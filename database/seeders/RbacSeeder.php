@@ -29,6 +29,7 @@ class RbacSeeder extends Seeder
         'report.view',
         'notification.read', 'notification.send', 'ticket.read', 'ticket.create', 'ticket.assign', 'ticket.manage',
         'franchise.manage', 'rbac.manage',
+        'workforce.read', 'workforce.manage',
     ];
 
     /** Role -> granted permissions (DD_EM-CFG-03 role-permission matrix). */
@@ -45,7 +46,7 @@ class RbacSeeder extends Seeder
         'OSR_SUPERVISOR' => ['stock.read', 'stock.manage', 'report.view'],
         'SALES_AGENT' => ['customer.read', 'customer.create', 'subscription.read', 'fulfillment.read'],
         'SALES_SUPERVISOR' => ['customer.read', 'customer.create', 'subscription.read', 'fulfillment.read', 'franchise.manage', 'report.view'],
-        'DISPATCHER' => ['workorder.read', 'workorder.assign', 'fulfillment.read'],
+        'DISPATCHER' => ['workorder.read', 'workorder.assign', 'fulfillment.read', 'workforce.read'],
         'FIELD_TECHNICIAN' => ['workorder.read', 'workorder.execute', 'stock.read'],
     ];
 

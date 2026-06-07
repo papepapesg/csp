@@ -25,7 +25,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | Approval workflow catalog (EM-CFG-04) | ⬜ | |
 | File storage foundation API (FOUNDATION_FILE_STORAGE) | ⬜ | |
 
-## Wave 1 — Revenue-Critical Core 🚧 (12/14 core capabilities done)
+## Wave 1 — Revenue-Critical Core ✅ (backend complete: 13/14; deeper frontends ongoing)
 
 | Order | Capability | Key DDs | Status |
 | ----- | ---------- | ------- | ------ |
@@ -35,7 +35,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 4 | Subscription workflow framework | SUB-WF-FRAMEWORK-01 | ✅ operation ledger + idempotency/concurrency + native workflow engine (activate/terminate); 5 tests, Postman bundle |
 | 5 | Billing/payment basics | BIL-01, BIL-01-PAY-01, BIL-02, BIL-02-READ-01, BIL-05 | ✅ `Modules/Billing`: invoice generation + read, payment application (FIFO/targeted + surplus credit), wallet topup/debit; events, 5 tests, Postman bundle |
 | 6 | First payment provider | PAY-GW-01 | ✅ `Modules/PaymentGateway`: M-Pesa/Visa/bank callback ingestion, dedupe, ILM account resolution, delegates to BIL payment application; 3 tests, Postman bundle |
-| 7 | Work order & workforce basics | WO-01(+FRAMEWORK, FLOW-INSTALLATION), EM-02 | 🚧 `Modules/WorkOrder`: WO lifecycle create→assign→start→finalize/cancel + status history + events, 3 tests, Postman bundle. EM-02 registry pending |
+| 7 | Work order & workforce basics | WO-01, EM-02 | ✅ `Modules/WorkOrder` (lifecycle + history) + `Modules/Workforce` (EM-02 contractor/team/staff registry); 5 tests, Postman bundles |
 | 8 | Stock/equipment basics | OSR-01, OSR-INSTANCE-01, PLM-CFG-06 | ✅ `Modules/Osr`: SKU catalog, stock locations/movements/derived balances, serialized equipment instance registry + lifecycle ledger; events, 3 tests, Postman bundle |
 | 9 | Fulfillment happy path | FUL-02 framework + WIK steps | ✅ `Modules/Fulfillment`: order capture orchestration (capture→validate→payment→subscription→install→activation) across SUB/WO modules; 3 E2E tests, Postman bundle |
 | 10 | Service activation | SUB-WF-ACTIVATE-01, FUL-03 | ✅ FUL-03 completion triggers SUB-WF activation end-to-end (order complete -> subscription ACTIVE) |
