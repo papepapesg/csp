@@ -39,6 +39,48 @@ const showingNavigationDropdown = ref(false);
                                 >
                                     Dashboard
                                 </NavLink>
+                                <NavLink
+                                    :href="route('customers.index')"
+                                    :active="route().current('customers.index')"
+                                >
+                                    Customers
+                                </NavLink>
+                                <NavLink
+                                    :href="route('tickets.index')"
+                                    :active="route().current('tickets.index')"
+                                >
+                                    Tickets
+                                </NavLink>
+                                <NavLink
+                                    :href="route('reports.index')"
+                                    :active="route().current('reports.index')"
+                                >
+                                    Reports
+                                </NavLink>
+                                <NavLink
+                                    :href="route('workflow.studio')"
+                                    :active="route().current('workflow.studio')"
+                                >
+                                    Studio
+                                </NavLink>
+                                <NavLink
+                                    :href="route('rules.studio')"
+                                    :active="route().current('rules.studio')"
+                                >
+                                    Rules
+                                </NavLink>
+                                <NavLink
+                                    :href="route('workflow.ops')"
+                                    :active="route().current('workflow.ops')"
+                                >
+                                    Ops
+                                </NavLink>
+                                <NavLink
+                                    :href="route('itops.console')"
+                                    :active="route().current('itops.console')"
+                                >
+                                    IT-Ops
+                                </NavLink>
                             </div>
                         </div>
 

@@ -1,5 +1,6 @@
 <?php
 
+use Modules\ItOps\Logging\DatabaseLogChannel;
 use Monolog\Handler\NullHandler;
 use Monolog\Handler\StreamHandler;
 use Monolog\Handler\SyslogUdpHandler;
@@ -56,6 +57,14 @@ return [
             'driver' => 'stack',
             'channels' => explode(',', (string) env('LOG_STACK', 'single')),
             'ignore_exceptions' => false,
+        ],
+
+        // IT-Ops searchable log channel (persists to system_log). Add 'database'
+        // to LOG_STACK to capture all logs, e.g. LOG_STACK=single,database.
+        'database' => [
+            'driver' => 'custom',
+            'via' => DatabaseLogChannel::class,
+            'level' => env('LOG_LEVEL', 'debug'),
         ],
 
         'single' => [

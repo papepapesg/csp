@@ -1,8 +1,78 @@
 <?php
 
+use App\Foundation\Http\PlatformController;
+use App\Http\Controllers\Api\AuthTokenController;
+use App\Http\Controllers\ApprovalController;
+use App\Http\Controllers\CustomerTimelineController;
+use App\Http\Controllers\FranchiseController;
+use App\Http\Controllers\LeadController;
+use App\Http\Controllers\UssdController;
+use App\Http\Controllers\FileController;
+use App\Http\Controllers\SelfCareController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/user', function (Request $request) {
-    return $request->user();
-})->middleware('auth:sanctum');
+/*
+|--------------------------------------------------------------------------
+| SOPHIX API routes
+|--------------------------------------------------------------------------
+| Foundation/platform endpoints live here. Each business module registers its
+| own routes from Modules/<Module>/routes/api.php (auto-loaded by the module
+| service provider), following DD_API-00 ownership and URL conventions.
+*/
+
+// --- Platform / foundation ---
+Route::get('/health', [PlatformController::class, 'health']);
+Route::get('/platform/config', [PlatformController::class, 'runtimeConfig']);
+
+// --- Mobile token auth (FE-APP-02/03 PWAs) ---
+Route::post('/auth/token', [AuthTokenController::class, 'token']);
+Route::post('/ussd', [UssdController::class, 'handle']); // USSD gateway webhook
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/auth/me', [AuthTokenController::class, 'me']);
+    Route::post('/auth/logout', [AuthTokenController::class, 'logout']);
+});
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/user', fn (Request $request) => $request->user());
+
+    // FOUNDATION_FILE_STORAGE
+    Route::post('/files', [FileController::class, 'store']);
+    Route::get('/files/{file}', [FileController::class, 'show']);
+    Route::get('/files/{file}/download', [FileController::class, 'download']);
+});
+
+// --- EM-CFG-04 approval workflow catalog ---
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/approval-definitions', [ApprovalController::class, 'definitions']);
+    Route::post('/approval-definitions', [ApprovalController::class, 'storeDefinition'])->middleware('permission:rbac.manage');
+    Route::get('/approvals', [ApprovalController::class, 'index']);
+    Route::post('/approvals', [ApprovalController::class, 'store'])->middleware('idempotency');
+    Route::post('/approvals/{approvalRequest}/decide', [ApprovalController::class, 'decide']);
+});
+
+// --- FE-APP-04 customer self-care (PWA at /care) ---
+Route::middleware(['auth:sanctum', 'permission:selfcare.access'])->prefix('selfcare')->group(function () {
+    Route::get('me', [SelfCareController::class, 'me']);
+    Route::get('subscriptions', [SelfCareController::class, 'subscriptions']);
+    Route::get('subscriptions/{subscription}/restrictions', [SelfCareController::class, 'restrictions']);
+    Route::get('invoices', [SelfCareController::class, 'invoices']);
+    Route::post('payments', [SelfCareController::class, 'pay'])->middleware('idempotency');
+    Route::get('tickets', [SelfCareController::class, 'ticketIndex']);
+    Route::post('tickets', [SelfCareController::class, 'raiseTicket'])->middleware('idempotency');
+});
+
+
+// --- EM-01 franchise + SALES-01 leads + CUST-INT-01 timeline ---
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/franchises', [FranchiseController::class, 'index'])->middleware('permission:franchise.manage');
+    Route::post('/franchises', [FranchiseController::class, 'store'])->middleware('permission:franchise.manage');
+
+    Route::get('/leads', [LeadController::class, 'index'])->middleware('permission:customer.read');
+    Route::post('/leads', [LeadController::class, 'store'])->middleware(['permission:customer.create', 'idempotency']);
+    Route::post('/leads/{lead}/qualify', [LeadController::class, 'qualify'])->middleware('permission:customer.create');
+    Route::post('/leads/{lead}/convert', [LeadController::class, 'convert'])->middleware('permission:customer.create');
+    Route::post('/leads/{lead}/lose', [LeadController::class, 'lose'])->middleware('permission:customer.create');
+
+    Route::get('/customers/{customerId}/timeline', [CustomerTimelineController::class, 'show'])->middleware('permission:customer.read');
+});

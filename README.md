@@ -1,59 +1,80 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# SOPHIX Core BSS
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+An all-Laravel implementation of the **SOPHIX V3** telecom Business Support
+System, built wave-by-wave from the design corpus in [`docs/design`](docs/design).
 
-## About Laravel
+- **Backend:** Laravel 12 modular monolith (`nwidart/laravel-modules`, one module per DD bundle)
+- **Frontend:** Inertia + Vue 3 + Tailwind (Backoffice shell via Breeze)
+- **Datastore:** PostgreSQL (authoritative) + Redis (cache/queue/session)
+- **Auth/RBAC:** Sanctum + `spatie/laravel-permission` (DD_EM-CFG-03 catalog)
+- **Infra (Laravel-native, swappable):** transactional outbox event bus, native
+  workflow/operation engine, native rules engine — each can be swapped for
+  Kafka / Camunda / Drools via config + compose profiles.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design-doc→Laravel
+mapping and [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) for
+wave-by-wave progress.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Quick start (Docker)
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+```bash
+cp .env.example .env
+docker compose up -d --build        # app, web (nginx), postgres, redis, queue, scheduler, mailpit
+# first boot runs migrations automatically; seed the RBAC catalog + admin user:
+docker compose exec app php artisan db:seed --force
+```
 
-## Learning Laravel
+| Service        | URL                              |
+| -------------- | -------------------------------- |
+| Backoffice/API | http://localhost:8080            |
+| Health check   | http://localhost:8080/api/health |
+| Mailpit        | http://localhost:8025            |
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+Default admin: `admin@sophix.local` / `password`.
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+Opt-in reference services:
 
-## Laravel Sponsors
+```bash
+docker compose --profile kafka up -d      # real Kafka broker
+docker compose --profile camunda up -d    # real Camunda engine
+docker compose --profile drools up -d     # real Drools / KIE server
+```
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+## Local development (without Docker)
 
-### Premium Partners
+```bash
+composer install
+npm install
+cp .env.example .env && php artisan key:generate
+# point DB_CONNECTION=sqlite for a quick start, or run a local postgres
+php artisan migrate --seed
+composer run dev          # serve + queue + vite + logs
+```
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+## API conventions (DD_API-00)
 
-## Contributing
+All module APIs share the foundation conventions:
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+- **Correlation:** `X-Correlation-Id` generated/preserved on every request.
+- **Operator scope:** `X-Operator-Code` (multi-operator: WIK, WUG, ...).
+- **Idempotency:** `Idempotency-Key` on commands → replay or `409 IDEMPOTENCY_CONFLICT`.
+- **Pagination:** `?page=0&size=50&sort=field,desc` → `{ items, page, size, totalElements, totalPages }`.
+- **Errors:** `{ errorCode, message, correlationId, retryable, fieldErrors?, nextAction? }`.
+- **Commands:** `{ status: "ACCEPTED", entityId?, operationId?, correlationId, nextAction }`.
 
-## Code of Conduct
+## Postman (per bundle)
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+Each bundle gets its own collection. Regenerate after adding routes:
 
-## Security Vulnerabilities
+```bash
+php artisan sophix:postman:generate
+```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+Import `postman/SOPHIX.postman_environment.json` and the per-bundle collections
+in `postman/collections/`.
 
-## License
+## Tests
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+```bash
+php artisan test
+```
