@@ -2,6 +2,8 @@
 
 use App\Foundation\Http\PlatformController;
 use App\Http\Controllers\Api\AuthTokenController;
+use App\Http\Controllers\ApprovalController;
+use App\Http\Controllers\FileController;
 use App\Http\Controllers\SelfCareController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -28,6 +30,20 @@ Route::middleware('auth:sanctum')->group(function () {
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', fn (Request $request) => $request->user());
+
+    // FOUNDATION_FILE_STORAGE
+    Route::post('/files', [FileController::class, 'store']);
+    Route::get('/files/{file}', [FileController::class, 'show']);
+    Route::get('/files/{file}/download', [FileController::class, 'download']);
+});
+
+// --- EM-CFG-04 approval workflow catalog ---
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/approval-definitions', [ApprovalController::class, 'definitions']);
+    Route::post('/approval-definitions', [ApprovalController::class, 'storeDefinition'])->middleware('permission:rbac.manage');
+    Route::get('/approvals', [ApprovalController::class, 'index']);
+    Route::post('/approvals', [ApprovalController::class, 'store'])->middleware('idempotency');
+    Route::post('/approvals/{approvalRequest}/decide', [ApprovalController::class, 'decide']);
 });
 
 // --- FE-APP-04 customer self-care (PWA at /care) ---

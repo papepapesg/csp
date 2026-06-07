@@ -22,8 +22,8 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | Foundation feature tests | ✅ | `tests/Feature/Foundation/ApiStandardsTest` |
 | Modular monolith wiring (`nwidart/laravel-modules`) | ✅ | `Modules/` + composer merge-plugin |
 | RBAC admin module (CRUD, effective-access API) | ✅ | `Modules/Rbac`: runtime roles/permissions/matrix/assignments + effective-access; seed is just bootstrap data |
-| Approval workflow catalog (EM-CFG-04) | ⬜ | |
-| File storage foundation API (FOUNDATION_FILE_STORAGE) | ⬜ | |
+| Approval workflow catalog (EM-CFG-04) | ✅ | `app/Foundation/Approvals`: data-driven approval_definition (threshold + roles) + approval_request lifecycle (auto-approve below threshold); /approvals API |
+| File storage foundation API (FOUNDATION_FILE_STORAGE) | ✅ | `app/Foundation/Files`: file_object registry + swappable-disk FileStorageService; /files upload/download |
 
 ## Wave 1 — Revenue-Critical Core ✅ (backend complete: 13/14; deeper frontends ongoing)
 
