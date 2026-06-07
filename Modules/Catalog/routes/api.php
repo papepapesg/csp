@@ -5,6 +5,7 @@ use Modules\Catalog\Http\Controllers\HomePassController;
 use Modules\Catalog\Http\Controllers\PackageController;
 use Modules\Catalog\Http\Controllers\ServiceClassController;
 use Modules\Catalog\Http\Controllers\ServiceController;
+use Modules\Catalog\Http\Controllers\TaxController;
 use Modules\Catalog\Http\Controllers\TechRegionController;
 
 /*
@@ -42,4 +43,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('homepass', [HomePassController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
     Route::get('homepass/{homepass}', [HomePassController::class, 'show'])->middleware('permission:catalog.read');
     Route::patch('homepass/{homepass}/status', [HomePassController::class, 'changeStatus'])->middleware('permission:catalog.manage');
+
+    // PLM-CFG-02 tax compute
+    Route::post('tax/compute', [TaxController::class, 'compute'])->middleware('permission:catalog.read');
 });

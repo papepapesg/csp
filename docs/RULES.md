@@ -39,3 +39,4 @@ Engine: `Modules/Rules/app/Engine/DataDrivenRuleEngine.php` (bound to
 
 The ⬜ packages belong to capabilities not yet built (Wave 2/3); each is seeded +
 wired at its decision point when that flow lands, using this same convention.
+| `rules.tax-applicability` | PLM-CFG-02 tax group resolution | ✅ seeded + wired (TaxComputeService) |
