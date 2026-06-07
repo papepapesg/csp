@@ -78,18 +78,40 @@ class InvoiceService
         });
     }
 
-    /** Gap-free legal number per (operator, fiscal year, type). */
+    /**
+     * Gap-free legal number per (operator, fiscal year, type) using a locked
+     * counter row (BIL-02). Must be called inside the generate() transaction.
+     */
     private function nextLegalNumber(string $operator, string $type): string
     {
-        $year = now()->year;
+        $year = (int) now()->year;
         $prefix = $type === 'TAX' ? 'TInv' : 'Inv';
-        $seq = Invoice::query()
+
+        // Ensure the counter row exists, then lock + increment it atomically.
+        DB::table('invoice_sequence')->insertOrIgnore([
+            'operator_code' => $operator,
+            'type' => $type,
+            'fiscal_year' => $year,
+            'last_value' => 0,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $row = DB::table('invoice_sequence')
             ->where('operator_code', $operator)
             ->where('type', $type)
-            ->whereYear('issue_date', $year)
+            ->where('fiscal_year', $year)
             ->lockForUpdate()
-            ->count() + 1;
+            ->first();
 
-        return sprintf('%s-%s-%d-%06d', $prefix, $operator, $year, $seq);
+        $next = ((int) $row->last_value) + 1;
+
+        DB::table('invoice_sequence')
+            ->where('operator_code', $operator)
+            ->where('type', $type)
+            ->where('fiscal_year', $year)
+            ->update(['last_value' => $next, 'updated_at' => now()]);
+
+        return sprintf('%s-%s-%d-%06d', $prefix, $operator, $year, $next);
     }
 }
