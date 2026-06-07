@@ -6,6 +6,7 @@ use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
+use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Ticketing\Database\Seeders\SlaPolicySeeder;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
@@ -22,6 +23,7 @@ class DatabaseSeeder extends Seeder
             ProcessDefinitionSeeder::class,
             ProvisioningTargetSeeder::class,
             DecisionTableSeeder::class,
+            CatalogPolicySeeder::class,
             SlaPolicySeeder::class,
         ]);
 

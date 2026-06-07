@@ -44,24 +44,29 @@ class ValidateActivationHandler implements TaskHandler
             return TaskResult::success(['eligible' => false, 'eligibilityReason' => 'TERMINATED']);
         }
 
-        // Gather facts for the policy decision. (The outstanding balance would be
-        // read through the BIL read API in a split deployment; in the monolith we
-        // read BIL's invoice projection directly.)
+        // Gather activation precondition facts. (Outstanding balance would be read
+        // through the BIL read API in a split deployment; in the monolith we read
+        // BIL's invoice projection directly.)
         $outstanding = (float) Invoice::query()
             ->where('account_id', $subscription->account_id)
             ->whereIn('status', [Invoice::OPEN, Invoice::PARTIALLY_PAID, Invoice::OVERDUE])
             ->sum('amount_due');
 
-        // DROOLS-equivalent: evaluate the configurable decision table.
-        $decision = $this->rules->evaluate('activation.eligibility', [
+        // Evaluate the design's rule package rules.subscription.activate
+        // (SUB-WF-ACTIVATE-01 validate-preconditions). Operator-specific tables
+        // override the default; results carry ruleIds (DROOLS-RES-1).
+        $result = $this->rules->assess('rules.subscription.activate', [
+            'statusCode' => $subscription->status_code,
             'outstandingBalance' => $outstanding,
             'billingMode' => $subscription->billing_mode,
-            'operatorCode' => $subscription->operator_code,
         ]);
+        $decision = $result['decision'];
 
         return TaskResult::success([
             'eligible' => $decision['eligible'] ?? true,
-            'eligibilityReason' => $decision['reason'] ?? null,
+            'eligibilityReason' => $decision['decisionCode'] ?? null,
+            'eligibilityRuleId' => $decision['ruleId'] ?? null,
+            'validationErrors' => $result['validationErrors'],
             'outstandingBalance' => $outstanding,
             'recipient' => $context->var('recipient'),
         ]);

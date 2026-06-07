@@ -1,0 +1,36 @@
+# SOPHIX Rule Packages (FOUNDATION_DROOLS)
+
+Rules are a **cross-cutting policy layer**, not an activation feature. The design
+names every rule package `rules.<domain>.<kind>` (operator scoping via the
+`operator_code` column = the design's `.<operator>` suffix; container analogue
+`{module}-rules-{operator}_{version}`). Every result carries a stable **ruleId**
+(`ValidationError{ruleId,field,message}` / `DecisionResult{decisionCode,ruleId,attributes}`,
+DROOLS-RES-1); empty results mean "pass". Operators override any package in the
+**Rules Studio** (`/rules/studio`) with no code change.
+
+Engine: `Modules/Rules/app/Engine/DataDrivenRuleEngine.php` (bound to
+`App\Foundation\Rules\RuleEngine`). Packages are `decision_table` rows.
+
+## Status — packages the corpus names (grep `rules\.` over docs/design-text)
+
+| Rule package (design) | Domain / DD | Status |
+| --------------------- | ----------- | ------ |
+| `rules.subscription.activate` | SUB-WF-ACTIVATE-01 preconditions/eligibility | ✅ seeded + wired (activation gateway) |
+| `rules.subscription.terminate` | SUB-WF-TERMINATE-01 | ✅ seeded |
+| `rules.service-catalog` | PLM-CFG-01 service config | ✅ seeded + wired (service create) |
+| `rules.homepass-catalog` | RLM-CFG-01 HomePass config | ✅ seeded + wired (HomePass create) |
+| `rules.subscription.pause` / `.resume` / `.restrict` / `.suspend-np` | SUB-WF (Wave 2) | ⬜ seed when flow lands |
+| `rules.subscription.upgrade` / `.downgrade` / `.relocation` / `.migration` | SUB-WF (Wave 3) | ⬜ |
+| `rules.subscription.common` | shared subscription policy | ⬜ |
+| `rules.tax` | PLM-CFG-02 / BIL tax applicability | ⬜ (tax fiscalisation stub exists) |
+| `rules.wallet` / `rules.wallet-catalog` | BIL-05 / PLM-CFG-03 | ⬜ |
+| `rules.discount-catalog` / `rules.commercial.discount_assignment` / `.bundle` / `.campaign` | PLM-CFG-04 / SIP / commercial (Wave 3) | ⬜ |
+| `rules.cvm.activity` / `.approval` / `.offer` / `.segmentation` | EM-03 CVM (Wave 3) | ⬜ |
+| `rules.field_audit.{equipment,kyc,network}.{approval,routing,scope,severity}` | FA-01/02/03 (Wave 3) | ⬜ |
+| `rules.fulfillment.technology_migration.{eligibility,cutover,equipment,exception}` | FUL-10 (Wave 3) | ⬜ |
+| `rules.asr.service_request` | ASR-04 (Wave 3) | ⬜ |
+| `rules.service-catalog` / `rules.homepass-status-code-catalog` / `rules.house-type-catalog` / `rules.network-node-catalog` / `rules.tech-region-catalog` / `rules.tech-contractor-catalog` / `rules.tech-contractor-skill-catalog` / `rules.franchise-catalog` | catalog config validation | 🚧 service + homepass done; rest seed with their catalogs |
+| `rules.user` / `rules.password` | FOUNDATION_AUTH | ⬜ |
+
+The ⬜ packages belong to capabilities not yet built (Wave 2/3); each is seeded +
+wired at its decision point when that flow lands, using this same convention.

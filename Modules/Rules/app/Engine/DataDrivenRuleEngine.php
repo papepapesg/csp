@@ -8,12 +8,15 @@ use App\Foundation\Support\Context;
 use Modules\Rules\Models\DecisionTable;
 
 /**
- * Data-driven rule engine (FOUNDATION_DROOLS as config). Policy lives in
- * decision_table rows, not code: evaluate() resolves the deployed table for a
- * rule set (operator-specific first, else global), runs each rule's structured,
- * side-effect-free conditions against the facts, and returns outputs per the
- * hit policy. A registered closure is used only as a fallback when no table
- * exists, so legacy/programmatic rules keep working during migration.
+ * Data-driven rule engine (FOUNDATION_DROOLS as config).
+ *
+ * A rule package is a decision_table row (rule_set + operator + version). Each
+ * rule has a stable ruleId, structured side-effect-free conditions, and a result
+ * that is either a DecisionResult (attributes such as `eligible`, plus an
+ * optional decisionCode) or a ValidationError ({field, message}). Evaluation
+ * inserts facts, fires rules and returns results; empty results mean "pass"
+ * (FOUNDATION_DROOLS §10, DROOLS-RES-1/3). Operator-specific packages override
+ * the global default with no code change.
  */
 class DataDrivenRuleEngine implements RuleEngine
 {
@@ -27,16 +30,21 @@ class DataDrivenRuleEngine implements RuleEngine
 
     public function evaluate(string $ruleSet, array $facts): array
     {
+        return $this->assess($ruleSet, $facts)['decision'];
+    }
+
+    public function assess(string $ruleSet, array $facts): array
+    {
         $table = $this->resolveTable($ruleSet, Context::operatorCode());
 
         if (! $table) {
             if (isset($this->fallbacks[$ruleSet])) {
-                return ($this->fallbacks[$ruleSet])($facts);
+                return ['decision' => ($this->fallbacks[$ruleSet])($facts), 'validationErrors' => [], 'firedRules' => []];
             }
-            throw new DomainException('RULE_SET_NOT_FOUND', "No decision table or rule for [{$ruleSet}].", 500);
+            throw new DomainException('RULE_PACKAGE_NOT_FOUND', "No rule package or decision table for [{$ruleSet}].", 500);
         }
 
-        return $this->run($table, $facts);
+        return $this->fire($table, $facts);
     }
 
     private function resolveTable(string $ruleSet, ?string $operator): ?DecisionTable
@@ -52,28 +60,44 @@ class DataDrivenRuleEngine implements RuleEngine
 
     /**
      * @param  array<string,mixed>  $facts
-     * @return array<string,mixed>
+     * @return array{decision: array<string,mixed>, validationErrors: array<int,array<string,mixed>>, firedRules: array<int,string>}
      */
-    private function run(DecisionTable $table, array $facts): array
+    private function fire(DecisionTable $table, array $facts): array
     {
-        $collected = [];
+        $decision = $table->default_output ?? [];
+        $errors = [];
+        $fired = [];
+        $first = ($table->hit_policy ?? 'FIRST') === 'FIRST';
 
         foreach ($table->rules as $rule) {
-            $conditions = $rule['when'] ?? [];
-            if ($this->matches($conditions, $facts)) {
-                $outputs = $rule['then'] ?? [];
-                if (($table->hit_policy ?? 'FIRST') === 'FIRST') {
-                    return $outputs;
-                }
-                $collected[] = $outputs;
+            if (! $this->matches($rule['when'] ?? [], $facts)) {
+                continue;
+            }
+
+            $ruleId = $rule['ruleId'] ?? 'R-UNSPECIFIED';
+            $fired[] = $ruleId;
+            $then = $rule['then'] ?? [];
+
+            // A ValidationError result (DROOLS-RES-1): { error: {field, message} }.
+            if (isset($then['error'])) {
+                $errors[] = [
+                    'ruleId' => $ruleId,
+                    'field' => $then['error']['field'] ?? null,
+                    'message' => $then['error']['message'] ?? '',
+                    'decisionCode' => $then['decisionCode'] ?? null,
+                ];
+                $decision = array_merge($decision, array_diff_key($then, ['error' => null]), ['ruleId' => $ruleId]);
+            } else {
+                // A DecisionResult: merge attributes, carry ruleId + decisionCode.
+                $decision = array_merge($decision, $then, ['ruleId' => $ruleId]);
+            }
+
+            if ($first) {
+                break;
             }
         }
 
-        if (($table->hit_policy ?? 'FIRST') === 'COLLECT') {
-            return ['matches' => $collected];
-        }
-
-        return $table->default_output ?? [];
+        return ['decision' => $decision, 'validationErrors' => $errors, 'firedRules' => $fired];
     }
 
     /**
@@ -95,6 +119,7 @@ class DataDrivenRuleEngine implements RuleEngine
                 'truthy' => (bool) $actual === true,
                 'falsy' => (bool) $actual === false,
                 'in' => is_array($expected) && in_array($actual, $expected, true),
+                'not_in' => is_array($expected) && ! in_array($actual, $expected, true),
                 default => false,
             };
             if (! $ok) {

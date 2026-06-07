@@ -32,7 +32,9 @@ class OrderCaptureService
 
     /**
      * Capture an order and provision its happy path: create the (pending)
-     * subscription and an installation work order.
+     * subscription and an installation work order. Activation eligibility
+     * (package/HomePass/role preconditions) is decided later by the
+     * rules.subscription.activate package at the SUB-WF activation gateway.
      *
      * @param  array<string,mixed>  $data
      */

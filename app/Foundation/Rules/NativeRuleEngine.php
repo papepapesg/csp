@@ -35,4 +35,9 @@ class NativeRuleEngine implements RuleEngine
 
         return ($this->ruleSets[$ruleSet])($facts);
     }
+
+    public function assess(string $ruleSet, array $facts): array
+    {
+        return ['decision' => $this->evaluate($ruleSet, $facts), 'validationErrors' => [], 'firedRules' => []];
+    }
 }

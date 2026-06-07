@@ -7,26 +7,47 @@ use Illuminate\Database\Seeder;
 use Modules\Rules\Models\DecisionTable;
 
 /**
- * Seeds an example configurable policy: activation eligibility. The default
- * (global) policy blocks activation when there is an outstanding balance; an
- * operator can deploy a different table for the same rule_set to change the
- * policy with no code change.
+ * Seeds the SUB-WF rule packages named by the design (DD_SUB-WF-*):
+ * `rules.subscription.<kind>` (operator scoping via operator_code, matching the
+ * design's `rules.subscription.<kind>.<operator>`). Each rule carries a stable
+ * ruleId (DROOLS-RES-1). These are evaluated at the operation's
+ * validate-preconditions decision point. Operations not yet built
+ * (pause/resume/upgrade/downgrade/restrict/suspend-np/relocation/migration) are
+ * catalogued in docs/RULES.md and seeded as their flows land.
  */
 class DecisionTableSeeder extends Seeder
 {
     public function run(): void
     {
+        // rules.subscription.activate — activation preconditions / eligibility
+        // (SUB-WF-ACTIVATE-01: validate-preconditions -> {eligible}).
+        $this->deploy('rules.subscription.activate', 'Subscription activation preconditions', 'FIRST', [
+            ['ruleId' => 'R-SUB-ACT-001', 'when' => [['var' => 'outstandingBalance', 'op' => 'gt', 'value' => 0]],
+                'then' => ['eligible' => false, 'decisionCode' => 'PAY_FIRST_REQUIRED',
+                    'error' => ['field' => 'outstandingBalance', 'message' => 'Outstanding balance must be cleared before activation']]],
+        ], ['eligible' => true], ['statusCode', 'outstandingBalance', 'packageStatus', 'homepassStatus', 'role']);
+
+        // rules.subscription.terminate — termination policy (default: allowed).
+        $this->deploy('rules.subscription.terminate', 'Subscription termination policy', 'FIRST',
+            [], ['eligible' => true], ['statusCode', 'reasonCode']);
+    }
+
+    /**
+     * @param  array<int,array<string,mixed>>  $rules
+     * @param  array<string,mixed>  $default
+     * @param  array<int,string>  $inputs
+     */
+    private function deploy(string $ruleSet, string $name, string $hit, array $rules, array $default, array $inputs): void
+    {
         DecisionTable::query()->updateOrCreate(
-            ['rule_set' => 'activation.eligibility', 'version' => 1, 'operator_code' => null],
+            ['rule_set' => $ruleSet, 'version' => 1, 'operator_code' => null],
             [
                 'table_id' => Id::make('dt'),
-                'name' => 'Activation eligibility (default)',
-                'hit_policy' => 'FIRST',
-                'inputs' => ['outstandingBalance'],
-                'rules' => [
-                    ['when' => [['var' => 'outstandingBalance', 'op' => 'gt', 'value' => 0]], 'then' => ['eligible' => false, 'reason' => 'OUTSTANDING_BALANCE']],
-                ],
-                'default_output' => ['eligible' => true],
+                'name' => $name,
+                'hit_policy' => $hit,
+                'inputs' => $inputs,
+                'rules' => $rules,
+                'default_output' => $default,
                 'status' => DecisionTable::DEPLOYED,
             ],
         );

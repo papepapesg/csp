@@ -38,6 +38,7 @@ return new class extends Migration
             $table->string('service_class_id')->index();
             $table->string('service_group')->nullable();
             $table->boolean('is_addressable')->default(false);
+            $table->string('equipment_requirement_ref')->nullable(); // PLM-CFG-01 / PLM-CFG-06
             $table->string('consumption_model')->default('FLAT'); // FLAT | USAGE | ...
             $table->string('revenue_category')->nullable();
             $table->json('network_profile_shape')->nullable();

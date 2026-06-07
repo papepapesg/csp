@@ -8,6 +8,7 @@ use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Catalog\Models\HomePass;
+use Modules\Catalog\Services\CatalogPolicy;
 use Modules\Catalog\Services\CatalogService;
 
 /**
@@ -15,7 +16,10 @@ use Modules\Catalog\Services\CatalogService;
  */
 class HomePassController extends ApiController
 {
-    public function __construct(private readonly CatalogService $catalog) {}
+    public function __construct(
+        private readonly CatalogService $catalog,
+        private readonly CatalogPolicy $policy,
+    ) {}
 
     /** GET /api/homepass?techRegionId=&status=&q= (serviceability search) */
     public function index(Request $request): JsonResponse
@@ -42,7 +46,10 @@ class HomePassController extends ApiController
             'network_nodes' => ['nullable', 'array'],
         ]);
 
-        return ApiResponse::created($this->catalog->createHomePass($data));
+        $homepass = $this->catalog->createHomePass($data);
+
+        // rules.homepass-catalog config policy (advisory).
+        return ApiResponse::created(['homepass' => $homepass, 'policyWarnings' => $this->policy->validateHomePass($homepass)]);
     }
 
     public function show(HomePass $homepass): JsonResponse

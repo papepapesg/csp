@@ -139,8 +139,8 @@ class SubscriptionApiTest extends TestCase
         // no code change — and a fresh activation succeeds.
         DecisionTable::query()->create([
             'table_id' => Id::make('dt'),
-            'rule_set' => 'activation.eligibility', 'version' => 2, 'operator_code' => 'WIK',
-            'name' => 'WIK lenient', 'hit_policy' => 'FIRST', 'rules' => [],
+            'rule_set' => 'rules.subscription.activate', 'version' => 2, 'operator_code' => 'WIK',
+            'name' => 'WIK lenient activation', 'hit_policy' => 'FIRST', 'rules' => [],
             'default_output' => ['eligible' => true], 'status' => 'DEPLOYED',
         ]);
 

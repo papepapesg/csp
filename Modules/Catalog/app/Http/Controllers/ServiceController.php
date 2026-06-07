@@ -8,6 +8,7 @@ use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Catalog\Models\Service;
+use Modules\Catalog\Services\CatalogPolicy;
 use Modules\Catalog\Services\CatalogService;
 
 /**
@@ -15,7 +16,10 @@ use Modules\Catalog\Services\CatalogService;
  */
 class ServiceController extends ApiController
 {
-    public function __construct(private readonly CatalogService $catalog) {}
+    public function __construct(
+        private readonly CatalogService $catalog,
+        private readonly CatalogPolicy $policy,
+    ) {}
 
     public function index(Request $request): JsonResponse
     {
@@ -37,13 +41,18 @@ class ServiceController extends ApiController
             'service_class_id' => ['required', 'string', 'exists:service_class,id'],
             'description' => ['nullable', 'string'],
             'consumption_model' => ['nullable', 'in:FLAT,USAGE,TIERED'],
+            'is_addressable' => ['sometimes', 'boolean'],
+            'equipment_requirement_ref' => ['nullable', 'string', 'max:64'],
             'service_group' => ['nullable', 'string', 'max:64'],
             'network_profile_shape' => ['nullable', 'array'],
             'default_wallet_ref' => ['nullable', 'string', 'max:64'],
             'default_tax_group_ref' => ['nullable', 'string', 'max:64'],
         ]);
 
-        return ApiResponse::created($this->catalog->createService($data));
+        $service = $this->catalog->createService($data);
+
+        // rules.service-catalog config policy (advisory).
+        return ApiResponse::created(['service' => $service, 'policyWarnings' => $this->policy->validateService($service)]);
     }
 
     public function show(Service $service): JsonResponse

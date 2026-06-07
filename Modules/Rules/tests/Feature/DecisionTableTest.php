@@ -2,6 +2,7 @@
 
 namespace Modules\Rules\Tests\Feature;
 
+use App\Foundation\Rules\RuleEngine;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -17,41 +18,51 @@ class DecisionTableTest extends TestCase
     {
         parent::setUp();
         $this->seed(RbacSeeder::class);
-        $this->seed(DecisionTableSeeder::class);
+        $this->seed(DecisionTableSeeder::class); // seeds rules.subscription.activate
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('SUPER_ADMIN');
         Sanctum::actingAs($user);
     }
 
-    public function test_default_policy_blocks_activation_with_balance(): void
+    public function test_rule_package_returns_decision_with_ruleid_per_foundation_drools(): void
     {
-        $this->postJson('/api/rules/activation.eligibility/evaluate', ['facts' => ['outstandingBalance' => 150]])
-            ->assertOk()
-            ->assertJsonPath('decision.eligible', false)
-            ->assertJsonPath('decision.reason', 'OUTSTANDING_BALANCE');
+        // Blocking precondition fires -> eligible false + a ValidationError carrying ruleId.
+        $assess = app(RuleEngine::class)->assess('rules.subscription.activate', ['outstandingBalance' => 1500]);
+        $this->assertFalse($assess['decision']['eligible']);
+        $this->assertSame('R-SUB-ACT-001', $assess['decision']['ruleId']);
+        $this->assertSame('PAY_FIRST_REQUIRED', $assess['decision']['decisionCode']);
+        $this->assertSame('R-SUB-ACT-001', $assess['validationErrors'][0]['ruleId']);
 
-        $this->postJson('/api/rules/activation.eligibility/evaluate', ['facts' => ['outstandingBalance' => 0]])
-            ->assertOk()
-            ->assertJsonPath('decision.eligible', true);
+        // No rule fires (empty results = pass).
+        $clean = app(RuleEngine::class)->assess('rules.subscription.activate', ['outstandingBalance' => 0]);
+        $this->assertTrue($clean['decision']['eligible']);
+        $this->assertSame([], $clean['validationErrors']);
     }
 
-    public function test_operator_can_override_policy_without_code(): void
+    public function test_evaluate_endpoint_uses_the_design_named_package(): void
     {
-        // Tanzania deploys a more lenient policy for the SAME rule set.
+        $this->postJson('/api/rules/rules.subscription.activate/evaluate', ['facts' => ['outstandingBalance' => 10]])
+            ->assertOk()
+            ->assertJsonPath('decision.eligible', false)
+            ->assertJsonPath('decision.decisionCode', 'PAY_FIRST_REQUIRED');
+    }
+
+    public function test_operator_can_override_a_rule_package_without_code(): void
+    {
+        // Tanzania deploys a more lenient activation policy for the SAME package.
         $this->postJson('/api/rules/decision-tables', [
-            'rule_set' => 'activation.eligibility',
-            'name' => 'Activation eligibility (WTZ)',
+            'rule_set' => 'rules.subscription.activate',
+            'name' => 'Activation (WTZ)',
             'operator_code' => 'WTZ',
             'hit_policy' => 'FIRST',
-            'rules' => [],                       // no blocking rules
+            'rules' => [],
             'default_output' => ['eligible' => true],
         ])->assertCreated();
 
-        // Same facts, WIK (default) -> blocked; WTZ (override) -> allowed. No code change.
-        $this->postJson('/api/rules/activation.eligibility/evaluate', ['facts' => ['outstandingBalance' => 150]], ['X-Operator-Code' => 'WIK'])
+        $this->postJson('/api/rules/rules.subscription.activate/evaluate', ['facts' => ['outstandingBalance' => 999]], ['X-Operator-Code' => 'WIK'])
             ->assertOk()->assertJsonPath('decision.eligible', false);
 
-        $this->postJson('/api/rules/activation.eligibility/evaluate', ['facts' => ['outstandingBalance' => 150]], ['X-Operator-Code' => 'WTZ'])
+        $this->postJson('/api/rules/rules.subscription.activate/evaluate', ['facts' => ['outstandingBalance' => 999]], ['X-Operator-Code' => 'WTZ'])
             ->assertOk()->assertJsonPath('decision.eligible', true);
     }
 
