@@ -6,6 +6,8 @@ use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
+use Modules\Ticketing\Models\SlaPolicy;
+use Modules\Ticketing\Models\Ticket;
 use Tests\TestCase;
 
 class TicketApiTest extends TestCase
@@ -63,5 +65,22 @@ class TicketApiTest extends TestCase
         Sanctum::actingAs($user);
 
         $this->postJson('/api/tickets', ['category' => 'TECHNICAL', 'subject' => 'x'])->assertForbidden();
+    }
+
+    public function test_sla_is_data_driven_and_operator_overridable(): void
+    {
+        // Default catalog: URGENT = 4h.
+        $this->postJson('/api/sla-policies', ['priority' => 'URGENT', 'response_hours' => 4])->assertCreated();
+        $this->assertSame(4, SlaPolicy::resolveHours('WIK', null, 'URGENT'));
+
+        // Operator override for WIK URGENT -> 1h, with no code change.
+        $this->postJson('/api/sla-policies', ['operator_code' => 'WIK', 'priority' => 'URGENT', 'response_hours' => 1])->assertCreated();
+        $this->assertSame(1, SlaPolicy::resolveHours('WIK', null, 'URGENT'));
+        $this->assertSame(4, SlaPolicy::resolveHours('WTZ', null, 'URGENT')); // other operator unaffected
+
+        // A new URGENT ticket now gets the tighter SLA due date.
+        $id = $this->create('URGENT');
+        $due = Ticket::find($id)->sla_due_at;
+        $this->assertTrue($due->lessThan(now()->addHours(2)));
     }
 }

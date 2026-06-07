@@ -39,12 +39,20 @@ class WorkflowWorkerCommand extends Command
 
         do {
             $processed = $this->drainOnce($registry, $engine, $workerId, $topics, (int) $this->option('max'));
+
+            // IT-Ops liveness + restart control.
+            \Modules\ItOps\Support\Heartbeat::ping('workflow-worker', $workerId, ['lastBatch' => $processed]);
+
             if ($this->option('once')) {
                 if ($processed === 0) {
                     break;
                 }
 
                 continue;
+            }
+            if (\Modules\ItOps\Support\Heartbeat::shouldStop('workflow-worker')) {
+                $this->info('Restart requested via IT-Ops — exiting for supervisor restart.');
+                break;
             }
             if ($processed === 0) {
                 sleep((int) $this->option('sleep'));

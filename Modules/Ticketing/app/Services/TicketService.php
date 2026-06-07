@@ -5,8 +5,10 @@ namespace Modules\Ticketing\Services;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
+use App\Foundation\Support\Context;
 use Illuminate\Support\Facades\DB;
 use Modules\Ticketing\Events\TicketEvents;
+use Modules\Ticketing\Models\SlaPolicy;
 use Modules\Ticketing\Models\Ticket;
 use Modules\WorkOrder\Services\WorkOrderService;
 
@@ -17,9 +19,6 @@ use Modules\WorkOrder\Services\WorkOrderService;
  */
 class TicketService
 {
-    /** SLA hours by priority. */
-    private const SLA_HOURS = ['URGENT' => 4, 'HIGH' => 8, 'NORMAL' => 24, 'LOW' => 72];
-
     public function __construct(
         private readonly EventBus $events,
         private readonly WorkOrderService $workOrders,
@@ -32,7 +31,7 @@ class TicketService
             $priority = $data['priority'] ?? 'NORMAL';
             $ticket = Ticket::query()->create($data + [
                 'status' => Ticket::OPEN,
-                'sla_due_at' => now()->addHours(self::SLA_HOURS[$priority] ?? 24),
+                'sla_due_at' => now()->addHours(SlaPolicy::resolveHours(Context::operatorCode(), $data['category'] ?? null, $priority)),
             ]);
             $this->timeline($ticket, 'CREATED', null, Ticket::OPEN, $data['opened_by'] ?? null);
             $this->emit(TicketEvents::CREATED, $ticket, ['category' => $ticket->category, 'priority' => $ticket->priority]);

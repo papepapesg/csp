@@ -69,6 +69,12 @@ const showingNavigationDropdown = ref(false);
                                 >
                                     Ops
                                 </NavLink>
+                                <NavLink
+                                    :href="route('itops.console')"
+                                    :active="route().current('itops.console')"
+                                >
+                                    IT-Ops
+                                </NavLink>
                             </div>
                         </div>
 

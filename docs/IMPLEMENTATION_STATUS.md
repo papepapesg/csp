@@ -52,10 +52,11 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | Config-driven workflow engine (flows as DATA, not code) | ✅ | `Modules/Workflow`: process_definition graphs, external-task workers, topic→handler toolbox; operator override with zero code (proven by test) |
 | PostgreSQL everywhere incl. tests (drop SQLite) | ✅ | caught a real concurrency bug SQLite masked |
 | Workflow Studio (Vue Flow drag-and-drop) | ✅ | `/workflow/studio` — author/deploy flows from the toolbox |
-| IT-Ops console (live process trace + worker/incident monitor) | ✅ | `/workflow/ops` — replay execution on the graph, retry incidents |
+| IT-Ops console (process trace, worker/incident monitor) | ✅ | `/workflow/ops` |
+| IT-Ops log search + service control | ✅ | `Modules/ItOps` + `/itops`: searchable DB logs, worker heartbeats up/down + queue depths, graceful restart control |
 | NMS/provisioning stub adapter (PROV-INT-01) | ✅ | `Modules/Provisioning`: command ledger + swappable adapter; activation flow drives the NMS end-to-end, failure gates activation |
 | Tax gateway stub adapter (BIL-02-TAX-01) | ✅ | TaxGateway interface + StubTaxGateway (KRA-style fiscalisation); issue tax-invoice endpoint, swappable via SOPHIX_TAX_DRIVER |
-| De-hardcode catalogs → data | 🚧 | rules ✅ + RBAC ✅ runtime-managed; SLA/status-transition catalogs next |
+| De-hardcode catalogs → data | ✅ | rules + RBAC + SLA now runtime catalogs (operator-overridable). WO/OSR status transitions are deliberate guard-validation in code (per MVP baseline: Drools only for configurable policy, not fixed validation) |
 | Data-driven rules (decision tables) | ✅ | `Modules/Rules`: decision tables as DATA, operator override with zero code (proven); rules.evaluate toolbox step |
 | PWA mobile frontends (sales, contractor) | ✅ | `SOPHIX Field` installable PWA at `/m`: token auth, contractor job execution (claim/start/finalize) + sales quick-capture, offline action queue + service-worker shell |
 

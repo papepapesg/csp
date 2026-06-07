@@ -6,6 +6,7 @@ use App\Foundation\Events\Drivers\KafkaEventBus;
 use App\Foundation\Events\Outbox\OutboxEvent;
 use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Console\Command;
+use Modules\ItOps\Support\Heartbeat;
 
 /**
  * Forwards committed outbox rows to the active transport (FOUNDATION_KAFKA).
@@ -45,6 +46,10 @@ class DispatchOutboxCommand extends Command
                 $row->increment('attempts');
                 $this->error("outbox {$row->event_id} failed: {$e->getMessage()}");
             }
+        }
+
+        if (class_exists(Heartbeat::class)) {
+            Heartbeat::ping('outbox-dispatcher', null, ['dispatched' => $rows->count()]);
         }
 
         $this->info("dispatched {$rows->count()} outbox event(s) via [{$driver}]");

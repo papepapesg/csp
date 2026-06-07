@@ -25,6 +25,8 @@ class WorkflowTickCommand extends Command
             ->where('locked_until', '<', now())
             ->update(['status' => ExternalTask::CREATED, 'worker_id' => null, 'locked_until' => null]);
 
+        \Modules\ItOps\Support\Heartbeat::ping('scheduler', null, ['timersFired' => $fired, 'locksReleased' => $released]);
+
         $this->info("timers fired: {$fired}, locks released: {$released}");
 
         return self::SUCCESS;

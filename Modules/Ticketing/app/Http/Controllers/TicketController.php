@@ -7,6 +7,7 @@ use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Modules\Ticketing\Models\SlaPolicy;
 use Modules\Ticketing\Models\Ticket;
 use Modules\Ticketing\Services\TicketService;
 
@@ -97,5 +98,28 @@ class TicketController extends ApiController
     public function close(Request $request, Ticket $ticket): JsonResponse
     {
         return ApiResponse::item($this->tickets->close($ticket, $request->user()?->uid));
+    }
+
+    /** GET /api/sla-policies — the SLA catalog. */
+    public function slaPolicies(): JsonResponse
+    {
+        return ApiResponse::item(['items' => SlaPolicy::query()->orderBy('priority')->get()]);
+    }
+
+    /** POST /api/sla-policies — set/override an SLA (operator/category/priority -> hours). */
+    public function storeSlaPolicy(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'operator_code' => ['nullable', 'string', 'max:16'],
+            'category' => ['nullable', 'string', 'max:32'],
+            'priority' => ['required', 'in:LOW,NORMAL,HIGH,URGENT'],
+            'response_hours' => ['required', 'integer', 'min:1'],
+        ]);
+        $policy = SlaPolicy::query()->updateOrCreate(
+            ['operator_code' => $data['operator_code'] ?? null, 'category' => $data['category'] ?? null, 'priority' => $data['priority']],
+            ['response_hours' => $data['response_hours']],
+        );
+
+        return ApiResponse::created($policy);
     }
 }

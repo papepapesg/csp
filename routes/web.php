@@ -25,6 +25,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/reports', fn () => Inertia::render('Reports/Dashboard'))->name('reports.index');
     Route::get('/workflow/studio', fn () => Inertia::render('Workflow/Studio'))->name('workflow.studio');
     Route::get('/workflow/ops', fn () => Inertia::render('Workflow/Operations'))->name('workflow.ops');
+    Route::get('/itops', fn () => Inertia::render('ItOps/Console'))->name('itops.console');
 });
 
 Route::middleware('auth')->group(function () {

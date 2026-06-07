@@ -7,6 +7,7 @@ use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
+use Modules\Ticketing\Database\Seeders\SlaPolicySeeder;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
 
 class DatabaseSeeder extends Seeder
@@ -21,6 +22,7 @@ class DatabaseSeeder extends Seeder
             ProcessDefinitionSeeder::class,
             ProvisioningTargetSeeder::class,
             DecisionTableSeeder::class,
+            SlaPolicySeeder::class,
         ]);
 
         $admin = User::query()->firstOrCreate(

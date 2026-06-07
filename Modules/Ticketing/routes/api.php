@@ -10,6 +10,8 @@ use Modules\Ticketing\Http\Controllers\TicketController;
 */
 
 Route::middleware('auth:sanctum')->group(function () {
+    Route::get('sla-policies', [TicketController::class, 'slaPolicies'])->middleware('permission:ticket.read');
+    Route::post('sla-policies', [TicketController::class, 'storeSlaPolicy'])->middleware('permission:ticket.manage');
     Route::get('tickets', [TicketController::class, 'index'])->middleware('permission:ticket.read');
     Route::post('tickets', [TicketController::class, 'store'])->middleware(['permission:ticket.create', 'idempotency']);
     Route::get('tickets/{ticket}', [TicketController::class, 'show'])->middleware('permission:ticket.read');
