@@ -39,7 +39,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 8 | Stock/equipment basics | OSR-01, OSR-INSTANCE-01, PLM-CFG-06 | ✅ `Modules/Osr`: SKU catalog, stock locations/movements/derived balances, serialized equipment instance registry + lifecycle ledger; events, 3 tests, Postman bundle |
 | 9 | Fulfillment happy path | FUL-02 framework + WIK steps | ✅ `Modules/Fulfillment`: order capture orchestration (capture→validate→payment→subscription→install→activation) across SUB/WO modules; 3 E2E tests, Postman bundle |
 | 10 | Service activation | SUB-WF-ACTIVATE-01, FUL-03 | ✅ FUL-03 completion triggers SUB-WF activation end-to-end (order complete -> subscription ACTIVE) |
-| 11 | Notifications/internal tasks | NOT-01, ICN-01 | ⬜ |
+| 11 | Notifications/internal tasks | NOT-01, ICN-01 | ✅ `Modules/Notification`: multi-channel notifications (queue→send) + internal messages; provider stub, events, 3 tests, Postman bundle |
 | 12 | Basic ticketing | TCK-01 | ⬜ |
 | 13 | Essential frontends | FE-APP-00/01/02/03 | ⬜ |
 | 14 | Minimal reporting | REP-01, FE-APP-05 | ⬜ |

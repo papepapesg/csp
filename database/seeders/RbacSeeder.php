@@ -27,6 +27,7 @@ class RbacSeeder extends Seeder
         'workorder.read', 'workorder.assign', 'workorder.execute',
         'stock.read', 'stock.manage',
         'report.view',
+        'notification.read', 'notification.send', 'ticket.read', 'ticket.create', 'ticket.assign', 'ticket.manage',
         'franchise.manage', 'rbac.manage',
     ];
 
@@ -34,8 +35,8 @@ class RbacSeeder extends Seeder
     private const ROLES = [
         'SUPER_ADMIN' => ['*'],
         'RBAC_ADMIN' => ['rbac.manage'],
-        'CUSTOMER_CARE_AGENT' => ['customer.read', 'customer.update', 'ticket.create', 'ticket.read', 'subscription.read', 'invoice.read', 'payment.read', 'wallet.read'],
-        'CUSTOMER_CARE_SUPERVISOR' => ['customer.read', 'customer.update', 'ticket.create', 'ticket.read', 'ticket.assign', 'subscription.read', 'invoice.read'],
+        'CUSTOMER_CARE_AGENT' => ['customer.read', 'customer.update', 'ticket.create', 'ticket.read', 'ticket.manage', 'notification.read', 'notification.send', 'subscription.read', 'invoice.read', 'payment.read', 'wallet.read'],
+        'CUSTOMER_CARE_SUPERVISOR' => ['customer.read', 'customer.update', 'ticket.create', 'ticket.read', 'ticket.assign', 'ticket.manage', 'notification.read', 'notification.send', 'subscription.read', 'invoice.read'],
         'BILLING_OPERATOR' => ['invoice.read', 'invoice.manage', 'payment.read', 'payment.apply', 'wallet.read', 'wallet.manage', 'adjustment.create', 'customer.read', 'subscription.read'],
         'BILLING_LEAD' => ['invoice.read', 'invoice.manage', 'payment.read', 'payment.apply', 'wallet.read', 'wallet.manage', 'adjustment.create', 'adjustment.approve', 'customer.read', 'subscription.read', 'report.view'],
         'PRODUCT_MANAGER' => ['catalog.read', 'catalog.manage'],
