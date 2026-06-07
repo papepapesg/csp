@@ -21,7 +21,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | Per-bundle Postman generator + environment | ✅ | `sophix:postman:generate` |
 | Foundation feature tests | ✅ | `tests/Feature/Foundation/ApiStandardsTest` |
 | Modular monolith wiring (`nwidart/laravel-modules`) | ✅ | `Modules/` + composer merge-plugin |
-| RBAC admin module (CRUD, scopes, effective-access API) | ⬜ | seed only for now; full module in a later pass |
+| RBAC admin module (CRUD, effective-access API) | ✅ | `Modules/Rbac`: runtime roles/permissions/matrix/assignments + effective-access; seed is just bootstrap data |
 | Approval workflow catalog (EM-CFG-04) | ⬜ | |
 | File storage foundation API (FOUNDATION_FILE_STORAGE) | ⬜ | |
 
@@ -55,7 +55,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | IT-Ops console (live process trace + worker/incident monitor) | ✅ | `/workflow/ops` — replay execution on the graph, retry incidents |
 | NMS/provisioning stub adapter (PROV-INT-01) | ✅ | `Modules/Provisioning`: command ledger + swappable adapter; activation flow drives the NMS end-to-end, failure gates activation |
 | Tax gateway stub adapter | ⬜ | next |
-| De-hardcode catalogs (RBAC/SLA/transitions) → data | ⬜ | rules now data-driven; RBAC/SLA next |
+| De-hardcode catalogs → data | 🚧 | rules ✅ + RBAC ✅ runtime-managed; SLA/status-transition catalogs next |
 | Data-driven rules (decision tables) | ✅ | `Modules/Rules`: decision tables as DATA, operator override with zero code (proven); rules.evaluate toolbox step |
 | PWA mobile frontends (sales, contractor) | ⬜ | |
 
