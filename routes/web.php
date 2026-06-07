@@ -18,9 +18,12 @@ Route::get('/dashboard', function () {
     return Inertia::render('Dashboard');
 })->middleware(['auth', 'verified'])->name('dashboard');
 
-// ILM Backoffice — Customers screen (data loaded client-side from the ILM API).
-Route::get('/customers', fn () => Inertia::render('Ilm/Customers/Index'))
-    ->middleware(['auth', 'verified'])->name('customers.index');
+// Backoffice screens (data loaded client-side from each owning module's API).
+Route::middleware(['auth', 'verified'])->group(function () {
+    Route::get('/customers', fn () => Inertia::render('Ilm/Customers/Index'))->name('customers.index');
+    Route::get('/tickets', fn () => Inertia::render('Tickets/Index'))->name('tickets.index');
+    Route::get('/reports', fn () => Inertia::render('Reports/Dashboard'))->name('reports.index');
+});
 
 Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
