@@ -34,6 +34,7 @@ class RbacSeeder extends Seeder
         'itops.view', 'itops.manage',
         'provisioning.view', 'provisioning.manage',
         'rules.view', 'rules.manage',
+        'selfcare.access',
     ];
 
     /** Role -> granted permissions (DD_EM-CFG-03 role-permission matrix). */
@@ -52,6 +53,7 @@ class RbacSeeder extends Seeder
         'SALES_SUPERVISOR' => ['customer.read', 'customer.create', 'subscription.read', 'fulfillment.read', 'franchise.manage', 'report.view'],
         'DISPATCHER' => ['workorder.read', 'workorder.assign', 'fulfillment.read', 'workforce.read'],
         'FIELD_TECHNICIAN' => ['workorder.read', 'workorder.execute', 'stock.read'],
+        'CUSTOMER' => ['selfcare.access'],
     ];
 
     public function run(): void

@@ -126,6 +126,34 @@ class SwapRequestTest extends TestCase
         $this->assertSame(EquipmentInstance::IN_FIELD_ACTIVE, $source->refresh()->state);
     }
 
+    public function test_equ_upgrade_is_chargeable_and_places_target(): void
+    {
+        $van = $this->contractorVan('ctr_equ');
+        $source = $this->fieldInstance();
+        $target = EquipmentInstance::query()->create([
+            'instance_id' => Id::make('eqi'), 'operator_code' => 'WIK', 'sku_id' => 'sku_modem_v2',
+            'serial' => 'SN-'.Id::make('x'), 'state' => EquipmentInstance::IN_CONTRACTOR_STOCK,
+        ]);
+
+        $resp = $this->postJson('/api/swap-requests/equ', [
+            'source_instance_id' => $source->instance_id, 'target_instance_id' => $target->instance_id,
+            'subscription_id' => 'sub_1', 'customer_id' => 'cust_1', 'recovery_contractor_id' => 'ctr_equ',
+        ], ['Idempotency-Key' => 'equ-1'])->assertStatus(202);
+        $swapId = $resp->json('entityId');
+
+        $this->drain();
+        $this->postJson("/api/swap-requests/{$swapId}/field-visit", ['recovered' => true])->assertStatus(202);
+        $this->drain();
+
+        $swap = EquipmentSwapRequest::find($swapId);
+        $this->assertSame('COMPLETED', $swap->status);
+        $this->assertTrue($swap->chargeable);
+        $this->assertSame('UPGRADE_FEE', $swap->charge_code);
+        // Target device is now bound to the customer in the field.
+        $this->assertSame(EquipmentInstance::IN_FIELD_ACTIVE, $target->refresh()->state);
+        $this->assertSame('cust_1', $target->customer_id);
+    }
+
     public function test_ineligible_swap_fails_without_truck_roll(): void
     {
         $this->contractorVan('ctr_1');

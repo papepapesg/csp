@@ -49,12 +49,15 @@ class ValidateSwapEligibilityHandler implements TaskHandler
         $result = $this->rules->assess('rules.osr.swap.eligibility', $facts);
         $eligible = $result['decision']['eligible'] ?? true;
 
-        // Chargeable when the warranty is void / customer-caused (BIL-01 owns the code catalog).
-        $chargeable = $eligible && $facts['warrantyVoid'];
+        // EQU (equipment upgrade) is always chargeable (upgrade fee); otherwise
+        // chargeable only when the warranty is void / customer-caused (BIL-01 owns
+        // the code catalog).
+        $isUpgrade = $swap->kind === 'EQU';
+        $chargeable = $eligible && ($isUpgrade || $facts['warrantyVoid']);
         $swap->update([
             'status' => 'VALIDATING',
             'chargeable' => $chargeable,
-            'charge_code' => $chargeable ? 'OUT_OF_WARRANTY' : null,
+            'charge_code' => $chargeable ? ($isUpgrade ? 'UPGRADE_FEE' : 'OUT_OF_WARRANTY') : null,
         ]);
 
         return TaskResult::success([

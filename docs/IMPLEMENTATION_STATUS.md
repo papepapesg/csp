@@ -60,7 +60,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | Data-driven rules (decision tables, Drools-equivalent) | ✅ | `Modules/Rules` engine + **Rules Studio UI** (`/rules/studio`) + WIRED into the live activation gateway (ValidateActivationHandler evaluates `activation.eligibility`); operator override proven by test |
 | PWA mobile frontends (sales, contractor) | ✅ | `SOPHIX Field` installable PWA at `/m`: token auth, contractor job execution (claim/start/finalize) + sales quick-capture, offline action queue + service-worker shell |
 
-## Wave 2 — Operational Hardening ⬜
+## Wave 2 — Operational Hardening ✅
 
 **Done:**
 - terminate, **pause, resume** (SUB-WF-PAUSE/RESUME-01 — data-defined flows
@@ -137,7 +137,16 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   REST `/shifting-flow` + `/advance-phase`. The WO flow family (install/support/
   shifting) is now config-driven.
 
-**Pending:** OSR-RMA EQU (equipment upgrade) · customer self-care.
+- **OSR-RMA EQU** (equipment upgrade) — kind=EQU through the osr-swap flow:
+  always chargeable (UPGRADE_FEE), places a target device from contractor stock and
+  binds it to the customer in the field. Tested.
+- **customer self-care** (FE-APP-04) — `/api/selfcare/*` API scoped server-side to
+  the authenticated customer (users with role CUSTOMER carry `customer_id`; staff
+  with `selfcare.access` act via `?customerId`): my subscriptions, invoices,
+  self-service payment (account-ownership guarded), raise/list tickets, view
+  restrictions. Installable **SOPHIX Care** PWA at `/care`. 5 tests.
+
+**Wave 2 complete.**
 
 ## Wave 3 — Advanced Commercial, Assurance & Audit ⬜
 

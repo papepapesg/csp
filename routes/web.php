@@ -38,4 +38,7 @@ Route::middleware('auth')->group(function () {
 // SOPHIX Field — installable mobile PWA (FE-APP-02/03). Auth handled in-app via tokens.
 Route::get('/m', fn () => view('mobile'))->name('mobile');
 
+// SOPHIX Care — customer self-care PWA (FE-APP-04). Token auth in-app.
+Route::get('/care', fn () => view('care'))->name('care');
+
 require __DIR__.'/auth.php';

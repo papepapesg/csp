@@ -2,6 +2,7 @@
 
 use App\Foundation\Http\PlatformController;
 use App\Http\Controllers\Api\AuthTokenController;
+use App\Http\Controllers\SelfCareController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -27,4 +28,15 @@ Route::middleware('auth:sanctum')->group(function () {
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', fn (Request $request) => $request->user());
+});
+
+// --- FE-APP-04 customer self-care (PWA at /care) ---
+Route::middleware(['auth:sanctum', 'permission:selfcare.access'])->prefix('selfcare')->group(function () {
+    Route::get('me', [SelfCareController::class, 'me']);
+    Route::get('subscriptions', [SelfCareController::class, 'subscriptions']);
+    Route::get('subscriptions/{subscription}/restrictions', [SelfCareController::class, 'restrictions']);
+    Route::get('invoices', [SelfCareController::class, 'invoices']);
+    Route::post('payments', [SelfCareController::class, 'pay'])->middleware('idempotency');
+    Route::get('tickets', [SelfCareController::class, 'ticketIndex']);
+    Route::post('tickets', [SelfCareController::class, 'raiseTicket'])->middleware('idempotency');
 });
