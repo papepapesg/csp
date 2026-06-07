@@ -1,6 +1,8 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Catalog\Http\Controllers\ConfigCatalogController;
+use Modules\Catalog\Http\Controllers\DiscountController;
 use Modules\Catalog\Http\Controllers\HomePassController;
 use Modules\Catalog\Http\Controllers\PackageController;
 use Modules\Catalog\Http\Controllers\ServiceClassController;
@@ -46,4 +48,14 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // PLM-CFG-02 tax compute
     Route::post('tax/compute', [TaxController::class, 'compute'])->middleware('permission:catalog.read');
+
+    // PLM-CFG-04 / SIP-03 / DIS-OP-01 discounts
+    Route::get('discounts', [DiscountController::class, 'index'])->middleware('permission:catalog.read');
+    Route::post('discounts', [DiscountController::class, 'store'])->middleware('permission:catalog.manage');
+    Route::post('discounts/assign', [DiscountController::class, 'assign'])->middleware('permission:catalog.manage');
+    Route::post('discounts/compute', [DiscountController::class, 'compute'])->middleware('permission:catalog.read');
+
+    // PLM config catalogs (wallet / adjustment-type / voice-tariff / equipment-type)
+    Route::get('config/{catalog}', [ConfigCatalogController::class, 'index'])->middleware('permission:catalog.read');
+    Route::post('config/{catalog}', [ConfigCatalogController::class, 'store'])->middleware('permission:catalog.manage');
 });
