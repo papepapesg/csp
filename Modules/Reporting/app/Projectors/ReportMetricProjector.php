@@ -6,6 +6,7 @@ use App\Foundation\Events\Outbox\InboxEvent;
 use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Support\Facades\DB;
 use Modules\Reporting\Models\ReportDailyMetric;
+use Modules\Reporting\Support\MetricMap;
 
 /**
  * REP-01 read-model projector. Consumes committed domain events (via the outbox
@@ -33,34 +34,11 @@ class ReportMetricProjector
         $date = ($event->created_at ?? now())->toDateString();
         $payload = $event->payload ?? [];
 
-        foreach ($this->metricsFor($event->event_type, $payload) as [$key, $delta]) {
+        foreach (MetricMap::for($event->event_type, $payload) as [$key, $delta]) {
             $this->increment($operator, $date, $key, $delta);
         }
 
         $inbox->update(['processed_at' => now()]);
-    }
-
-    /**
-     * @param  array<string,mixed>  $payload
-     * @return array<int, array{0:string,1:float}>
-     */
-    private function metricsFor(string $type, array $payload): array
-    {
-        return match ($type) {
-            'SubscriptionCreated' => [['subscriptions_created', 1]],
-            'SubscriptionActivated' => [['subscriptions_activated', 1]],
-            'SubscriptionTerminated' => [['subscriptions_terminated', 1]],
-            'InvoiceGenerated' => [['invoices_generated', 1], ['invoices_amount', (float) ($payload['total'] ?? 0)]],
-            'PaymentReceived' => [['payments_count', 1], ['payments_amount', (float) ($payload['amount'] ?? 0)]],
-            'InvoicePaid' => [['invoices_paid', 1]],
-            'TicketCreated' => [['tickets_created', 1]],
-            'TicketResolved' => [['tickets_resolved', 1]],
-            'WorkOrderFinalized' => [['work_orders_finalized', 1]],
-            'OrderCaptured' => [['orders_captured', 1]],
-            'OrderCompleted' => [['orders_completed', 1]],
-            'WalletToppedUp' => [['wallet_topups_amount', (float) ($payload['amount'] ?? 0)]],
-            default => [],
-        };
     }
 
     private function increment(string $operator, string $date, string $key, float $delta): void

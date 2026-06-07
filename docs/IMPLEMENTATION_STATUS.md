@@ -122,8 +122,13 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   instance states (IN_FIELD_DEFECTIVE/RECOVERED_BY_CONTRACTOR/RESERVED_FOR_WO).
   REST `/swap-requests/{kind}` + field-visit. (EQP/EQU pickup/upgrade flows pending.)
 
-**Pending:** WO shifting · OSR-RMA EQP/EQU ·
-customer self-care · reporting exports/reconciliation.
+- **reporting exports + reconciliation** (REP-01) — CSV export of a dashboard's
+  metric mart (`/reports/export/{code}`) + a mart-vs-event-log integrity check
+  (`/reports/reconcile`) that re-projects the authoritative outbox events with the
+  shared `MetricMap` and diffs against the stored daily metrics, flagging any
+  missed/double-counted projection — staying within the event/mart boundary.
+
+**Pending:** WO shifting · OSR-RMA EQP/EQU · customer self-care.
 
 ## Wave 3 — Advanced Commercial, Assurance & Audit ⬜
 

@@ -11,4 +11,6 @@ use Modules\Reporting\Http\Controllers\ReportController;
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('reports/dashboards/{code}', [ReportController::class, 'dashboard'])->middleware('permission:report.view');
     Route::get('reports/metrics', [ReportController::class, 'metrics'])->middleware('permission:report.view');
+    Route::get('reports/export/{code}', [ReportController::class, 'export'])->middleware('permission:report.view');
+    Route::get('reports/reconcile', [ReportController::class, 'reconcile'])->middleware('permission:report.view');
 });

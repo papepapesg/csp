@@ -8,6 +8,9 @@ use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Reporting\Models\ReportDailyMetric;
+use Modules\Reporting\Services\ReportExportService;
+use Modules\Reporting\Services\ReportReconciliationService;
+use Symfony\Component\HttpFoundation\Response;
 
 /**
  * REP-01 dashboard + metric read API. Reads only from the reporting mart.
@@ -71,6 +74,40 @@ class ReportController extends ApiController
             ->get(['metric_date', 'metric_key', 'value']);
 
         return ApiResponse::item(['items' => $series]);
+    }
+
+    /** GET /api/reports/export/{code}.csv?from=&to= — CSV export of a dashboard's metrics. */
+    public function export(Request $request, string $code, ReportExportService $exporter): Response
+    {
+        $keys = self::DASHBOARDS[$code] ?? null;
+        if ($keys === null) {
+            return ApiResponse::error('NOT_FOUND', "Unknown dashboard [{$code}].", 404);
+        }
+        [$from, $to] = $this->range($request);
+        $operator = $request->query('operatorCode', Context::operatorCode());
+        $csv = $exporter->csv($operator, $keys, $from, $to);
+
+        return new Response($csv, 200, [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => "attachment; filename=\"{$code}-{$from}-to-{$to}.csv\"",
+        ]);
+    }
+
+    /** GET /api/reports/reconcile?from=&to= — mart-vs-event-log integrity check. */
+    public function reconcile(Request $request, ReportReconciliationService $reconciler): JsonResponse
+    {
+        [$from, $to] = $this->range($request);
+        $operator = $request->query('operatorCode', Context::operatorCode());
+        $report = $reconciler->reconcile($operator, $from, $to);
+
+        return ApiResponse::item([
+            'operatorCode' => $operator,
+            'from' => $from,
+            'to' => $to,
+            'checked' => $report['checked'],
+            'inSync' => $report['discrepancies'] === [],
+            'discrepancies' => $report['discrepancies'],
+        ]);
     }
 
     /** @return array{0:string,1:string} */
