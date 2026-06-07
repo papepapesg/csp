@@ -1,0 +1,474 @@
+ DD_ASR-02 - Information Request - Developer
+ Implementation Guide
+ Version: 1.0 Status: Draft for review Bundle: 10_other Audience: mid-level backend developers, ticketing developers, QA
+ Parent DD: DD_ASR-02 - Information Request
+
+
+
+ 1. How To Read This Guide
+ Information request is a TCK ticket flow. It is not a separate ASR case engine.
+
+ The flow creates a TCK ticket, resolves guidance from ASR config, optionally performs research, then stores a
+ customer-visible answer and resolves the ticket.
+
+
+
+ 2. Step 1 - Seed TCK Information Categories
+ Seed TCK categories.
+
+ ASR answer templates are canned agent-response content. They are not NOT-01 notification templates. If an agent chooses
+ to send the answer through SMS, email, WhatsApp, push, or portal notification, the delivery call must go through NOT-01;
+ NOT-01 owns template selection, channel, language, fallback, and retry policy.
+          insert into ticket_category_config (
+            category_id,
+            operator_code,
+            type_code,
+            category_code,
+            display_name,
+            default_priority,
+            default_queue_code,
+            default_sla_policy,
+            wo_allowed,
+            default_wo_kind,
+            status
+          ) values
+            ('tcat-package-info', 'WIK', 'PACKAGE_OR_CATALOG_QUERY', 'PACKAGE_EXPLANATION', 'Package explanation', 'P4', 'CARE_L1',
+            ('tcat-coverage-info', 'WIK', 'PACKAGE_OR_CATALOG_QUERY', 'COVERAGE_INFORMATION', 'Coverage information', 'P4', 'CARE_L1
+            ('tcat-invoice-info', 'WIK', 'BILLING_COMPLAINT', 'INVOICE_EXPLANATION', 'Invoice explanation', 'P3', 'BILLING_CARE', 'I
+            ('tcat-kyc-info', 'WIK', 'KYC_SUPPORT', 'KYC_STATUS_INFORMATION', 'KYC status information', 'P4', 'CARE_L1', 'INFO_P4_48
+
+ These are TCK categories. ASR-02 only adds guidance and answer rules.
+
+
+
+ 3. Step 2 - Seed ASR Info Category Config
+          insert into asr_info_category_config (
+            config_id,
+            operator_code,
+            category_code,
+            default_type_code,
+            answer_source_module,
+            research_required,
+            default_queue_code,
+            selfcare_allowed,
+            answer_template_code,
+            conversion_policy_json,
+            status
+          ) values
+            ('airc-package-info', 'WIK', 'PACKAGE_EXPLANATION', 'PACKAGE_OR_CATALOG_QUERY', 'SIP-01', false, 'CARE_L1', true, 'PACKA
+            ('airc-coverage-info', 'WIK', 'COVERAGE_INFORMATION', 'PACKAGE_OR_CATALOG_QUERY', 'RLM-CFG-01', false, 'CARE_L1', true,
+            ('airc-invoice-info', 'WIK', 'INVOICE_EXPLANATION', 'BILLING_COMPLAINT', 'BIL-02-READ-01', true, 'BILLING_CARE', true, '
+            ('airc-kyc-info', 'WIK', 'KYC_STATUS_INFORMATION', 'KYC_SUPPORT', 'ILM-CFG-01', false, 'CARE_L1', true, 'KYC_STATUS_BASI
+
+
+
+
+ 4. Step 3 - Seed Answer Templates
+          insert into asr_info_answer_template (
+            template_id,
+            operator_code,
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+             template_code,
+             language_code,
+             subject_template,
+             body_template,
+             required_variables_json,
+             status
+          ) values (
+             'ait-package-basic-en',
+             'WIK',
+             'PACKAGE_EXPLANATION_BASIC',
+             'en',
+             'Your current package information',
+             'Your current package is {{packageName}}. The current monthly recurring charge is {{monthlyPrice}} {{currency}} before a
+             '["packageName","monthlyPrice","currency"]',
+             'ACTIVE'
+          );
+
+ Template rendering must fail safely if required variables are missing. Do not send an answer with unresolved placeholders.
+
+
+
+ 5. Step 4 - Customer Creates Information Request
+ Self-care or Backoffice calls TCK:
+          POST /api/tickets
+          Idempotency-Key: selfcare-info-20260603-001
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "typeCode": "PACKAGE_OR_CATALOG_QUERY",
+              "categoryCode": "PACKAGE_EXPLANATION",
+              "sourceChannel": "SELF_CARE",
+              "customerId": "CUS-100045",
+              "accountId": "ACC-900045",
+              "subscriptionId": "SUB-700045",
+              "subject": "Package information request",
+              "description": "Customer wants to know current package and price.",
+              "customerVisible": true
+          }
+
+ Before allowing self-care create, validate:
+          select selfcare_allowed
+          from asr_info_category_config
+          where operator_code = 'WIK'
+            and category_code = 'PACKAGE_EXPLANATION'
+            and status = 'ACTIVE';
+
+ If selfcare_allowed = false, return:
+          403 ASR_INFO_SELFCare_CATEGORY_NOT_ALLOWED
+
+
+
+
+ 6. Step 5 - Load Guidance
+ Backoffice opens the ticket:
+          GET /api/asr/information-requests/tck-20260603-000020/guidance
+
+ Response:
+          {
+              "ticketId": "tck-20260603-000020",
+              "categoryCode": "PACKAGE_EXPLANATION",
+              "answerSourceModule": "SIP-01",
+              "researchRequired": false,
+              "answerTemplateCode": "PACKAGE_EXPLANATION_BASIC",
+              "allowedActions": [
+                "ANSWER_AND_RESOLVE",
+                "CREATE_RESEARCH_TASK",
+                "CONVERT_TO_COMPLAINT"
+              ]
+          }
+
+ Frontend uses this to show the right actions. Do not hardcode topic behavior in the UI.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 2
+ 7. Step 6 - Fetch Source Data
+ For package explanation, the service gathers:
+
+   1. Subscription from SUB-LM.
+
+   2. Package version from SIP-01.
+
+   3. Service summary from PLM-CFG-01 if needed.
+
+ Example internal source refs:
+           [
+               {"module": "SUB-LM", "ref": "SUB-700045"},
+               {"module": "SIP-01", "ref": "pkg-fiber-100m"}
+           ]
+
+ If source API is unavailable, create a research task or move ticket to WAITING_INTERNAL.
+
+
+
+ 8. Step 7 - Create Research Task When Needed
+ Invoice explanation may need billing-care review.
+           POST /api/asr/information-requests/tck-20260603-000021/research-tasks
+           Content-Type: application/json
+
+           {
+               "researchType": "TEAM_REVIEW",
+               "sourceModule": "BIL-02-READ-01",
+               "assignedQueueCode": "BILLING_CARE",
+               "requestPayload": {
+                 "invoiceId": "INV-2026-06-000045",
+                 "question": "Explain prorated line item."
+               }
+           }
+
+ Insert:
+           insert into asr_info_research_task (
+              research_task_id,
+              ticket_id,
+              operator_code,
+              research_type,
+              source_module,
+              status,
+              request_payload_json,
+              assigned_queue_code,
+              created_at
+           ) values (
+              'airt-001',
+              'tck-20260603-000021',
+              'WIK',
+              'TEAM_REVIEW',
+              'BIL-02-READ-01',
+              'OPEN',
+              '{"invoiceId":"INV-2026-06-000045","question":"Explain prorated line item."}',
+              'BILLING_CARE',
+              now()
+           );
+
+ Then update TCK ticket:
+           status_code = WAITING_INTERNAL
+           assigned_queue_code = BILLING_CARE
+
+
+
+
+ 9. Step 8 - Complete Research Task
+ Billing-care user completes the research:
+           POST /api/asr/information-requests/research-tasks/airt-001/complete
+           Content-Type: application/json
+
+           {
+               "resultPayload": {
+                 "explanation": "The line is a prorated charge for 10 days after package upgrade.",
+                 "sourceRefs": [
+                   {"module": "BIL-02-READ-01", "ref": "INV-2026-06-000045"}
+
+
+
+SOPHIX BSS Design Documents                                                                           Page 3
+                  ]
+              }
+          }
+
+ Update research task:
+          update asr_info_research_task
+          set status = 'COMPLETED',
+              result_payload_json = '{"explanation":"The line is a prorated charge for 10 days after package upgrade."}',
+              completed_at = now()
+          where research_task_id = 'airt-001';
+
+ Then return ticket to the answering queue:
+          status_code = ASSIGNED
+          assigned_queue_code = CARE_L1 or prior owner
+
+
+
+
+ 10. Step 9 - Answer And Resolve
+ CSR posts final answer:
+          POST /api/asr/information-requests/tck-20260603-000020/answer-and-resolve
+          Content-Type: application/json
+
+          {
+              "templateCode": "PACKAGE_EXPLANATION_BASIC",
+              "languageCode": "en",
+              "answerBody": "Your current package is Fiber 100M. The monthly recurring charge is 4,500 KES before any active discounts
+              "sourceRefs": [
+                 {"module": "SIP-01", "ref": "pkg-fiber-100m"},
+                 {"module": "SUB-LM", "ref": "SUB-700045"}
+              ],
+              "resolutionCode": "ANSWER_PROVIDED"
+          }
+
+ Insert answer:
+          insert into asr_info_answer (
+             answer_id,
+             ticket_id,
+             operator_code,
+             template_code,
+             language_code,
+             answer_body,
+             source_refs_json,
+             answered_by_user_id,
+             answered_at
+          ) values (
+             'aia-001',
+             'tck-20260603-000020',
+             'WIK',
+             'PACKAGE_EXPLANATION_BASIC',
+             'en',
+             'Your current package is Fiber 100M. The monthly recurring charge is 4,500 KES before any active discounts.',
+             '[{"module":"SIP-01","ref":"pkg-fiber-100m"},{"module":"SUB-LM","ref":"SUB-700045"}]',
+             'usr-care-001',
+             now()
+          );
+
+ Then:
+
+   1. Add TCK customer-visible comment with answer body.
+
+   2. Resolve ticket through TCK status API.
+
+   3. Emit InformationRequestAnswered.
+
+   4. Project event to CUST-INT-01.
+
+
+
+ 11. Step 10 - Convert To Another Flow
+ If a customer asks for invoice explanation and then says the charge is wrong, convert or link to complaint/adjustment path.
+          POST /api/asr/information-requests/tck-20260603-000021/convert
+          Content-Type: application/json
+
+          {
+              "targetFlow": "ASR-03",
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 4
+               "targetCategoryCode": "BILLING_DISPUTE",
+               "reason": "Customer rejects invoice explanation and requests correction."
+           }
+
+ Recommended implementation:
+
+   1. Create linked TCK ticket for ASR-03, or change current ticket category if policy allows.
+
+   2. Add ticket_link between old and new ticket.
+
+   3. Close original with resolutionCode = CONVERTED.
+
+   4. Emit InformationRequestConverted.
+
+ Never delete the original information-request history.
+
+
+
+ 12. Suggested Worker Commands
+ These run inside TCK/ASR workers and can be consolidated.
+           asr-info:research-sla-scan
+           asr-info:template-validation-scan
+           asr-info:source-api-retry
+
+ Recommended schedule:
+
+  Command                                                           Frequency
+
+  asr-info:research-sla-scan                                        Every 10 minutes.
+
+  asr-info:template-validation-scan                                 On template change and nightly.
+
+  asr-info:source-api-retry                                         Every 5 minutes for failed API research tasks.
+
+
+
+
+ 13. Error Codes
+  Error code                                                        Meaning
+
+  ASR_INFO_CATEGORY_NOT_FOUND                                       No active config for category.
+
+  ASR_INFO_SELFCARE_CATEGORY_NOT_ALLOWED                            Self-care attempted blocked category.
+
+  ASR_INFO_TEMPLATE_NOT_FOUND                                       Answer template missing.
+
+  ASR_INFO_TEMPLATE_VARIABLE_MISSING                                Required template variable not available.
+
+  ASR_INFO_ANSWER_REQUIRED                                          Cannot resolve without customer-visible answer.
+
+  ASR_INFO_RESEARCH_TASK_OPEN                                       Cannot resolve while required research is open.
+
+  ASR_INFO_CONVERSION_TARGET_INVALID                                Target flow/category not allowed.
+
+
+
+
+ 14. Minimum Implementation Order
+ Build in this order:
+
+   1. Seed TCK information request categories.
+
+   2. Add ASR info config migrations.
+
+   3. Seed answer templates.
+
+   4. Implement guidance API.
+
+   5. Implement self-care category validation.
+
+   6. Implement research task create/complete APIs.
+
+   7. Implement answer-and-resolve API.
+
+   8. Implement conversion/link API.
+
+   9. Emit ASR-02 business events.
+
+   10. Project to CUST-INT-01.
+
+
+
+SOPHIX BSS Design Documents                                                                                           Page 5
+   11. Patch Backoffice and self-care screens.
+
+   12. Add E2E tests.
+
+
+
+ 15. Test Scenarios
+ 15.1 Package Question Answered Immediately
+ Input:
+
+   - Self-care creates PACKAGE_EXPLANATION.
+
+ Expected:
+
+   - TCK ticket created.
+
+   - Guidance returns SIP source and template.
+
+   - CSR answers and resolves.
+
+   - Customer-visible answer appears in ticket/timeline.
+
+ 15.2 Invoice Explanation Needs Research
+ Input:
+
+   - Customer asks about invoice line.
+
+ Expected:
+
+   - Research task created for billing-care.
+
+   - Ticket moves WAITING_INTERNAL.
+
+   - Completed research allows answer.
+
+ 15.3 Missing Answer Blocks Closure
+ Input:
+
+   - User tries to resolve without answer body.
+
+ Expected:
+
+   - API returns ASR_INFO_ANSWER_REQUIRED.
+
+ 15.4 Convert To Complaint
+ Input:
+
+   - Customer rejects explanation and requests correction.
+
+ Expected:
+
+   - Original info ticket is linked to ASR-03 complaint ticket or converted by policy.
+
+   - History preserved.
+
+
+
+ 16. Developer Checklist
+ Before marking ASR-02 complete:
+
+   - Information request uses TCK ticket lifecycle.
+
+   - ASR-02 does not mutate business records.
+
+   - Guidance is config-driven.
+
+   - Self-care categories are explicitly allowed.
+
+   - Research tasks preserve source module and result.
+
+   - Final answer is customer-visible and stored.
+
+
+SOPHIX BSS Design Documents                                                              Page 6
+   - Conversion preserves original history.
+
+   - Customer timeline receives events.
+
+
+
+
+SOPHIX BSS Design Documents                   Page 7
+

@@ -1,0 +1,1170 @@
+ DD_SUB-WF-ACTIVATE-01 - Subscription Activation
+ Developer implementation guide: DD_SUB-WF-ACTIVATE-01-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ SUB-WF-ACTIVATE-01 defines the activation operation for a subscription.
+
+ Activation moves a subscription from:
+           CREATED -> ACTIVE
+
+ It is the first state-changing workflow in the customer service lifecycle. After activation succeeds, the customer can receive
+ service, billing can start, fulfillment has provisioned the network, equipment is bound, and downstream systems receive a
+ SubscriptionActivated event.
+
+ Use this DD when implementing:
+
+   - POST /api/subscriptions/{subscription_id}/activate.
+
+   - Activation preview.
+
+   - Activation validation rules.
+
+   - subscription_activation_config.
+
+   - Activation-specific BPMN variables.
+
+   - Activation-specific Kafka events.
+
+   - Activation-specific Drools package behavior.
+
+   - The activation composition of shared workers from DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+
+ 2. Ownership
+ This DD owns:
+
+   - Activation trigger taxonomy.
+
+   - Activation config table.
+
+   - Activation precondition rules.
+
+   - Cycle anchor overflow rules for activation.
+
+   - Activation backdating rules.
+
+   - Activation equipment-binding rules.
+
+   - Activation REST endpoint contract.
+
+   - Activation preview endpoint contract.
+
+   - Activation domain events: SubscriptionActivated and SubscriptionActivationFailed.
+
+   - Worker usage rules for activation BPMNs.
+
+ This DD does not own:
+
+   - Subscription master schema and state primitives. See SUB-LM-01.
+
+   - Operation orchestration tables, idempotency, concurrency, and operation status APIs. See SUB-WF-FRAMEWORK-01.
+
+   - Worker implementation contracts. See DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+   - WIK-specific BPMN sequence. See DD_SUB-WF-ACTIVATE-01-FLOW-WIK.
+
+   - Billing calculation, installation fees, activation fees, proration, tax, invoice, or wallet logic. See BIL DDs.
+
+   - Network provisioning. See FUL-03.
+
+   - HomePass claim. See FUL-07.
+
+   - Equipment instance lifecycle. See OSR-INSTANCE-01.
+
+   - Customer onboarding before subscription creation. See FUL-02.
+
+SOPHIX BSS Design Documents                                                                                                   Page 1
+   - Notification template/channel delivery. See NOT-01.
+
+
+ 3. Mental Model
+ Activation is not a simple status update.
+
+ It is a saga:
+            flowchart LR
+                API[Activate endpoint] --> FW[SUB-WF Framework]
+                FW --> BPMN[Activation BPMN]
+                BPMN --> VALIDATE[Drools validation]
+                BPMN --> LM1[SUB-LM pending status]
+                BPMN --> BIL[Billing intent / payment]
+                BPMN --> FUL[Fulfillment activation]
+                BPMN --> HP[HomePass claim]
+                BPMN --> OSR[Equipment bind]
+                BPMN --> LM2[SUB-LM commit ACTIVE]
+                BPMN --> EVT[Kafka event]
+                BPMN --> NOTIF[Notification]
+
+ The subscription must not become ACTIVE until the required activation work has succeeded.
+
+ For WIK, the reference flow is pay-first:
+            validate -> PENDING_ACTIVATION -> billing/payment -> network activation -> HomePass claim -> equipment bind -> ACTIVE
+
+ Other operators may have different BPMNs, but they must use the same framework and worker contracts.
+
+
+ 4. Deployment Unit Clarification
+ This DD does not introduce a standalone activation-service.
+
+ Activation is deployed as part of the subscription workflow capability:
+
+   - Route/controller in the SUB-WF application: POST /api/subscriptions/{subscription_id}/activate.
+
+   - Config migration/table: subscription_activation_config.
+
+   - BPMN process definition, for example sub-activate-wik.
+
+   - Drools package, for example rules.subscription.activate.wik.
+
+   - Worker usage through the shared worker catalog.
+
+ Budget deployment:
+            subscription app deployment:
+              - SUB-LM module
+              - SUB-WF framework module
+              - activation endpoint/controller
+              - activation BPMN deployment package
+              - worker pods/commands as defined in the WORKERS DD
+
+ Logical ownership still remains separate by DD, package/module, migration, route group, and metrics label.
+
+
+ 5. Activation Triggers
+  Trigger                           Purpose                                    Required role              Typical caller
+
+  BACKOFFICE_OPERATOR               Manual activation by back office.          SUBSCRIPTION_OPERATOR or   BO admin UI
+                                                                               SUBSCRIPTION_ADMIN
+
+  CALL_CENTER                       Activation requested through call          CALL_CENTER                Customer care UI
+                                    center.
+
+  CUSTOMER_SELF_SERVICE             Customer starts activation from            CUSTOMER_SELF_SERVICE      Customer portal
+                                    portal/app.
+
+  SALES_FIELD                       Sales/installation agent activates after   SALES_AGENT                FUL-02 onboarding/field flow
+                                    onboarding/install.
+
+  SCHEDULED_ACTIVATION              Scheduler activates on pre-booked          SCHEDULER_INTERNAL         Scheduler job
+                                    date.
+
+
+ Trigger meaning:
+
+   - All triggers have the same business intent: start service.
+
+
+
+SOPHIX BSS Design Documents                                                                                                              Page 2
+   - The trigger mainly controls audit, role-gating, and operator policy.
+
+   - Settlement differences are handled by billing intent and operator rules, not by creating separate activation operation kinds.
+
+
+ 6. Data Model
+ 6.1 subscription_activation_config
+ What this table is for:
+
+ subscription_activation_config stores operator-level activation policy. The activation endpoint, Drools rules, and
+ BPMN use this row to decide which activation paths are allowed.
+
+ Use this table when:
+
+   - Checking whether customer self-service activation is enabled.
+
+   - Checking whether sales-field activation is enabled.
+
+   - Checking whether scheduled activation is enabled.
+
+   - Resolving the default cycle-anchor overflow policy.
+
+   - Deciding whether equipment validation is strict.
+
+   - Deciding whether backdated activation is allowed.
+
+ Do not use this table for:
+
+   - Package-specific equipment requirements. Use SIP/PLM catalog data.
+
+   - Billing prices or proration formulas. Use BIL configuration and BIL-01.
+
+   - Per-customer exceptions. Use operation request data or an approved override flow.
+
+   - BPMN process key selection. Use subscription_operation_config from the framework DD.
+           CREATE TABLE subscription_activation_config (
+             operator_code                       TEXT PRIMARY KEY,
+             cycle_anchor_overflow_default       TEXT NOT NULL DEFAULT 'PRORATE_PARTIAL_CYCLE',
+             customer_self_service_enabled       BOOLEAN NOT NULL DEFAULT FALSE,
+             sales_field_activation_enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+             scheduled_activation_enabled        BOOLEAN NOT NULL DEFAULT TRUE,
+             equipment_binding_validation_strict BOOLEAN NOT NULL DEFAULT TRUE,
+             backdating_allowed                  BOOLEAN NOT NULL DEFAULT FALSE,
+             backdating_max_days                 INTEGER NOT NULL DEFAULT 0,
+             backdating_required_role            TEXT NULL,
+             updated_at                          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+             updated_by                          TEXT NOT NULL,
+
+             CHECK (cycle_anchor_overflow_default IN (
+               'ROUND_TO_28',
+               'ROUND_TO_1_NEXT_MONTH',
+               'PRORATE_PARTIAL_CYCLE'
+             )),
+             CHECK (
+               (
+                  backdating_allowed = FALSE
+                  AND backdating_max_days = 0
+                  AND backdating_required_role IS NULL
+               )
+               OR
+               (
+                  backdating_allowed = TRUE
+                  AND backdating_max_days > 0
+                  AND backdating_required_role IS NOT NULL
+               )
+             )
+           );
+
+ Column descriptions:
+
+  Column                                                             Purpose
+
+  operator_code                                                      Operator this activation policy applies to.
+
+  cycle_anchor_overflow_default                                      Default policy when activation day is 29, 30, or 31 and subscription uses
+                                                                     CALENDAR_ANCHOR.
+
+  customer_self_service_enabled                                      Allows or blocks activation from customer self-service channels.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 3
+  Column                                                                       Purpose
+
+  sales_field_activation_enabled                                               Allows or blocks activation by field sales/installation agents.
+
+  scheduled_activation_enabled                                                 Allows or blocks scheduler-driven activation.
+
+  equipment_binding_validation_strict                                          If true, equipment bindings must be validated against OSR and package
+                                                                               requirements before activation proceeds.
+
+  backdating_allowed                                                           Whether intendedActivationDate may be before today.
+
+  backdating_max_days                                                          Maximum number of days activation may be backdated. Must be zero when
+                                                                               backdating is disabled.
+
+  backdating_required_role                                                     Role required for backdating, for example SUBSCRIPTION_ADMIN. Must be null
+                                                                               when backdating is disabled.
+
+  updated_at                                                                   Last update timestamp.
+
+  updated_by                                                                   User/service that last changed the row.
+
+
+ Sample data:
+
+  operator_code   cycle_anchor_    customer_self_   sales_field_acti   scheduled_acti    equipment_bin      backdating_allo    backdating_ma       backdating_req
+                  overflow_defau   service_enable   vation_enabled     vation_enabled    ding_validation    wed                x_days              uired_role
+                  lt               d                                                     _strict
+
+  WIK             PRORATE_PAR      false            true               true              true               true               7                   SUBSCRIPTIO
+                  TIAL_CYCLE                                                                                                                       N_ADMIN
+
+  WUG             PRORATE_PAR      false            true               true              true               false              0                   NULL
+                  TIAL_CYCLE
+
+  WTZ             PRORATE_PAR      false            true               true              true               false              0                   NULL
+                  TIAL_CYCLE
+
+  YASSN           PRORATE_PAR      false            true               true              true               false              0                   NULL
+                  TIAL_CYCLE
+
+
+ Sample meaning:
+
+   - WIK allows sales-field activation, scheduled activation, strict equipment validation, and admin-only backdating up to 7
+     days.
+
+   - WUG, WTZ, and YASSN rows are conservative placeholders until their operator-specific flow DDs are written.
+
+   - None of the sample operators allows customer self-service activation in v1.0.
+
+
+ 7. Business Rules
+ 7.1 Preconditions
+  Rule                                                                         Description
+
+  R-ACT-P-1                                                                    Subscription must be in CREATED. Otherwise return 409
+                                                                               INVALID_STATE_FOR_ACTIVATION.
+
+  R-ACT-P-2                                                                    Package must exist and be ACTIVE in SIP-01 at activation time. Otherwise
+                                                                               return PACKAGE_RETIRED or PACKAGE_NOT_ACTIVE.
+
+  R-ACT-P-3                                                                    HomePass must be sellable in RLM-CFG-01. Otherwise return
+                                                                               HOMEPASS_NOT_SELLABLE.
+
+  R-ACT-P-4                                                                    Trigger role must match the trigger and config flags.
+
+  R-ACT-P-5                                                                    Operation framework must reject duplicate in-flight state-changing operations
+                                                                               for the same subscription.
+
+  R-ACT-P-6                                                                    Idempotent retry with same key and same payload returns the existing
+                                                                               operation. Same key with different payload returns 409.
+
+
+
+ 7.2 Cycle Anchor Overflow
+ Overflow applies only when:
+           cycle_model = CALENDAR_ANCHOR
+           activation day is 29, 30, or 31
+
+  Policy                                            Behavior                                                When to use
+
+  ROUND_TO_28                                       Set cycle_anchor_day = 28.                              Simple rule, no special first-cycle logic.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                               Page 4
+  Policy                                     Behavior                                            When to use
+
+  ROUND_TO_1_NEXT_MONTH                      Set cycle_anchor_day = 1 for the next month.        Operator wants clean monthly billing from day 1.
+                                             Billing cycle starts next month.
+
+  PRORATE_PARTIAL_CYCLE                      Set cycle_anchor_day = 1; bill partial period       Operator wants immediate service and fair
+                                             from activation date to next day 1.                 partial-cycle charge.
+
+
+ Rules:
+
+  Rule                                                                Description
+
+  R-ACT-OV-1                                                          Caller may provide cycleAnchorOverflowPolicy; if absent, use subscrip
+                                                                      tion_activation_config.cycle_anchor_overflow_default.
+
+  R-ACT-OV-2                                                          Resolved cycle_anchor_day must be valid for SUB-LM, which means 1 to
+                                                                      28.
+
+  R-ACT-OV-3                                                          For ROLLING_DAYS, no overflow policy applies. Cycle starts from
+                                                                      activated_at.
+
+  R-ACT-OV-4                                                          BIL-01 computes money for partial cycle. Activation workflow only passes cycle
+                                                                      and context facts.
+
+
+
+ 7.3 Equipment Bindings
+ Equipment binding request item:
+           {
+               "equipmentRequirement": "GPON_ONT",
+               "equipmentRef": "ont_01HZ_NEW01"
+           }
+
+ Rules:
+
+  Rule                                                                Description
+
+  R-ACT-EB-1                                                          Supplied equipmentRequirement values must match package/service
+                                                                      equipment requirements from SIP/PLM.
+
+  R-ACT-EB-2                                                          Missing required equipment returns 400 EQUIPMENT_MISSING.
+
+  R-ACT-EB-3                                                          Extra equipment not required by the package returns 400
+                                                                      EQUIPMENT_NOT_REQUIRED, unless operator rules explicitly allow it.
+
+  R-ACT-EB-4                                                          When strict validation is enabled, equipmentRef must exist in OSR and be
+                                                                      available for binding.
+
+  R-ACT-EB-5                                                          After fulfillment succeeds, osr-equipment-bind binds equipment to the
+                                                                      subscription.
+
+  R-ACT-EB-6                                                          Equipment authoritative state is OSR. Activation events may include equipment
+                                                                      binding summary for downstream visibility.
+
+
+
+ 7.4 Backdating
+ Rules:
+
+  Rule                                                                Description
+
+  R-ACT-BD-1                                                          Backdating is allowed only when backdating_allowed = true.
+
+  R-ACT-BD-2                                                          Backdated date must be within backdating_max_days.
+
+  R-ACT-BD-3                                                          Backdating requires backdating_required_role.
+
+  R-ACT-BD-4                                                          Future activation dates must not be accepted by this endpoint. Use
+                                                                      scheduler-driven activation instead.
+
+  R-ACT-BD-5                                                          When backdating is accepted, activated_at uses the intended date, but the
+                                                                      workflow still runs now.
+
+
+
+ 7.5 Final State Rules
+  Rule                                                                Description
+
+  R-ACT-F-1                                                           Activation success must commit SUB-LM status to ACTIVE.
+
+  R-ACT-F-2                                                           Activation failure after pending state must revert subscription to CREATED.
+
+  R-ACT-F-3                                                           Activation must emit SubscriptionActivated only after final state commit
+                                                                      succeeds.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 5
+  Rule                                                             Description
+
+  R-ACT-F-4                                                        Activation failure must emit SubscriptionActivationFailed after
+                                                                   compensation is complete.
+
+
+
+
+ 8. REST APIs
+ 8.1 Trigger Activation
+          POST /api/subscriptions/{subscription_id}/activate HTTP/1.1
+          Authorization: Bearer <jwt-or-service-token>
+          Content-Type: application/json
+          Idempotency-Key: act-sub_01HZ_NEW-20260518T100000-sa042
+
+          {
+              "operatorCode": "WIK",
+              "activationTrigger": "SALES_FIELD",
+              "intendedActivationDate": "2026-05-18",
+              "cycleAnchorOverflowPolicy": null,
+              "equipmentBindings": [
+                 {
+                    "equipmentRequirement": "GPON_ONT",
+                    "equipmentRef": "ont_01HZ_NEW01"
+                 },
+                 {
+                    "equipmentRequirement": "ATA",
+                    "equipmentRef": "ata_01HZ_NEW01"
+                 }
+              ],
+              "initiatingWorkflowKind": "FUL_02_OBR_01",
+              "initiatingWorkflowRef": "obr_01HZ_NEW_CUSTOMER"
+          }
+
+ Notes:
+
+   - initiatingActorUserId and role should be resolved from auth context, not blindly trusted from body.
+
+   - Service callers such as FUL-02 may pass workflow refs, but auth still comes from their service token.
+
+ Success:
+          202 Accepted
+
+          {
+              "operationId": "subop_01HZ_NEW_ACT",
+              "operatorCode": "WIK",
+              "subscriptionId": "sub_01HZ_NEW",
+              "operationKind": "ACTIVATE",
+              "bpmnProcessKey": "sub-activate-wik",
+              "bpmnProcessInstanceId": "pi_01HZ_NEW_ACT",
+              "currentState": "VALIDATING",
+              "finalState": null,
+              "startedAt": "2026-05-18T10:00:00Z"
+          }
+
+ Common errors:
+
+  HTTP                                       Code                                          Meaning
+
+  400                                        EQUIPMENT_MISSING                             Required package equipment was not supplied.
+
+  400                                        EQUIPMENT_NOT_REQUIRED                        Request supplied equipment not required by the
+                                                                                           package.
+
+  400                                        INVALID_CYCLE_ANCHOR_OVERFLOW_POLICY          Unknown overflow policy.
+
+  403                                        ROLE_NOT_AUTHORIZED_FOR_TRIGGER               Actor role cannot use this activation trigger.
+
+  409                                        INVALID_STATE_FOR_ACTIVATION                  Subscription is not CREATED.
+
+  409                                        ALREADY_ACTIVE                                Subscription is already active.
+
+  409                                        PACKAGE_RETIRED                               Package is no longer active.
+
+  409                                        HOMEPASS_NOT_SELLABLE                         HomePass cannot be sold/activated.
+
+  409                                        OPERATION_IN_PROGRESS                         Another state-changing operation is already
+                                                                                           running.
+
+
+
+ 8.2 Activation Preview
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 6
+ Preview is read-only. It must not:
+
+   - Insert subscription_operation.
+
+   - Start BPMN.
+
+   - Change subscription state.
+
+   - Call fulfillment.
+
+   - Bind equipment.
+           POST /api/subscriptions/{subscription_id}/activate/preview HTTP/1.1
+           Authorization: Bearer <jwt-or-service-token>
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "intendedActivationDate": "2026-05-29",
+               "cycleAnchorOverflowPolicy": "PRORATE_PARTIAL_CYCLE"
+           }
+
+ Response:
+           {
+               "subscriptionId": "sub_01HZ_NEW",
+               "resolvedActivatedAt": "2026-05-29",
+               "resolvedCycleAnchorDay": 1,
+               "cycleAnchorOverflowApplied": "PRORATE_PARTIAL_CYCLE",
+               "partialCycleDays": 3,
+               "firstCycleStart": "2026-06-01",
+               "billing": {
+                 "lineItems": [
+                    {
+                       "kind": "INSTALLATION_FEE",
+                       "amount": 3500.00,
+                       "currency": "KES",
+                       "description": "Installation fee"
+                    },
+                    {
+                       "kind": "PARTIAL_CYCLE_PRORATE",
+                       "amount": 350.00,
+                       "currency": "KES",
+                       "description": "3 days at KES 116.67/day"
+                    }
+                 ],
+                 "totals": {
+                    "net": 3850.00,
+                    "currency": "KES"
+                 }
+               }
+           }
+
+
+
+ 9. Worker Usage In This Operation
+ The worker catalog is defined in DD_SUB-WF-FRAMEWORK-01-WORKERS. This section explains how activation uses those
+ workers.
+
+ Important:
+           The list below is a logical BPMN task list, not a deployment list.
+
+ Several logical worker topics can be handled by one worker application. For example, one subscription-state-worker
+ can handle all SUB-LM topics, and one billing-worker can handle all BIL-01 topics. Keep per-topic contracts and
+ metrics, but consolidate runtime deployments where it makes operations simpler.
+
+  Worker                              Why activation uses it                  Key inputs                      Key outputs
+
+  drools-decide                       Validate preconditions, role/trigger,   kjarPackage=rules.subscripti    decisionsJson
+                                      backdating, cycle overflow, equipment   on.activate.<operator>,
+                                      policy.                                 factsJson, requestedDecisions
+
+  sub-lm-put-pending-status           Move subscription to                    subscriptionId,                 priorStatusSnapshot,
+                                      PENDING_ACTIVATION before               toStatus=PENDING_ACTIVATION,    lmEventId
+                                      external work starts.                   currentTransitionType=ACTIVA
+                                                                              TE
+
+  sub-lm-compute-cycle-window         Compute cycle dates for billing and     subscriptionId,                 cycleWindowJson
+                                      event payloads.                         referenceDate=activatedAt
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                          Page 7
+  Worker                           Why activation uses it                       Key inputs                         Key outputs
+
+  bil01-charge-pre-authorize       Create pay-first                             subscriptionId,                    billableEventId,
+                                   activation/installation/first-cycle charge   chargeCode=ACTIVATION_INTENT,      chargeCreatedAt
+                                   when operator BPMN requires                  chargeContext
+                                   payment before service.
+
+  bil01-confirm-charge             Confirm the pending charge after             billableEventId                    confirmedAt, chargeStatus
+                                   payment is received.
+
+  bil01-revert-pending-charge      Cancel pending charge during                 billableEventId, cancelReason      cancelledAt
+                                   activation compensation.
+
+  ful-call-activate                Ask FUL-03 to provision the service.         subscriptionId,                    activationFulfillmentId,
+                                                                                activationCorrelationId,           activationTerminalState
+                                                                                equipmentBindings
+
+  ful-call-claim-homepass          Ask FUL-07 to claim HomePass                 subscriptionId, homepassId,        homepassClaimId, incrementedA
+                                   capacity.                                    claimReason                        ctiveTerminationPoints
+
+  osr-equipment-bind               Bind ONT/STB/ATA/etc. equipment to           subscriptionId,                    boundCount, boundInstanceRefs
+                                   the subscription.                            equipmentBindings,
+                                                                                bindCorrelationId
+
+  osr-equipment-unbind             Undo equipment binding in                    subscriptionId,                    unboundCount
+                                   compensation.                                equipmentBindings,
+                                                                                unbindCorrelationId
+
+  sub-lm-put-master-fields         Persist activation master fields in          subscriptionId, fieldsJson         lmEventId
+                                   SUB-LM.
+
+  sub-lm-commit-state              Commit subscription to ACTIVE.               subscriptionId,                    committedAt, lmEventId
+                                                                                toStatus=ACTIVE, expectedFrom
+                                                                                Status=PENDING_ACTIVATION
+
+  sub-lm-revert-to-prior           Revert to CREATED if activation fails        subscriptionId,                    revertedAt, lmEventId
+                                   after pending state.                         priorStatus=CREATED,
+                                                                                failureReasonCode
+
+  kafka-emit                       Write SubscriptionActivated or               topic, key=subscriptionId,         outboxId
+                                   SubscriptionActivationFailed                 payloadJson
+                                   to outbox.
+
+  notification-send                Send welcome/failure notification.           recipientKind, recipientRef,       notificationId, dispatched
+                                   Does not fail activation if notification     notificationEventKind,
+                                   fails.                                       eventContext
+
+  subscription-operation-final     Mark operation COMPLETED or                  operationId, finalState, failure   finalizedAt
+  ize                              FAILED.                                      fields when needed
+
+
+ Operator note:
+
+   - WIK uses pay-first workers.
+
+   - An operator without pay-first activation can skip bil01-charge-pre-authorize, payment-confirmed, and
+     bil01-confirm-charge.
+
+   - If equipment is not required for a package, the BPMN can skip OSR bind/unbind workers.
+
+
+ 10. Kafka Events
+ 10.1 SubscriptionActivated
+ Topic:
+           sophix.subscription.subscription.activated
+
+ When emitted:
+
+   - After FUL-03 activation succeeds.
+
+   - After required HomePass/equipment steps are complete or accepted by their owning modules.
+
+   - After SUB-LM commits status to ACTIVE.
+
+ Sample:
+           {
+               "eventType": "SubscriptionActivated",
+               "aggregateId": "sub_01HZ_NEW",
+               "timestamp": "2026-05-18T10:00:18Z",
+               "payload": {
+                 "operatorCode": "WIK",
+                 "subscriptionId": "sub_01HZ_NEW",
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 8
+                    "customerId": "cust_01HZ_NEW",
+                    "homepassId": "hp_01HZ_NRB",
+                    "operationId": "subop_01HZ_NEW_ACT",
+                    "activationTrigger": "SALES_FIELD",
+                    "packageRef": "pkg_INET_VOIP_RES",
+                    "packageVersionId": "pkgver_003",
+                    "activatedAt": "2026-05-18T10:00:18Z",
+                    "cycleModel": "CALENDAR_ANCHOR",
+                    "resolvedCycleAnchorDay": 1,
+                    "cycleAnchorOverflowApplied": "PRORATE_PARTIAL_CYCLE",
+                    "partialCycleDays": 13,
+                    "equipmentBindings": [
+                       {
+                          "equipmentRequirement": "GPON_ONT",
+                          "equipmentRef": "ont_01HZ_NEW01"
+                       },
+                       {
+                          "equipmentRequirement": "ATA",
+                          "equipmentRef": "ata_01HZ_NEW01"
+                       }
+                    ],
+                    "billingMode": "PREPAID",
+                    "contractStartedAt": "2026-05-18T10:00:18Z",
+                    "contractMinimumTermMonths": 12,
+                    "contractEndAt": "2027-05-18T10:00:18Z",
+                    "initiatingActorUserId": "sales-agent-wik-042",
+                    "initiatingActorRole": "SALES_AGENT"
+                }
+            }
+
+ Consumers:
+
+  Consumer                                                           Use
+
+  NOT-01                                                             Welcome notification.
+
+  BIL-02                                                             Begin invoicing cycle.
+
+  BIL-05                                                             Open prepaid wallet when billing mode is prepaid.
+
+  Reporting/analytics                                                New activation reporting.
+
+
+
+ 10.2 SubscriptionActivationFailed
+ Topic:
+            sophix.subscription.subscription.activationfailed
+
+ When emitted:
+
+   - Activation cannot complete.
+
+   - Compensation has run.
+
+   - Subscription has been reverted to CREATED when it had already entered PENDING_ACTIVATION.
+
+ Sample:
+            {
+                "eventType": "SubscriptionActivationFailed",
+                "aggregateId": "sub_01HZ_NEW",
+                "timestamp": "2026-05-18T10:00:45Z",
+                "payload": {
+                  "operatorCode": "WIK",
+                  "subscriptionId": "sub_01HZ_NEW",
+                  "operationId": "subop_01HZ_NEW_ACT_FAIL",
+                  "activationTrigger": "SALES_FIELD",
+                  "rejectionReasonCode": "FULFILLMENT_FAILED",
+                  "rejectionReasonDetail": "FUL-03 returned terminal failure during GPON activation.",
+                  "subscriptionRevertedTo": "CREATED",
+                  "initiatingActorUserId": "sales-agent-wik-042"
+                }
+            }
+
+ Consumers:
+
+  Consumer                                                           Use
+
+  NOT-01                                                             Notify agent/customer where policy allows.
+
+  ICN-01                                                             Operational alert.
+
+  Reporting/analytics                                                Failed activation reporting.
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 9
+ 11. Drools Package
+ Package name pattern:
+             rules.subscription.activate.<operator>
+
+ Examples:
+             rules.subscription.activate.wik
+             rules.subscription.activate.wug
+             rules.subscription.activate.wtz
+             rules.subscription.activate.yassn
+
+ Activation rules should return decisions, not perform side effects.
+
+ Expected requested decisions:
+
+  Decision                                       Purpose                                           Example output
+
+  validate-preconditions                         Confirms subscription/package/HomePass/role are   {"eligible":true}
+                                                 valid.
+
+  validate-backdating                            Confirms intended activation date is allowed.     {"backdatingValid":true,"backdatingApp
+                                                                                                   lied":false}
+
+  resolve-cycle-anchor-overflow                  Resolves anchor day and partial-cycle facts.      {"resolvedCycleAnchorDay":1,"partialCy
+                                                                                                   cleDays":3}
+
+  validate-equipment-bindings                    Confirms equipment request matches                {"equipmentValid":true}
+                                                 operator/package policy.
+
+
+ Sample facts:
+             {
+                 "operatorCode": "WIK",
+                 "subscriptionStatus": "CREATED",
+                 "packageStatus": "ACTIVE",
+                 "homepassSellable": true,
+                 "activationTrigger": "SALES_FIELD",
+                 "initiatingActorRole": "SALES_AGENT",
+                 "intendedActivationDate": "2026-05-18",
+                 "cycleModel": "CALENDAR_ANCHOR",
+                 "equipmentBindings": [
+                    {
+                      "equipmentRequirement": "GPON_ONT",
+                      "equipmentRef": "ont_01HZ_NEW01"
+                    }
+                 ],
+                 "activationConfig": {
+                    "salesFieldActivationEnabled": true,
+                    "equipmentBindingValidationStrict": true
+                 }
+             }
+
+ Sample decisions:
+             {
+                 "eligible": true,
+                 "backdatingApplied": false,
+                 "backdatingValid": true,
+                 "resolvedCycleAnchorDay": 18,
+                 "partialCycleDays": 0,
+                 "overflowApplied": null,
+                 "equipmentValid": true
+             }
+
+
+
+ 12. Auth
+ Activation endpoint must use FOUNDATION_AUTH.
+
+ Rules:
+
+   - Resolve actor user and role from JWT/service token.
+
+   - Do not trust actor role from request body.
+
+   - Service-to-service calls must use service accounts.
+
+   - CUSTOMER_SELF_SERVICE trigger requires both role and config flag.
+
+   - SALES_FIELD trigger requires both role and config flag.
+
+
+SOPHIX BSS Design Documents                                                                                                       Page 10
+   - Backdating requires the configured role.
+
+ Additional group required by activation:
+
+  Group                                                           Purpose
+
+  SALES_AGENT                                                     Allows field sales/installation activation when enabled by config.
+
+
+ If SALES_AGENT is not yet in FOUNDATION_AUTH, add it as a subscription workflow group before production activation
+ rollout.
+
+
+ 13. Error Handling
+  Error code                                    HTTP/status                                   Meaning
+
+  INVALID_STATE_FOR_ACTIVATION                  409                                           Subscription is not CREATED.
+
+  ALREADY_ACTIVE                                409                                           Subscription is already ACTIVE.
+
+  SUBSCRIPTION_TERMINATED                       409                                           Subscription is terminal and cannot be activated.
+
+  PACKAGE_RETIRED                               409                                           Package is no longer active.
+
+  HOMEPASS_NOT_SELLABLE                         409                                           HomePass cannot be sold/activated.
+
+  ROLE_NOT_AUTHORIZED_FOR_TRIGGER               403                                           Actor role cannot use requested trigger.
+
+  CUSTOMER_SELF_SERVICE_ACTIVATION_DISAB        403                                           Self-service trigger disabled for operator.
+  LED
+
+  SALES_FIELD_ACTIVATION_DISABLED               403                                           Sales-field trigger disabled for operator.
+
+  BACKDATING_NOT_ALLOWED                        403 or 400                                    Backdating disabled or role missing.
+
+  BACKDATING_RANGE_EXCEEDED                     400                                           Intended date is too far in the past.
+
+  FUTURE_ACTIVATION_DATE_NOT_ALLOWED            400                                           Use scheduler instead.
+
+  EQUIPMENT_MISSING                             400                                           Required equipment not supplied.
+
+  EQUIPMENT_NOT_REQUIRED                        400                                           Extra equipment supplied.
+
+  EQUIPMENT_BINDING_INVALID                     400 or 409                                    Equipment does not exist or cannot be bound.
+
+  ACTIVATION_PAYMENT_TIMEOUT                    Final failure                                 Payment was not confirmed before BPMN timer.
+
+  FULFILLMENT_FAILED                            Final failure                                 FUL-03 returned terminal failure.
+
+
+
+
+ 14. Implementation Notes
+ 14.1 Trigger Endpoint Sequence
+ Use this sequence:
+
+   1. Authenticate caller.
+
+   2. Resolve actor user ID, role, and operator scope from auth context.
+
+   3. Validate Idempotency-Key.
+
+   4. Validate request shape.
+
+   5. Load subscription from SUB-LM/read model.
+
+   6. Load subscription_activation_config.
+
+   7. Load framework subscription_operation_config for (operator_code, ACTIVATE).
+
+   8. Validate trigger role and config flags.
+
+   9. Validate subscription is CREATED.
+
+   10. Validate package and HomePass references.
+
+   11. Validate equipment request shape.
+
+   12. Call framework start operation contract with operationKind=ACTIVATE.
+
+   13. Framework creates subscription_operation and starts BPMN.
+
+   14. Return 202 Accepted.
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 11
+ Keep trigger endpoint logic thin. Detailed orchestration belongs in BPMN.
+
+ 14.2 Idempotency
+ Activation trigger must use framework idempotency:
+             (operator_code, idempotency_key)
+
+ Same key and same request:
+             return existing operation
+
+ Same key and different request:
+             409 IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST
+
+ Recommended idempotency key from FUL-02:
+             activation:<subscriptionId>:<onboardingRef>
+
+
+ 14.3 Activation Date Resolution
+ Compute these values before billing and final commit:
+
+  Value                                                                Meaning
+
+  resolvedActivatedAt                                                  Date/time that business treats as activation time.
+
+  resolvedCycleAnchorDay                                               SUB-LM-safe anchor day, 1 to 28.
+
+  cycleAnchorOverflowApplied                                           Null or selected overflow policy.
+
+  partialCycleDays                                                     Days to pass to billing for partial-cycle calculation.
+
+
+ Do not let SUB-LM accept invalid anchor days. Activation must resolve days 29-31 before calling
+ sub-lm-put-master-fields.
+
+ 14.4 Equipment Validation
+ Validation has two layers:
+
+   1. Shape validation in API/BPMN: array exists, fields are present, no duplicate equipmentRequirement.
+
+   2. Business validation through catalog/OSR: required equipment matches package, equipment instances exist and can be
+     bound.
+
+ Do not bind equipment before network activation succeeds unless the operator BPMN explicitly requires early reservation.
+
+ 14.5 Compensation
+ Minimum compensation behavior:
+
+  Failure point                                                        Compensation
+
+  Validation fails before pending state                                Finalize failed; no subscription revert needed.
+
+  Pending state set, billing fails                                     sub-lm-revert-to-prior, finalize failed.
+
+  Payment timeout                                                      bil01-revert-pending-charge, sub-lm-revert-to-prior, finalize
+                                                                       failed.
+
+  Fulfillment fails                                                    bil01-revert-pending-charge, sub-lm-revert-to-prior, finalize
+                                                                       failed.
+
+  Equipment bind fails after fulfillment                               Reverse fulfillment if available, revert charge, revert subscription, finalize failed.
+
+  SUB-LM commit fails after fulfillment                                Route to manual recovery; do not silently mark completed.
+
+
+
+ 14.6 Event Timing
+ Emit SubscriptionActivated only after:
+
+   1. SUB-LM commit to ACTIVE succeeded.
+
+   2. Required billing confirmation succeeded, if pay-first is used.
+
+   3. Required fulfillment succeeded.
+
+   4. Required equipment binding succeeded or was explicitly skipped by policy.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                        Page 12
+ Do not emit SubscriptionActivated from the trigger endpoint.
+
+
+ 15. Infrastructure Recommendations
+ Activation does not require separate infrastructure from SUB-WF.
+
+ Deploy these artifacts with the subscription workflow service:
+
+  Artifact                                                          Where it runs
+
+  Activation endpoint/controller                                    SUB-WF API pods.
+
+  Activation config migration                                       Application DB migration pipeline.
+
+  Activation BPMN files                                             Camunda deployment pipeline.
+
+  Activation Drools packages                                        Drools/KIE deployment pipeline.
+
+  Activation worker usage                                           Worker pods from the WORKERS DD.
+
+
+ Medium deployment guidance:
+
+   - Use the SUB-WF API and worker sizing already defined in the framework and worker DDs.
+
+   - Ensure at least two worker replicas can process activation topics.
+
+   - Ensure activation worker topics have dashboards for backlog, failure rate, and p95 duration.
+
+   - Ensure FUL-03 and BIL-01 latency stays below worker lock-duration safety margins.
+
+ AWS guidance:
+
+   - No separate ECS/EKS service is required just for activation.
+
+   - Deploy activation BPMN and rules as versioned artifacts.
+
+   - Use CloudWatch alarms for activation failure rate, payment timeout count, fulfillment failure count, and stuck
+     PENDING_ACTIVATION subscriptions.
+
+
+ 16. Cross-DD Dependencies
+  DD/module                                                         Relationship
+
+  SUB-WF-FRAMEWORK-01                                               Creates operation row, enforces idempotency/concurrency, starts BPMN.
+
+  DD_SUB-WF-FRAMEWORK-01-WORKERS                                    Defines workers used by activation.
+
+  DD_SUB-WF-ACTIVATE-01-FLOW-WIK                                    WIK reference BPMN for this operation.
+
+  SUB-LM-01                                                         Owns subscription status and master fields.
+
+  SIP-01                                                            Package active/version validation.
+
+  PLM-CFG-01                                                        Service/equipment requirement catalog.
+
+  RLM-CFG-01                                                        HomePass sellability validation.
+
+  BIL-01                                                            Activation billing intent and pay-first charge.
+
+  BIL-02                                                            Consumes activation event for invoice cycle.
+
+  BIL-05                                                            Opens prepaid wallet after activation event.
+
+  FUL-02                                                            Upstream onboarding caller.
+
+  FUL-03                                                            Network activation fulfillment.
+
+  FUL-07                                                            HomePass claim.
+
+  OSR-INSTANCE-01                                                   Equipment binding.
+
+  NOT-01                                                            Welcome/failure notifications.
+
+  FOUNDATION_AUTH                                                   Roles and service accounts.
+
+  FOUNDATION_DROOLS                                                 Activation rule execution.
+
+
+
+
+ 17. Build Order
+ The detailed implementation procedure is in DD_SUB-WF-ACTIVATE-01-DEV_IMPL_GUIDE-v1.0.md.
+
+ Recommended build order:
+
+
+SOPHIX BSS Design Documents                                                                                                           Page 13
+   1. Add activation config migration and seed rows.
+
+   2. Add framework operation config for ACTIVATE.
+
+   3. Implement DTOs, controller, and activation service.
+
+   4. Implement preview endpoint.
+
+   5. Implement Drools fact and decision mapping.
+
+   6. Deploy the first BPMN, normally sub-activate-wik.
+
+   7. Wire BPMN service tasks to worker topics.
+
+   8. Add event builders.
+
+   9. Add compensation paths.
+
+   10. Run unit, service, BPMN, and manual smoke tests from the dev guide.
+
+
+ 18. Test Checklist
+   - [ ] Activation rejects non-CREATED subscriptions.
+
+   - [ ] Activation rejects retired/inactive package.
+
+   - [ ] Activation rejects non-sellable HomePass.
+
+   - [ ] Trigger role gating works for every trigger.
+
+   - [ ] Disabled config flag blocks corresponding trigger.
+
+   - [ ] Idempotent retry returns existing operation.
+
+   - [ ] Same idempotency key with different payload returns 409.
+
+   - [ ] Overflow day 29/30/31 resolves correctly for each policy.
+
+   - [ ] ROLLING_DAYS ignores overflow policy.
+
+   - [ ] Backdating disabled rejects past date.
+
+   - [ ] Backdating enabled requires configured role.
+
+   - [ ] Equipment missing returns EQUIPMENT_MISSING.
+
+   - [ ] Equipment invalid returns EQUIPMENT_BINDING_INVALID.
+
+   - [ ] Preview does not create operation or mutate state.
+
+   - [ ] Success commits subscription to ACTIVE.
+
+   - [ ] Success emits SubscriptionActivated only after commit.
+
+   - [ ] Failure after pending state reverts to CREATED.
+
+   - [ ] Failure emits SubscriptionActivationFailed after compensation.
+
+   - [ ] Notification failure does not fail activation.
+
+
+ 19. Developer Checklist
+   - [ ] Do not activate by directly updating subscription.status_code.
+
+   - [ ] Use SUB-WF framework start contract.
+
+   - [ ] Use shared workers by topic name.
+
+   - [ ] Keep billing calculation in BIL.
+
+   - [ ] Keep network provisioning in FUL-03.
+
+   - [ ] Keep equipment state in OSR.
+
+   - [ ] Keep large payloads out of Camunda variables.
+
+   - [ ] Emit domain events through kafka-emit/outbox.
+
+   - [ ] Keep operator-specific variation in BPMN, Drools, and config.
+
+SOPHIX BSS Design Documents                                                  Page 14
+

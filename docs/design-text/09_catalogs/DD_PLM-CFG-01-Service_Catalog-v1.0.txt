@@ -1,0 +1,913 @@
+ DD: PLM-CFG-01 v1.0 — Service Catalog
+ Developer implementation guide: DD_PLM-CFG-01-Service_Catalog-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract DD_PLM-CFG-01-Service_Catalog-v1.0.md.
+
+ Verdict: ■ Updated | Wave: 1 | Group I: Product Catalog | Version: v1.0 The Service Catalog. Owns: the service_class
+ table (admin-managed classes: Internet, Voice, IPTV, Monitoring, ...), the service table (the leaf Services that Packages
+ compose), the Provisioner adapter interface declaration, and the rules governing addressable vs non-addressable Services.
+ What changed from v0.8: - Added service_class.requires_equipment boolean — declares whether a service class
+ needs customer-premises equipment to fulfill. Used by UPGRADE-01 / DOWNGRADE-01 / MIGRATION-01 for
+ equipment-delta computation when comparing source vs target Package compositions. - Added
+ service_class.service_management_key_default — the canonical HomePass endpoint key per class (e.g., Internet
+ class → data, IPTV class → iptv_multicast). Services inherit this default; per-Service override remains. - Formal
+ Provisioner interface declaration — 5 methods (activateService / modifyService / deactivateService /
+ resumeService / suspendService). Referenced by FUL-03 v1.1 (first four) + FUL-04 v1.0 (suspendService +
+ restriction verbs not on this interface). - Service version pinning contract — Services no longer carry rate-cards or pricing
+ in this catalog; pricing lives in BIL-CFG-01 BillableEvents (for ONE_SHOT) and SIP-01 Package Versions (for
+ CONTINUOUS). PLM-CFG-01 v1.0 strictly owns the Service shape (class, addressability, equipment-requirement,
+ network-profile-shape, service-management-key, provisioner-key) — not its price.
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    9_catalogs/DD_PLM-CFG-01-Service_Catalog-v1.0.md
+
+  Version                                                           v1.0
+
+  DD type                                                           module contract
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   Not explicitly defined
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+   - DELETE /api/plm/service-classes/{id}
+
+   - DELETE /api/plm/services/{id}
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+   - GET /api/plm/service-classes/{id}
+
+   - GET /api/plm/service-classes?operatorCode=WIK&retired=false
+
+   - GET /api/plm/services/{id}
+
+   - GET /api/plm/services?operatorCode=WIK&serviceClassId=scl_...&consumptionModel=CONTINUOUS
+
+   - PATCH /api/plm/service-classes/{id}
+
+   - PATCH /api/plm/services/{id}
+
+   - POST /api/plm/service-classes
+
+   - POST /api/plm/services
+
+ 4.2 Tables
+   - service
+
+   - service_class
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - gpon-res
+
+   - hfc-docsis
+
+   - verimatrix-iptv
+
+   - voip-sip
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - No domain events are explicitly declared in this DD.
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+SOPHIX BSS Design Documents                                                                                              Page 2
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                         Recommendation
+
+  API/runtime                                                     Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                         Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                        Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                           Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                         Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                          Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                         Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                  Store with IRSA.
+
+  Observability                                                   Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                  dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ Updated | Wave: 1 | Group I: Product Catalog | Version: v1.0
+
+ The Service Catalog. Owns: the service_class table (admin-managed classes: Internet, Voice, IPTV, Monitoring, ...), the
+ service table (the leaf Services that Packages compose), the Provisioner adapter interface declaration, and the rules
+ governing addressable vs non-addressable Services.
+
+ What changed from v0.8:
+
+ - Added service_class.requires_equipment boolean — declares whether a service class needs customer-premises
+ equipment to fulfill. Used by UPGRADE-01 / DOWNGRADE-01 / MIGRATION-01 for equipment-delta computation when
+ comparing source vs target Package compositions.
+
+ - Added service_class.service_management_key_default — the canonical HomePass endpoint key per class
+ (e.g., Internet class → data, IPTV class → iptv_multicast). Services inherit this default; per-Service override remains.
+
+ - Formal Provisioner interface declaration — 5 methods (activateService / modifyService / deactivateService
+ / resumeService / suspendService). Referenced by FUL-03 v1.1 (first four) + FUL-04 v1.0 (suspendService +
+ restriction verbs not on this interface).
+
+ - Service version pinning contract — Services no longer carry rate-cards or pricing in this catalog; pricing lives in
+ BIL-CFG-01 BillableEvents (for ONE_SHOT) and SIP-01 Package Versions (for CONTINUOUS). PLM-CFG-01 v1.0 strictly
+ owns the Service shape (class, addressability, equipment-requirement, network-profile-shape, service-management-key,
+ provisioner-key) — not its price.
+
+
+ Glossary
+  Term                                                            Meaning
+
+  Service class                                                   A coarse-grained category of fulfillment: Internet, Voice, IPTV,
+                                                                  Monitoring, Mobile, etc. Per-operator catalog. Carries class-level defaults
+                                                                  (tax group, wallet, equipment requirement, canonical service-management key).
+
+  Service                                                         A specific leaf product within a class — e.g., "Internet 100Mbps GPON", "VoIP
+                                                                  standard", "IPTV basic tier". Belongs to one class. Bundled into Packages (per
+                                                                  SIP-01).
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 3
+  Term                                                             Meaning
+
+  Addressable Service                                              A Service whose activation requires equipment + a network profile + a
+                                                                   HomePass endpoint resolution. CONTINUOUS Services in Packages are
+                                                                   typically addressable. ONE_SHOT Services (fees, ETFs) are typically
+                                                                   non-addressable.
+
+  Consumption model                                                CONTINUOUS (recurring; accrues across bill cycles; belongs to Packages) or
+                                                                   ONE_SHOT (single charge on a trigger; referenced by BillableEvents in
+                                                                   BIL-CFG-01).
+
+  Provisioner key                                                  The identifier of the adapter that translates a FUL-03 / FUL-04 / FUL-05 verb
+                                                                   into vendor commands. Examples: gpon-res (Huawei NCE), hfc-docsis
+                                                                   (Casa BSR), voip-sip (SIP switch), verimatrix-iptv (Verimatrix
+                                                                   middleware).
+
+  Network profile shape                                            The set of parameters the Provisioner adapter needs to fulfill: speed tier, codec,
+                                                                   multicast groups, etc. Carried as JSONB {provisionerKey, params} per
+                                                                   Service.
+
+  Service management key                                           The key looked up in the HomePass's service_management_endpoints
+                                                                   map (per RLM-CFG-01) to resolve {nodeCode, port}. Examples: data,
+                                                                   voice, iptv_multicast, monitoring. Per-deployment configurable.
+
+  requires_equipment                                               Class-level flag declaring whether this service class needs customer-premises
+                                                                   equipment (ONT, ATA, STB, modem) to fulfill. Drives
+                                                                   UPGRADE/DOWNGRADE/MIGRATION's equipment-delta logic.
+
+
+
+
+ 1. What this is
+ The Service Catalog. Two entities: service_class (the classes the operator sells — Internet, Voice, IPTV, ...) and
+ service (the specific leaf products within a class — Internet 100Mbps GPON, VoIP standard, ...). Services are bundled into
+ Packages by SIP-01.
+
+ Who reads from PLM-CFG-01:
+
+   - SIP-01 — reads Service definitions when validating a Package's serviceRefs[].
+
+   - FUL-03 / FUL-04 / FUL-05 — read Service definitions to resolve service_management_key → HomePass endpoint,
+     dispatch to Provisioner adapter via provisioner_key, apply network_profile_shape.params.
+
+   - UPGRADE-01 / DOWNGRADE-01 / MIGRATION-01 — read service_class.requires_equipment to compute
+     equipment-delta when comparing source vs target Package compositions.
+
+   - BIL-01 / BIL-CFG-01 — read Service consumption_model to enforce that CONTINUOUS Services are referenced by
+     Packages and ONE_SHOT Services by BillableEvents.
+
+   - CVM / Reporting — read revenue_category for finance/analytics revenue stream separation.
+
+ What this DD owns:
+
+   1. The service_class and service tables.
+
+   2. The Provisioner adapter interface declaration (5 methods).
+
+   3. The rules governing addressability + consumption model + equipment requirement.
+
+   4. CRUD APIs for admin-managed catalog entries.
+
+   5. Kafka events on catalog changes (consumed by SIP-01 + downstream).
+
+ What this DD does NOT own:
+
+   - Package composition — owned by SIP-01.
+
+   - Service pricing — pricing lives in BIL-CFG-01 (BillableEvents for ONE_SHOT) and SIP-01 Package Versions (for
+     CONTINUOUS Package prices). PLM-CFG-01 carries default tax group and default wallet refs for revenue allocation, but
+     never a price.
+
+   - Provisioner adapter implementations — those are code beans in the fulfillment module, registered per
+     provisioner_key. PLM-CFG-01 declares the interface contract; the beans live in code.
+
+   - HomePass service_management_endpoints map — owned by RLM-CFG-01. PLM-CFG-01 only declares which
+     keys Services consult.
+
+   - Equipment binding to subscriptions — owned by OSR-INSTANCE-01 (the equipment inventory module). PLM-CFG-01
+     declares the requirement; OSR-INSTANCE-01 tracks the binding.
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 4
+ 2. Schemas
+ 2.1 service_class
+ Admin-managed list of service classes. One row per (operator, class).
+           CREATE TABLE service_class (
+              id                                  TEXT PRIMARY KEY,
+              operator_code                       TEXT NOT NULL,
+              name                                TEXT NOT NULL,
+              description                         TEXT NULL,
+              requires_equipment                  BOOLEAN NOT NULL DEFAULT FALSE,
+              service_management_key_default      TEXT NULL,
+              default_tax_group_ref               TEXT NOT NULL,
+              default_wallet_ref                  TEXT NOT NULL,
+              created_at                          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              created_by                          TEXT NOT NULL,
+              updated_at                          TIMESTAMPTZ NULL,
+              updated_by                          TEXT NULL,
+              retired_at                          TIMESTAMPTZ NULL,
+              UNIQUE (operator_code, name) WHERE retired_at IS NULL
+           );
+
+  Column                                                          Notes
+
+  id                                                              ULID. Example: scl_01HX_INET
+
+  operator_code                                                   WIK / WUG / WTZ / YASSN. Classes are operator-scoped — each operator can
+                                                                  declare its own taxonomy.
+
+  name                                                            Display name, unique per operator. Examples: Internet, Voice, IPTV,
+                                                                  Monitoring, Mobile.
+
+  requires_equipment                                              true when this class needs customer-premises equipment (ONT for Internet,
+                                                                  ATA for Voice, STB for IPTV). false for software/cloud services (Mobile data
+                                                                  plan, OTT bundle). Drives UPGRADE/DOWNGRADE/MIGRATION's
+                                                                  equipment-delta logic — when target Package adds a class with
+                                                                  requires_equipment=true and the customer doesn't have suitable
+                                                                  equipment bound, the workflow forces equipmentPath=NEW_INSTALL.
+
+  service_management_key_default                                  The canonical HomePass endpoint key for this class. NULL for
+                                                                  non-addressable classes (cloud-only). Examples: Internet → data, Voice →
+                                                                  voice, IPTV → iptv_multicast, Monitoring → monitoring. Services
+                                                                  inherit this default; per-Service override remains via the Service's
+                                                                  service_management_key column.
+
+  default_tax_group_ref                                           String ref to PLM-CFG-02 tax group. Used as default for Services in this class;
+                                                                  per-Service override allowed.
+
+  default_wallet_ref                                              String ref to PLM-CFG-03 wallet. Used as default for Services in this class.
+
+
+ Sample data:
+
+  id                 operator_code    name              requires_equipment   service_manageme        default_tax_group_r     default_wallet_ref
+                                                                             nt_key_default          ef
+
+  scl_01HX_INET_W    WIK              Internet          true                 data                    tg_VAT_16_WIK           wlt_WIK_AIRTIME
+  IK
+
+  scl_01HX_VOIP_W    WIK              Voice             true                 voice                   tg_VAT_16_WIK           wlt_WIK_AIRTIME
+  IK
+
+  scl_01HX_IPTV_W    WIK              IPTV              true                 iptv_multicast          tg_VAT_16_WIK           wlt_WIK_AIRTIME
+  IK
+
+  scl_01HX_MON_WI    WIK              Monitoring        false                monitoring              tg_VAT_16_WIK           wlt_WIK_AIRTIME
+  K
+
+  scl_01HX_OTT_WI    WIK              OTT_Bundle        false                NULL                    tg_VAT_16_WIK           wlt_WIK_AIRTIME
+  K
+
+
+ (Row 5: an OTT bundle — Netflix-style add-on — is non-addressable, no HomePass endpoint needed, no equipment.)
+
+ 2.2 service
+ The Service catalog. One row per (operator, service code).
+           CREATE TABLE service (
+             id                          TEXT PRIMARY KEY,
+             operator_code               TEXT NOT NULL,
+
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 5
+             code                        TEXT NOT NULL,
+             description                 TEXT NULL,
+             service_class_id            TEXT NOT NULL REFERENCES service_class(id),
+             service_group               TEXT NULL,
+             is_addressable              BOOLEAN NOT NULL DEFAULT FALSE,
+             consumption_model           TEXT NOT NULL,
+             revenue_category            TEXT NULL,
+             equipment_requirement_ref   TEXT NULL,
+             network_profile_shape       JSONB NULL,
+             provisioner_key             TEXT NULL,
+             service_management_key      TEXT NULL,
+             default_wallet_ref          TEXT NOT NULL,
+             default_tax_group_ref       TEXT NOT NULL,
+             created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+             created_by                  TEXT NOT NULL,
+             updated_at                  TIMESTAMPTZ NULL,
+             updated_by                  TEXT NULL,
+             retired_at                  TIMESTAMPTZ NULL,
+             UNIQUE (operator_code, code) WHERE retired_at IS NULL,
+             CHECK (consumption_model IN ('CONTINUOUS','ONE_SHOT')),
+             CHECK (NOT is_addressable OR (provisioner_key IS NOT NULL AND network_profile_shape IS NOT NULL))
+           );
+
+  Column                                                                 Notes
+
+  id                                                                     ULID. Example: svc_01HX_INET_100M_GPON_WIK
+
+  code                                                                   Unique business code per operator. Example: INET_100M_GPON.
+
+  service_class_id                                                       FK to service_class.
+
+  is_addressable                                                         true when activation needs equipment + network profile + HomePass endpoint
+                                                                         resolution. CONTINUOUS Services in Packages are typically addressable;
+                                                                         ONE_SHOT fee Services are typically non-addressable. Check constraint
+                                                                         enforces that addressable Services have provisioner_key +
+                                                                         network_profile_shape set.
+
+  consumption_model                                                      CONTINUOUS (recurring; in Packages; e.g., Internet 100Mbps) or ONE_SHOT
+                                                                         (single charge; referenced by BillableEvents; e.g., installation fee, ETF).
+                                                                         Immutable after create.
+
+  revenue_category                                                       Optional finance classification mirroring BIL-CFG-01's
+                                                                         billable_event_category (RECURRING_INTERNET, RECURRING_VOICE,
+                                                                         INSTALLATION_FEE, ETF, VAS, REGULATORY, RECURRING_IPTV, ...). Used
+                                                                         by finance/analytics for revenue stream separation.
+
+  equipment_requirement_ref                                              String ref to PLM-CFG-06 equipment-type binding. Required when
+                                                                         is_addressable=true AND class has requires_equipment=true.
+                                                                         Allows per-Service equipment-type override (e.g., GPON 1Gbps Service might
+                                                                         require a newer ONT model than the 100Mbps Service in the same class).
+
+  network_profile_shape                                                  JSONB { "params": {...} }. Examples: Internet 100Mbps →
+                                                                         {"speedDownMbps": 100, "speedUpMbps": 20}; IPTV Basic →
+                                                                         {"multicastGroups": ["epg_basic"], "stbAaaProfile":
+                                                                         "basic-tier"}. Required when is_addressable=true.
+
+  provisioner_key                                                        The Provisioner adapter that handles this Service. Required when
+                                                                         is_addressable=true. Examples: gpon-res, hfc-docsis, voip-sip,
+                                                                         verimatrix-iptv.
+
+  service_management_key                                                 The key looked up in the HomePass's service_management_endpoints
+                                                                         map. NULL inherits the class default. Required (or class default) when
+                                                                         is_addressable=true.
+
+
+ Sample data:
+
+  id             operator_code   code          service_class_i   is_addressable   consumption_      provisioner_ke    service_manag     revenue_categ
+                                               d                                  model             y                 ement_key         ory
+
+  svc_01HX_IN    WIK             INET_100M_G   scl_01HX_IN       true             CONTINUOUS        gpon-res          data              RECURRING_I
+  ET_100M_GPO                    PON           ET_WIK                                                                                   NTERNET
+  N_WIK
+
+  svc_01HX_VO    WIK             VOIP_STD      scl_01HX_VO       true             CONTINUOUS        voip-sip          voice             RECURRING_V
+  IP_STD_WIK                                   IP_WIK                                                                                   OICE
+
+  svc_01HX_IP    WIK             IPTV_BASIC    scl_01HX_IP       true             CONTINUOUS        verimatrix-       iptv_multic       RECURRING_I
+  TV_BASIC_WI                                  TV_WIK                                               iptv              ast               PTV
+  K
+
+  svc_01HX_IN    WIK             INSTALL_FEE   scl_01HX_IN       false            ONE_SHOT          NULL              NULL              INSTALLATIO
+  STALL_FEE_W                                  ET_WIK                                                                                   N_FEE
+  IK
+
+  svc_01HX_ET    WIK             EARLY_TERMI   scl_01HX_IN       false            ONE_SHOT          NULL              NULL              ETF
+  F_WIK                          NATION_FEE    ET_WIK
+
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 6
+ (Rows 4-5: ONE_SHOT non-addressable fee Services. Referenced by BIL-CFG-01 BillableEvents, not by Packages.)
+
+ network_profile_shape JSONB samples:
+          // svc_01HX_INET_100M_GPON_WIK
+          {"params": {"speedDownMbps": 100, "speedUpMbps": 20, "burstAllowanceGB": 10}}
+
+          // svc_01HX_VOIP_STD_WIK
+          {"params": {"codec": "G.711a", "didCount": 1, "callForwardingEnabled": true}}
+
+          // svc_01HX_IPTV_BASIC_WIK
+          {"params": {"multicastGroups": ["epg_zuku_basic"], "stbAaaProfile": "basic-tier", "concurrentStreamLimit": 2}}
+
+
+
+
+ 3. Provisioner adapter interface
+ Declared formally in PLM-CFG-01. Implementation beans live in the fulfillment module, registered per provisioner_key.
+ All beans implement the same interface so FUL-03 / FUL-04 / FUL-05 can dispatch generically.
+
+ 3.1 Interface declaration
+          public interface ServiceProvisioner {
+            /** Stand up a Service at the customer's premises for the first time. Called by FUL-03 (ACTIVATE_SERVICE, MODIFY_SERVICE
+            ProvisionerOutcome activateService(
+               EquipmentBinding equipment,
+               Map<String,Object> params,
+               Customer customer,
+               String targetNodeCode,
+               String targetPort
+            );
+
+              /** Change a running Service's parameters in place (e.g., speed tier change). Called by FUL-03 (MODIFY_SERVICE-modified-
+              ProvisionerOutcome modifyService(
+                 Map<String,Object> oldParams,
+                 Map<String,Object> newParams,
+                 Customer customer,
+                 String targetNodeCode,
+                 String targetPort
+              );
+
+              /** Tear down a running Service permanently (post-termination network revocation). Called by FUL-03 (MODIFY_SERVICE-drop
+              ProvisionerOutcome deactivateService(
+                 Map<String,Object> params,
+                 Customer customer,
+                 String targetNodeCode,
+                 String targetPort
+              );
+
+              /** Temporarily suspend a running Service (customer-initiated PAUSE, non-payment SUSPEND_NP, or workflow compensation).
+              ProvisionerOutcome suspendService(
+                 String reasonCategory,
+                 Map<String,Object> params,
+                 Customer customer,
+                 String targetNodeCode,
+                 String targetPort
+              );
+
+              /** Restore a suspended Service. Called by FUL-03 (RESUME_SERVICE, post-PAUSE). Also used as FUL-04's compensation inver
+              ProvisionerOutcome resumeService(
+                 Map<String,Object> params,
+                 Customer customer,
+                 String targetNodeCode,
+                 String targetPort
+              );
+          }
+
+
+ 3.2 ProvisionerOutcome contract
+          public class ProvisionerOutcome {
+            boolean success;
+            Map<String,String> adapterRefs;       // vendor-system IDs returned by the call (e.g., {"huaweiCommandId": "cmd_123"})
+            String failureReason;                 // populated when success=false; coded enum (ADAPTER_TIMEOUT, ADAPTER_ERROR, UNREACH
+            String failureDetail;                 // free-text human-readable
+            long durationMs;
+          }
+
+
+ 3.3 Adapter registration
+
+SOPHIX BSS Design Documents                                                                                           Page 7
+ Adapters register a bean in the fulfillment module's Spring context with @ServiceProvisioner(key = "gpon-res") (or
+ hfc-docsis, voip-sip, etc.). FUL-03 / FUL-04 / FUL-05 look up the bean by provisioner_key from the Service's
+ provisioner_key column.
+
+ A Service whose provisioner_key references an unregistered key fails at dispatch time with
+ UNKNOWN_PROVISIONER_KEY.
+
+ 3.4 Provisioner restrictions (FUL-04-only methods)
+ FUL-04 (Restriction Fulfillment) requires two additional methods on the adapter: applyRestriction and
+ liftRestriction. These are not on the ServiceProvisioner interface — they're on a separate
+ RestrictionCapableProvisioner extension interface. Adapters that support restrictions (e.g., AAA-capable adapters)
+ implement both; adapters that don't (e.g., partner-fulfilled OTT bundle adapters) implement only ServiceProvisioner.
+          public interface RestrictionCapableProvisioner extends ServiceProvisioner {
+            ProvisionerOutcome applyRestriction(String fulfillmentAction, String restrictionCode, Map<String,Object> params, Custome
+            ProvisionerOutcome liftRestriction(String fulfillmentAction, String restrictionCode, Map<String,Object> params, Customer
+          }
+
+ FUL-04 checks the adapter implements RestrictionCapableProvisioner before invoking restriction methods; if not,
+ returns RESTRICTION_NOT_SUPPORTED_BY_PROVISIONER for that Service.
+
+
+
+ 4. Rules
+ 4.1 Service class
+  Rule                                                         Description
+
+  R-PLM-CFG-01-CL-1                                            A service_class row is operator-scoped. Operators may declare different
+                                                               class taxonomies (e.g., WIK may have IPTV class; WUG may not yet).
+
+  R-PLM-CFG-01-CL-2                                            name is unique per operator (excluding retired). Two operators may both have a
+                                                               class named Internet; this is the typical case.
+
+  R-PLM-CFG-01-CL-3                                            requires_equipment is set at create time per operator policy. Changing it
+                                                               post-create is allowed but requires manual ops review (audit log entry
+                                                               mandatory) — changing it retroactively affects
+                                                               UPGRADE/DOWNGRADE/MIGRATION decisions for in-flight workflows.
+
+  R-PLM-CFG-01-CL-4                                            service_management_key_default may be NULL (for non-addressable
+                                                               classes like OTT bundles). When non-null, Services in this class inherit the
+                                                               value unless the Service's own service_management_key overrides.
+
+  R-PLM-CFG-01-CL-5                                            A service class with active Services (Services not retired and referenced by a
+                                                               non-retired Package) cannot itself be retired. Returns 409
+                                                               SERVICE_CLASS_IN_USE.
+
+
+
+ 4.2 Service
+  Rule                                                         Description
+
+  R-PLM-CFG-01-SV-1                                            A service row is operator-scoped. code is unique per operator (excluding
+                                                               retired).
+
+  R-PLM-CFG-01-SV-2                                            service_class_id MUST reference a non-retired service_class row in
+                                                               the same operator. Cross-operator references return 400
+                                                               SERVICE_CLASS_OPERATOR_MISMATCH.
+
+  R-PLM-CFG-01-SV-3                                            consumption_model is immutable after create. Changing requires retire +
+                                                               re-create.
+
+  R-PLM-CFG-01-SV-4                                            Addressable Services (is_addressable=true) MUST have
+                                                               provisioner_key, network_profile_shape, and
+                                                               service_management_key set (or inherited from class). Check constraint
+                                                               enforced at insert.
+
+  R-PLM-CFG-01-SV-5                                            equipment_requirement_ref is required when is_addressable=true
+                                                               AND the parent service class has requires_equipment=true. Returns 400
+                                                               EQUIPMENT_REQUIREMENT_MISSING otherwise.
+
+  R-PLM-CFG-01-SV-6                                            service_management_key inherits from
+                                                               service_class.service_management_key_default when NULL on the
+                                                               Service. The effective key at dispatch time is
+                                                               service.service_management_key ??
+                                                               service_class.service_management_key_default. NULL on both for
+                                                               addressable Services is a configuration error → 400 at create.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 8
+  Rule                                                          Description
+
+  R-PLM-CFG-01-SV-7                                             Retiring a Service requires no active Packages reference it (per SIP-01
+                                                                cross-DD check). Returns 409 SERVICE_IN_USE otherwise.
+
+
+
+ 4.3 Provisioner
+  Rule                                                          Description
+
+  R-PLM-CFG-01-PR-1                                             provisioner_key is a free-text string at the catalog level. Validation that a
+                                                                registered adapter exists is deferred to dispatch time (FUL-03 / FUL-04 /
+                                                                FUL-05). A Service may be created with an unregistered provisioner_key
+                                                                (e.g., pre-deployment); attempts to activate will fail at runtime with
+                                                                UNKNOWN_PROVISIONER_KEY.
+
+  R-PLM-CFG-01-PR-2                                             The 5-method ServiceProvisioner interface (§3.1) is the canonical
+                                                                contract. All adapters MUST implement all 5 methods (may return
+                                                                success=false, failureReason=NOT_SUPPORTED for methods they
+                                                                cannot perform — e.g., a partner-fulfilled adapter may not support
+                                                                modifyService).
+
+  R-PLM-CFG-01-PR-3                                             The RestrictionCapableProvisioner interface (§3.4) is optional.
+                                                                Adapters implement it only when they support restrictions.
+
+
+
+ 4.4 Equipment requirement
+  Rule                                                          Description
+
+  R-PLM-CFG-01-EQ-1                                             service_class.requires_equipment is the authoritative class-level flag.
+                                                                Used by UPGRADE-01 / DOWNGRADE-01 / MIGRATION-01 when computing
+                                                                equipment-delta between source and target Package compositions.
+
+  R-PLM-CFG-01-EQ-2                                             Per-Service equipment_requirement_ref declares the SPECIFIC
+                                                                equipment type. The class-level requires_equipment is a quick filter ("does
+                                                                this class need ANY equipment?"); the Service-level ref tells the workflow which
+                                                                equipment-type to look for in existing bindings or request from inventory.
+
+  R-PLM-CFG-01-EQ-3                                             Multi-Service equipment retention: when
+                                                                UPGRADE/DOWNGRADE/MIGRATION drops a class, the customer's existing
+                                                                equipment is retained if it ALSO fulfills another retained class (e.g., ATA fulfilling
+                                                                both VOIP and a future fax service; if VOIP class is dropped but fax class is
+                                                                retained, ATA stays). The workflow checks equipment_requirement_ref
+                                                                per class to determine multi-service overlap.
+
+
+
+
+ 5. REST API
+ 5.1 Service class CRUD
+          POST /api/plm/service-classes HTTP/1.1
+          Content-Type: application/json
+
+          {
+              "operatorCode":                  "WIK",
+              "name":                          "IPTV",
+              "requiresEquipment":             true,
+              "serviceManagementKeyDefault":   "iptv_multicast",
+              "defaultTaxGroupRef":            "tg_VAT_16_WIK",
+              "defaultWalletRef":              "wlt_WIK_AIRTIME",
+              "createdBy":                     "admin-wik-001"
+          }
+
+          → 201 Created
+          {
+            "id":                              "scl_01HX_IPTV_WIK",
+            "operatorCode":                    "WIK",
+            "name":                            "IPTV",
+            "requiresEquipment":               true,
+            "serviceManagementKeyDefault":     "iptv_multicast",
+            "createdAt":                       "2026-05-25T14:00:00+03:00"
+          }
+
+ GET /api/plm/service-classes/{id} — read. GET
+ /api/plm/service-classes?operatorCode=WIK&retired=false — list. PATCH
+ /api/plm/service-classes/{id} — update (audit logs changes). DELETE /api/plm/service-classes/{id} —
+ soft-delete (sets retired_at).
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 9
+ 5.2 Service CRUD
+          POST /api/plm/services HTTP/1.1
+          Content-Type: application/json
+
+          {
+              "operatorCode":              "WIK",
+              "code":                      "IPTV_BASIC",
+              "description":               "IPTV basic tier — 50 channels",
+              "serviceClassId":            "scl_01HX_IPTV_WIK",
+              "isAddressable":             true,
+              "consumptionModel":          "CONTINUOUS",
+              "revenueCategory":           "RECURRING_IPTV",
+              "equipmentRequirementRef":   "eqt_STB_BASIC",
+              "networkProfileShape":       {"params": {"multicastGroups": ["epg_zuku_basic"], "stbAaaProfile": "basic-tier", "concurre
+              "provisionerKey":            "verimatrix-iptv",
+              "serviceManagementKey":      null,
+              "defaultWalletRef":          "wlt_WIK_AIRTIME",
+              "defaultTaxGroupRef":        "tg_VAT_16_WIK",
+              "createdBy":                 "admin-wik-001"
+          }
+
+          → 201 Created
+          {
+            "id":                  "svc_01HX_IPTV_BASIC_WIK",
+            "operatorCode":        "WIK",
+            "code":                "IPTV_BASIC",
+            "serviceClassId":      "scl_01HX_IPTV_WIK",
+            "effectiveServiceManagementKey": "iptv_multicast",
+            "createdAt":           "2026-05-25T14:05:00+03:00"
+          }
+
+ (effectiveServiceManagementKey is derived from the class default since the Service's own field is NULL.)
+
+ GET /api/plm/services/{id} — read. GET
+ /api/plm/services?operatorCode=WIK&serviceClassId=scl_...&consumptionModel=CONTINUOUS — filter.
+ PATCH /api/plm/services/{id} — update (audit logs changes; rejects changes to consumption_model). DELETE
+ /api/plm/services/{id} — soft-delete (R-SV-7 check).
+
+ 5.3 Errors
+          → 400 Bad Request
+          {
+            "code":     "EQUIPMENT_REQUIREMENT_MISSING",
+            "guidance": "Service is addressable AND parent class has requires_equipment=true, but equipment_requirement_ref is null.
+          }
+
+          → 409 Conflict
+          {
+            "code":               "SERVICE_IN_USE",
+            "referencingPackages":["pkg_01HX_INET_VOIP_IPTV_RES"],
+            "guidance":           "Service is referenced by 1 active Package. Retire the Package first, or replace the Service in th
+          }
+
+
+
+
+ 6. Kafka events
+  Event                           Topic                          Fires on                      Consumers
+
+  ServiceClassCreated             sophix.plm.service-class.cre   New service_class row         SIP-01, CVM, EM-04
+                                  ated
+
+  ServiceClassUpdated             sophix.plm.service-class.upd   Mutable column change         SIP-01, CVM
+                                  ated
+
+  ServiceClassRetired             sophix.plm.service-class.ret   retired_at set                SIP-01, CVM
+                                  ired
+
+  ServiceCreated                  sophix.plm.service.created     New service row               SIP-01, BIL-CFG-01, FUL-03 cache
+                                                                                               invalidation
+
+  ServiceUpdated                  sophix.plm.service.updated     Mutable column change         SIP-01, FUL-03 cache invalidation
+
+  ServiceRetired                  sophix.plm.service.retired     retired_at set                SIP-01, CVM
+
+
+ Sample ServiceCreated:
+          {
+              "eventType":   "ServiceCreated",
+              "aggregateId": "svc_01HX_IPTV_BASIC_WIK",
+
+
+SOPHIX BSS Design Documents                                                                                                Page 10
+                "timestamp":   "2026-05-25T14:05:00+03:00",
+                "payload": {
+                  "operatorCode":         "WIK",
+                  "id":                   "svc_01HX_IPTV_BASIC_WIK",
+                  "code":                 "IPTV_BASIC",
+                  "serviceClassId":       "scl_01HX_IPTV_WIK",
+                  "isAddressable":        true,
+                  "consumptionModel":     "CONTINUOUS",
+                  "revenueCategory":      "RECURRING_IPTV",
+                  "provisionerKey":       "verimatrix-iptv",
+                  "effectiveServiceManagementKey": "iptv_multicast",
+                  "createdBy":            "admin-wik-001"
+                }
+           }
+
+
+
+
+ 7. Cross-DD coordination
+  Module                                      Direction                   Contract
+
+  SIP-01                                      Consumer                    Reads Service definitions when validating Package
+                                                                          serviceRefs[]. Consumes catalog events for
+                                                                          cache invalidation.
+
+  FUL-03 v1.1                                 Consumer                    Reads Service service_management_key,
+                                                                          provisioner_key, network_profile_shape,
+                                                                          consumption_model, is_addressable,
+                                                                          equipment_requirement_ref. Implements
+                                                                          ServiceProvisioner interface adapters per §3.
+
+  FUL-04 v1.0                                 Consumer                    Same fields as FUL-03. Implements
+                                                                          RestrictionCapableProvisioner interface
+                                                                          adapters per §3.4.
+
+  FUL-05 v1.0                                 Consumer                    Reads Service definitions for termination revocation.
+                                                                          Implements
+                                                                          ServiceProvisioner.deactivateService
+                                                                          per §3.
+
+  SUB-WF-UPGRADE-01 / DOWNGRADE-01 /          Consumer                    Read service_class.requires_equipment
+  MIGRATION-01                                                            for equipment-delta computation. Read
+                                                                          service.equipment_requirement_ref for
+                                                                          specific equipment-type lookup.
+
+  BIL-CFG-01                                  Consumer                    Reads ONE_SHOT Services for BillableEvent
+                                                                          definitions. Reads revenue_category for revenue
+                                                                          stream classification.
+
+  PLM-CFG-02 (Tax)                            Referenced                  default_tax_group_ref on both
+                                                                          service_class and service references
+                                                                          PLM-CFG-02.
+
+  PLM-CFG-03 (Wallet)                         Referenced                  default_wallet_ref references PLM-CFG-03.
+
+  PLM-CFG-06 (Equipment Type Catalog)         Referenced                  service.equipment_requirement_ref
+                                                                          references PLM-CFG-06.
+
+
+
+ 7.1 Build order
+ This DD (v1.0) deploys after:
+
+   1. PLM-CFG-02 v1.0 (tax groups)
+
+   2. PLM-CFG-03 v1.0 (wallets)
+
+   3. PLM-CFG-06 v1.0 (equipment type catalog)
+
+ Callers depending on v1.0:
+
+   - SIP-01 v1.0 (Package composition)
+
+   - FUL-03 v1.1 (5-method Provisioner interface)
+
+   - FUL-04 v1.0 (already deployed against v0.8 — backwards-compatible)
+
+   - FUL-05 v1.0 (already deployed against v0.8 — backwards-compatible)
+
+   - UPGRADE-01 / DOWNGRADE-01 / MIGRATION-01 (require service_class.requires_equipment)
+
+ 7.2 Stub debt + open coordination items
+
+SOPHIX BSS Design Documents                                                                                          Page 11
+   - v0.8 → v1.0 migration — production service_class rows need requires_equipment +
+     service_management_key_default backfilled. KE WIK seed: Internet=true, Voice=true, IPTV=true, Monitoring=false,
+     OTT_Bundle=false. Migration script ships with v1.0.
+
+   - Adapter registration audit — once v1.0 ships, ops should audit existing Service rows for provisioner_key values that
+     don't match registered adapters and either retire or update.
+
+   - PLM-CFG-06 Equipment Type Catalog v1.0 — pending; provides equipment types referenced by
+     service.equipment_requirement_ref.
+
+
+
+ B — Current TZ
+ Status: To be filled in after codebase cartography review.
+
+ The TZ codebase has a Service catalog implementation (the v0.8 baseline was authored against partial observation). Specific
+ structural details — whether service_class.requires_equipment exists today, whether the 5-method Provisioner
+ interface is formally declared in code, whether service_management_key defaults are class-level or per-Service — require
+ source-code review to document accurately. Until cartography lands, this DD does not assert specific legacy structural claims.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 12
+

@@ -1,0 +1,687 @@
+ DD: SUB-WF-SUSPEND-NP-01 — Subscription
+ Non-Payment Suspension
+ Developer implementation guide:
+ DD_SUB-WF-SUSPEND-NP-01-Subscription_Non_Payment_Suspension-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract
+ DD_SUB-WF-SUSPEND-NP-01-Subscription_Non_Payment_Suspension-v1.0.md.
+
+ Verdict: ■ New | Wave: 1 | Group I: Subscription Management | Version: v1.0 Operation that transitions an ACTIVE
+ subscription to SUSPENDED due to non-payment, on instruction from BIL-04 (the dunning engine). Owns: the dunning-only
+ trigger gating, the originIntent = SUSPEND_NP marker that protects the suspension from voluntary resume, the
+ per-operator config catalog, the trigger REST endpoint, the rich domain Kafka events. Composes the framework primitives
+ from DD_SUB-WF-FRAMEWORK-01 + DD_SUB-WF-FRAMEWORK-01-WORKERS. Distinct from SUB-WF-PAUSE-01:
+ SUB-WF-PAUSE-01 is voluntary (customer-/admin-initiated) pause with a fee and customer-resumable.
+ SUB-WF-SUSPEND-NP-01 is system-driven from dunning, no fee, resumable only via SUB-WF-RESUME-01's
+ DUNNING_RESUME trigger (after debt settlement) or ADMIN_FORCE_RESUME (exceptional admin override). Both flows
+ transition the subscription to the same SUSPENDED status — the distinction is preserved in the pause-history row's
+ originIntent field. Companion DDs (per-operator BPMN satellites): - DD_SUB-WF-SUSPEND-NP-01-FLOW-WIK — KE
+ WIK reference BPMN (shipped v1.0) - DD_SUB-WF-SUSPEND-NP-01-FLOW-WUG / -WTZ / -YASSN — pending operator
+ deep dives
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    4_subscription_workflows/DD_SUB-WF-SUSPEND-NP-01-Subscript
+                                                                    ion_Non_Payment_Suspension-v1.0.md
+
+  Version                                                           v1.0
+
+  DD type                                                           module contract
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   rules.subscription.suspend-np.<operator>
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+   - POST /api/subscriptions/{subscription_id}/suspend-np
+
+ 4.2 Tables
+   - subscription_suspend_np_config
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - bil01-emit-intent
+
+   - drools-decide
+
+   - external-cancel-requested
+
+   - ful-call-restrict
+
+   - kafka-emit
+
+   - notification-send
+
+   - sub-lm-cancel-in-flight-operation
+
+   - sub-lm-commit-state
+
+   - sub-lm-compute-cycle-window
+
+   - sub-lm-put-active-restrictions
+
+   - sub-lm-put-master-fields
+
+   - sub-lm-put-pending-status
+
+   - subscription-operation-finalize
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - SubscriptionSuspendNPRejected
+
+   - SubscriptionSuspendedForNonPayment
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+SOPHIX BSS Design Documents                                                                                              Page 2
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                         Recommendation
+
+  API/runtime                                                     Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                         Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                        Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                           Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                         Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                          Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                         Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                  Store with IRSA.
+
+  Observability                                                   Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                  dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ New | Wave: 1 | Group I: Subscription Management | Version: v1.0
+
+ Operation that transitions an ACTIVE subscription to SUSPENDED due to non-payment, on instruction from BIL-04 (the
+ dunning engine). Owns: the dunning-only trigger gating, the originIntent = SUSPEND_NP marker that protects the
+ suspension from voluntary resume, the per-operator config catalog, the trigger REST endpoint, the rich domain Kafka events.
+ Composes the framework primitives from DD_SUB-WF-FRAMEWORK-01 + DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+ Distinct from SUB-WF-PAUSE-01: SUB-WF-PAUSE-01 is voluntary (customer-/admin-initiated) pause with a fee and
+ customer-resumable. SUB-WF-SUSPEND-NP-01 is system-driven from dunning, no fee, resumable only via
+ SUB-WF-RESUME-01's DUNNING_RESUME trigger (after debt settlement) or ADMIN_FORCE_RESUME (exceptional admin
+ override). Both flows transition the subscription to the same SUSPENDED status — the distinction is preserved in the
+ pause-history row's originIntent field.
+
+ Companion DDs (per-operator BPMN satellites):
+
+ - DD_SUB-WF-SUSPEND-NP-01-FLOW-WIK — KE WIK reference BPMN (shipped v1.0)
+
+ - DD_SUB-WF-SUSPEND-NP-01-FLOW-WUG / -WTZ / -YASSN — pending operator deep dives
+
+
+ Glossary
+  Term                                                            Meaning
+
+  Non-payment suspension                                          Full revocation of service for failure to pay, driven by BIL-04 dunning at the
+                                                                  configured escalation level (typically L3 in a 3-tier ladder). Distinct from
+                                                                  RESTRICT (partial constraint, ACTIVE status preserved) and from TERMINATE
+                                                                  (permanent, terminal status). Equipment stays in place; no retrieval WO is
+                                                                  dispatched.
+
+  originIntent = SUSPEND_NP                                       Marker on the subscription_pause_history row created by this workflow.
+                                                                  Distinguishes a non-payment suspension from a voluntary pause
+                                                                  (originIntent = CUSTOMER_REQUESTED_PAUSE or ADMIN_PAUSE).
+                                                                  Drives downstream rules: SUB-WF-RESUME-01 only accepts
+                                                                  DUNNING_RESUME or ADMIN_FORCE_RESUME triggers on
+                                                                  SUSPEND_NP-flagged suspensions.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 3
+  Term                                                           Meaning
+
+  systemManaged = true                                           Companion flag on the pause-history row indicating the suspension was applied
+                                                                 by automated dunning. Prevents human-actor reactivation through voluntary
+                                                                 resume paths.
+
+  Dunning reason code                                            Free-text reason supplied by BIL-04 (e.g., DUNNING_GRACE_EXPIRED,
+                                                                 DUNNING_WALLET_DEPLETED, DUNNING_ESCALATION_T3). The framework
+                                                                 does not enumerate; BIL-04's catalog defines them. Propagated to
+                                                                 subscription.current_transition_reason_code and the Kafka event.
+
+  Dunning escalation level                                       Integer level in the operator's tiered dunning program (e.g., 1/2/3). BIL-04 sets
+                                                                 per its policy. Recorded for audit.
+
+  Outstanding debt amount                                        The customer's outstanding debt at suspension time, supplied by BIL-04.
+                                                                 Recorded for audit + downstream reporting (CVM, finance write-off analysis).
+
+  Auto-clear restrictions                                        Per SUB-LM-01 R-RES-6, all active_restrictions[] entries are cleared
+                                                                 automatically when a subscription transitions to SUSPENDED (since
+                                                                 suspension already revokes all service). This DD's BPMN includes the
+                                                                 sub-lm-put-active-restrictions clear step.
+
+
+
+
+ 1. What this is
+ The non-payment suspension operation. SUB-WF-SUSPEND-NP-01 is one of the 10 operation kinds in the framework.
+ Triggered exclusively by BIL-04 when a subscription crosses its dunning suspension threshold (grace period expired on an
+ unpaid invoice, prepaid wallet drained past reactivation window, level-3 dunning escalation reached). System-driven only —
+ no human or self-service trigger is accepted.
+
+ Outcomes: subscription status → SUSPENDED, all active restrictions cleared (per SUB-LM-01 R-RES-6), network access
+ revoked (FUL-04 SUSPEND_SERVICE), suspension history row written with originIntent = SUSPEND_NP +
+ systemManaged = true, customer notified by NOT-01, BIL-04 acknowledged via Kafka event.
+
+ What this DD owns
+   1. subscription_suspend_np_config table — per-operator config: customer-notification preference at suspension,
+     debt-amount threshold reporting flags.
+
+   2. BILLING_INTERNAL-only trigger gating — only BIL-04's service account may call the trigger endpoint.
+
+   3. originIntent = SUSPEND_NP + systemManaged = true marker contract on the pause-history row (the row is
+     owned by SUB-LM-01's pause-history table, but this DD defines the flags applied).
+
+   4. Trigger REST endpoint — POST /api/subscriptions/{subscription_id}/suspend-np.
+
+   5. Domain Kafka events — SubscriptionSuspendedForNonPayment + SubscriptionSuspendNPRejected.
+
+   6. Suspend-NP workflow rules — 11 rules in §4.
+
+ What this DD does NOT own
+   - BPMN files — owned by per-operator satellites.
+
+   - Worker implementations — catalogued in DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+   - Subscription state machine + status transitions — owned by SUB-LM-01 (states, transitions, restriction-clear behavior
+     on suspend per R-RES-6).
+
+   - Pause-history table itself — owned by SUB-LM-01.
+
+   - Dunning ladder orchestration — owned by BIL-04. This DD is a callee.
+
+   - Network suspension implementation — owned by FUL-04 (SUSPEND_SERVICE intent).
+
+   - Restriction additions before full suspension — owned by SUB-WF-RESTRICT-01 (BIL-04 may add restrictions at L2
+     via that workflow before reaching L3 here).
+
+   - Resume after debt settlement — owned by SUB-WF-RESUME-01 (DUNNING_RESUME trigger).
+
+ Regional flexibility
+ Per-operator levers:
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 4
+  Lever                                                              Examples for SUSPEND-NP
+
+  BPMN file                                                          KE: standard 11-worker BPMN. Operators with simpler dunning policies may
+                                                                     skip the bil01-emit-intent analytics call.
+
+  Drools package rules.subscription.suspend-np.<operator>            KE: minimal rules (role-gating + dunning context validation).
+
+  subscription_suspend_np_config row                                 KE: customer notification enabled; debt-amount-warning threshold tier KES
+                                                                     5,000 for HIGH-tier flagging.
+
+  FOUNDATION_AUTH candidate groups                                   BILLING_INTERNAL resolves to operator-specific BIL-04 service accounts.
+
+
+
+
+ 2. Tables overview
+ This DD owns one table: subscription_suspend_np_config (per-operator config).
+
+ Cross-operation audit anchor: subscription_operation (framework-owned).
+
+ Subscription master fields updated by this workflow (owned by SUB-LM-01): status_code = SUSPENDED,
+ current_transition_type = SUSPEND_NP (during PENDING_SUSPEND_NP phase),
+ current_transition_reason_code = <dunningReasonCode>, last_status_changed_at.
+
+ Pause-history row inserted (owned by SUB-LM-01 — same table SUB-WF-PAUSE-01 uses): originIntent =
+ SUSPEND_NP, systemManaged = true, plus dunning context fields.
+
+
+
+ 3. Schemas
+ 3.1 subscription_suspend_np_config
+ One row per operator.
+              CREATE TABLE subscription_suspend_np_config (
+                 operator_code                       TEXT PRIMARY KEY,
+                 customer_notification_enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+                 debt_amount_warning_threshold       NUMERIC(18,2) NULL,
+                 debt_amount_warning_currency        TEXT NULL,
+                 updated_at                          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                 updated_by                          TEXT NOT NULL,
+                 CHECK ((debt_amount_warning_threshold IS NULL) = (debt_amount_warning_currency IS NULL))
+              );
+
+  Column                                                             Notes
+
+  customer_notification_enabled                                      When true, the workflow calls the notification-send worker with
+                                                                     notificationEventKind=SUBSCRIPTION_SUSPENDED_NON_PAYMENT at
+                                                                     suspension. When false, no notification is dispatched (operator handles
+                                                                     communication out-of-band, e.g., via a separate batch from BIL-04). NOT-01
+                                                                     owns template, channel, language, and fallback chain resolution.
+
+  debt_amount_warning_threshold                                      When the outstanding debt at suspension exceeds this value, the
+                                                                     SubscriptionSuspendedForNonPayment event payload sets
+                                                                     debtAmountTier = HIGH (otherwise STANDARD). Used by CVM analytics +
+                                                                     finance reporting to flag high-value churn risk. Null = no tiering.
+
+  debt_amount_warning_currency                                       Currency for the threshold; nullable iff threshold is nullable.
+
+
+ Sample data:
+
+  operator_code                      customer_notification_enabled   debt_amount_warning_threshold               debt_amount_warning_currency
+
+  WIK                                true                            5000.00                                     KES
+
+  WUG                                true                            NULL                                        NULL
+
+  WTZ                                true                            NULL                                        NULL
+
+  YASSN                              true                            NULL                                        NULL
+
+
+
+
+ 4. Rules
+ 4.1 State precondition + transition
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 5
+  Rule                               Description
+
+  R-SUB-WF-SUSPEND-NP-01-S-1         Suspension requires the subscription's status_code = ACTIVE. Other
+                                     statuses (already SUSPENDED, PENDING_*, TERMINATED, RETIRED,
+                                     CREATED) return 409 INVALID_STATE_FOR_SUSPEND_NP. Idempotent
+                                     re-submission of the same idempotency key returns the existing
+                                     operation_id.
+
+  R-SUB-WF-SUSPEND-NP-01-S-2         The transition is ACTIVE → PENDING_SUSPEND_NP → SUSPENDED.
+                                     PENDING_SUSPEND_NP is a framework-internal transient state (per SUB-LM-01
+                                     catalog) used during the saga; downstream consumers should see only the
+                                     commit to SUSPENDED.
+
+  R-SUB-WF-SUSPEND-NP-01-S-3         Per framework R-FW-1, this operation is mutually exclusive with other
+                                     state-affecting operations on the same subscription. If another in-flight operation
+                                     exists (e.g., a customer just triggered PAUSE), the workflow uses the
+                                     framework's external-cancel-requested mechanism to cancel it before
+                                     proceeding. RESTRICT operations are concurrent-safe per their own design
+                                     and do not need cancellation.
+
+  R-SUB-WF-SUSPEND-NP-01-S-4         The subscription's current_transition_type is set to SUSPEND_NP during
+                                     PENDING_SUSPEND_NP. current_transition_reason_code is set to
+                                     the caller-supplied dunningReasonCode.
+
+
+
+ 4.2 Trigger gating
+  Rule                               Description
+
+  R-SUB-WF-SUSPEND-NP-01-T-1         The trigger endpoint is callable only by the BILLING_INTERNAL role. Any other
+                                     actor (human or service) returns 403 UNAUTHORIZED_TRIGGER with the
+                                     allowed role for diagnostic clarity.
+
+  R-SUB-WF-SUSPEND-NP-01-T-2         Request body MUST include dunningReasonCode (free-text from BIL-04's
+                                     reason catalog), dunningCycleReference (BIL-04's internal correlation ID
+                                     for the dunning wave), outstandingDebtAmount,
+                                     outstandingDebtCurrency. Optional: dunningEscalationLevel
+                                     (integer). Missing required fields → 400 MISSING_REQUIRED_FIELD.
+
+  R-SUB-WF-SUSPEND-NP-01-T-3         Idempotency: BIL-04 generates the idempotency key per dunning cycle.
+                                     Re-submission of the same key returns the existing operation_id per
+                                     framework R-FW-3.
+
+
+
+ 4.3 Master fields + pause-history
+  Rule                               Description
+
+  R-SUB-WF-SUSPEND-NP-01-M-1         On commit, the subscription's master fields are updated:
+                                     last_status_changed_at = NOW(). suspended_at (if SUB-LM-01 has
+                                     this field; otherwise inferable from status_history) is set via
+                                     sub-lm-put-master-fields.
+
+  R-SUB-WF-SUSPEND-NP-01-M-2         A pause-history row is inserted into SUB-LM-01's pause-history table with
+                                     originIntent = SUSPEND_NP, systemManaged = true,
+                                     dunningReasonCode, dunningCycleReference,
+                                     dunningEscalationLevel, outstandingDebtAmount,
+                                     outstandingDebtCurrency, suspendedAt = commitAt. The row has no
+                                     cycleAnchorPolicy (not applicable; SUSPEND-NP does not configure cycle
+                                     behavior).
+
+  R-SUB-WF-SUSPEND-NP-01-M-3         All entries in subscription.active_restrictions[] are cleared at the
+                                     same time (per SUB-LM-01 R-RES-6 — restrictions are auto-removed when
+                                     transitioning to SUSPENDED since suspension already revokes all service).
+                                     Done via sub-lm-put-active-restrictions with
+                                     restrictionsOperationKind = CLEAR_ALL. The pre-clear array is
+                                     captured in the Kafka event for audit.
+
+
+
+ 4.4 Resume protection
+  Rule                               Description
+
+  R-SUB-WF-SUSPEND-NP-01-R-1         A subscription with an open SUSPEND_NP-flagged pause-history row can only
+                                     be resumed via SUB-WF-RESUME-01's DUNNING_RESUME trigger (BIL-04
+                                     after debt settlement) or ADMIN_FORCE_RESUME trigger (admin override).
+                                     SUB-WF-RESUME-01's role gating enforces this; SUB-WF-SUSPEND-NP-01
+                                     only ensures the flags are correctly set on the pause-history row.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                    Page 6
+  Rule                                                           Description
+
+  R-SUB-WF-SUSPEND-NP-01-R-2                                     If an admin invokes ADMIN_FORCE_RESUME (exceptional case), the original
+                                                                 SUSPEND_NP marker on the pause-history row is preserved (the row is closed,
+                                                                 but the originIntent is not changed). This surfaces in audit + operations
+                                                                 dashboards as "admin force-resumed a non-payment suspension" — a flag for
+                                                                 compliance review.
+
+
+
+
+ 5. REST API
+ 5.1 Trigger non-payment suspension
+          POST /api/subscriptions/{subscription_id}/suspend-np HTTP/1.1
+          Authorization: Bearer <bil04-service-jwt>
+          Content-Type: application/json
+          Idempotency-Key: suspend-np-sub_01HZ_KAMAU-dunning-wave-2026-06-15-L3
+
+          {
+              "operatorCode":           "WIK",
+              "dunningReasonCode":      "DUNNING_ESCALATION_T3",
+              "dunningCycleReference": "bil04-dunning-wave-2026-06-15-L3",
+              "dunningEscalationLevel": 3,
+              "outstandingDebtAmount": 3500.00,
+              "outstandingDebtCurrency":"KES",
+              "notes":                  "Dunning L3 reached after L2 voice-bar did not produce payment within 14 days",
+              "initiatingActorUserId": "bil04-svc-account",
+              "initiatingActorRole":    "BILLING_INTERNAL",
+              "initiatingWorkflowKind": "BIL_04_DUNNING",
+              "initiatingWorkflowRef": "bil04-dunning-wave-2026-06-15-L3"
+          }
+
+          → 202 Accepted
+          {
+            "operationId":           "subop_01HZ_KAMAU_SUSPNP",
+            "operatorCode":          "WIK",
+            "subscriptionId":        "sub_01HZ_KAMAU_FIBER",
+            "operationKind":         "SUSPEND_NP",
+            "bpmnProcessKey":        "sub-suspend-np-wik",
+            "bpmnProcessInstanceId": "pi_01HZ_KAMAU_SUSPNP",
+            "currentState":          "VALIDATING",
+            "startedAt":             "2026-06-15T02:00:00+03:00"
+          }
+
+ Unauthorized trigger:
+          → 403 Forbidden
+          {
+            "code":         "UNAUTHORIZED_TRIGGER",
+            "allowedRoles": ["BILLING_INTERNAL"],
+            "actorRole":    "CALL_CENTER"
+          }
+
+ Invalid state:
+          → 409 Conflict
+          {
+            "code":          "INVALID_STATE_FOR_SUSPEND_NP",
+            "currentStatus": "SUSPENDED",
+            "operationId":   "subop_01HZ_KAMAU_SUSPNP_PRIOR"
+          }
+
+
+
+
+ 6. Kafka events emitted
+  Event                           Topic                          Fires on                                 Consumers
+
+  SubscriptionSuspendedForNonP    sophix.subscription.subscrip   Successful commit                        NOT-01 (customer notification per
+  ayment                          tion.suspendednonpayment                                                operator config), BIL-04
+                                                                                                          (acknowledges its dunning step), CVM
+                                                                                                          analytics (churn-risk modeling), EM-04
+                                                                                                          reporting, finance reporting (debt-tier
+                                                                                                          flagging)
+
+  SubscriptionSuspendNPRejecte    sophix.subscription.subscrip   Workflow failure (validation, billing,   BIL-04 (retry or escalate), ICN-01 ops
+  d                               tion.suspendednonpaymentreje   fulfillment)                             alert, EM-04
+                                  cted
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                              Page 7
+ Sample SubscriptionSuspendedForNonPayment:
+           {
+               "eventType":    "SubscriptionSuspendedForNonPayment",
+               "aggregateId": "sub_01HZ_KAMAU_FIBER",
+               "timestamp":    "2026-06-15T02:00:18+03:00",
+               "payload": {
+                 "operatorCode":             "WIK",
+                 "subscriptionId":           "sub_01HZ_KAMAU_FIBER",
+                 "customerId":               "cust_01HZ_KAMAU",
+                 "operationId":              "subop_01HZ_KAMAU_SUSPNP",
+                 "priorStatus":              "ACTIVE",
+                 "newStatus":                "SUSPENDED",
+                 "suspendedAt":              "2026-06-15T02:00:18+03:00",
+                 "dunningReasonCode":        "DUNNING_ESCALATION_T3",
+                 "dunningCycleReference":    "bil04-dunning-wave-2026-06-15-L3",
+                 "dunningEscalationLevel": 3,
+                 "outstandingDebtAmount":    3500.00,
+                 "outstandingDebtCurrency": "KES",
+                 "debtAmountTier":           "STANDARD",
+                 "clearedRestrictions":      ["OUTGOING_VOICE_BARRED"],
+                 "pauseHistoryRowId":        "pause_01HZ_KAMAU_SUSPNP",
+                 "originIntent":             "SUSPEND_NP",
+                 "systemManaged":            true
+               }
+           }
+
+ Sample SubscriptionSuspendNPRejected:
+           {
+               "eventType":   "SubscriptionSuspendNPRejected",
+               "aggregateId": "sub_01HZ_KAMAU_FIBER",
+               "payload": {
+                 "operatorCode":          "WIK",
+                 "subscriptionId":        "sub_01HZ_KAMAU_FIBER",
+                 "operationId":           "subop_01HZ_KAMAU_SUSPNP_FAIL",
+                 "rejectionReasonCode":   "FULFILLMENT_FAILED",
+                 "rejectionReasonDetail": "FUL-04 returned FAILED on Internet service suspend (Huawei NCE timeout)",
+                 "subscriptionRevertedTo":"ACTIVE",
+                 "dunningCycleReference": "bil04-dunning-wave-2026-06-15-L3"
+               }
+           }
+
+
+
+
+ 7. Cross-DD coordination
+ 7.1 Upstream caller (single)
+  Caller                            Endpoint                              Trigger value                             Role
+
+  BIL-04 Dunning                    POST .../suspend-np                   (caller carries dunningReasonCode         BILLING_INTERNAL
+                                                                          etc., no separate "trigger" enum here
+                                                                          — this DD has only one trigger
+                                                                          pattern, system-driven from dunning)
+
+
+
+ 7.2 Sibling modules
+  Module                                       Direction                                              Contract
+
+  SUB-WF-FRAMEWORK-01 (parent)                 This DD composes framework primitives                  subscription_operation row created; BPMN
+                                                                                                      started
+
+  SUB-WF-FRAMEWORK-01-WORKERS                  This DD's BPMNs reference workers by topic             Workers used: drools-decide,
+                                                                                                      sub-lm-cancel-in-flight-operation (if
+                                                                                                      any), sub-lm-put-pending-status,
+                                                                                                      sub-lm-compute-cycle-window,
+                                                                                                      bil01-emit-intent, ful-call-restrict
+                                                                                                      (intent=SUSPEND_SERVICE),
+                                                                                                      sub-lm-put-active-restrictions (clear all),
+                                                                                                      sub-lm-put-master-fields,
+                                                                                                      sub-lm-commit-state, kafka-emit,
+                                                                                                      notification-send,
+                                                                                                      subscription-operation-finalize
+
+  SUB-LM-01                                    Workers write status + master fields + pause-history   Status flip, master fields update, pause-history insert
+                                               + clear restrictions                                   with originIntent=SUSPEND_NP, restrictions
+                                                                                                      clear
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                         Page 8
+  Module                                    Direction                                         Contract
+
+  BIL-01                                    bil01-emit-intent worker                          SUSPEND_NP_INTENT — billing records
+                                                                                              suspension state, freezes cycle accrual per operator
+                                                                                              policy, may emit analytics BillableEvent (no charge)
+
+  BIL-04 Dunning                            Calls trigger endpoint + consumes events          Drives at L3 escalation; consumes
+                                                                                              SubscriptionSuspendedForNonPayment to
+                                                                                              acknowledge step
+
+  FUL-04                                    ful-call-restrict worker with                     Network-level suspension (AAA disable, may
+                                            intent=SUSPEND_SERVICE                            rate-zero OLT)
+
+  NOT-01                                    notification-send worker                          Customer notification per operator config
+
+  SUB-WF-RESUME-01                          Sibling DD — handles eventual resume after debt   Reads pause-history row's
+                                            settlement                                        originIntent=SUSPEND_NP to gate resume
+                                                                                              triggers
+
+  CVM / EM-04                               Consume Kafka events                              Churn analytics + debt-tier reporting
+
+
+
+ 7.3 Build order
+ This DD deploys after:
+
+   1. SUB-WF-FRAMEWORK-01 (parent + WORKERS) v1.0
+
+   2. SUB-LM-01 v1.0
+
+   3. FUL-04 v1.0 (SUSPEND_SERVICE intent)
+
+   4. BIL-01 (SUSPEND_NP_INTENT support)
+
+   5. At least one FLOW satellite (FLOW-WIK v1.0)
+
+ 7.4 Stub debt + open coordination items
+   - WUG / WTZ / YASSN FLOW satellites — pending operator deep dives.
+
+   - BIL-04 Dunning ladder L3 integration — BIL-04 calls this DD's trigger endpoint. Captured in BIL-04 v1.4.
+
+   - BIL-CFG-01 SUSPEND_NP_INTENT BillableEvent definitions — pending BIL-CFG-01 v1.0 promotion.
+
+   - SUB-WF-RESUME-01 DUNNING_RESUME contract — pending DD; this DD's pause-history flags must be read correctly
+     by SUB-WF-RESUME-01 to enforce resume gating.
+
+
+
+ B — Current TZ
+ Status: To be filled in after codebase cartography review.
+
+ Workshop materials note that the legacy dunning flow drives suspension via AAA disable at the final dunning step. Whether
+ the legacy codebase has a structured pause-history or distinguishes voluntary pause from dunning suspension requires
+ source-code review. Until that cartography lands, this DD does not assert specific legacy structural claims.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                               Page 9
+

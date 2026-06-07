@@ -1,0 +1,630 @@
+ DD_PLM-CFG-07 - Voice Tariff Catalog - Developer
+ Implementation Guide
+ Version: 1.0 Status: Draft for review Bundle: 09_catalogs Audience: mid-level backend developers, catalog developers, rating
+ developers, QA Parent DD: DD_PLM-CFG-07 - Voice Tariff Catalog
+
+
+
+ 1. How To Read This Guide
+ This guide follows the flow a developer should implement.
+
+ The catalog does not rate CDRs. It only stores and exposes tariff data. RAT-01 calls the lookup API and performs the charge
+ calculation.
+
+
+
+ 2. Step 1 - Create Destination Zones
+ Start by creating the zones that rating will use.
+
+ Example zones for Kenya launch:
+          insert into voice_destination_zone (
+            zone_id,
+            operator_code,
+            zone_code,
+            zone_name,
+            zone_type,
+            default_charge_policy,
+            status,
+            created_at,
+            updated_at
+          ) values
+            ('vdz-wik-onnet', 'WIK', 'WIK_ON_NET', 'Wananchi On-net', 'ON_NET', 'CHARGEABLE', 'ACTIVE', now(), now()),
+            ('vdz-ke-mobile', 'WIK', 'KE_MOBILE', 'Kenya Mobile', 'NATIONAL', 'CHARGEABLE', 'ACTIVE', now(), now()),
+            ('vdz-ke-fixed', 'WIK', 'KE_FIXED', 'Kenya Fixed', 'NATIONAL', 'CHARGEABLE', 'ACTIVE', now(), now()),
+            ('vdz-emergency', 'WIK', 'EMERGENCY', 'Emergency Numbers', 'EMERGENCY', 'ZERO_RATED', 'ACTIVE', now(), now()),
+            ('vdz-tollfree', 'WIK', 'TOLL_FREE', 'Toll Free', 'TOLL_FREE', 'ZERO_RATED', 'ACTIVE', now(), now()),
+            ('vdz-international', 'WIK', 'INTERNATIONAL_ROW', 'International Rest of World', 'INTERNATIONAL', 'CHARGEABLE', 'ACTIVE'
+
+ Meaning:
+
+   - zone_code is what RAT-01 stores on rated usage.
+
+   - zone_type helps reporting and validation.
+
+   - default_charge_policy protects special categories such as emergency calls.
+
+
+
+ 3. Step 2 - Load Prefixes
+ Create prefixes that map normalized called numbers to zones.
+          insert into voice_destination_prefix (
+            prefix_id,
+            operator_code,
+            prefix,
+            zone_id,
+            match_priority,
+            status,
+            effective_from,
+            notes
+          ) values
+            ('vdp-ke-mobile-2547', 'WIK', '+2547', 'vdz-ke-mobile', 100, 'ACTIVE', '2026-06-01T00:00:00Z', 'Kenya mobile'),
+            ('vdp-ke-fixed-25420', 'WIK', '+25420', 'vdz-ke-fixed', 100, 'ACTIVE', '2026-06-01T00:00:00Z', 'Nairobi fixed'),
+            ('vdp-emergency-999', 'WIK', '999', 'vdz-emergency', 100, 'ACTIVE', '2026-06-01T00:00:00Z', 'Emergency'),
+            ('vdp-emergency-112', 'WIK', '112', 'vdz-emergency', 100, 'ACTIVE', '2026-06-01T00:00:00Z', 'Emergency'),
+            ('vdp-tollfree-0800', 'WIK', '0800', 'vdz-tollfree', 100, 'ACTIVE', '2026-06-01T00:00:00Z', 'Toll free');
+
+
+ 3.1 Prefix Match Logic
+ Use longest-prefix match.
+
+
+
+SOPHIX BSS Design Documents                                                                                             Page 1
+ Pseudo-code:
+          public function resolveZone(string $operatorCode, string $calledNumber, Carbon $callStartedAt): ?DestinationZone
+          {
+              return VoiceDestinationPrefix::query()
+                  ->where('operator_code', $operatorCode)
+                  ->where('status', 'ACTIVE')
+                  ->where('effective_from', '<=', $callStartedAt)
+                  ->where(function ($q) use ($callStartedAt) {
+                      $q->whereNull('effective_to')->orWhere('effective_to', '>', $callStartedAt);
+                  })
+                  ->whereRaw('? like prefix || \'%\'', [$calledNumber])
+                  ->orderByRaw('length(prefix) desc')
+                  ->orderByDesc('match_priority')
+                  ->first()?->zone;
+          }
+
+ If no prefix is found, return no zone. RAT-01 must quarantine the CDR instead of rating it.
+
+
+
+ 4. Step 3 - Create Time Band
+ Start with ANYTIME if product does not need peak/off-peak.
+          insert into voice_time_band (
+             time_band_id,
+             operator_code,
+             time_band_code,
+             display_name,
+             days_of_week,
+             start_time_local,
+             end_time_local,
+             timezone,
+             status
+          ) values (
+             'vtb-wik-anytime',
+             'WIK',
+             'ANYTIME',
+             'Any time',
+             'MON,TUE,WED,THU,FRI,SAT,SUN',
+             '00:00:00',
+             '23:59:59',
+             'Africa/Nairobi',
+             'ACTIVE'
+          );
+
+ Time band lookup must use the operator timezone, not server timezone.
+
+
+
+ 5. Step 4 - Create Tariff Plan
+ Create the plan in DRAFT first.
+          insert into voice_tariff_plan (
+             tariff_plan_id,
+             operator_code,
+             tariff_plan_code,
+             display_name,
+             billing_mode,
+             currency_code,
+             status,
+             effective_from,
+             created_at,
+             updated_at
+          ) values (
+             'vtp-wik-res-voice-2026',
+             'WIK',
+             'WIK_RES_VOICE_STD_2026',
+             'Residential Voice Standard 2026',
+             'BOTH',
+             'KES',
+             'DRAFT',
+             '2026-06-01T00:00:00Z',
+             now(),
+             now()
+          );
+
+ Keep plans in DRAFT until zones, prefixes, rates, bindings, and validation checks are complete.
+
+
+
+SOPHIX BSS Design Documents                                                                                         Page 2
+ 6. Step 5 - Add Rates
+ Add rates per zone.
+          insert into voice_tariff_rate (
+            rate_id,
+            operator_code,
+            tariff_plan_id,
+            zone_id,
+            time_band_id,
+            call_direction,
+            unit_type,
+            unit_price,
+            setup_fee_amount,
+            initial_increment_seconds,
+            subsequent_increment_seconds,
+            minimum_charge_amount,
+            charge_policy,
+            taxable_kind,
+            taxable_ref,
+            effective_from,
+            status
+          ) values
+            ('vtr-ke-mobile', 'WIK', 'vtp-wik-res-voice-2026', 'vdz-ke-mobile', 'vtb-wik-anytime', 'OUTBOUND',
+             'MINUTE', 3.000000, 0, 60, 60, 0, 'CHARGEABLE', 'SERVICE', 'svc_VOIP_STD', '2026-06-01T00:00:00Z', 'DRAFT'),
+            ('vtr-ke-fixed', 'WIK', 'vtp-wik-res-voice-2026', 'vdz-ke-fixed', 'vtb-wik-anytime', 'OUTBOUND',
+             'MINUTE', 2.000000, 0, 60, 60, 0, 'CHARGEABLE', 'SERVICE', 'svc_VOIP_STD', '2026-06-01T00:00:00Z', 'DRAFT'),
+            ('vtr-emergency', 'WIK', 'vtp-wik-res-voice-2026', 'vdz-emergency', 'vtb-wik-anytime', 'OUTBOUND',
+             'MINUTE', 0.000000, 0, 1, 1, 0, 'ZERO_RATED', 'SERVICE', 'svc_VOIP_STD', '2026-06-01T00:00:00Z', 'DRAFT'),
+            ('vtr-tollfree', 'WIK', 'vtp-wik-res-voice-2026', 'vdz-tollfree', 'vtb-wik-anytime', 'OUTBOUND',
+             'MINUTE', 0.000000, 0, 1, 1, 0, 'ZERO_RATED', 'SERVICE', 'svc_VOIP_STD', '2026-06-01T00:00:00Z', 'DRAFT');
+
+
+ 6.1 Validate Rate Overlap
+ Before activation, reject two active or draft rates that overlap for:
+          operator_code
+          tariff_plan_id
+          zone_id
+          time_band_id
+          call_direction
+          effective date range
+
+ Pseudo-code:
+          public function assertNoRateOverlap(VoiceTariffRate $candidate): void
+          {
+              $overlap = VoiceTariffRate::query()
+                  ->where('operator_code', $candidate->operator_code)
+                  ->where('tariff_plan_id', $candidate->tariff_plan_id)
+                  ->where('zone_id', $candidate->zone_id)
+                  ->where('time_band_id', $candidate->time_band_id)
+                  ->where('call_direction', $candidate->call_direction)
+                  ->whereIn('status', ['DRAFT', 'ACTIVE'])
+                  ->where('rate_id', '<>', $candidate->rate_id)
+                  ->where('effective_from', '<', $candidate->effective_to ?? '9999-12-31')
+                  ->whereRaw('coalesce(effective_to, timestamp \'9999-12-31\') > ?', [$candidate->effective_from])
+                  ->exists();
+
+               if ($overlap) {
+                   throw new DomainException('VOICE_RATE_OVERLAP');
+               }
+          }
+
+
+
+
+ 7. Step 6 - Add Allowance
+ If the plan has no included minutes, skip this step.
+
+ Example: 100 on-net minutes per bill cycle.
+          insert into voice_tariff_allowance (
+            allowance_id,
+            operator_code,
+            tariff_plan_id,
+            allowance_code,
+            allowance_name,
+
+
+
+SOPHIX BSS Design Documents                                                                                          Page 3
+               included_seconds,
+               eligible_zone_codes_json,
+               cycle_policy,
+               carry_over_policy,
+               priority,
+               status,
+               effective_from
+            ) values (
+               'vta-wik-onnet-100',
+               'WIK',
+               'vtp-wik-res-voice-2026',
+               'ONNET_100_MIN',
+               '100 on-net minutes',
+               6000,
+               '["WIK_ON_NET"]',
+               'BILL_CYCLE',
+               'NONE',
+               10,
+               'ACTIVE',
+               '2026-06-01T00:00:00Z'
+            );
+
+ RAT-01 consumes the allowance. PLM-CFG-07 only defines it.
+
+
+
+ 8. Step 7 - Bind Tariff Plan
+ Bind the tariff plan to a package or service.
+
+ Package-level binding:
+            insert into voice_tariff_binding (
+               binding_id,
+               operator_code,
+               binding_scope,
+               binding_ref,
+               tariff_plan_id,
+               priority,
+               status,
+               effective_from
+            ) values (
+               'vtbnd-pkg-voice-std',
+               'WIK',
+               'PACKAGE',
+               'pkg_INET_VOICE_STD',
+               'vtp-wik-res-voice-2026',
+               100,
+               'ACTIVE',
+               '2026-06-01T00:00:00Z'
+            );
+
+ Binding priority:
+
+  Binding scope                                                   Priority rule
+
+  SUBSCRIPTION_OVERRIDE                                           Highest priority. Used for explicit customer exception.
+
+  PACKAGE                                                         Normal product-level binding.
+
+  SERVICE                                                         Fallback if package has no binding.
+
+
+
+
+ 9. Step 8 - Activate Plan
+ Validation before activation:
+
+   1. Plan has at least one active/future rate.
+
+   2. Every chargeable active zone used by prefixes has at least one rate.
+
+   3. Emergency zone has zero-rated rate.
+
+   4. No rate overlaps.
+
+   5. Currency is valid for operator.
+
+   6. Binding references valid package/service/subscription.
+
+ Activation update:
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 4
+           update voice_tariff_plan
+           set status = 'ACTIVE',
+               updated_at = now()
+           where tariff_plan_id = 'vtp-wik-res-voice-2026'
+             and status = 'DRAFT';
+
+           update voice_tariff_rate
+           set status = 'ACTIVE'
+           where tariff_plan_id = 'vtp-wik-res-voice-2026'
+             and status = 'DRAFT';
+
+ Emit:
+           {
+               "eventType": "VoiceTariffPlanActivated",
+               "operatorCode": "WIK",
+               "tariffPlanCode": "WIK_RES_VOICE_STD_2026",
+               "effectiveFrom": "2026-06-01T00:00:00Z"
+           }
+
+ RAT-01 consumes this event and refreshes cache.
+
+
+
+ 10. Step 9 - RAT-01 Performs Lookup
+ When RAT-01 receives a mediated CDR, it calls:
+           POST /api/plm/voice-rating/lookup
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "subscriptionId": "SUB-700045",
+               "packageRef": "pkg_INET_VOICE_STD",
+               "serviceRef": "svc_VOIP_STD",
+               "calledNumberNormalized": "+254711222333",
+               "callDirection": "OUTBOUND",
+               "callStartedAt": "2026-06-02T10:15:00+03:00"
+           }
+
+ Lookup logic:
+
+   1. Resolve tariff plan by binding priority.
+
+   2. Resolve destination zone by longest-prefix match.
+
+   3. Resolve time band using operator timezone.
+
+   4. Resolve active rate by plan, zone, time band, direction, and call start time.
+
+   5. Return rate payload.
+
+ Response:
+           {
+               "tariffPlanCode": "WIK_RES_VOICE_STD_2026",
+               "zoneCode": "KE_MOBILE",
+               "timeBandCode": "ANYTIME",
+               "chargePolicy": "CHARGEABLE",
+               "unitType": "MINUTE",
+               "unitPrice": 3.0,
+               "currency": "KES",
+               "initialIncrementSeconds": 60,
+               "subsequentIncrementSeconds": 60,
+               "setupFeeAmount": 0.0,
+               "minimumChargeAmount": 0.0,
+               "taxableKind": "SERVICE",
+               "taxableRef": "svc_VOIP_STD"
+           }
+
+ If no prefix or rate is found:
+           {
+               "errorCode": "VOICE_TARIFF_NOT_FOUND",
+               "reason": "No active destination prefix for +998..."
+           }
+
+ RAT-01 must quarantine the CDR.
+
+
+
+
+SOPHIX BSS Design Documents                                                           Page 5
+ 11. Step 10 - Rating Calculation Example
+ PLM-CFG-07 response:
+           {
+               "unitType": "MINUTE",
+               "unitPrice": 3.0,
+               "initialIncrementSeconds": 60,
+               "subsequentIncrementSeconds": 60,
+               "setupFeeAmount": 0.0,
+               "minimumChargeAmount": 0.0
+           }
+
+ Mediated CDR:
+           {
+               "durationSeconds": 75
+           }
+
+ RAT-01 calculates:
+           initial increment covers first 60 seconds
+           remaining actual seconds = 15
+           subsequent increment rounds remaining 15 to 60
+           billable seconds = 120
+           billable units = 120 / 60 = 2 minutes
+           charge = 2 * 3.00 + 0 setup fee = 6.00 KES
+
+ PLM-CFG-07 does not persist this calculation. RAT-01 persists rated usage.
+
+
+
+ 12. Step 11 - Bulk Import Prefixes Or Rates
+ Backoffice uploads CSV to:
+           POST /api/plm/voice-destination-prefixes/bulk-import
+
+ Example CSV:
+           prefix,zone_code,effective_from,notes
+           +2547,KE_MOBILE,2026-06-01T00:00:00Z,Kenya mobile
+           +25420,KE_FIXED,2026-06-01T00:00:00Z,Nairobi fixed
+           999,EMERGENCY,2026-06-01T00:00:00Z,Emergency
+
+ Import rules:
+
+   1. Validate required columns.
+
+   2. Validate zone exists.
+
+   3. Validate no duplicate active prefix for same operator/effective date.
+
+   4. Insert in one batch transaction if file is small.
+
+   5. For large files, create import job and process asynchronously.
+
+   6. Emit prefix change event after success.
+
+
+
+ 13. Error Codes
+  Error code                                                        Meaning
+
+  VOICE_TARIFF_PLAN_NOT_FOUND                                       No applicable tariff plan binding.
+
+  VOICE_DESTINATION_ZONE_NOT_FOUND                                  Called number did not match a prefix.
+
+  VOICE_RATE_NOT_FOUND                                              Zone resolved but no active rate exists.
+
+  VOICE_RATE_OVERLAP                                                Rate effective periods overlap.
+
+  VOICE_PREFIX_DUPLICATE                                            Duplicate active prefix.
+
+  VOICE_BINDING_REF_INVALID                                         Package/service/subscription binding reference is invalid.
+
+  VOICE_TARIFF_BACKDATE_NOT_ALLOWED                                 User attempted backdated tariff change without permission.
+
+  VOICE_PREMIUM_RATE_REQUIRED                                       Premium zone exists without explicit active rate.
+
+  VOICE_EMERGENCY_ZERO_RATE_REQUIRED                                Emergency zone is not zero-rated.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 6
+ 14. Suggested Worker Commands
+ PLM-CFG-07 is mostly API-driven. Workers are optional and can be consolidated into catalog workers.
+           plm:voice-prefix-import
+           plm:voice-rate-import
+           plm:voice-tariff-validate-future-activations
+           plm:voice-tariff-cache-warm
+
+ Recommended schedule:
+
+  Command                                                             Frequency
+
+  plm:voice-prefix-import                                             Event-driven when large import is uploaded.
+
+  plm:voice-rate-import                                               Event-driven when large import is uploaded.
+
+  plm:voice-tariff-validate-future-activations                        Daily.
+
+  plm:voice-tariff-cache-warm                                         On deployment and after tariff change events.
+
+
+
+
+ 15. Minimum Implementation Order
+ Build in this order:
+
+   1. Migrations for tariff plan, zone, prefix, time band, rate, allowance, binding.
+
+   2. CRUD APIs for zones and time bands.
+
+   3. CRUD APIs for tariff plans and rates.
+
+   4. Prefix longest-match resolver.
+
+   5. Binding resolver.
+
+   6. Time band resolver.
+
+   7. Rate overlap validation.
+
+   8. Rating lookup API.
+
+   9. Activation/retirement API.
+
+   10. Events for cache invalidation.
+
+   11. Bulk import for prefixes.
+
+   12. Bulk import for rates.
+
+   13. Backoffice screens.
+
+
+
+ 16. Test Scenarios
+ 16.1 Mobile Call Lookup
+ Input:
+
+   - Called number +254711222333.
+
+   - Package pkg_INET_VOICE_STD.
+
+ Expected:
+
+   - Prefix +2547 matches.
+
+   - Zone KE_MOBILE.
+
+   - Rate 3.00 KES/minute.
+
+ 16.2 Longest Prefix Wins
+ Input:
+
+   - Prefixes +2547 and +254711.
+
+
+
+SOPHIX BSS Design Documents                                                                                           Page 7
+   - Called number +254711222333.
+
+ Expected:
+
+   - +254711 wins.
+
+ 16.3 Emergency Call
+ Input:
+
+   - Called number 999.
+
+ Expected:
+
+   - Zone EMERGENCY.
+
+   - Charge policy ZERO_RATED.
+
+   - Rate 0.
+
+ 16.4 Unknown Destination
+ Input:
+
+   - Called number has no matching prefix.
+
+ Expected:
+
+   - Lookup returns VOICE_DESTINATION_ZONE_NOT_FOUND.
+
+   - RAT-01 quarantines the CDR.
+
+ 16.5 Historical Rate Lookup
+ Input:
+
+   - Old rate active until 2026-06-30.
+
+   - New rate active from 2026-07-01.
+
+   - CDR started 2026-06-15.
+
+ Expected:
+
+   - Old rate is returned.
+
+ 16.6 Binding Priority
+ Input:
+
+   - Package binding and subscription override both exist.
+
+ Expected:
+
+   - Subscription override tariff plan wins.
+
+
+
+ 17. Developer Checklist
+ Before marking this catalog complete:
+
+   - Longest-prefix matching is deterministic.
+
+   - Rate overlap validation runs before activation.
+
+   - Lookup API does not return draft rates.
+
+   - Emergency zone validation enforces zero-rated config.
+
+   - Premium zones require explicit rates.
+
+   - Effective-date logic uses call start time.
+
+   - Time band logic uses operator timezone.
+
+   - Binding priority is implemented.
+
+
+
+SOPHIX BSS Design Documents                                  Page 8
+   - Events are emitted after plan/rate/prefix/binding changes.
+
+   - RAT-01 can use lookup API without direct database reads.
+
+
+
+
+SOPHIX BSS Design Documents                                       Page 9
+

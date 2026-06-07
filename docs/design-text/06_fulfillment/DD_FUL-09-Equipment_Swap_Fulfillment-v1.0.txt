@@ -1,0 +1,546 @@
+ DD_FUL-09 - Equipment Swap Fulfillment
+ Version: v1.0 Bundle: 06_fulfillment Status: Draft for review Primary owner: Fulfillment / provisioning team Related DDs:
+ DD_OSR-RMA-01, DD_OSR-01, DD_OSR-INSTANCE-01, DD_OSR-02, DD_WO-01, DD_WO-01-FLOW-SHIFTING,
+ DD_FUL-03, DD_PROV-INT-01, DD_RLM-CFG-01, DD_BIL-01, DD_EM-CFG-04, FOUNDATION_DROOLS
+
+
+
+ 1. Purpose
+ FUL-09 defines the fulfillment-side service and provisioning work required when customer equipment is swapped, replaced,
+ upgraded, recovered, or re-bound.
+
+ OSR-RMA-01 owns the equipment swap/RMA operational workflow: source/target equipment, contractor route, recovery,
+ RMA state, and stock movement. FUL-09 owns the fulfillment effect: service continuity, network rebinding, provisioning
+ commands, customer subscription impact, HomePass updates, and final activation confirmation.
+
+ Use FUL-09 when:
+
+   - swap workflow needs old device unbound and new device provisioned;
+
+   - HFC modem replacement must preserve or update slot/port authorization;
+
+   - GPON ONT replacement must unbind old ONT and bind new ONT at the OLT/HomePass;
+
+   - STB/smart card replacement must update entitlement bindings;
+
+   - equipment swap is part of relocation/shifting or upgrade;
+
+   - swap is completed physically but provisioning/network state needs reconciliation.
+
+ Procurement is related only upstream. OSR-02 creates future stock supply. FUL-09 must not call procurement inside a
+ customer swap. Customer jobs consume available/reserved OSR stock.
+
+
+
+ 2. Scope And Boundaries
+  Capability                                                                    Owner
+
+  Swap request, recovery logistics, RMA routing, source/target instance state   OSR-RMA-01
+
+  SKU quantity reservation/movement                                             OSR-01
+
+  Serialized instance identity/current state/lifecycle                          OSR-INSTANCE-01
+
+  Upstream stock replenishment/procurement                                      OSR-02
+
+  Work order technician execution                                               WO-01
+
+  Network/service provisioning commands                                         FUL-09 / FUL-03 / PROV-INT-01
+
+  HomePass topology/path update                                                 RLM-CFG-01 via FUL-09/FUL-07 where applicable
+
+  Billing charges/deposit delta                                                 BIL-01 / BIL-02
+
+  Configurable override approval                                                EM-CFG-04
+
+  Operator-variable swap fulfillment rules                                      Drools
+
+
+ Boundary rules:
+
+   - FUL-09 does not create purchase orders or procure stock.
+
+   - FUL-09 does not allocate inventory. It consumes target equipment selected/reserved by OSR-RMA/OSR.
+
+   - FUL-09 does not mutate OSR tables directly. It calls OSR-INSTANCE lifecycle APIs and consumes OSR-RMA events.
+
+   - FUL-09 does not replace FUL-03; it coordinates equipment-specific provisioning and may call FUL-03/PROV-INT
+     adapters.
+
+   - Approval is needed only for risky manual override, forced completion, or exception repair. Normal swap execution follows
+     workflow/rules.
+
+
+
+ 3. Process Overview
+
+SOPHIX BSS Design Documents                                                                                                     Page 1
+           flowchart LR
+             A["OSR-RMA swap ready for fulfillment"] --> B["FUL-09 validates service/equipment context"]
+             B --> C["Reserve/provision target path"]
+             C --> D["Unbind old equipment"]
+             D --> E["Bind/provision new equipment"]
+             E --> F["Run reconciliation"]
+             F --> G["Notify OSR-RMA fulfillment complete"]
+             G --> H["OSR updates lifecycle and closes swap"]
+
+ For relocation/shifting:
+
+   - SUB-WF-RELOCATION creates the shifting operation.
+
+   - WO-01 shifting executes field work.
+
+   - OSR-RMA/OSR handle equipment recovery/new equipment lifecycle.
+
+   - FUL-09 handles the network rebinding and service activation at target.
+
+   - OSR-02 procurement is not in the runtime path.
+
+
+
+ 4. Fulfillment Status Model
+  Status                                                           Meaning
+
+  REQUESTED                                                        Swap fulfillment requested by OSR-RMA/WO/SUB flow.
+
+  VALIDATED                                                        Service/equipment context validated.
+
+  PROVISIONING_OLD_UNBIND                                          Old device unbind in progress.
+
+  PROVISIONING_NEW_BIND                                            New device bind/provision in progress.
+
+  RECONCILING                                                      Network/BSS state being checked.
+
+  COMPLETED                                                        Fulfillment complete.
+
+  FAILED                                                           Fulfillment failed and can be retried or repaired.
+
+  PENDING_APPROVAL                                                 Manual override/force-complete approval open.
+
+  CANCELLED                                                        Fulfillment cancelled before network change.
+
+
+
+
+ 5. Data Model
+ 5.1 equipment_swap_fulfillment
+ What it is for: stores one fulfillment execution for an equipment swap request.
+
+ When to use it: every OSR-RMA swap that requires provisioning/network/service-side changes should create one fulfillment
+ row.
+
+ Sample meaning: esf-001 is the fulfillment execution that unbinds old ONT inst-old-001 and binds new ONT
+ inst-new-001 for subscription SUB-700045.
+
+  Column                          Type                             Purpose                                    Sample
+
+  fulfillment_id                  TEXT PK                          Fulfillment id.                            esf-001
+
+  operator_code                   TEXT                             Tenant/operator.                           WIK
+
+  swap_request_id                 TEXT                             OSR-RMA swap request.                      swap-001
+
+  wo_id                           TEXT NULL                        Work order if field-driven.                wo-shift-001
+
+  subscription_id                 TEXT                             Subscription id.                           SUB-700045
+
+  account_id                      TEXT NULL                        Account id.                                ACC-900045
+
+  customer_id                     TEXT NULL                        Customer id.                               CUS-100045
+
+  swap_type                       TEXT                             DEFECT_SWAP,                               DEFECT_SWAP
+                                                                   EQUIPMENT_UPGRADE,
+                                                                   RELOCATION_SWAP,
+                                                                   TERMINATION_RECOVERY.
+
+  technology_family               TEXT                             GPON, HFC, IPTV, VOICE, MIXED.             GPON
+
+  source_instance_id              TEXT NULL                        Old equipment instance.                    inst-old-001
+
+  target_instance_id              TEXT NULL                        New equipment instance.                    inst-new-001
+
+
+
+SOPHIX BSS Design Documents                                                                                                  Page 2
+  Column                          Type                             Purpose                           Sample
+
+  source_sku_id                   TEXT NULL                        Old SKU.                          WIK-ONT-HUAWEI-OLD
+
+  target_sku_id                   TEXT NULL                        New SKU.                          WIK-ONT-HUAWEI-EG8145V5
+
+  homepass_id                     TEXT NULL                        Target/current HomePass.          HP-001
+
+  status                          TEXT                             Fulfillment status.               PROVISIONING_NEW_BIND
+
+  created_at                      TIMESTAMP                        Creation timestamp.               2026-07-01T08:00:00Z
+
+  completed_at                    TIMESTAMP NULL                   Completion timestamp.             null
+
+
+ Recommended indexes:
+
+   - unique (operator_code, swap_request_id).
+
+   - (subscription_id, status).
+
+   - (wo_id).
+
+ 5.2 equipment_swap_provisioning_step
+ What it is for: stores each provisioning command/check in the swap fulfillment flow.
+
+ When to use it: create one row per old-unbind, new-bind, entitlement update, HomePass update, reconciliation, or rollback
+ command.
+
+ Sample meaning: esps-001 records the command sent to unbind old ONT from the OLT.
+
+  Column                          Type                             Purpose                           Sample
+
+  step_id                         TEXT PK                          Step id.                          esps-001
+
+  fulfillment_id                  TEXT                             Parent fulfillment.               esf-001
+
+  step_code                       TEXT                             Step identifier.                  GPON_UNBIND_OLD_ONT
+
+  target_system                   TEXT                             Provisioning target.              OLT_NMS
+
+  command_ref                     TEXT NULL                        PROV-INT command id.              prov-cmd-001
+
+  status                          TEXT                             PENDING, SENT, SUCCESS, FAILED,   SUCCESS
+                                                                   SKIPPED, COMPENSATED.
+
+  request_json                    JSONB                            Command request snapshot.         {"oldSerial":"OLD123"}
+
+  response_json                   JSONB NULL                       Response snapshot.                {"result":"OK"}
+
+  failure_code                    TEXT NULL                        Failure code.                     null
+
+  started_at                      TIMESTAMP NULL                   Start time.                       2026-07-01T08:02:00Z
+
+  completed_at                    TIMESTAMP NULL                   Completion time.                  2026-07-01T08:02:15Z
+
+
+ Recommended indexes:
+
+   - (fulfillment_id, status).
+
+   - (command_ref).
+
+ 5.3 equipment_swap_fulfillment_reconciliation
+ What it is for: stores post-provisioning verification between BSS and network state.
+
+ When to use it: after provisioning commands finish, especially when external systems are eventually consistent or manually
+ operated.
+
+ Sample meaning: esfr-001 confirms network now shows new ONT serial bound to the subscription/HomePass.
+
+  Column                          Type                             Purpose                           Sample
+
+  reconciliation_id               TEXT PK                          Reconciliation id.                esfr-001
+
+  fulfillment_id                  TEXT                             Parent fulfillment.               esf-001
+
+  check_code                      TEXT                             Check identifier.                 TARGET_ONT_BOUND
+
+  expected_value_json             JSONB                            Expected state.                   {"serial":"NEW123"}
+
+  actual_value_json               JSONB NULL                       Observed state.                   {"serial":"NEW123"}
+
+  status                          TEXT                             PASS, WARN, FAIL.                 PASS
+
+  message                         TEXT                             Human-readable result.            Target ONT bound in OLT.
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 3
+  Column                           Type                             Purpose                          Sample
+
+  checked_at                       TIMESTAMP                        Check timestamp.                 2026-07-01T08:05:00Z
+
+
+ Recommended indexes:
+
+   - (fulfillment_id, status).
+
+ 5.4 equipment_swap_exception
+ What it is for: stores exception/manual repair cases for swap fulfillment.
+
+ When to use it: provisioning mismatch, missing network response, serial mismatch, forced completion, rollback decision, or
+ manual override.
+
+ Sample meaning: ese-001 records that HFC authorization failed and a NOC user must repair it.
+
+  Column                           Type                             Purpose                          Sample
+
+  exception_id                     TEXT PK                          Exception id.                    ese-001
+
+  fulfillment_id                   TEXT                             Parent fulfillment.              esf-001
+
+  exception_type                   TEXT                             PROVISIONING_FAILED,             PROVISIONING_FAILED
+                                                                    SERIAL_MISMATCH,
+                                                                    NETWORK_MISMATCH,
+                                                                    FORCE_COMPLETE,
+                                                                    ROLLBACK_REQUIRED.
+
+  severity                         TEXT                             LOW, MEDIUM, HIGH, CRITICAL.     HIGH
+
+  status                           TEXT                             OPEN, PENDING_APPROVAL,          OPEN
+                                                                    APPROVED, RESOLVED, CANCELLED.
+
+  approval_request_id              TEXT NULL                        EM-CFG-04 request if needed.     apr-esf-001
+
+  assigned_to_team_code            TEXT NULL                        Repair team.                     NOC_GPON
+
+  created_at                       TIMESTAMP                        Creation timestamp.              2026-07-01T08:06:00Z
+
+  resolved_at                      TIMESTAMP NULL                   Resolution timestamp.            null
+
+
+ Recommended indexes:
+
+   - (fulfillment_id, status).
+
+   - (approval_request_id).
+
+
+
+ 6. APIs
+ 6.1 Start Swap Fulfillment
+           POST /api/equipment-swap-fulfillments
+           Idempotency-Key: esf-swap-001
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "swapRequestId": "swap-001",
+               "woId": "wo-001",
+               "subscriptionId": "SUB-700045",
+               "accountId": "ACC-900045",
+               "swapType": "DEFECT_SWAP",
+               "technologyFamily": "GPON",
+               "sourceInstanceId": "inst-old-001",
+               "targetInstanceId": "inst-new-001",
+               "homepassId": "HP-001"
+           }
+
+
+ 6.2 Execute Fulfillment
+           POST /api/equipment-swap-fulfillments/{fulfillment_id}/execute
+           Content-Type: application/json
+
+ Execution:
+
+   - validate OSR-RMA swap and OSR-INSTANCE source/target state;
+
+   - call PROV-INT/FUL-03 adapters for old unbind/new bind;
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 4
+   - update HomePass path if needed;
+
+   - reconcile network state;
+
+   - notify OSR-RMA of fulfillment result.
+
+ 6.3 Fulfillment Callback To OSR-RMA
+          POST /internal/swap-requests/{swap_request_id}/fulfillment-outcome
+          Content-Type: application/json
+
+          {
+               "fulfillmentId": "esf-001",
+               "outcome": "COMPLETED",
+               "sourceInstanceId": "inst-old-001",
+               "targetInstanceId": "inst-new-001",
+               "completedAt": "2026-07-01T08:08:00Z"
+          }
+
+
+ 6.4 Manual Exception Approval
+ For force-complete or risky override, FUL-09 calls EM-CFG-04:
+          POST /api/approvals/evaluate
+          Content-Type: application/json
+
+          {
+               "operatorCode": "WIK",
+               "moduleCode": "FUL-09",
+               "actionCode": "EQUIPMENT_SWAP_FORCE_COMPLETE",
+               "subjectType": "EQUIPMENT_SWAP_EXCEPTION",
+               "subjectId": "ese-001",
+               "context": {
+                 "fulfillmentId": "esf-001",
+                 "exceptionType": "NETWORK_MISMATCH",
+                 "technologyFamily": "GPON",
+                 "subscriptionId": "SUB-700045"
+               }
+          }
+
+
+
+
+ 7. Technology-Specific Behavior
+  Technology                       Old equipment action                      New equipment action                    Reconciliation
+
+  GPON                             Unbind old ONT from OLT/NMS; clear        Bind/provision new ONT serial; update   OLT shows target serial/service
+                                   old service binding.                      HomePass network path if changed.       active.
+
+  HFC                              Disable old modem/STB/smart-card          Authorize new MAC/smart card;           CMTS/Broadhub/entitlement state
+                                   authorization; preserve slot/port where   update Broadhub/NOMS/Verimatrix as      matches BSS.
+                                   required.                                 applicable.
+
+  IPTV                             Remove old STB/smart-card                 Add entitlement to new                  Entitlement system shows new device.
+                                   entitlement.                              STB/smart-card.
+
+  VOICE                            Unbind old MTA/IAD port/number            Bind phone numbers to new               Voice platform shows new binding.
+                                   mapping.                                  port/device.
+
+
+
+
+ 8. Business Rules
+  Rule                                          Description                                            Reason
+
+  R-FUL-09-01                                   Swap request must exist and be in a                    Avoid orphan provisioning.
+                                                fulfillment-ready state.
+
+  R-FUL-09-02                                   Target instance must be reserved/assigned by OSR       Inventory ownership.
+                                                flow before provisioning.
+
+  R-FUL-09-03                                   FUL-09 must not call OSR-02 procurement during         Procurement is upstream replenishment only.
+                                                customer job.
+
+  R-FUL-09-04                                   Old device unbind must happen before new device        Avoid duplicate network bindings.
+                                                bind unless operator policy allows
+                                                make-before-break.
+
+  R-FUL-09-05                                   Reconciliation must pass before completion             Service integrity.
+                                                callback, unless approved force-complete is used.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                        Page 5
+  Rule                                        Description                                          Reason
+
+  R-FUL-09-06                                 Manual force-complete/override must use              Governance.
+                                              EM-CFG-04 when policy requires it.
+
+  R-FUL-09-07                                 Camunda approval process is owned by                 Clear process boundaries.
+                                              EM-CFG-04; FUL-09 owns its fulfillment workflow.
+
+  R-FUL-09-08                                 All provisioning commands must be idempotent by      Safe retries.
+                                              fulfillment/step id.
+
+
+
+
+ 9. Rule Engine Guidance
+ Use Drools for configurable swap fulfillment decisions:
+
+  Rule file                                                             Purpose
+
+  equipment-swap-fulfillment-routing.drl                                Select provisioning steps by technology, SKU, service family, and operator.
+
+  equipment-swap-make-before-break.drl                                  Decide whether old/new can overlap during swap.
+
+  equipment-swap-exception-approval.drl                                 Decide when manual override needs EM-CFG-04 approval.
+
+
+ Example:
+              package com.sophix.fulfillment.equipment_swap
+
+              rule "GPON target bind requires OLT reconciliation"
+              when
+                $f : EquipmentSwapFulfillmentFact(technologyFamily == "GPON")
+                $d : EquipmentSwapFulfillmentDecision()
+              then
+                $d.addStep("GPON_UNBIND_OLD_ONT");
+                $d.addStep("GPON_BIND_NEW_ONT");
+                $d.addReconciliationCheck("TARGET_ONT_BOUND");
+              end
+
+
+
+
+ 10. Events
+  Event                                       Topic                                                When emitted
+
+  EquipmentSwapFulfillmentRequested           sophix.fulfillment.equipment-swap.requ               Fulfillment created.
+                                              ested
+
+  EquipmentSwapProvisioningStepCompleted      sophix.fulfillment.equipment-swap.step               A provisioning step completes.
+                                              -completed
+
+  EquipmentSwapFulfillmentCompleted           sophix.fulfillment.equipment-swap.comp               Fulfillment complete.
+                                              leted
+
+  EquipmentSwapFulfillmentFailed              sophix.fulfillment.equipment-swap.fail               Fulfillment failed.
+                                              ed
+
+  EquipmentSwapExceptionOpened                sophix.fulfillment.equipment-swap.exce               Manual repair/approval needed.
+                                              ption-opened
+
+
+
+
+ 11. Frontend/API Consumers
+  Area                                                                  APIs/modules used
+
+  Backoffice NOC/support                                                FUL-09 fulfillment detail and exception APIs.
+
+  Contractor mobile app                                                 WO-01 task execution; not direct provisioning except finalization data.
+
+  OSR-RMA module                                                        Starts FUL-09 and receives outcome callback.
+
+  Relocation/shifting flows                                             Consume FUL-09 when new/recovered equipment requires provisioning
+                                                                        changes.
+
+  Reporting                                                             FUL-09 events into REP-01.
+
+
+
+
+ 12. Infrastructure Recommendations
+
+SOPHIX BSS Design Documents                                                                                                                       Page 6
+ Run FUL-09 inside fulfillment/provisioning API and worker deployments.
+
+  Component                                                         Recommendation
+
+  API                                                               Fulfillment API exposes swap-fulfillment endpoints.
+
+  Workers                                                           Shared fulfillment/provisioning worker executes provisioning steps.
+
+  Database                                                          Fulfillment schema.
+
+  Provisioning                                                      Use PROV-INT-01 adapters and reconciliation.
+
+  Events                                                            Kafka/outbox for FUL-09 events and OSR-RMA callbacks.
+
+  Rules                                                             Drools/KIE for configurable technology behavior.
+
+
+ AWS notes: use existing ECS/EKS fulfillment services, RDS PostgreSQL, MSK/Kafka, Secrets Manager for provisioning
+ credentials, and strict alerts for failed provisioning/reconciliation.
+
+
+
+ 13. Acceptance Criteria
+   - Swap fulfillment tables and APIs exist.
+
+   - OSR-RMA can start fulfillment and receive outcome.
+
+   - FUL-09 validates OSR-RMA and OSR-INSTANCE state through APIs.
+
+   - Provisioning commands are executed through PROV-INT/FUL-03 adapters.
+
+   - GPON/HFC/IPTV/VOICE technology rules are configurable.
+
+   - Manual force-complete uses EM-CFG-04 when configured.
+
+   - Procurement is explicitly not in the customer swap runtime path.
+
+   - Tests cover success, provisioning failure, reconciliation failure, forced completion approval, and idempotent retry.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                               Page 7
+

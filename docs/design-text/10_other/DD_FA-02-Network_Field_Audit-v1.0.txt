@@ -1,0 +1,581 @@
+ DD_FA-02 - Network Field Audit
+ Version: v1.0 Bundle: 10_other Status: Draft for review Primary owner: Network operations / field quality team Related
+ DDs: DD_RLM-CFG-01, DD_ILM-CFG-02, DD_WO-01, DD_PROV-INT-01, DD_FA-01, DD_OSR-INSTANCE-01,
+ DD_EM-02, DD_EM-CFG-03, DD_EM-CFG-04, DD_TCK-01, DD_REP-01, FOUNDATION_DROOLS
+
+ MVP simplification baseline: FA-01, FA-02, and FA-03 must be implemented as one field-audit capability in the first release,
+ with audit_type driving type-specific rules, checklists, and routing. Do not create three services or three independent
+ databases.
+
+
+
+ 1. Purpose
+ FA-02 defines field audit of outside-plant and access-network assets: HomePass availability, pole/tap/splitter/OLT-port
+ condition, cable path, signal quality, GPS position, photos, and serviceability evidence.
+
+ Use FA-02 when:
+
+   - network operations needs to verify HomePass readiness before selling;
+
+   - installation failures suggest wrong network topology or missing plant;
+
+   - a field team must confirm splitter/tap/port condition;
+
+   - a mass audit is needed for an area, franchise, or technology region;
+
+   - support/NOC needs evidence before changing HomePass sellability;
+
+   - reporting needs audit coverage and plant quality metrics.
+
+ FA-02 is not the authoritative network inventory. RLM-CFG-01 remains the owner of HomePass/serviceability/topology
+ records. FA-02 records audit evidence and routes approved corrections to RLM or the proper network owner.
+
+
+
+ 2. Scope And Boundaries
+  Capability                                                         Owner
+
+  Network audit campaign/task/evidence/discrepancy                   FA-02
+
+  HomePass, serviceability, topology, address/port availability      RLM-CFG-01
+
+  Technology region/team scope                                       ILM-CFG-02
+
+  Field dispatch and technician execution                            WO-01
+
+  Provisioning/network read checks                                   PROV-INT-01
+
+  Serialized active customer equipment                               OSR-INSTANCE-01 / FA-01
+
+  Field users, teams, contractors                                    EM-02
+
+  Permissions                                                        EM-CFG-03
+
+  Approval for sellability/topology correction                       EM-CFG-04
+
+  Customer/support case if customer impacted                         TCK-01
+
+  Analytics and audit dashboards                                     REP-01
+
+  Configurable audit severity and routing                            Drools
+
+
+ Boundary rules:
+
+   - FA-02 does not directly update HomePass sellability, port availability, or topology tables.
+
+   - FA-02 stores evidence, discrepancies, and requested corrections.
+
+   - RLM-CFG-01 owns approved HomePass/topology mutation.
+
+   - WO-01 owns technician assignment and field finalization when dispatch is required.
+
+   - FA-02 does not replace PROV-INT reconciliation. It may call read/check APIs for evidence.
+
+   - EM-CFG-04 is required for risky topology/sellability correction where configured. Camunda is used only when the approval
+     policy mode is BPMN.
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+ 3. Process Overview
+           flowchart LR
+             A["Backoffice creates network audit"] --> B["FA-02 loads HomePass/topology scope"]
+             B --> C["Create WO or assign field task"]
+             C --> D["Technician captures GPS/photos/measurements"]
+             D --> E["FA-02 compares expected vs observed"]
+             E --> F{"Discrepancy?"}
+             F -- "No" --> G["Close task and mark verified"]
+             F -- "Yes" --> H["Open discrepancy"]
+             H --> I["Drools severity and routing"]
+             I --> J["RLM correction / NOC review / ticket / approval"]
+
+
+
+
+ 4. Status Models
+ 4.1 Audit Status
+  Status                                                          Meaning
+
+  DRAFT                                                           Audit campaign/task being prepared.
+
+  SCHEDULED                                                       Audit is scheduled.
+
+  IN_PROGRESS                                                     Field capture started.
+
+  RECONCILING                                                     Observations are being compared.
+
+  PENDING_APPROVAL                                                Correction needs approval.
+
+  CLOSED                                                          Audit completed.
+
+  CANCELLED                                                       Audit cancelled.
+
+
+
+ 4.2 Discrepancy Status
+  Status                                                          Meaning
+
+  OPEN                                                            Difference detected.
+
+  ROUTED                                                          Route/action selected.
+
+  PENDING_APPROVAL                                                Approval required.
+
+  ACTION_CREATED                                                  RLM/TCK/NOC action created.
+
+  RESOLVED                                                        Corrective action completed.
+
+  CLOSED                                                          Discrepancy closed.
+
+
+
+
+ 5. Data Model
+ 5.1 network_field_audit_campaign
+ What it is for: stores one planned network audit scope.
+
+ When to use it: create a campaign for area verification, HomePass readiness audit, post-build quality check, or investigation
+ batch.
+
+ Sample meaning: nfac-001 is a GPON readiness audit for Nairobi West covering 300 HomePass records.
+
+  Column                          Type                            Purpose                               Sample
+
+  campaign_id                     TEXT PK                         Campaign id.                          nfac-001
+
+  operator_code                   TEXT                            Tenant/operator.                      WIK
+
+  campaign_type                   TEXT                            HOMEPASS_READINESS,                   HOMEPASS_READINESS
+                                                                  POST_BUILD_QA,
+                                                                  AREA_INVESTIGATION,
+                                                                  SIGNAL_QUALITY.
+
+  area_code                       TEXT NULL                       Area scope.                           NRB-WEST
+
+  technology_family               TEXT NULL                       GPON, HFC, MIXED.                     GPON
+
+  status                          TEXT                            Campaign status.                      IN_PROGRESS
+
+  scheduled_start_at              TIMESTAMP NULL                  Planned start.                        2026-08-15T08:00:00Z
+
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 2
+  Column                           Type                             Purpose                      Sample
+
+  scheduled_end_at                 TIMESTAMP NULL                   Planned end.                 2026-08-25T17:00:00Z
+
+  created_by_user_id               TEXT                             Creator.                     usr-network-audit
+
+  created_at                       TIMESTAMP                        Creation timestamp.          2026-08-01T09:00:00Z
+
+  closed_at                        TIMESTAMP NULL                   Close timestamp.             null
+
+
+ Recommended indexes:
+
+   - (operator_code, status).
+
+   - (operator_code, area_code, status).
+
+   - (technology_family, status).
+
+ 5.2 network_field_audit_task
+ What it is for: stores one field audit assignment for a HomePass, network node, access port, route segment, or address
+ cluster.
+
+ When to use it: create one task per physical location or network element to be checked.
+
+ Sample meaning: nfat-001 asks technician usr-tech-020 to verify GPON splitter SPL-NRB-009.
+
+  Column                           Type                             Purpose                      Sample
+
+  audit_task_id                    TEXT PK                          Task id.                     nfat-001
+
+  campaign_id                      TEXT NULL                        Parent campaign.             nfac-001
+
+  operator_code                    TEXT                             Tenant/operator.             WIK
+
+  task_type                        TEXT                             HOMEPASS, SPLITTER, TAP,     SPLITTER
+                                                                    OLT_PORT, ROUTE_SEGMENT,
+                                                                    SIGNAL_TEST.
+
+  network_ref_type                 TEXT                             Network object type.         SPLITTER
+
+  network_ref_id                   TEXT                             RLM/network object id.       SPL-NRB-009
+
+  homepass_id                      TEXT NULL                        HomePass if task is          HP-GPON-0440
+                                                                    HomePass-specific.
+
+  wo_id                            TEXT NULL                        WO if dispatch-backed.       wo-nfa-001
+
+  assigned_to_user_id              TEXT NULL                        Field user.                  usr-tech-020
+
+  assigned_team_id                 TEXT NULL                        Team/contractor.             team-nrb-network
+
+  status                           TEXT                             Task status.                 ASSIGNED
+
+  due_at                           TIMESTAMP NULL                   Due timestamp.               2026-08-16T17:00:00Z
+
+  created_at                       TIMESTAMP                        Creation timestamp.          2026-08-15T08:00:00Z
+
+  submitted_at                     TIMESTAMP NULL                   Submission timestamp.        null
+
+  closed_at                        TIMESTAMP NULL                   Close timestamp.             null
+
+
+ Recommended indexes:
+
+   - (operator_code, status).
+
+   - (network_ref_type, network_ref_id).
+
+   - (assigned_to_user_id, status).
+
+   - (wo_id).
+
+ 5.3 network_field_audit_expected_state
+ What it is for: stores the expected RLM/network state at the start of the task.
+
+ When to use it: create one row per expected HomePass/node/port/capacity/signal condition so audit results can be compared
+ against a frozen snapshot.
+
+ Sample meaning: nfae-001 says splitter SPL-NRB-009 should exist at GPS point -1.2921,36.8219 and have four free
+ ports.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 3
+  Column                            Type                           Purpose                          Sample
+
+  expected_state_id                 TEXT PK                        Expected state id.               nfae-001
+
+  audit_task_id                     TEXT                           Parent task.                     nfat-001
+
+  expected_code                     TEXT                           Expected item/check.             SPLITTER_LOCATION
+
+  expected_value_json               JSONB                          Expected value snapshot.         {"lat":-1.2921,"lng":36.8219
+                                                                                                    ,"freePorts":4}
+
+  source_system                     TEXT                           Owner of source data.            RLM-CFG-01
+
+  source_ref_id                     TEXT NULL                      Source object id.                SPL-NRB-009
+
+  created_at                        TIMESTAMP                      Snapshot timestamp.              2026-08-15T08:02:00Z
+
+
+ Recommended indexes:
+
+   - (audit_task_id).
+
+   - (source_ref_id).
+
+ 5.4 network_field_audit_observation
+ What it is for: stores what the field user found.
+
+ When to use it: create rows for GPS, photo evidence, port count, signal measurement, node condition, access route
+ blockage, or any field measurement.
+
+ Sample meaning: nfao-001 records that splitter SPL-NRB-009 was found, photographed, and measured with acceptable
+ optical power.
+
+  Column                            Type                           Purpose                          Sample
+
+  observation_id                    TEXT PK                        Observation id.                  nfao-001
+
+  operator_code                     TEXT                           Tenant/operator.                 WIK
+
+  audit_task_id                     TEXT                           Parent task.                     nfat-001
+
+  observation_code                  TEXT                           Observation type.                OPTICAL_POWER_TEST
+
+  observed_value_json               JSONB                          Captured value.                  {"rxPowerDbm":-19.4,"freePor
+                                                                                                    ts":4}
+
+  condition_status                  TEXT                           OK, DAMAGED, MISSING, BLOCKED,   OK
+                                                                   UNKNOWN.
+
+  photo_file_ids_json               JSONB                          Evidence files.                  ["file-101"]
+
+  gps_latitude                      DECIMAL NULL                   Captured latitude.               -1.2920
+
+  gps_longitude                     DECIMAL NULL                   Captured longitude.              36.8218
+
+  notes                             TEXT NULL                      Field note.                      Splitter accessible and
+                                                                                                    labeled.
+
+  captured_by_user_id               TEXT                           Field user.                      usr-tech-020
+
+  captured_at                       TIMESTAMP                      Capture timestamp.               2026-08-16T10:15:00Z
+
+  offline_client_ref                TEXT NULL                      Mobile idempotency ref.          mob-nfa-991
+
+
+ Recommended indexes:
+
+   - (audit_task_id).
+
+   - (observation_code).
+
+   - unique (operator_code, offline_client_ref).
+
+ 5.5 network_field_audit_discrepancy
+ What it is for: stores mismatch or issue found by the network audit.
+
+ When to use it: create one row for missing network object, wrong GPS, low signal, blocked access, port mismatch,
+ HomePass not serviceable, or undocumented plant.
+
+ Sample meaning: nfad-001 records that RLM says a HomePass is sellable but the field audit found no usable port.
+
+  Column                            Type                           Purpose                          Sample
+
+  discrepancy_id                    TEXT PK                        Discrepancy id.                  nfad-001
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 4
+  Column                           Type                         Purpose                        Sample
+
+  audit_task_id                    TEXT                         Parent task.                   nfat-001
+
+  discrepancy_type                 TEXT                         MISSING_NODE, WRONG_GPS,       PORT_MISMATCH
+                                                                LOW_SIGNAL, PORT_MISMATCH,
+                                                                NOT_SERVICEABLE,
+                                                                UNDOCUMENTED_PLANT.
+
+  severity                         TEXT                         LOW, MEDIUM, HIGH, CRITICAL.   HIGH
+
+  status                           TEXT                         Discrepancy status.            ROUTED
+
+  route_action                     TEXT NULL                    REQUEST_RLM_CORRECTION,        REQUEST_RLM_CORRECTION
+                                                                CREATE_TICKET,
+                                                                CREATE_NETWORK_REPAIR_WO,
+                                                                NOC_REVIEW, NO_ACTION.
+
+  routed_ref_type                  TEXT NULL                    Target action type.            RLM_CORRECTION
+
+  routed_ref_id                    TEXT NULL                    Target action id.              rlm-corr-001
+
+  approval_request_id              TEXT NULL                    EM-CFG-04 request.             apr-nfa-001
+
+  created_at                       TIMESTAMP                    Creation timestamp.            2026-08-16T10:30:00Z
+
+  resolved_at                      TIMESTAMP NULL               Resolution timestamp.          null
+
+
+ Recommended indexes:
+
+   - (audit_task_id, status).
+
+   - (discrepancy_type, status).
+
+   - (approval_request_id).
+
+
+
+ 6. APIs
+ 6.1 Create Network Audit Campaign
+           POST /api/network-field-audits/campaigns
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "campaignType": "HOMEPASS_READINESS",
+               "areaCode": "NRB-WEST",
+               "technologyFamily": "GPON",
+               "scheduledStartAt": "2026-08-15T08:00:00Z",
+               "scheduledEndAt": "2026-08-25T17:00:00Z"
+           }
+
+
+ 6.2 Create Network Audit Task
+           POST /api/network-field-audits/tasks
+           Idempotency-Key: nfat-HP-GPON-0440-202608
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "campaignId": "nfac-001",
+               "taskType": "HOMEPASS",
+               "networkRefType": "HOMEPASS",
+               "networkRefId": "HP-GPON-0440",
+               "homepassId": "HP-GPON-0440",
+               "assignedToUserId": "usr-tech-020",
+               "createWorkOrder": true
+           }
+
+
+ 6.3 Submit Observation
+           POST /api/network-field-audits/tasks/nfat-001/observations
+           Idempotency-Key: mob-nfa-991
+           Content-Type: application/json
+
+           {
+               "observationCode": "OPTICAL_POWER_TEST",
+               "observedValue": {
+                  "rxPowerDbm": -19.4,
+                  "freePorts": 4
+               },
+
+
+SOPHIX BSS Design Documents                                                                                             Page 5
+              "conditionStatus": "OK",
+              "photoFileIds": ["file-101"],
+              "gpsLatitude": -1.2920,
+              "gpsLongitude": 36.8218,
+              "capturedAt": "2026-08-16T10:15:00Z",
+              "offlineClientRef": "mob-nfa-991"
+          }
+
+
+ 6.4 Submit Task
+          POST /api/network-field-audits/tasks/nfat-001/submit
+          Content-Type: application/json
+
+          {
+              "submittedByUserId": "usr-tech-020",
+              "submittedAt": "2026-08-16T10:30:00Z"
+          }
+
+
+ 6.5 Route Discrepancy
+          POST /api/network-field-audit-discrepancies/nfad-001/route
+          Content-Type: application/json
+
+          {
+              "requestedByUserId": "usr-network-audit",
+              "routeAction": "REQUEST_RLM_CORRECTION"
+          }
+
+
+
+
+ 7. Rules And Drools
+ Use Drools for configurable severity and routing.
+
+ Recommended packages:
+
+   - rules.field_audit.network.scope
+
+   - rules.field_audit.network.severity
+
+   - rules.field_audit.network.routing
+
+   - rules.field_audit.network.approval
+          package rules.field_audit.network.severity
+
+          rule "Sellable HomePass but no usable port is high severity"
+          when
+            $f : NetworkFieldAuditFact(discrepancyType == "PORT_MISMATCH",
+                                       homepassSellable == true,
+                                       usablePortCount == 0)
+            $d : NetworkFieldAuditDecision()
+          then
+            $d.setSeverity("HIGH");
+            $d.route("REQUEST_RLM_CORRECTION");
+          end
+
+          package rules.field_audit.network.approval
+
+          rule "Disable sellability requires approval"
+          when
+            $f : NetworkFieldAuditFact(routeAction == "REQUEST_RLM_CORRECTION",
+                                       proposedSellability == "NOT_SELLABLE")
+            $d : NetworkFieldAuditDecision()
+          then
+            $d.requireApproval("NETWORK_FIELD_AUDIT_SELLABILITY_CHANGE");
+          end
+
+
+
+
+ 8. Events
+  Event                                      When emitted                         Key fields
+
+  NetworkFieldAuditCampaignCreated           Campaign created.                    campaignId, areaCode
+
+  NetworkFieldAuditTaskCreated               Task created.                        auditTaskId, networkRefType,
+                                                                                  networkRefId
+
+  NetworkFieldAuditSubmitted                 Observations submitted.              auditTaskId, observationCount
+
+
+
+
+SOPHIX BSS Design Documents                                                                                       Page 6
+  Event                                         When emitted                                          Key fields
+
+  NetworkFieldAuditDiscrepancyOpened            Difference found.                                     discrepancyId, discrepancyType, severity
+
+  NetworkFieldAuditDiscrepancyRouted            Route action created.                                 routeAction, routedRefType, routedRefId
+
+  NetworkFieldAuditTaskClosed                   Task closed.                                          auditTaskId, closedAt
+
+
+
+
+ 9. Frontend And Module Consumers
+  Consumer                                                              What it uses
+
+  Backoffice network audit console                                      Campaign/task/discrepancy APIs
+
+  Contractor technical mobile app                                       Assigned audit tasks, observation submit, file upload
+
+  RLM operations                                                        Correction requests and evidence
+
+  NOC/support                                                           Signal/plant issue evidence
+
+  Reporting portal                                                      Audit coverage and plant quality dashboards
+
+
+
+
+ 10. Infrastructure Recommendations
+   - Run FA-02 with the operations/field API deployment.
+
+   - Use existing WO and mobile app infrastructure for dispatch and offline capture.
+
+   - Store photos in foundation file storage.
+
+   - Use Kafka/outbox for audit events.
+
+   - Keep RLM corrections asynchronous and approval-controlled.
+
+ Recommended logical handlers:
+
+  Handler                                                               Purpose
+
+  fa02-freeze-expected-state                                            Reads RLM/PROV and stores expected snapshots.
+
+  fa02-create-wo                                                        Creates WO-01 audit dispatch if needed.
+
+  fa02-compare-observations                                             Finds mismatches.
+
+  fa02-route-discrepancy                                                Runs Drools and creates correction/ticket/review action.
+
+
+
+
+ 11. Test Scenarios
+   1. Create HomePass audit task and freeze expected RLM state.
+
+   2. Create WO with FIELD_NETWORK_AUDIT or equivalent operator catalog job type.
+
+   3. Mobile observation is idempotent by offline ref.
+
+   4. Matching state closes task.
+
+   5. Port mismatch creates discrepancy.
+
+   6. Low signal creates NOC review or repair WO.
+
+   7. Sellability correction calls EM-CFG-04 when configured.
+
+   8. No direct RLM mutation occurs without owning module API.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 7
+

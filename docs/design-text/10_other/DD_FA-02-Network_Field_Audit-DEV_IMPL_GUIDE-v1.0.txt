@@ -1,0 +1,261 @@
+ DD_FA-02 - Network Field Audit - Developer
+ Implementation Guide
+ Version: v1.0 Bundle: 10_other Companion DD: DD_FA-02-Network_Field_Audit-v1.0
+
+
+
+ 1. Goal
+ Implement network field audits without duplicating RLM, WO, or provisioning ownership.
+
+ FA-02 stores audit tasks, expected snapshots, observations, discrepancies, and routing. RLM-CFG-01 remains the source of
+ truth for HomePass/topology, WO-01 handles dispatch, and PROV-INT provides network read/check data.
+
+
+
+ 2. Runtime Flow
+           sequenceDiagram
+             participant BO as Backoffice
+             participant FA as FA-02
+             participant RLM as RLM-CFG-01
+             participant PROV as PROV-INT
+             participant WO as WO-01
+             participant MOB as Mobile App
+             participant APR as EM-CFG-04
+
+               BO->>FA: POST /api/network-field-audits/tasks
+               FA->>RLM: read expected HomePass/topology
+               FA->>PROV: optional read signal/port state
+               FA->>FA: store expected snapshot
+               FA->>WO: optional create FIELD_NETWORK_AUDIT WO
+               MOB->>FA: submit GPS/photos/measurements
+               MOB->>FA: submit task
+               FA->>FA: compare expected vs observed
+               FA->>FA: run Drools severity/routing
+               FA->>APR: approval if sellability/topology correction needs it
+               FA->>RLM: request approved correction
+
+
+
+
+ 3. Step 1 - Migrations
+ Create:
+
+   - network_field_audit_campaign
+
+   - network_field_audit_task
+
+   - network_field_audit_expected_state
+
+   - network_field_audit_observation
+
+   - network_field_audit_discrepancy
+
+ Add unique (operator_code, offline_client_ref) for observations to support offline mobile retry.
+
+
+
+ 4. Step 2 - Create Task
+ Endpoint:
+           POST /api/network-field-audits/tasks
+           Idempotency-Key: nfat-HP-GPON-0440-202608
+           Content-Type: application/json
+
+ Request:
+           {
+               "operatorCode": "WIK",
+               "campaignId": "nfac-001",
+               "taskType": "HOMEPASS",
+               "networkRefType": "HOMEPASS",
+               "networkRefId": "HP-GPON-0440",
+
+
+
+SOPHIX BSS Design Documents                                                                                          Page 1
+              "homepassId": "HP-GPON-0440",
+              "assignedToUserId": "usr-tech-020",
+              "createWorkOrder": true
+          }
+
+ FA-02 behavior:
+
+   1. Validate permission through EM-CFG-03.
+
+   2. Apply idempotency by key and request hash.
+
+   3. Insert task in CREATED.
+
+   4. Call RLM-CFG-01 to fetch expected network state.
+
+   5. Optionally call PROV-INT read APIs for signal/port state.
+
+   6. Insert network_field_audit_expected_state rows.
+
+   7. If createWorkOrder=true, create WO.
+
+   8. Emit NetworkFieldAuditTaskCreated.
+
+
+
+ 5. Step 3 - Create WO
+ Call WO-01:
+          POST /api/work-orders
+          Idempotency-Key: nfat-001-wo
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "kind": "FIELD_NETWORK_AUDIT",
+              "originatingContextType": "NETWORK_FIELD_AUDIT_TASK",
+              "originatingContextId": "nfat-001",
+              "homepassId": "HP-GPON-0440",
+              "metadata": {
+                "networkRefType": "HOMEPASS",
+                "networkRefId": "HP-GPON-0440",
+                "requiredEvidence": ["gps", "photo", "signalMeasurement", "portCount"]
+              }
+          }
+
+ Store wo_id and move task to ASSIGNED.
+
+
+
+ 6. Step 4 - Mobile Observation
+ Endpoint:
+          POST /api/network-field-audits/tasks/nfat-001/observations
+          Idempotency-Key: mob-nfa-991
+          Content-Type: application/json
+
+ Request:
+          {
+              "observationCode": "OPTICAL_POWER_TEST",
+              "observedValue": {
+                 "rxPowerDbm": -19.4,
+                 "freePorts": 4
+              },
+              "conditionStatus": "OK",
+              "photoFileIds": ["file-101"],
+              "gpsLatitude": -1.2920,
+              "gpsLongitude": 36.8218,
+              "capturedAt": "2026-08-16T10:15:00Z",
+              "offlineClientRef": "mob-nfa-991"
+          }
+
+ FA-02 behavior:
+
+   1. Verify task assignment.
+
+   2. Validate uploaded file ids through file storage metadata.
+
+   3. Store observation.
+
+
+SOPHIX BSS Design Documents                                                              Page 2
+   4. Return the existing observation on duplicate offline ref.
+
+
+
+ 7. Step 5 - Submit And Compare
+ Endpoint:
+           POST /api/network-field-audits/tasks/nfat-001/submit
+
+ Comparison:
+
+   1. Load expected snapshots.
+
+   2. Load observations.
+
+   3. Detect MISSING_NODE, WRONG_GPS, LOW_SIGNAL, PORT_MISMATCH, NOT_SERVICEABLE, or UNDOCUMENTED_PLANT.
+
+   4. Create discrepancies.
+
+   5. If none, close task.
+
+   6. If any, run routing.
+
+
+
+ 8. Step 6 - Drools
+ Fact:
+           public record NetworkFieldAuditFact(
+                String operatorCode,
+                String discrepancyType,
+                String technologyFamily,
+                boolean homepassSellable,
+                int usablePortCount,
+                double rxPowerDbm,
+                String proposedSellability
+           ) {}
+
+ Rules:
+           package rules.field_audit.network.severity
+
+           rule "No usable port on sellable HomePass"
+           when
+             $f : NetworkFieldAuditFact(discrepancyType == "PORT_MISMATCH",
+                                        homepassSellable == true,
+                                        usablePortCount == 0)
+             $d : NetworkFieldAuditDecision()
+           then
+             $d.setSeverity("HIGH");
+             $d.route("REQUEST_RLM_CORRECTION");
+           end
+
+           package rules.field_audit.network.approval
+
+           rule "Sellability downgrade requires approval"
+           when
+             $f : NetworkFieldAuditFact(proposedSellability == "NOT_SELLABLE")
+             $d : NetworkFieldAuditDecision()
+           then
+             $d.requireApproval("NETWORK_FIELD_AUDIT_SELLABILITY_CHANGE");
+           end
+
+
+
+
+ 9. Step 7 - Route
+ If route is REQUEST_RLM_CORRECTION, call EM-CFG-04 first when required, then call RLM:
+           POST /api/homepass-corrections
+           Idempotency-Key: nfad-001-rlm-correction
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "originRefType": "NETWORK_FIELD_AUDIT_DISCREPANCY",
+               "originRefId": "nfad-001",
+               "homepassId": "HP-GPON-0440",
+               "correctionType": "SELLABILITY_CHANGE",
+
+
+
+SOPHIX BSS Design Documents                                                                         Page 3
+              "proposedValue": {
+                "sellability": "NOT_SELLABLE",
+                "reason": "No usable port found during audit"
+              }
+          }
+
+ For customer-impacting issues, create a TCK ticket instead of directly contacting the customer from FA-02.
+
+
+
+ 10. Tests
+   1. Create task freezes RLM snapshot.
+
+   2. Duplicate task request returns same task.
+
+   3. WO creation carries correct origin context.
+
+   4. Observation idempotency works offline.
+
+   5. Port mismatch opens discrepancy.
+
+   6. Sellability correction requires EM-CFG-04 when configured.
+
+   7. RLM is called only through API, not local DB writes.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                   Page 4
+

@@ -1,0 +1,177 @@
+ DEV_IMPL_GUIDE - FE-APP-03 Contractor Technical
+ Mobile App
+ 1. Implementation Objective
+ Implement the contractor technical mobile app for assigned work orders, offline execution, evidence capture, equipment
+ scan/validation, job finalization, and field issue escalation.
+
+
+ 2. Start Here
+ Read these first:
+
+   1. FE-APP-00-Frontend_Architecture_and_Shared_UX_Foundation-v1.0.md
+
+   2. FE-APP-03-Contractor_Technical_Mobile_App-v1.0.md
+
+   3. DD_WO-01-Work_Order_Module-v1.0.md
+
+   4. DD_WO-01-FRAMEWORK-v1.0.md
+
+   5. DD_OSR-INSTANCE-01-Equipment_Instance_Registry-v1.0.md
+
+   6. DD_OSR-01-Stock_Chain_Engine-v1.0.md
+
+   7. DD_EM-02-Contractor_and_Staff_Registry-v1.0.md
+
+   8. FOUNDATION_FILE_STORAGE.md
+
+
+ 3. Build Order
+   1. Implement authenticated job list from WO.
+
+   2. Implement job detail, checklist, notes, and field status transitions.
+
+   3. Implement offline work packet download for assigned jobs.
+
+   4. Implement evidence capture and upload through file storage.
+
+   5. Implement equipment serial scan and validation through OSR before finalization.
+
+   6. Implement WO finalization and sync retry.
+
+   7. Implement field issue creation/update through TCK when needed.
+
+
+ 4. Offline Rule
+ Offline mode may store assigned job packets, notes, photos, and pending finalization commands. It must not invent
+ equipment validity, subscription state, ticket status, or stock ownership. Those are confirmed by owning APIs during sync.
+
+
+ 5. Tests
+   - Job list and claim.
+
+   - Offline evidence capture.
+
+   - Sync retry and idempotency.
+
+   - Invalid equipment serial.
+
+   - WO finalization with file upload.
+
+   - Field issue creates ticket.
+
+
+ 6. Screen-To-API Wiring
+  Screen                                        Owning module API                       Calls
+
+  Login/contractor context                      FOUNDATION_AUTH, EM-02                  OIDC login, contractor/team/skill context.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                          Page 1
+  Screen                                         Owning module API                       Calls
+
+  Assigned jobs                                  WO-01                                   assigned work-order list, claim/accept where
+                                                                                         allowed.
+
+  Job detail                                     WO-01                                   work-order detail, appointment, checklist,
+                                                                                         customer/account/homepass summary.
+
+  Equipment scan                                 OSR-INSTANCE-01, OSR-01                 validate serial/MAC, check
+                                                                                         ownership/location/assigned stock.
+
+  Evidence                                       FOUNDATION_FILE_STORAGE                 upload photos, signatures, test results.
+
+  Job finalization                               WO-01                                   finalize, fail, reschedule, request help.
+
+  Field issue                                    TCK-01                                  create/update ticket linked to work order.
+
+
+
+
+ 7. Offline Work Packet
+ Download an assigned job packet before field work:
+               type WorkPacket = {
+                  workOrderId: string;
+                  accountId: string;
+                  customerId: string;
+                  homepassId?: string;
+                  appointmentWindow: { start: string; end: string };
+                  jobKind: "INSTALL" | "REPAIR" | "SWAP" | "RECOVERY" | "SURVEY";
+                  checklist: Array<{ code: string; label: string; required: boolean }>;
+                  expectedEquipment?: Array<{ skuRef: string; quantity: number; serialRequired: boolean }>;
+                  allowedActions: string[];
+                  downloadedAt: string;
+               };
+
+ Offline packet data is a work aid, not source of truth. On sync, the app must revalidate work order status and equipment state
+ before finalization.
+
+
+ 8. Flow - Finalize A Work Order
+   1. Contractor opens assigned job from WO-01.
+
+   2. App downloads packet and lets contractor capture notes, checklist answers, photos, GPS, and serial scans offline.
+
+   3. For each equipment serial, app validates online when possible:
+               GET /api/equipment-instances/lookup?serial=ONT123456
+               Authorization: Bearer <jwt>
+
+   4. App uploads evidence files:
+               POST /api/files/upload-sessions
+               Content-Type: application/json
+
+               {
+                   "purpose": "WORK_ORDER_EVIDENCE",
+                   "ownerModule": "WO",
+                   "ownerRef": "wo_01HZ"
+               }
+
+   5. App submits finalization:
+               POST /api/work-orders/{work_order_id}/finalize
+               Idempotency-Key: wo-finalize:{work_order_id}:{localAttemptId}
+               Content-Type: application/json
+
+               {
+                   "outcome": "COMPLETED",
+                   "completedAt": "2026-06-01T14:30:00+03:00",
+                   "checklist": [
+                      { "code": "SIGNAL_TEST", "value": "PASS" }
+                   ],
+                   "equipment": [
+                      { "serial": "ONT123456", "action": "INSTALLED" }
+                   ],
+                   "evidenceFileRefs": ["file_01HZ_PHOTO"],
+                   "gps": { "lat": -1.2921, "lng": 36.8219, "accuracyM": 12 }
+               }
+
+   6. WO-01 validates status and records finalization.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 2
+   7. Downstream WO/OSR/FUL events update equipment and service state. The app waits for confirmed API response; it
+     does not locally mark inventory as installed.
+
+
+ 9. Sync And Conflict Handling
+  Conflict                                                    UI handling
+
+  Work order cancelled while offline                          Stop sync, show cancelled state, keep local evidence read-only for supervisor
+                                                              review.
+
+  Serial belongs to another account/location                  Block finalization and require replacement serial or dispatcher override where
+                                                              policy allows.
+
+  Required evidence missing                                   Keep command local in FAILED_CONFLICT; highlight missing items.
+
+  Upload succeeds but finalization fails                      Keep uploaded file refs and retry finalization with the same idempotency key.
+
+  Duplicate finalization retry                                Show existing WO finalization result returned by WO-01.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                           Page 3
+

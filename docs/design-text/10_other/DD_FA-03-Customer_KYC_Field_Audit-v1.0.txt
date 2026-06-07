@@ -1,0 +1,534 @@
+ DD_FA-03 - Customer KYC Field Audit
+ Version: v1.0 Bundle: 10_other Status: Draft for review Primary owner: Customer operations / compliance team Related
+ DDs: DD_ILM-CFG-01, DD_FUL-02-STEP-KYC, DD_WO-01, DD_TCK-01, DD_CUST-INT-01, DD_EM-02,
+ DD_EM-CFG-03, DD_EM-CFG-04, DD_NOT-01, DD_REP-01, FOUNDATION_FILE_STORAGE, FOUNDATION_DROOLS
+
+ MVP simplification baseline: FA-01, FA-02, and FA-03 must be implemented as one field-audit capability in the first release,
+ with audit_type driving type-specific rules, checklists, and routing. Do not create three services or three independent
+ databases.
+
+
+
+ 1. Purpose
+ FA-03 defines field audit of customer identity, KYC evidence, contactability, address/location match, consent, and customer
+ presence/occupancy.
+
+ Use FA-03 when:
+
+   - KYC documents submitted during sales/order need field verification;
+
+   - a customer record has duplicate, suspicious, incomplete, or expired KYC data;
+
+   - installation/support teams must confirm customer identity at site;
+
+   - compliance needs a campaign to verify customer records in an area;
+
+   - contact/address mismatch blocks activation, billing, support, or recovery;
+
+   - a rejected/incomplete KYC case needs field evidence before approval.
+
+ FA-03 does not own customer master data. ILM-CFG-01 owns customer, account, KYC, contact methods, and address
+ records. FA-03 stores audit tasks/evidence and requests approved ILM corrections.
+
+
+
+ 2. Scope And Boundaries
+  Capability                                                        Owner
+
+  KYC field audit campaign, task, evidence, discrepancy             FA-03
+
+  Customer/account/KYC/contact/address source of truth              ILM-CFG-01
+
+  Order KYC step during activation                                  FUL-02-STEP-KYC
+
+  Field dispatch and technician execution                           WO-01
+
+  Ticket/case for customer follow-up                                TCK-01
+
+  Customer interaction history                                      CUST-INT-01
+
+  Field users/teams/contractors                                     EM-02
+
+  Permission model                                                  EM-CFG-03
+
+  KYC override/correction approval                                  EM-CFG-04
+
+  Customer notification                                             NOT-01
+
+  Reporting                                                         REP-01
+
+  Configurable KYC severity/routing                                 Drools
+
+
+ Boundary rules:
+
+   - FA-03 does not directly edit ILM customer/KYC records.
+
+   - FA-03 stores field evidence and discrepancy decisions.
+
+   - ILM-CFG-01 applies approved KYC/contact/address corrections.
+
+   - FUL-02-STEP-KYC remains the owner of order-time KYC task state.
+
+   - WO-01 owns dispatch if a field visit is required.
+
+   - KYC documents must be stored through foundation file storage with restricted access.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 1
+   - EM-CFG-04 is required for risky override, KYC approval bypass, identity correction, or duplicate-merge recommendation
+     where configured.
+
+   - Camunda is involved only when the approval policy mode in EM-CFG-04 is BPMN.
+
+
+
+ 3. Process Overview
+            flowchart LR
+              A["Backoffice creates KYC audit"] --> B["FA-03 loads ILM customer/KYC snapshot"]
+              B --> C["Assign task or create WO"]
+              C --> D["Field user verifies customer/site/evidence"]
+              D --> E["FA-03 compares expected vs observed"]
+              E --> F{"Issue?"}
+              F -- "No" --> G["Close audit verified"]
+              F -- "Yes" --> H["Open discrepancy"]
+              H --> I["Drools route"]
+              I --> J["ILM correction / TCK case / approval / notification"]
+
+
+
+
+ 4. Status Models
+  Task Status                                                       Meaning
+
+  CREATED                                                           Audit task created.
+
+  ASSIGNED                                                          Assigned directly or through WO.
+
+  IN_PROGRESS                                                       Field capture started.
+
+  SUBMITTED                                                         Observations submitted.
+
+  DISCREPANCY_OPEN                                                  One or more issues exist.
+
+  PENDING_APPROVAL                                                  Correction/override approval needed.
+
+  CLOSED                                                            Audit completed.
+
+  CANCELLED                                                         Audit cancelled.
+
+
+  Discrepancy Status                                                Meaning
+
+  OPEN                                                              Issue detected.
+
+  ROUTED                                                            Action selected.
+
+  PENDING_APPROVAL                                                  Approval required.
+
+  ACTION_CREATED                                                    ILM/TCK/NOT action created.
+
+  RESOLVED                                                          Issue resolved.
+
+  CLOSED                                                            Fully closed.
+
+
+
+
+ 5. Data Model
+ 5.1 kyc_field_audit_campaign
+ What it is for: stores a planned batch of customer/KYC field verification.
+
+ When to use it: create a campaign for compliance verification, duplicate-customer cleanup, rejected-KYC follow-up, or
+ area/customer segment audit.
+
+ Sample meaning: kfac-001 verifies 500 customer KYC records in Nairobi West.
+
+  Column                           Type                             Purpose                                Sample
+
+  campaign_id                      TEXT PK                          Campaign id.                           kfac-001
+
+  operator_code                    TEXT                             Tenant/operator.                       WIK
+
+  campaign_type                    TEXT                             KYC_REVERIFY,                          KYC_REVERIFY
+                                                                    DUPLICATE_INVESTIGATION,
+                                                                    ADDRESS_VERIFY,
+                                                                    CONTACT_VERIFY.
+
+  area_code                        TEXT NULL                        Area scope.                            NRB-WEST
+
+  status                           TEXT                             Campaign status.                       IN_PROGRESS
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 2
+  Column                           Type                             Purpose                         Sample
+
+  scheduled_start_at               TIMESTAMP NULL                   Planned start.                  2026-08-20T08:00:00Z
+
+  scheduled_end_at                 TIMESTAMP NULL                   Planned end.                    2026-08-30T17:00:00Z
+
+  created_by_user_id               TEXT                             Creator.                        usr-compliance
+
+  created_at                       TIMESTAMP                        Creation timestamp.             2026-08-10T09:00:00Z
+
+  closed_at                        TIMESTAMP NULL                   Close timestamp.                null
+
+
+ Recommended indexes:
+
+   - (operator_code, status).
+
+   - (operator_code, area_code, status).
+
+ 5.2 kyc_field_audit_task
+ What it is for: stores one field verification assignment for a customer/account/order.
+
+ When to use it: create one task when a customer identity, address, contact method, or consent evidence needs field
+ verification.
+
+ Sample meaning: kfat-001 asks user usr-tech-030 to verify customer CUS-100045 at the installed address.
+
+  Column                           Type                             Purpose                         Sample
+
+  audit_task_id                    TEXT PK                          Task id.                        kfat-001
+
+  campaign_id                      TEXT NULL                        Parent campaign.                kfac-001
+
+  operator_code                    TEXT                             Tenant/operator.                WIK
+
+  task_type                        TEXT                             KYC_REVERIFY, ADDRESS_VERIFY,   ADDRESS_VERIFY
+                                                                    CONTACT_VERIFY,
+                                                                    CONSENT_VERIFY,
+                                                                    DUPLICATE_INVESTIGATION.
+
+  customer_id                      TEXT                             Customer id.                    CUS-100045
+
+  account_id                       TEXT NULL                        Account id.                     ACC-900045
+
+  order_id                         TEXT NULL                        Order id if order-time KYC.     ORD-1001
+
+  homepass_id                      TEXT NULL                        Related service location.       HP-GPON-0440
+
+  wo_id                            TEXT NULL                        WO if dispatch-backed.          wo-kyc-001
+
+  assigned_to_user_id              TEXT NULL                        Field user.                     usr-tech-030
+
+  status                           TEXT                             Task status.                    ASSIGNED
+
+  due_at                           TIMESTAMP NULL                   Due timestamp.                  2026-08-22T17:00:00Z
+
+  created_at                       TIMESTAMP                        Creation timestamp.             2026-08-20T08:00:00Z
+
+  submitted_at                     TIMESTAMP NULL                   Submission timestamp.           null
+
+  closed_at                        TIMESTAMP NULL                   Close timestamp.                null
+
+
+ Recommended indexes:
+
+   - (operator_code, status).
+
+   - (customer_id, status).
+
+   - (assigned_to_user_id, status).
+
+   - (wo_id).
+
+ 5.3 kyc_field_audit_expected_snapshot
+ What it is for: stores the ILM customer/KYC/address/contact snapshot used for the audit.
+
+ When to use it: create a snapshot before field work starts, so the submitted evidence can be compared to the exact record
+ state at assignment time.
+
+ Sample meaning: kfes-001 freezes customer name, phone, ID type, masked ID number, and expected address for
+ CUS-100045.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 3
+  Column                           Type                            Purpose                               Sample
+
+  snapshot_id                      TEXT PK                         Snapshot id.                          kfes-001
+
+  audit_task_id                    TEXT                            Parent task.                          kfat-001
+
+  customer_id                      TEXT                            Customer id.                          CUS-100045
+
+  snapshot_json                    JSONB                           Masked                                {"name":"Jane A.","phone":"2
+                                                                   customer/KYC/contact/address          547***123","kycStatus":"PEND
+                                                                   snapshot.                             ING_REVERIFY"}
+
+  source_system                    TEXT                            Source owner.                         ILM-CFG-01
+
+  source_version                   TEXT NULL                       ILM version/etag if available.        ilmv-8899
+
+  created_at                       TIMESTAMP                       Snapshot timestamp.                   2026-08-20T08:01:00Z
+
+
+ Recommended indexes:
+
+   - (audit_task_id).
+
+   - (customer_id).
+
+ 5.4 kyc_field_audit_observation
+ What it is for: stores field user observations and evidence.
+
+ When to use it: create rows for identity document sighting, customer presence, phone confirmation, address proof, site GPS,
+ consent confirmation, or refusal.
+
+ Sample meaning: kfao-001 confirms the customer was present, phone matched, and address GPS was captured.
+
+  Column                           Type                            Purpose                               Sample
+
+  observation_id                   TEXT PK                         Observation id.                       kfao-001
+
+  operator_code                    TEXT                            Tenant/operator.                      WIK
+
+  audit_task_id                    TEXT                            Parent task.                          kfat-001
+
+  observation_type                 TEXT                            CUSTOMER_PRESENT, ID_SIGHTED,         ADDRESS_CONFIRMED
+                                                                   PHONE_CONFIRMED,
+                                                                   ADDRESS_CONFIRMED,
+                                                                   CONSENT_CONFIRMED,
+                                                                   CUSTOMER_REFUSED.
+
+  result_status                    TEXT                            PASS, FAIL, PARTIAL,                  PASS
+                                                                   NOT_VERIFIABLE.
+
+  observed_value_json              JSONB                           Captured field values, masked where   {"gpsMatch":true,"occupantCo
+                                                                   sensitive.                            nfirmed":true}
+
+  evidence_file_ids_json           JSONB                           File ids.                             ["file-kyc-001"]
+
+  gps_latitude                     DECIMAL NULL                    Captured latitude.                    -1.2921
+
+  gps_longitude                    DECIMAL NULL                    Captured longitude.                   36.8219
+
+  notes                            TEXT NULL                       Field note.                           Customer confirmed address.
+
+  captured_by_user_id              TEXT                            Field user.                           usr-tech-030
+
+  captured_at                      TIMESTAMP                       Capture timestamp.                    2026-08-22T09:30:00Z
+
+  offline_client_ref               TEXT NULL                       Mobile idempotency ref.               mob-kyc-888
+
+
+ Recommended indexes:
+
+   - (audit_task_id).
+
+   - (observation_type, result_status).
+
+   - unique (operator_code, offline_client_ref).
+
+ 5.5 kyc_field_audit_discrepancy
+ What it is for: stores KYC/customer issues detected by field audit.
+
+ When to use it: create one row for identity mismatch, address mismatch, contact mismatch, missing consent, duplicate
+ suspicion, refusal, or fraud risk.
+
+ Sample meaning: kfad-001 records that the installed address does not match the ILM address and requires ILM correction
+ approval.
+
+
+SOPHIX BSS Design Documents                                                                                                     Page 4
+  Column                           Type                         Purpose                        Sample
+
+  discrepancy_id                   TEXT PK                      Discrepancy id.                kfad-001
+
+  audit_task_id                    TEXT                         Parent task.                   kfat-001
+
+  discrepancy_type                 TEXT                         IDENTITY_MISMATCH,             ADDRESS_MISMATCH
+                                                                ADDRESS_MISMATCH,
+                                                                CONTACT_MISMATCH,
+                                                                MISSING_CONSENT,
+                                                                DUPLICATE_SUSPECTED,
+                                                                CUSTOMER_REFUSED.
+
+  severity                         TEXT                         LOW, MEDIUM, HIGH, CRITICAL.   HIGH
+
+  status                           TEXT                         Discrepancy status.            PENDING_APPROVAL
+
+  route_action                     TEXT NULL                    REQUEST_ILM_CORRECTION,        REQUEST_ILM_CORRECTION
+                                                                CREATE_TICKET,
+                                                                REQUEST_KYC_REVIEW,
+                                                                REQUEST_APPROVAL, NO_ACTION.
+
+  routed_ref_type                  TEXT NULL                    Target action type.            ILM_CORRECTION
+
+  routed_ref_id                    TEXT NULL                    Target action id.              ilm-corr-001
+
+  approval_request_id              TEXT NULL                    EM-CFG-04 request.             apr-kyc-001
+
+  created_at                       TIMESTAMP                    Creation timestamp.            2026-08-22T09:40:00Z
+
+  resolved_at                      TIMESTAMP NULL               Resolution timestamp.          null
+
+
+ Recommended indexes:
+
+   - (audit_task_id, status).
+
+   - (discrepancy_type, status).
+
+   - (approval_request_id).
+
+
+
+ 6. APIs
+ 6.1 Create KYC Audit Task
+           POST /api/kyc-field-audits/tasks
+           Idempotency-Key: kfat-CUS-100045-202608
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "campaignId": "kfac-001",
+               "taskType": "ADDRESS_VERIFY",
+               "customerId": "CUS-100045",
+               "accountId": "ACC-900045",
+               "orderId": "ORD-1001",
+               "homepassId": "HP-GPON-0440",
+               "assignedToUserId": "usr-tech-030",
+               "createWorkOrder": true
+           }
+
+
+ 6.2 Submit Observation
+           POST /api/kyc-field-audits/tasks/kfat-001/observations
+           Idempotency-Key: mob-kyc-888
+           Content-Type: application/json
+
+           {
+               "observationType": "ADDRESS_CONFIRMED",
+               "resultStatus": "PASS",
+               "observedValue": {
+                  "gpsMatch": true,
+                  "occupantConfirmed": true
+               },
+               "evidenceFileIds": ["file-kyc-001"],
+               "gpsLatitude": -1.2921,
+               "gpsLongitude": 36.8219,
+               "capturedAt": "2026-08-22T09:30:00Z",
+               "offlineClientRef": "mob-kyc-888"
+           }
+
+
+ 6.3 Submit Task
+
+SOPHIX BSS Design Documents                                                                                             Page 5
+          POST /api/kyc-field-audits/tasks/kfat-001/submit
+          Content-Type: application/json
+
+          {
+              "submittedByUserId": "usr-tech-030",
+              "submittedAt": "2026-08-22T09:45:00Z"
+          }
+
+
+ 6.4 Route Discrepancy
+          POST /api/kyc-field-audit-discrepancies/kfad-001/route
+          Content-Type: application/json
+
+          {
+              "requestedByUserId": "usr-compliance",
+              "routeAction": "REQUEST_ILM_CORRECTION"
+          }
+
+
+
+
+ 7. Rules And Drools
+ Recommended packages:
+
+   - rules.field_audit.kyc.scope
+
+   - rules.field_audit.kyc.severity
+
+   - rules.field_audit.kyc.routing
+
+   - rules.field_audit.kyc.approval
+          package rules.field_audit.kyc.severity
+
+          rule "Identity mismatch is critical"
+          when
+            $f : KycFieldAuditFact(discrepancyType == "IDENTITY_MISMATCH")
+            $d : KycFieldAuditDecision()
+          then
+            $d.setSeverity("CRITICAL");
+            $d.route("REQUEST_KYC_REVIEW");
+          end
+
+          package rules.field_audit.kyc.routing
+
+          rule "Address mismatch requests ILM correction"
+          when
+            $f : KycFieldAuditFact(discrepancyType == "ADDRESS_MISMATCH",
+                                   evidenceComplete == true)
+            $d : KycFieldAuditDecision()
+          then
+            $d.route("REQUEST_ILM_CORRECTION");
+            $d.requireApproval("KYC_FIELD_AUDIT_ADDRESS_CORRECTION");
+          end
+
+
+
+
+ 8. Events
+  Event                                        When emitted                  Key fields
+
+  KycFieldAuditTaskCreated                     Task created.                 auditTaskId, customerId
+
+  KycFieldAuditSubmitted                       Observations submitted.       auditTaskId, customerId
+
+  KycFieldAuditDiscrepancyOpened               Issue found.                  discrepancyId, discrepancyType, severity
+
+  KycFieldAuditDiscrepancyRouted               Route action created.         routeAction, routedRefType, routedRefId
+
+  KycFieldAuditTaskClosed                      Task closed.                  auditTaskId, closedAt
+
+
+
+
+ 9. Security And Privacy
+   - Do not store raw ID numbers in FA-03 tables.
+
+   - Store KYC/identity photos in restricted file storage only.
+
+   - Mask sensitive fields in snapshots.
+
+
+SOPHIX BSS Design Documents                                                                                    Page 6
+   - Field users may see only the minimum data needed to verify the task.
+
+   - Audit all reads of KYC evidence.
+
+
+
+ 10. Test Scenarios
+   1. Task creation freezes masked ILM snapshot.
+
+   2. WO is created when dispatch is requested.
+
+   3. Mobile observation submit is idempotent.
+
+   4. Matching address/contact closes task.
+
+   5. Identity mismatch creates critical discrepancy.
+
+   6. Address correction calls EM-CFG-04 when configured.
+
+   7. ILM correction is routed through ILM API, not local DB update.
+
+   8. Raw ID number is not stored in FA tables.
+
+
+
+
+SOPHIX BSS Design Documents                                                 Page 7
+

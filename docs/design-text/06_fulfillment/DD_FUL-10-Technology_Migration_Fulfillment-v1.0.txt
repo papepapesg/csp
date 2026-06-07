@@ -1,0 +1,733 @@
+ DD_FUL-10 - Technology Migration Fulfillment
+ Version: v1.0 Bundle: 06_fulfillment Status: Draft for review Primary owner: Fulfillment / provisioning team Related DDs:
+ DD_SUB-WF-MIGRATION-01, DD_WO-01, DD_WO-01-CONTRACT-FOR-SUB-WF, DD_FUL-03, DD_FUL-09,
+ DD_PROV-INT-01, DD_RLM-CFG-01, DD_OSR-01, DD_OSR-INSTANCE-01, DD_OSR-02, DD_BIL-01, DD_EM-CFG-04,
+ FOUNDATION_DROOLS
+
+ MVP simplification baseline: FUL-10 is phased after activation, payment, WO installation, OSR basics, and provisioning
+ integration are stable. First implementation is admin-only cohort migration, not customer self-service cross-technology
+ migration. FUL-10 calls WO only for field work and does not create a separate WO migration engine unless an operator
+ process requires it.
+
+
+
+ 1. Purpose
+ FUL-10 defines the fulfillment-side execution for a customer or network migration that changes the access technology used
+ by an active subscription.
+
+ Examples:
+
+   - HFC to GPON migration;
+
+   - GPON to HFC migration where an operator supports both access networks;
+
+   - legacy access to fiber migration;
+
+   - operator-driven area cutover from one network topology to another;
+
+   - package migration that requires a different access technology or equipment profile.
+
+ SUB-WF-MIGRATION-01 owns the subscription operation: commercial validation, target package, target HomePass, billing
+ policy, customer-facing operation state, and final subscription state update. FUL-10 owns the technical fulfillment: migration
+ validation against provisioning/network constraints, work-order creation, equipment plan, source technology teardown, target
+ technology activation, network reconciliation, and fulfillment outcome callback.
+
+ Use FUL-10 when:
+
+   - source and target HomePass technologies are different;
+
+   - the migration requires new access equipment or new network binding;
+
+   - the subscription migration flow needs a technical cutover before it can commit;
+
+   - an operator performs a planned technology retirement or area cutover;
+
+   - manual force-complete, rollback, or exception repair may be needed after network provisioning.
+
+ Procurement is related only upstream. OSR-02 replenishes stock before customer jobs start. FUL-10 must not call
+ procurement during a migration. Runtime customer migrations consume equipment already available, reserved, or assigned
+ through OSR/WO flows.
+
+
+
+ 2. Scope And Boundaries
+  Capability                                                                   Owner
+
+  Subscription migration operation, package/homepass choice, customer-facing   SUB-WF-MIGRATION-01
+  status
+
+  Technical migration fulfillment and cutover orchestration                    FUL-10
+
+  Field visit, technician assignment, installation evidence                    WO-01
+
+  Equipment replacement fulfillment                                            FUL-09
+
+  Network/service provisioning commands                                        FUL-03 / PROV-INT-01
+
+  HomePass topology and service availability                                   RLM-CFG-01
+
+  Stock balances and reservations                                              OSR-01
+
+  Serialized equipment state and binding                                       OSR-INSTANCE-01
+
+  Upstream replenishment and purchase orders                                   OSR-02
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+  Capability                                                        Owner
+
+  Charges, deposits, proration, migration fees                      BIL-01 / BIL-02
+
+  Configurable risky override approval                              EM-CFG-04
+
+  Operator-variable eligibility, cutover, and exception rules       Drools
+
+
+ Boundary rules:
+
+   - FUL-10 does not approve the commercial migration. SUB-WF-MIGRATION-01 must start or authorize the operation.
+
+   - FUL-10 does not directly update subscription master data. It calls back the migration outcome so SUB-WF can commit.
+
+   - FUL-10 does not schedule technicians directly if the WO module is enabled. It creates or references a WO.
+
+   - FUL-10 does not directly edit OSR stock or equipment instance tables. It uses OSR APIs and events.
+
+   - FUL-10 may call FUL-09 when the migration includes an equipment replacement/swap.
+
+   - FUL-10 may call FUL-03/PROV-INT to activate/deactivate access services.
+
+   - EM-CFG-04 is used only for approval policies such as force-complete, forced rollback, risky serial correction, or
+     non-standard cutover. Camunda is involved only when the configured approval policy mode is BPMN.
+
+
+
+ 3. Process Overview
+               flowchart LR
+                 A["SUB-WF migration requests technical fulfillment"] --> B["FUL-10 validates source/target technology"]
+                 B --> C["Build equipment and work plan"]
+                 C --> D["Create migration WO if field work required"]
+                 D --> E["Technician installs target access"]
+                 E --> F["FUL-10 executes source teardown and target activation"]
+                 F --> G["FUL-10 reconciles BSS and network state"]
+                 G --> H["FUL-10 sends outcome to SUB-WF"]
+                 H --> I["SUB-WF commits subscription migration"]
+
+ For an HFC to GPON migration:
+
+   1. SUB-WF-MIGRATION validates the target package and target HomePass.
+
+   2. FUL-10 validates that the target HomePass can serve the package on GPON.
+
+   3. FUL-10 creates a WO with migration context.
+
+   4. WO installs the ONT and captures serial, port, GPS, and evidence.
+
+   5. FUL-10 calls provisioning to activate GPON service.
+
+   6. FUL-10 tears down or suspends HFC service according to the cutover policy.
+
+   7. FUL-10 reconciles network state.
+
+   8. SUB-WF commits the subscription only after FUL-10 returns COMPLETED.
+
+
+
+ 4. Status Model
+  Status                                                            Meaning
+
+  REQUESTED                                                         Technical migration fulfillment requested.
+
+  VALIDATED                                                         Source and target technology context validated.
+
+  WO_CREATED                                                        Work order created or linked.
+
+  EQUIPMENT_PLANNED                                                 Required equipment and reuse/recovery plan decided.
+
+  FIELD_READY                                                       Field installation evidence received and target path is ready for cutover.
+
+  CUTOVER_IN_PROGRESS                                               Source teardown and target activation are running.
+
+  RECONCILING                                                       Provisioning/network state is being verified.
+
+  COMPLETED                                                         Technical migration completed and callback sent.
+
+  FAILED                                                            Technical migration failed and needs retry or repair.
+
+  PENDING_APPROVAL                                                  Risky manual action requires EM-CFG-04 approval.
+
+  ROLLBACK_IN_PROGRESS                                              Approved rollback is being executed.
+
+
+SOPHIX BSS Design Documents                                                                                                                      Page 2
+  Status                                                             Meaning
+
+  CANCELLED                                                          Fulfillment cancelled before irreversible technical changes.
+
+
+
+
+ 5. Data Model
+ 5.1 technology_migration_fulfillment
+ What it is for: stores one technical fulfillment execution for a cross-technology migration.
+
+ When to use it: create one row when SUB-WF-MIGRATION asks fulfillment to execute a migration where source and target
+ access technology differ, or where network/equipment migration must be orchestrated separately from normal same-tech
+ shifting.
+
+ Sample meaning: tmf-001 is the technical fulfillment that migrates subscription SUB-700045 from HFC HomePass
+ HP-HFC-0100 to GPON HomePass HP-GPON-0440.
+
+  Column                           Type                              Purpose                                   Sample
+
+  migration_fulfillment_id         TEXT PK                           Technical fulfillment id.                 tmf-001
+
+  operator_code                    TEXT                              Tenant/operator.                          WIK
+
+  subscription_operation_id        TEXT                              SUB-WF migration operation id.            op-mig-001
+
+  subscription_id                  TEXT                              Subscription being migrated.              SUB-700045
+
+  account_id                       TEXT                              Billing/account id.                       ACC-900045
+
+  customer_id                      TEXT                              Customer id.                              CUS-100045
+
+  source_technology                TEXT                              Current access technology.                HFC
+
+  target_technology                TEXT                              Target access technology.                 GPON
+
+  source_homepass_id               TEXT                              Current HomePass.                         HP-HFC-0100
+
+  target_homepass_id               TEXT                              Target HomePass.                          HP-GPON-0440
+
+  migration_type                   TEXT                              ACCESS_TECH_CHANGE,                       ACCESS_TECH_CHANGE
+                                                                     NETWORK_UPGRADE, AREA_CUTOVER,
+                                                                     PACKAGE_TECH_REQUIREMENT.
+
+  status                           TEXT                              Technical fulfillment state.              CUTOVER_IN_PROGRESS
+
+  wo_id                            TEXT NULL                         WO used for field execution.              wo-mig-001
+
+  equipment_swap_fulfillment_i     TEXT NULL                         FUL-09 execution if equipment             esf-010
+  d                                                                  swap/rebind is required.
+
+  approval_request_id              TEXT NULL                         EM-CFG-04 request for risky action.       apr-tmf-001
+
+  created_at                       TIMESTAMP                         Creation timestamp.                       2026-08-03T08:00:00Z
+
+  completed_at                     TIMESTAMP NULL                    Completion timestamp.                     null
+
+
+ Recommended indexes:
+
+   - unique (operator_code, subscription_operation_id).
+
+   - (operator_code, subscription_id, status).
+
+   - (wo_id).
+
+   - (approval_request_id).
+
+ 5.2 technology_migration_validation_check
+ What it is for: stores validation checks performed before technical migration execution.
+
+ When to use it: record each check that decides if the migration can proceed, needs approval, or must be rejected before
+ field/provisioning work starts.
+
+ Sample meaning: tmvc-001 confirms that target HomePass HP-GPON-0440 supports internet and voice for the target
+ package.
+
+  Column                           Type                              Purpose                                   Sample
+
+  validation_check_id              TEXT PK                           Validation row id.                        tmvc-001
+
+  migration_fulfillment_id         TEXT                              Parent fulfillment.                       tmf-001
+
+
+
+SOPHIX BSS Design Documents                                                                                                           Page 3
+  Column                           Type                             Purpose                          Sample
+
+  check_code                       TEXT                             Validation name.                 TARGET_TECH_SUPPORTS_PACKAGE
+
+  check_group                      TEXT                             HOMEPASS, PACKAGE, CAPACITY,     HOMEPASS
+                                                                    EQUIPMENT, BILLING,
+                                                                    PROVISIONING.
+
+  expected_value_json              JSONB                            Expected condition.              {"requiredFamilies":["INTERN
+                                                                                                     ET","VOICE"]}
+
+  actual_value_json                JSONB NULL                       Actual condition found.          {"supportedFamilies":["INTER
+                                                                                                     NET","VOICE","TV"]}
+
+  status                           TEXT                             PASS, WARN, FAIL,                PASS
+                                                                    APPROVAL_REQUIRED.
+
+  message                          TEXT                             Human-readable result.           Target GPON HomePass
+                                                                                                     supports required services.
+
+  checked_at                       TIMESTAMP                        Check timestamp.                 2026-08-03T08:01:00Z
+
+
+ Recommended indexes:
+
+   - (migration_fulfillment_id, status).
+
+   - (check_code, status).
+
+ 5.3 technology_migration_equipment_plan
+ What it is for: stores the equipment decision for the migration.
+
+ When to use it: create rows for equipment that must be kept, recovered, newly installed, swapped, or re-bound as part of the
+ migration.
+
+ Sample meaning: tmep-001 says the old HFC modem must be recovered and a new GPON ONT must be installed.
+
+  Column                           Type                             Purpose                          Sample
+
+  equipment_plan_id                TEXT PK                          Equipment plan row id.           tmep-001
+
+  migration_fulfillment_id         TEXT                             Parent fulfillment.              tmf-001
+
+  plan_role                        TEXT                             SOURCE_RECOVERY,                 TARGET_INSTALL
+                                                                    TARGET_INSTALL, REUSE,
+                                                                    RETURN_TO_STOCK,
+                                                                    CUSTOMER_KEEP.
+
+  sku_id                           TEXT NULL                        Required SKU.                    WIK-ONT-HUAWEI-EG8145V5
+
+  source_instance_id               TEXT NULL                        Existing equipment instance.     inst-hfc-001
+
+  target_instance_id               TEXT NULL                        New/target equipment instance.   inst-gpon-001
+
+  reservation_ref                  TEXT NULL                        OSR reservation or WO stock      res-ont-001
+                                                                    reference.
+
+  fulfillment_action               TEXT                             NO_ACTION, CALL_FUL_09,          CALL_FUL_09
+                                                                    WO_INSTALL_ONLY, RECOVER_ONLY.
+
+  status                           TEXT                             PLANNED, RESERVED, ASSIGNED,     RESERVED
+                                                                    COMPLETED, FAILED.
+
+  created_at                       TIMESTAMP                        Creation timestamp.              2026-08-03T08:02:00Z
+
+
+ Recommended indexes:
+
+   - (migration_fulfillment_id, status).
+
+   - (target_instance_id).
+
+   - (reservation_ref).
+
+ 5.4 technology_migration_cutover_step
+ What it is for: stores each technical command/check executed during source teardown, target activation, reconciliation, or
+ rollback.
+
+ When to use it: create one row per provisioning command or technical checkpoint sent through PROV-INT/FUL-03 or another
+ approved adapter.
+
+ Sample meaning: tmcs-001 records the command that activates the GPON ONT for subscription SUB-700045.
+
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 4
+  Column                           Type                             Purpose                           Sample
+
+  cutover_step_id                  TEXT PK                          Step id.                          tmcs-001
+
+  migration_fulfillment_id         TEXT                             Parent fulfillment.               tmf-001
+
+  step_order                       INT                              Execution order.                  20
+
+  step_code                        TEXT                             Step name.                        GPON_ACTIVATE_TARGET_ONT
+
+  target_system                    TEXT                             Provisioning/network target.      OLT_NMS
+
+  command_ref                      TEXT NULL                        PROV-INT command id.              prov-cmd-9001
+
+  status                           TEXT                             PENDING, SENT, SUCCESS, FAILED,   SUCCESS
+                                                                    SKIPPED, COMPENSATED.
+
+  request_json                     JSONB                            Command request snapshot.         {"serial":"ONT123456"}
+
+  response_json                    JSONB NULL                       Command response snapshot.        {"result":"OK"}
+
+  failure_code                     TEXT NULL                        Failure code if failed.           null
+
+  started_at                       TIMESTAMP NULL                   Start time.                       2026-08-03T10:30:00Z
+
+  completed_at                     TIMESTAMP NULL                   Completion time.                  2026-08-03T10:30:15Z
+
+
+ Recommended indexes:
+
+   - (migration_fulfillment_id, step_order).
+
+   - (migration_fulfillment_id, status).
+
+   - (command_ref).
+
+ 5.5 technology_migration_exception
+ What it is for: stores technical exceptions and manual recovery cases for a migration fulfillment.
+
+ When to use it: create one row when validation, provisioning, reconciliation, rollback, or force-complete needs investigation or
+ approval.
+
+ Sample meaning: tmex-001 records that GPON activation succeeded but HFC source teardown failed, so NOC must decide
+ whether to retry teardown or force-complete.
+
+  Column                           Type                             Purpose                           Sample
+
+  exception_id                     TEXT PK                          Exception id.                     tmex-001
+
+  migration_fulfillment_id         TEXT                             Parent fulfillment.               tmf-001
+
+  exception_type                   TEXT                             VALIDATION_FAILED,                PROVISIONING_FAILED
+                                                                    PROVISIONING_FAILED,
+                                                                    NETWORK_MISMATCH,
+                                                                    ROLLBACK_REQUIRED,
+                                                                    FORCE_COMPLETE.
+
+  severity                         TEXT                             LOW, MEDIUM, HIGH, CRITICAL.      HIGH
+
+  status                           TEXT                             OPEN, PENDING_APPROVAL,           OPEN
+                                                                    APPROVED, RESOLVED, CANCELLED.
+
+  approval_request_id              TEXT NULL                        EM-CFG-04 approval request.       apr-tmf-001
+
+  assigned_to_team_code            TEXT NULL                        Team responsible for repair.      NOC_GPON
+
+  created_at                       TIMESTAMP                        Creation timestamp.               2026-08-03T10:35:00Z
+
+  resolved_at                      TIMESTAMP NULL                   Resolution timestamp.             null
+
+
+ Recommended indexes:
+
+   - (migration_fulfillment_id, status).
+
+   - (approval_request_id).
+
+   - (assigned_to_team_code, status).
+
+
+
+ 6. APIs
+ 6.1 Start Technical Migration Fulfillment
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 5
+ Called by SUB-WF-MIGRATION or a trusted backoffice orchestration API after the migration operation has been accepted.
+          POST /api/technology-migrations/fulfillments
+          Idempotency-Key: tmf-op-mig-001
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "subscriptionOperationId": "op-mig-001",
+              "subscriptionId": "SUB-700045",
+              "accountId": "ACC-900045",
+              "customerId": "CUS-100045",
+              "sourceTechnology": "HFC",
+              "targetTechnology": "GPON",
+              "sourceHomepassId": "HP-HFC-0100",
+              "targetHomepassId": "HP-GPON-0440",
+              "targetPackageRef": "WIK-FIBER-50M",
+              "migrationType": "ACCESS_TECH_CHANGE"
+          }
+
+ Response:
+          {
+              "migrationFulfillmentId": "tmf-001",
+              "status": "REQUESTED"
+          }
+
+ Rules:
+
+   - Same operatorCode + subscriptionOperationId must return the existing fulfillment.
+
+   - If the same subscription has another active technology migration fulfillment, return 409.
+
+   - Validate that the caller is an approved internal module or backoffice role.
+
+ 6.2 Validate Migration
+          POST /api/technology-migrations/fulfillments/tmf-001/validate
+
+ The API runs Drools eligibility rules and stores validation check rows.
+
+ 6.3 Create Or Link Work Order
+          POST /api/technology-migrations/fulfillments/tmf-001/create-work-order
+          Content-Type: application/json
+
+          {
+              "preferredScheduleFrom": "2026-08-04T08:00:00Z",
+              "preferredScheduleTo": "2026-08-04T13:00:00Z",
+              "requiresCustomerVisit": true
+          }
+
+ FUL-10 calls WO-01:
+          POST /api/work-orders
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "kind": "TECHNOLOGY_MIGRATION",
+              "originatingContextType": "TECHNOLOGY_MIGRATION_FULFILLMENT",
+              "originatingContextId": "tmf-001",
+              "subscriptionId": "SUB-700045",
+              "accountId": "ACC-900045",
+              "homepassId": "HP-GPON-0440",
+              "metadata": {
+                "sourceTechnology": "HFC",
+                "targetTechnology": "GPON",
+                "targetPackageRef": "WIK-FIBER-50M"
+              }
+          }
+
+
+ 6.4 Execute Cutover
+          POST /api/technology-migrations/fulfillments/tmf-001/execute-cutover
+          Content-Type: application/json
+
+          {
+              "fieldCompletionRef": "wo-mig-001",
+              "targetEquipmentInstanceId": "inst-gpon-001",
+              "cutoverMode": "MAKE_BEFORE_BREAK"
+          }
+
+
+
+SOPHIX BSS Design Documents                                                                                         Page 6
+ 6.5 Outcome Callback To SUB-WF
+          POST /internal/subscription-migrations/op-mig-001/fulfillment-outcome
+          Content-Type: application/json
+
+          {
+              "migrationFulfillmentId": "tmf-001",
+              "status": "COMPLETED",
+              "sourceTechnology": "HFC",
+              "targetTechnology": "GPON",
+              "completedAt": "2026-08-04T11:30:00Z"
+          }
+
+
+ 6.6 Request Approval For Risky Action
+ FUL-10 calls EM-CFG-04 when configured policy requires approval.
+          POST /api/approval-requests
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "approvalCode": "TECH_MIGRATION_FORCE_COMPLETE",
+              "originRefType": "TECHNOLOGY_MIGRATION_FULFILLMENT",
+              "originRefId": "tmf-001",
+              "requestedByUserId": "usr-noc-lead",
+              "payload": {
+                "exceptionId": "tmex-001",
+                "reason": "Target GPON verified manually; source HFC teardown retry will run later."
+              }
+          }
+
+
+
+
+ 7. Rules And Drools
+ Use Drools for rules that vary by operator, region, technology, or commercial policy.
+
+ Recommended packages:
+
+   - rules.fulfillment.technology_migration.eligibility
+
+   - rules.fulfillment.technology_migration.equipment
+
+   - rules.fulfillment.technology_migration.cutover
+
+   - rules.fulfillment.technology_migration.exception
+
+ Example rules:
+          package rules.fulfillment.technology_migration.eligibility
+
+          rule "Reject migration when target technology does not support package services"
+          when
+            $f : TechnologyMigrationFact(targetSupportsAllRequiredServices == false)
+            $d : TechnologyMigrationDecision()
+          then
+            $d.reject("TARGET_TECH_PACKAGE_INCOMPATIBLE");
+          end
+
+          package rules.fulfillment.technology_migration.cutover
+
+          rule "HFC to GPON make-before-break"
+          when
+            $f : TechnologyMigrationFact(sourceTechnology == "HFC", targetTechnology == "GPON")
+            $d : TechnologyMigrationDecision()
+          then
+            $d.setCutoverMode("MAKE_BEFORE_BREAK");
+            $d.addStep("GPON_ACTIVATE_TARGET_ONT");
+            $d.addStep("GPON_RECONCILE_TARGET");
+            $d.addStep("HFC_SUSPEND_SOURCE_MODEM");
+            $d.addStep("HFC_RECONCILE_SOURCE");
+          end
+
+          package rules.fulfillment.technology_migration.exception
+
+          rule "Force complete requires approval when source teardown failed"
+          when
+            $f : TechnologyMigrationExceptionFact(exceptionType == "PROVISIONING_FAILED",
+                                                 targetActivationVerified == true,
+                                                 sourceTeardownVerified == false)
+            $d : TechnologyMigrationExceptionDecision()
+
+
+SOPHIX BSS Design Documents                                                                            Page 7
+              then
+                $d.requireApproval("TECH_MIGRATION_FORCE_COMPLETE");
+                $d.assignTeam("NOC_ACCESS");
+                $d.setSeverity("HIGH");
+              end
+
+ Fixed validations such as required fields, idempotency, enum values, and foreign reference format belong in application code,
+ not Drools.
+
+
+
+ 8. Events
+ Publish events through the transactional outbox after the local database commit.
+
+  Event                                       When emitted                                               Key fields
+
+  TechnologyMigrationFulfillmentRequeste      Fulfillment row created.                                   migrationFulfillmentId,
+  d                                                                                                      subscriptionOperationId, subscriptionId
+
+  TechnologyMigrationValidated                Validation completes.                                      status, failedChecks
+
+  TechnologyMigrationWorkOrderCreated         WO is created/linked.                                      woId, migrationFulfillmentId
+
+  TechnologyMigrationCutoverStarted           Cutover begins.                                            cutoverMode, sourceTechnology,
+                                                                                                         targetTechnology
+
+  TechnologyMigrationCompleted                Technical fulfillment completes.                           completedAt, targetHomepassId
+
+  TechnologyMigrationFailed                   Technical fulfillment fails.                               failureCode, exceptionId
+
+  TechnologyMigrationExceptionOpened          Exception row created.                                     exceptionType, severity, assignedTeam
+
+
+
+
+ 9. Frontend And Module Consumers
+  Consumer                                                                   What it uses
+
+  Backoffice migration console                                               Start/validate/status APIs, validation checks, exception state
+
+  Contractor technical mobile app                                            WO-01 migration task, equipment capture, field completion
+
+  NOC/support console                                                        Cutover steps, reconciliation, exception repair
+
+  Subscription workflow                                                      Start fulfillment and receive outcome callback
+
+  Reporting                                                                  Events and fulfillment tables for migration SLA/failure reporting
+
+
+ Frontend screens must show module boundaries clearly:
+
+   - commercial/package decision comes from SUB-WF and catalog APIs;
+
+   - field task status comes from WO APIs;
+
+   - equipment serials and stock come from OSR APIs;
+
+   - technical cutover and reconciliation come from FUL-10 APIs.
+
+
+
+ 10. Infrastructure Recommendations
+ For a medium budget-conscious deployment:
+
+   - Run FUL-10 APIs in the existing fulfillment service deployment.
+
+   - Run FUL-10 logical workers in the shared fulfillment worker deployment; keep metrics by topic/handler.
+
+   - Use the fulfillment PostgreSQL schema for FUL-10 tables.
+
+   - Use the existing Kafka/outbox stack for events.
+
+   - Use existing PROV-INT adapters for network commands; do not introduce direct NMS calls in business code.
+
+   - Keep Camunda optional for this DD. Use it when the operator wants a visible long-running technical workflow. Use
+     EM-CFG-04 for approvals regardless of whether the approval itself is simple or BPMN-backed.
+
+ Recommended logical worker handlers:
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                      Page 8
+  Handler                                                            Purpose
+
+  ful10-validate-migration                                           Runs validation checks and Drools eligibility.
+
+  ful10-create-wo                                                    Creates/links WO-01 migration work order.
+
+  ful10-plan-equipment                                               Builds equipment plan from OSR and package requirements.
+
+  ful10-execute-cutover                                              Sends provisioning commands through PROV-INT/FUL-03.
+
+  ful10-reconcile                                                    Verifies network/BSS state.
+
+  ful10-handle-exception                                             Routes exception and calls EM-CFG-04 when needed.
+
+
+ These are logical handlers. One worker process may implement multiple handlers.
+
+
+
+ 11. Test Scenarios
+ Minimum tests:
+
+   1. Start fulfillment is idempotent for the same subscription operation.
+
+   2. Second active technology migration for same subscription returns 409.
+
+   3. HFC to GPON validation passes when target HomePass supports package services.
+
+   4. Validation fails when target HomePass lacks required service family.
+
+   5. WO is created with kind=TECHNOLOGY_MIGRATION and correct origin context.
+
+   6. Equipment plan calls FUL-09 only when equipment swap/rebind is required.
+
+   7. Cutover executes target activation before source teardown for make-before-break policy.
+
+   8. Reconciliation failure creates technology_migration_exception.
+
+   9. Force-complete calls EM-CFG-04 when configured.
+
+   10. Completed fulfillment calls SUB-WF outcome endpoint once.
+
+
+
+ 12. Implementation Notes
+   - Treat FUL-10 as the missing technical satellite for cross-technology migration.
+
+   - Keep the customer subscription active on the source technology until target activation has passed reconciliation, unless
+     the operator explicitly configures break-before-make.
+
+   - Do not update subscription package/homepass from FUL-10. SUB-WF commits after receiving the success outcome.
+
+   - If a field visit is required, WO-01 remains the owner of assignment, technician evidence, and field finalization.
+
+   - If equipment changes are required, FUL-10 coordinates with FUL-09 instead of duplicating equipment swap provisioning
+      logic.
+
+   - If procurement is missing stock, the operational answer is to stop before runtime fulfillment and let OSR replenishment
+      happen through OSR-02. Do not insert purchase order logic into FUL-10.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                     Page 9
+

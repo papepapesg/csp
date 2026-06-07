@@ -1,0 +1,548 @@
+ DD_FUL-10 - Technology Migration Fulfillment - Developer
+ Implementation Guide
+ Version: v1.0 Bundle: 06_fulfillment Companion DD: DD_FUL-10-Technology_Migration_Fulfillment-v1.0
+
+
+
+ 1. Goal
+ Implement the technical fulfillment flow for access technology migration.
+
+ The important separation is:
+
+   - SUB-WF-MIGRATION starts and commits the subscription operation.
+
+   - FUL-10 validates and executes the technical migration.
+
+   - WO-01 executes technician work.
+
+   - OSR/OSR-INSTANCE own stock and serial state.
+
+   - FUL-09 handles equipment swap/rebind fulfillment when needed.
+
+   - FUL-03/PROV-INT send network commands.
+
+
+
+ 2. Runtime Flow
+           sequenceDiagram
+             participant SUB as SUB-WF-MIGRATION
+             participant FUL10 as FUL-10
+             participant RLM as RLM-CFG/HomePass
+             participant OSR as OSR/OSR-INSTANCE
+             participant WO as WO-01
+             participant FUL09 as FUL-09
+             participant PROV as FUL-03/PROV-INT
+             participant APR as EM-CFG-04
+
+             SUB->>FUL10: POST /api/technology-migrations/fulfillments
+             FUL10->>RLM: read source/target HomePass capability
+             FUL10->>OSR: read expected/available equipment
+             FUL10->>FUL10: run Drools eligibility/equipment policy
+             FUL10->>WO: POST /api/work-orders kind TECHNOLOGY_MIGRATION
+             WO-->>FUL10: WorkOrderFinalized with field evidence
+             FUL10->>FUL09: start equipment swap fulfillment when required
+             FUL10->>PROV: activate target technology
+             FUL10->>PROV: suspend/teardown source technology
+             FUL10->>PROV: reconcile
+             FUL10-->>SUB: fulfillment outcome
+             FUL10->>APR: approval only for override/force-complete/rollback
+
+
+
+
+ 3. Step 1 - Database Migrations
+ Create:
+
+   - technology_migration_fulfillment
+
+   - technology_migration_validation_check
+
+   - technology_migration_equipment_plan
+
+   - technology_migration_cutover_step
+
+   - technology_migration_exception
+
+ Required constraints:
+
+   - technology_migration_fulfillment(operator_code, subscription_operation_id) unique.
+
+   - One active technology migration per (operator_code, subscription_id).
+
+   - Foreign references may be soft references because modules are separate, but store enough ids for support and
+     reconciliation.
+
+SOPHIX BSS Design Documents                                                                                         Page 1
+ Add table and column comments in the migration because support teams will inspect these tables during failed cutovers.
+
+
+
+ 4. Step 2 - Receive Request From SUB-WF
+ Endpoint:
+          POST /api/technology-migrations/fulfillments
+          Idempotency-Key: tmf-op-mig-001
+          Content-Type: application/json
+
+ Request:
+          {
+              "operatorCode": "WIK",
+              "subscriptionOperationId": "op-mig-001",
+              "subscriptionId": "SUB-700045",
+              "accountId": "ACC-900045",
+              "customerId": "CUS-100045",
+              "sourceTechnology": "HFC",
+              "targetTechnology": "GPON",
+              "sourceHomepassId": "HP-HFC-0100",
+              "targetHomepassId": "HP-GPON-0440",
+              "targetPackageRef": "WIK-FIBER-50M",
+              "migrationType": "ACCESS_TECH_CHANGE"
+          }
+
+ Implementation:
+
+   1. Validate required fields and enum values.
+
+   2. Check idempotency by operator_code + subscription_operation_id.
+
+   3. If row exists with the same request hash, return existing row.
+
+   4. If row exists with a different request hash, return 409.
+
+   5. Check no other active FUL-10 fulfillment exists for the subscription.
+
+   6. Insert technology_migration_fulfillment with REQUESTED.
+
+   7. Emit TechnologyMigrationFulfillmentRequested.
+
+ Do not call procurement. Missing stock must be handled before or during WO/OSR reservation; OSR-02 is not a runtime
+ customer migration dependency.
+
+
+
+ 5. Step 3 - Validate Source And Target Context
+ Endpoint:
+          POST /api/technology-migrations/fulfillments/tmf-001/validate
+
+ FUL-10 reads:
+
+   - source and target HomePass from RLM-CFG-01;
+
+   - target package requirements from SIP/PLM catalog APIs already used by SUB-WF;
+
+   - current subscription summary from SUB-LM/SUB-WF read API if needed;
+
+   - expected equipment and current bindings from OSR-INSTANCE;
+
+   - service provisioning capability from FUL-03/PROV-INT metadata if available.
+
+ Create validation rows for:
+
+   - SOURCE_HOMEPASS_ACTIVE
+
+   - TARGET_HOMEPASS_ACTIVE
+
+   - TARGET_TECH_SUPPORTS_PACKAGE
+
+   - TARGET_CAPACITY_AVAILABLE
+
+   - EQUIPMENT_PLAN_AVAILABLE
+
+   - PROVISIONING_ADAPTER_AVAILABLE
+
+
+SOPHIX BSS Design Documents                                                                                               Page 2
+   - BILLING_READY_FOR_MIGRATION
+
+ Run Drools:
+          public record TechnologyMigrationFact(
+               String operatorCode,
+               String sourceTechnology,
+               String targetTechnology,
+               String migrationType,
+               boolean targetSupportsAllRequiredServices,
+               boolean targetHasCapacity,
+               boolean equipmentAvailable,
+               boolean customerVisitRequired,
+               boolean sameBuilding,
+               boolean plannedAreaCutover
+          ) {}
+
+          package rules.fulfillment.technology_migration.eligibility
+
+          rule "Target must support required services"
+          when
+            $f : TechnologyMigrationFact(targetSupportsAllRequiredServices == false)
+            $d : TechnologyMigrationDecision()
+          then
+            $d.reject("TARGET_TECH_PACKAGE_INCOMPATIBLE");
+          end
+
+          rule "GPON migration needs target capacity"
+          when
+            $f : TechnologyMigrationFact(targetTechnology == "GPON", targetHasCapacity == false)
+            $d : TechnologyMigrationDecision()
+          then
+            $d.reject("TARGET_GPON_CAPACITY_NOT_AVAILABLE");
+          end
+
+ If all required checks pass, update fulfillment to VALIDATED.
+
+
+
+ 6. Step 4 - Build Equipment Plan
+ FUL-10 should decide whether the migration needs equipment work.
+
+ Examples:
+          package rules.fulfillment.technology_migration.equipment
+
+          rule "HFC to GPON requires old modem recovery and new ONT install"
+          when
+            $f : TechnologyMigrationFact(sourceTechnology == "HFC", targetTechnology == "GPON")
+            $d : TechnologyMigrationDecision()
+          then
+            $d.addEquipmentAction("SOURCE_RECOVERY", "RECOVER_ONLY");
+            $d.addEquipmentAction("TARGET_INSTALL", "CALL_FUL_09");
+          end
+
+          rule "Same CPE can be reused only when technology and SKU capability match"
+          when
+            $f : TechnologyMigrationFact(sourceTechnology == targetTechnology)
+            $d : TechnologyMigrationDecision()
+          then
+            $d.addEquipmentAction("REUSE", "NO_ACTION");
+          end
+
+ Implementation:
+
+   1. Read current equipment bindings from OSR-INSTANCE.
+
+   2. Read required target equipment profile from package/catalog.
+
+   3. Run equipment rules.
+
+   4. Insert technology_migration_equipment_plan rows.
+
+   5. If required equipment is not available/reserved, fail validation or request WO/OSR reservation.
+
+   6. If equipment swap fulfillment is needed, call FUL-09 after field readiness or when WO assigns the target serial.
+
+ FUL-10 does not mutate stock_balance or equipment instance state directly.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 3
+ 7. Step 5 - Create Work Order
+ Endpoint:
+           POST /api/technology-migrations/fulfillments/tmf-001/create-work-order
+           Content-Type: application/json
+
+ Request:
+           {
+               "preferredScheduleFrom": "2026-08-04T08:00:00Z",
+               "preferredScheduleTo": "2026-08-04T13:00:00Z",
+               "requiresCustomerVisit": true
+           }
+
+ FUL-10 calls WO-01:
+           POST /api/work-orders
+           Idempotency-Key: tmf-001-wo
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "kind": "TECHNOLOGY_MIGRATION",
+               "originatingContextType": "TECHNOLOGY_MIGRATION_FULFILLMENT",
+               "originatingContextId": "tmf-001",
+               "subscriptionId": "SUB-700045",
+               "accountId": "ACC-900045",
+               "homepassId": "HP-GPON-0440",
+               "metadata": {
+                 "sourceTechnology": "HFC",
+                 "targetTechnology": "GPON",
+                 "targetPackageRef": "WIK-FIBER-50M",
+                 "requiredEvidence": ["targetSerial", "port", "photo", "gps"]
+               }
+           }
+
+ Update FUL-10 status to WO_CREATED.
+
+ When WO finalizes, it must provide:
+
+   - target serial or equipment instance id;
+
+   - port/splitter/tap information;
+
+   - installation evidence;
+
+   - technician completion status;
+
+   - failure reason if not completed.
+
+
+
+ 8. Step 6 - Execute Cutover
+ Endpoint:
+           POST /api/technology-migrations/fulfillments/tmf-001/execute-cutover
+           Content-Type: application/json
+
+ Request:
+           {
+               "fieldCompletionRef": "wo-mig-001",
+               "targetEquipmentInstanceId": "inst-gpon-001",
+               "cutoverMode": "MAKE_BEFORE_BREAK"
+           }
+
+ Build cutover steps using Drools:
+           package rules.fulfillment.technology_migration.cutover
+
+           rule "HFC to GPON make-before-break"
+           when
+             $f : TechnologyMigrationFact(sourceTechnology == "HFC",
+                                          targetTechnology == "GPON")
+             $d : TechnologyMigrationDecision()
+           then
+             $d.setCutoverMode("MAKE_BEFORE_BREAK");
+             $d.addStep("GPON_ACTIVATE_TARGET_ONT");
+             $d.addStep("GPON_RECONCILE_TARGET");
+             $d.addStep("HFC_SUSPEND_SOURCE_MODEM");
+             $d.addStep("HFC_RECONCILE_SOURCE");
+
+
+SOPHIX BSS Design Documents                                                         Page 4
+          end
+
+ For every step:
+
+   1. Insert technology_migration_cutover_step in PENDING.
+
+   2. Send command through PROV-INT/FUL-03.
+
+   3. Store request/response snapshots.
+
+   4. Update step status.
+
+   5. Stop on failure unless rule policy allows next step.
+
+ Sample provisioning command:
+          POST /api/provisioning/commands
+          Idempotency-Key: tmf-001-GPON_ACTIVATE_TARGET_ONT
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "commandType": "GPON_ACTIVATE_ONT",
+              "subscriptionId": "SUB-700045",
+              "homepassId": "HP-GPON-0440",
+              "equipmentInstanceId": "inst-gpon-001",
+              "originRefType": "TECHNOLOGY_MIGRATION_FULFILLMENT",
+              "originRefId": "tmf-001",
+              "payload": {
+                "serialNumber": "ONT123456",
+                "targetPackageRef": "WIK-FIBER-50M"
+              }
+          }
+
+
+
+
+ 9. Step 7 - Call FUL-09 When Equipment Swap Fulfillment Is Needed
+ If the equipment plan row says CALL_FUL_09, call:
+          POST /api/equipment-swap-fulfillments
+          Idempotency-Key: tmf-001-esf
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "swapRequestId": "tmf-001",
+              "woId": "wo-mig-001",
+              "subscriptionId": "SUB-700045",
+              "accountId": "ACC-900045",
+              "swapType": "EQUIPMENT_UPGRADE",
+              "technologyFamily": "GPON",
+              "sourceInstanceId": "inst-hfc-001",
+              "targetInstanceId": "inst-gpon-001",
+              "homepassId": "HP-GPON-0440"
+          }
+
+ Store returned id in technology_migration_fulfillment.equipment_swap_fulfillment_id.
+
+ Do not duplicate FUL-09 provisioning logic in FUL-10.
+
+
+
+ 10. Step 8 - Reconcile
+ After provisioning commands:
+
+   1. Read target network state through PROV-INT read adapter.
+
+   2. Confirm target serial/MAC/ONT is active.
+
+   3. Confirm target service profiles match the target package.
+
+   4. Confirm source technology is suspended/teardown state according to cutover policy.
+
+   5. Confirm OSR-INSTANCE state is consistent or that OSR-RMA/FUL-09 has accepted responsibility for recovery.
+
+   6. Mark fulfillment COMPLETED only when reconciliation passes or an approved force-complete exists.
+
+ If reconciliation fails, create technology_migration_exception.
+
+
+
+SOPHIX BSS Design Documents                                                                                       Page 5
+ 11. Step 9 - Callback SUB-WF
+ On success:
+          POST /internal/subscription-migrations/op-mig-001/fulfillment-outcome
+          Idempotency-Key: tmf-001-completed
+          Content-Type: application/json
+
+          {
+               "migrationFulfillmentId": "tmf-001",
+               "status": "COMPLETED",
+               "sourceTechnology": "HFC",
+               "targetTechnology": "GPON",
+               "targetHomepassId": "HP-GPON-0440",
+               "completedAt": "2026-08-04T11:30:00Z"
+          }
+
+ On failure:
+          {
+               "migrationFulfillmentId": "tmf-001",
+               "status": "FAILED",
+               "failureCode": "TARGET_RECONCILIATION_FAILED",
+               "exceptionId": "tmex-001"
+          }
+
+ SUB-WF decides whether to keep the operation pending, cancel it, or expose a repair path. FUL-10 does not update
+ subscription master state.
+
+
+
+ 12. Step 10 - Exception And Approval Flow
+ For force-complete, forced rollback, risky serial correction, or non-standard cutover:
+
+   1. Create technology_migration_exception.
+
+   2. Run exception routing rules.
+
+   3. If approval required, call EM-CFG-04.
+
+   4. Store approval_request_id.
+
+   5. Continue only after approval event/callback.
+
+ Sample rule:
+          package rules.fulfillment.technology_migration.exception
+
+          rule "Force complete after target verified requires approval"
+          when
+            $f : TechnologyMigrationExceptionFact(exceptionType == "FORCE_COMPLETE",
+                                                 targetActivationVerified == true)
+            $d : TechnologyMigrationExceptionDecision()
+          then
+            $d.requireApproval("TECH_MIGRATION_FORCE_COMPLETE");
+            $d.assignTeam("NOC_ACCESS");
+            $d.setSeverity("HIGH");
+          end
+
+ Approval call:
+          POST /api/approval-requests
+          Content-Type: application/json
+
+          {
+               "operatorCode": "WIK",
+               "approvalCode": "TECH_MIGRATION_FORCE_COMPLETE",
+               "originRefType": "TECHNOLOGY_MIGRATION_FULFILLMENT",
+               "originRefId": "tmf-001",
+               "requestedByUserId": "usr-noc-lead",
+               "payload": {
+                 "exceptionId": "tmex-001",
+                 "targetActivationVerified": true,
+                 "sourceTeardownVerified": false
+               }
+          }
+
+ Camunda is used only if EM-CFG-04 policy mode is BPMN.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                         Page 6
+ 13. Step 11 - Events And Outbox
+ Write all events to the transactional outbox in the same database transaction as the state change:
+
+   - TechnologyMigrationFulfillmentRequested
+
+   - TechnologyMigrationValidated
+
+   - TechnologyMigrationWorkOrderCreated
+
+   - TechnologyMigrationCutoverStarted
+
+   - TechnologyMigrationCompleted
+
+   - TechnologyMigrationFailed
+
+   - TechnologyMigrationExceptionOpened
+
+ Include:
+
+   - operatorCode
+
+   - migrationFulfillmentId
+
+   - subscriptionOperationId
+
+   - subscriptionId
+
+   - correlationId
+
+   - causationId
+
+
+
+ 14. Step 12 - Tests
+ Implement tests in this order:
+
+   1. Start request creates fulfillment and is idempotent.
+
+   2. Same operation with different hash returns 409.
+
+   3. Second active migration for same subscription returns 409.
+
+   4. Target HomePass/package incompatibility creates failed validation.
+
+   5. HFC to GPON creates equipment plan with source recovery and target install.
+
+   6. WO creation sends correct TECHNOLOGY_MIGRATION context.
+
+   7. WO finalization with target serial enables cutover.
+
+   8. Cutover sends PROV-INT commands with deterministic idempotency keys.
+
+   9. Reconciliation pass completes and calls SUB-WF.
+
+   10. Reconciliation fail creates exception and does not callback success.
+
+   11. Force-complete calls EM-CFG-04 when configured.
+
+
+
+ 15. Operational Notes
+   - Expose metrics by handler: validation failures, WO age, cutover duration, provisioning failures, reconciliation failures,
+     approval wait time.
+
+   - Keep provisioning command request/response snapshots small and scrub secrets.
+
+   - The same worker application may implement all FUL-10 logical handlers.
+
+   - Do not let the frontend call provisioning adapters directly. Backoffice and support screens call FUL-10 APIs.
+
+   - Do not call OSR-02 procurement from this flow.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 7
+

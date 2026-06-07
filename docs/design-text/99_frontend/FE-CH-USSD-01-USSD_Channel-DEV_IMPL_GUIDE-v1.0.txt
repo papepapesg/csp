@@ -1,0 +1,226 @@
+ FE-CH-USSD-01 - USSD Channel - Developer
+ Implementation Guide
+ Version: v1.0 Bundle: 99_frontend Companion DD: FE-CH-USSD-01-USSD_Channel-v1.0
+
+
+
+ 1. Goal
+ Implement USSD as a stateless gateway-facing adapter with server-side session state.
+
+ USSD must call owning module APIs. It must not implement local billing, payment, subscription, ticket, or customer state
+ changes.
+
+
+
+ 2. Runtime Flow
+            sequenceDiagram
+              participant GW as USSD Gateway
+              participant USSD as USSD Adapter
+              participant ILM as ILM
+              participant BIL as Billing
+              participant SUB as SUB-LM
+              participant TCK as TCK
+              participant INT as CUST-INT
+
+              GW->>USSD: POST session request
+              USSD->>USSD: load/create session
+              USSD->>ILM: resolve MSISDN
+              USSD->>BIL: query balance if menu selected
+              USSD->>SUB: query subscription if selected
+              USSD->>TCK: create ticket if selected
+              USSD->>INT: record interaction
+              USSD-->>GW: CON or END text
+
+
+
+
+ 3. Step 1 - Migrations
+ Create:
+
+   - ussd_session
+
+   - ussd_menu_definition
+
+   - ussd_request_log
+
+ Seed WIK English menus:
+
+   - MAIN
+
+   - BALANCE
+
+   - PAY
+
+   - SUBSCRIPTION
+
+   - SUPPORT
+
+   - LANGUAGE
+
+   - UNKNOWN_CUSTOMER
+
+
+
+ 4. Step 2 - Gateway Endpoint
+ Endpoint:
+            POST /api/channels/ussd/sessions
+            Content-Type: application/json
+
+ Request:
+
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 1
+           {
+               "operatorCode": "WIK",
+               "gateway": "SAFARICOM_AGGREGATOR",
+               "gatewaySessionId": "gw-abc-001",
+               "gatewayRequestId": "gw-msg-001",
+               "msisdn": "254700000001",
+               "inputText": "1",
+               "shortCode": "*123#",
+               "requestedAt": "2026-08-30T08:01:00Z"
+           }
+
+ Implementation:
+
+   1. Normalize MSISDN.
+
+   2. Find or create ussd_session.
+
+   3. If gatewayRequestId already logged, return same response.
+
+   4. Resolve customer on first request:
+           GET /api/customers/lookup?msisdn=254700000001
+
+   5. Route input to next menu.
+
+   6. Log request/response.
+
+   7. Return CON or END.
+
+
+
+ 5. Step 3 - Balance Menu
+ When customer selects balance:
+           GET /api/accounts/ACC-900045/balance
+
+ Optional dunning:
+           GET /api/dunning-states?accountId=ACC-900045
+
+ Render:
+           Balance KES 1200
+           Due 05 Sep
+           1 Pay now
+           2 Main menu
+
+ Keep text short and configurable.
+
+
+
+ 6. Step 4 - Payment Menu
+ If payment instructions mode:
+           POST /api/payments/instructions
+           Idempotency-Key: ussd-gw-msg-001-payinst
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "accountId": "ACC-900045",
+               "channel": "USSD",
+               "msisdn": "254700000001"
+           }
+
+ If STK push is enabled, call PAY-GW-01 payment initiation API. Never mark payment successful from USSD callback alone;
+ payment application belongs to BIL/PAY-GW flow.
+
+
+
+ 7. Step 5 - Subscription Menu
+ Call:
+           GET /api/subscriptions?customerId=CUS-100045
+
+ Render only compact fields:
+           1 Fiber 50M ACTIVE
+           2 Main menu
+
+
+SOPHIX BSS Design Documents                                                                                         Page 2
+ If multiple subscriptions, let customer select one before showing details.
+
+
+
+ 8. Step 6 - Support Menu
+ Create simple ticket:
+           POST /api/tickets
+           Idempotency-Key: ussd-gw-msg-001-ticket
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "ticketType": "USSD_SUPPORT_REQUEST",
+               "customerId": "CUS-100045",
+               "accountId": "ACC-900045",
+               "channel": "USSD",
+               "summary": "Customer requested callback via USSD"
+           }
+
+ Return:
+           Request received.
+           Ref TCK-1001.
+           We will contact you.
+
+
+
+
+ 9. Step 7 - Interaction Logging
+ After meaningful actions, call:
+           POST /api/customer-interactions
+           Idempotency-Key: ussd-gw-msg-001-interaction
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "customerId": "CUS-100045",
+               "channel": "USSD",
+               "interactionType": "USSD_BALANCE_VIEWED",
+               "originRefType": "USSD_SESSION",
+               "originRefId": "ussd-sess-001"
+           }
+
+
+
+
+ 10. Step 8 - Timeout Worker
+ Logical handler ussd-expire-sessions:
+
+   1. Find active sessions where last_seen_at is older than configured timeout.
+
+   2. Mark TIMED_OUT.
+
+   3. Do not emit customer-facing notification for normal timeout.
+
+ This is a logical worker and can run in the channel app process.
+
+
+
+ 11. Tests
+   1. New gateway session creates ussd_session.
+
+   2. Duplicate gateway request returns same response.
+
+   3. Unknown MSISDN shows safe fallback.
+
+   4. Balance flow calls billing API.
+
+   5. Payment instructions flow calls payment API but does not apply payment.
+
+   6. Ticket flow calls TCK API with idempotency.
+
+   7. Session timeout worker closes stale sessions.
+
+   8. CUST-INT logging is created for meaningful actions.
+
+
+SOPHIX BSS Design Documents                                                       Page 3
+

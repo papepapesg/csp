@@ -1,0 +1,664 @@
+ DD_OSR-05 - Inventory Audit
+ Version: v1.0 Bundle: 08_osr_equipment Status: Draft for review Primary owner: OSR / warehouse operations team
+ Related DDs: DD_OSR-01, DD_OSR-INSTANCE-01, DD_OSR-02, DD_EM-02, DD_EM-CFG-03, DD_EM-CFG-04,
+ DD_ICN-01, DD_REP-01, FOUNDATION_DROOLS
+
+ MVP simplification baseline: implement stock and equipment instance basics before full inventory audit. OSR-05 can start
+ with manual count import, discrepancy list, and approval/write-off routing; advanced mobile count campaigns can be phased
+ later.
+
+
+
+ 1. Purpose
+ OSR-05 defines physical inventory audit, discrepancy investigation, stock adjustment, and write-off governance for SOPHIX
+ equipment stock.
+
+ It covers central warehouse counts, contractor van counts, serialized equipment checks, discrepancy review, approved stock
+ adjustments, and write-offs for lost, stolen, damaged, obsolete, or unrecoverable equipment.
+
+ Use OSR-05 when:
+
+   - warehouse team performs a monthly/quarterly stock count;
+
+   - contractor van inventory must be checked;
+
+   - system stock differs from physical stock;
+
+   - serial device physically exists but system says it is elsewhere;
+
+   - system shows equipment but staff cannot find it;
+
+   - inventory discrepancy requires investigation;
+
+   - approved adjustment/write-off must update OSR-01 and OSR-INSTANCE.
+
+ OSR-05 does not own stock balances or device lifecycle. It investigates differences and calls OSR-01/OSR-INSTANCE to
+ apply approved corrections.
+
+
+
+ 2. Scope And Boundaries
+  Capability                                                                    Owner
+
+  Inventory audit plan, count tasks, count results, discrepancy investigation   OSR-05
+
+  SKU quantity balance and adjustment movement                                  OSR-01
+
+  Serialized equipment current state and lifecycle transition                   OSR-INSTANCE-01
+
+  Procurement receipt source records                                            OSR-02
+
+  Contractor/team location ownership                                            EM-02
+
+  Audit permissions                                                             EM-CFG-03
+
+  Configurable write-off/adjustment approval                                    EM-CFG-04
+
+  Configurable discrepancy severity/routing                                     Drools
+
+  Internal audit notifications                                                  ICN-01
+
+  Audit reporting                                                               REP-01
+
+
+ Boundary rules:
+
+   - OSR-05 must not directly edit stock_balance.
+
+   - Quantity corrections are applied by OSR-01 stock adjustment movements.
+
+   - Serialized write-offs/state corrections are applied by OSR-INSTANCE lifecycle events.
+
+   - EM-CFG-04 owns approval policies and tasks. OSR-05 stores approval references and applies final outcome.
+
+   - Camunda is used only when EM-CFG-04 selected policy mode is BPMN.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                            Page 1
+ 3. Process Overview
+            flowchart LR
+              A["Create audit plan"] --> B["Generate count tasks"]
+              B --> C["Counter records physical quantities/serials"]
+              C --> D["System compares expected vs counted"]
+              D --> E["Discrepancy opened"]
+              E --> F["Investigation"]
+              F --> G["Approval if required"]
+              G --> H["Apply OSR-01 adjustment"]
+              G --> I["Apply OSR-INSTANCE lifecycle correction/write-off"]
+              H --> J["Audit closed"]
+              I --> J
+
+
+
+
+ 4. Status Models
+ 4.1 Audit Plan Status
+  Status                                                           Meaning
+
+  DRAFT                                                            Audit plan being prepared.
+
+  SCHEDULED                                                        Plan approved/scheduled.
+
+  IN_PROGRESS                                                      Counting started.
+
+  RECONCILING                                                      Counts complete; differences being reviewed.
+
+  PENDING_APPROVAL                                                 Adjustment/write-off approval open.
+
+  CLOSED                                                           Audit completed.
+
+  CANCELLED                                                        Audit cancelled.
+
+
+
+ 4.2 Discrepancy Status
+  Status                                                           Meaning
+
+  OPEN                                                             Difference detected.
+
+  INVESTIGATING                                                    Assigned to reviewer.
+
+  PENDING_APPROVAL                                                 Resolution needs EM-CFG-04 approval.
+
+  APPROVED                                                         Resolution approved.
+
+  APPLIED                                                          OSR correction applied.
+
+  REJECTED                                                         Proposed resolution rejected.
+
+  CLOSED                                                           Fully handled.
+
+
+
+
+ 5. Data Model
+ 5.1 inventory_audit_plan
+ What it is for: stores one planned physical inventory audit.
+
+ When to use it: create a plan for central warehouse count, contractor van count, cycle count, surprise audit, or investigation
+ audit.
+
+ Sample meaning: iap-001 is a monthly WIK Nairobi central warehouse count scheduled for July 31.
+
+  Column                           Type                            Purpose                                 Sample
+
+  audit_plan_id                    TEXT PK                         Audit plan id.                          iap-001
+
+  operator_code                    TEXT                            Tenant/operator.                        WIK
+
+  audit_type                       TEXT                            CYCLE_COUNT, FULL_COUNT,                CYCLE_COUNT
+                                                                   SPOT_CHECK, INVESTIGATION.
+
+  location_id                      TEXT                            OSR-01 stock location.                  WIK-CENTRAL-NRB
+
+  contractor_id                    TEXT NULL                       Contractor if van/location belongs to   contractor_ke_nairobi_a
+                                                                   contractor.
+
+  scheduled_start_at               TIMESTAMP                       Planned start.                          2026-07-31T08:00:00Z
+
+
+
+SOPHIX BSS Design Documents                                                                                                       Page 2
+  Column                           Type                              Purpose                                 Sample
+
+  scheduled_end_at                 TIMESTAMP                         Planned end.                            2026-07-31T17:00:00Z
+
+  status                           TEXT                              Audit plan status.                      SCHEDULED
+
+  created_by_user_id               TEXT                              Creator.                                usr-inventory-manager
+
+  created_at                       TIMESTAMP                         Creation timestamp.                     2026-07-20T10:00:00Z
+
+  closed_at                        TIMESTAMP NULL                    Close timestamp.                        null
+
+
+ Recommended indexes:
+
+   - (operator_code, location_id, status).
+
+   - (operator_code, scheduled_start_at).
+
+ 5.2 inventory_count_task
+ What it is for: stores count assignments generated from an audit plan.
+
+ When to use it: assign one or more staff/contractors to count specific SKUs, zones, bins, or serialized devices.
+
+ Sample meaning: ict-001 asks warehouse user usr-counter-001 to count Huawei ONTs in bin A-01.
+
+  Column                           Type                              Purpose                                 Sample
+
+  count_task_id                    TEXT PK                           Count task id.                          ict-001
+
+  audit_plan_id                    TEXT                              Parent audit plan.                      iap-001
+
+  location_id                      TEXT                              Count location.                         WIK-CENTRAL-NRB
+
+  sku_id                           TEXT NULL                         SKU to count; null means all assigned   WIK-ONT-HUAWEI-EG8145V5
+                                                                     scope.
+
+  bin_code                         TEXT NULL                         Physical bin/shelf.                     A-01
+
+  assigned_to_user_id              TEXT                              Counter.                                usr-counter-001
+
+  status                           TEXT                              ASSIGNED, IN_PROGRESS,                  SUBMITTED
+                                                                     SUBMITTED, RECOUNT_REQUIRED,
+                                                                     ACCEPTED.
+
+  started_at                       TIMESTAMP NULL                    Start time.                             2026-07-31T08:30:00Z
+
+  submitted_at                     TIMESTAMP NULL                    Submission time.                        2026-07-31T09:10:00Z
+
+
+ Recommended indexes:
+
+   - (audit_plan_id, status).
+
+   - (assigned_to_user_id, status).
+
+ 5.3 inventory_count_line
+ What it is for: stores counted quantity and serials for one count task line.
+
+ When to use it: each counted SKU/bin or serial capture submits a count line.
+
+ Sample meaning: icl-001 says the counter found 97 Huawei ONTs while system expected 100.
+
+  Column                           Type                              Purpose                                 Sample
+
+  count_line_id                    TEXT PK                           Count line id.                          icl-001
+
+  count_task_id                    TEXT                              Parent task.                            ict-001
+
+  sku_id                           TEXT                              SKU counted.                            WIK-ONT-HUAWEI-EG8145V5
+
+  expected_qty                     INT                               System quantity from OSR-01 at count    100
+                                                                     freeze.
+
+  counted_qty                      INT                               Physical quantity counted.              97
+
+  variance_qty                     INT                               Counted minus expected.                 -3
+
+  serials_counted_json             JSONB NULL                        Serial list for serialized SKU.         ["48575443ABCD1234"]
+
+  counter_comment                  TEXT NULL                         Counter note.                           Three units missing from
+                                                                                                             bin.
+
+  submitted_at                     TIMESTAMP                         Submit timestamp.                       2026-07-31T09:10:00Z
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                          Page 3
+ Recommended indexes:
+
+   - (count_task_id).
+
+   - (sku_id).
+
+   - (variance_qty).
+
+ 5.4 inventory_discrepancy
+ What it is for: stores detected variance requiring review.
+
+ When to use it: count variance is not zero, serial mismatch exists, location mismatch exists, or count quality fails.
+
+ Sample meaning: idisc-001 is a shortage of 3 Huawei ONTs at WIK central warehouse.
+
+  Column                           Type                             Purpose                           Sample
+
+  discrepancy_id                   TEXT PK                          Discrepancy id.                   idisc-001
+
+  operator_code                    TEXT                             Tenant/operator.                  WIK
+
+  audit_plan_id                    TEXT                             Audit plan.                       iap-001
+
+  count_line_id                    TEXT NULL                        Source count line.                icl-001
+
+  location_id                      TEXT                             Location.                         WIK-CENTRAL-NRB
+
+  sku_id                           TEXT                             SKU.                              WIK-ONT-HUAWEI-EG8145V5
+
+  discrepancy_type                 TEXT                             SHORTAGE, OVERAGE,                SHORTAGE
+                                                                    SERIAL_MISMATCH,
+                                                                    LOCATION_MISMATCH,
+                                                                    DAMAGED_FOUND.
+
+  quantity_delta                   INT                              Counted minus expected.           -3
+
+  estimated_value                  NUMERIC(14,2) NULL               Estimated financial impact.       18000.00
+
+  severity                         TEXT                             LOW, MEDIUM, HIGH, CRITICAL.      HIGH
+
+  status                           TEXT                             Discrepancy status.               INVESTIGATING
+
+  assigned_to_user_id              TEXT NULL                        Investigator.                     usr-inventory-supervisor
+
+  created_at                       TIMESTAMP                        Creation timestamp.               2026-07-31T09:15:00Z
+
+  closed_at                        TIMESTAMP NULL                   Close timestamp.                  null
+
+
+ Recommended indexes:
+
+   - (operator_code, status, created_at DESC).
+
+   - (audit_plan_id, status).
+
+   - (location_id, sku_id).
+
+ 5.5 inventory_resolution
+ What it is for: stores proposed and applied discrepancy resolution.
+
+ When to use it: investigator decides whether to recount, accept variance, adjust stock, write off, transfer correction, or mark
+ found.
+
+ Sample meaning: ires-001 proposes to write off 3 missing ONTs after investigation.
+
+  Column                           Type                             Purpose                           Sample
+
+  resolution_id                    TEXT PK                          Resolution id.                    ires-001
+
+  discrepancy_id                   TEXT                             Discrepancy id.                   idisc-001
+
+  resolution_action                TEXT                             RECOUNT, ADJUST_STOCK,            WRITE_OFF
+                                                                    WRITE_OFF,
+                                                                    FOUND_AND_CORRECT_LOCATION,
+                                                                    NO_ACTION.
+
+  proposed_by_user_id              TEXT                             Proposer.                         usr-inventory-supervisor
+
+  approval_request_id              TEXT NULL                        EM-CFG-04 request if required.    apr-wof-001
+
+  approval_mode                    TEXT NULL                        EM-CFG-04 mode.                   MULTI_STEP
+
+  camunda_process_instance_id      TEXT NULL                        BPMN instance if used.            cam-wof-001
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 4
+  Column                            Type                               Purpose                            Sample
+
+  status                            TEXT                               PROPOSED, PENDING_APPROVAL,        PENDING_APPROVAL
+                                                                       APPROVED, REJECTED, APPLIED.
+
+  comment                           TEXT NULL                          Resolution note.                   Not found after recount and
+                                                                                                          camera review.
+
+  created_at                        TIMESTAMP                          Creation timestamp.                2026-07-31T11:00:00Z
+
+  applied_at                        TIMESTAMP NULL                     Apply timestamp.                   null
+
+
+ Recommended indexes:
+
+   - (discrepancy_id, status).
+
+   - (approval_request_id).
+
+ 5.6 inventory_write_off_item
+ What it is for: stores item-level write-off detail for approved write-off resolutions.
+
+ When to use it: resolution action is WRITE_OFF, especially when serialized instances are involved.
+
+ Sample meaning: iwoi-001 writes off missing serial 48575443ABCD1234.
+
+  Column                            Type                               Purpose                            Sample
+
+  write_off_item_id                 TEXT PK                            Write-off item id.                 iwoi-001
+
+  resolution_id                     TEXT                               Resolution id.                     ires-001
+
+  sku_id                            TEXT                               SKU.                               WIK-ONT-HUAWEI-EG8145V5
+
+  quantity                          INT                                Quantity written off.              1
+
+  instance_id                       TEXT NULL                          OSR-INSTANCE id if serialized.     inst-ont-001
+
+  serial_number                     TEXT NULL                          Serial if known.                   48575443ABCD1234
+
+  reason_code                       TEXT                               LOST, STOLEN, DAMAGED, OBSOLETE,   LOST
+                                                                       UNRECOVERABLE.
+
+  estimated_value                   NUMERIC(14,2) NULL                 Estimated item value.              6000.00
+
+
+ Recommended indexes:
+
+   - (resolution_id).
+
+   - (instance_id).
+
+   - (sku_id).
+
+
+
+ 6. APIs
+ 6.1 Create Audit Plan
+            POST /api/inventory-audits
+            Idempotency-Key: audit-wik-central-20260731
+            Content-Type: application/json
+
+            {
+                "operatorCode": "WIK",
+                "auditType": "CYCLE_COUNT",
+                "locationId": "WIK-CENTRAL-NRB",
+                "scheduledStartAt": "2026-07-31T08:00:00Z",
+                "scheduledEndAt": "2026-07-31T17:00:00Z",
+                "scope": {
+                  "skuIds": ["WIK-ONT-HUAWEI-EG8145V5"],
+                  "binCodes": ["A-01", "A-02"]
+                }
+            }
+
+
+ 6.2 Generate Count Tasks
+            POST /api/inventory-audits/{audit_plan_id}/generate-tasks
+            Content-Type: application/json
+
+ Creates inventory_count_task rows from scope and assigned counters.
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 5
+ 6.3 Submit Count
+          POST /api/inventory-count-tasks/{count_task_id}/submit
+          Content-Type: application/json
+
+          {
+              "lines": [
+                {
+                  "skuId": "WIK-ONT-HUAWEI-EG8145V5",
+                  "countedQty": 97,
+                  "serialsCounted": ["48575443ABCD1234"],
+                  "counterComment": "Three units missing from bin."
+                }
+              ]
+          }
+
+ OSR-05 compares against frozen OSR-01 balance and OSR-INSTANCE expected serial list.
+
+ 6.4 Propose Resolution
+          POST /api/inventory-discrepancies/{discrepancy_id}/resolutions
+          Content-Type: application/json
+
+          {
+              "resolutionAction": "WRITE_OFF",
+              "comment": "Not found after recount and camera review.",
+              "items": [
+                {
+                  "skuId": "WIK-ONT-HUAWEI-EG8145V5",
+                  "quantity": 3,
+                  "reasonCode": "LOST"
+                }
+              ]
+          }
+
+ OSR-05 evaluates whether approval is required through Drools/EM-CFG-04.
+
+ 6.5 Approval Outcome Callback
+          POST /internal/inventory-resolutions/{resolution_id}/approval-outcome
+          Content-Type: application/json
+
+          {
+              "approvalRequestId": "apr-wof-001",
+              "outcome": "APPROVED",
+              "decisionComment": "Approved after inventory investigation."
+          }
+
+
+ 6.6 Apply Resolution
+          POST /api/inventory-resolutions/{resolution_id}/apply
+          Content-Type: application/json
+
+ For ADJUST_STOCK or WRITE_OFF, OSR-05 calls OSR-01:
+          POST /api/stock-movements
+          Idempotency-Key: inv-resolution-ires-001-stock
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "movementType": "ADJUSTMENT",
+              "reasonCode": "INVENTORY_WRITE_OFF",
+              "skuId": "WIK-ONT-HUAWEI-EG8145V5",
+              "quantity": -3,
+              "sourceLocationId": "WIK-CENTRAL-NRB",
+              "originRefType": "INVENTORY_RESOLUTION",
+              "originRefId": "ires-001",
+              "actorUserId": "usr-inventory-supervisor"
+          }
+
+ For serialized item write-off, OSR-05 calls OSR-INSTANCE:
+          POST /api/equipment-instances/{instance_id}/lifecycle-events
+          Idempotency-Key: inv-writeoff-ires-001-inst-ont-001
+          Content-Type: application/json
+
+          {
+              "toState": "DECOMMISSIONED",
+              "reasonCode": "INVENTORY_WRITE_OFF_LOST",
+              "originRefKind": "INVENTORY_RESOLUTION",
+              "originRefId": "ires-001",
+
+
+
+SOPHIX BSS Design Documents                                                             Page 6
+                  "actorUserId": "usr-inventory-supervisor",
+                  "notes": "Approved write-off after physical count discrepancy."
+              }
+
+
+
+
+ 7. Business Rules
+  Rule                                           Description                                            Reason
+
+  R-OSR-05-01                                    Audit location must exist in OSR-01.                   Valid count scope.
+
+  R-OSR-05-02                                    Audit expected quantity is frozen at task              Stable variance calculation.
+                                                 generation/start.
+
+  R-OSR-05-03                                    Count submitter cannot approve own discrepancy         Segregation of duties.
+                                                 resolution unless EM-CFG-04 explicitly allows it.
+
+  R-OSR-05-04                                    Non-zero variance creates discrepancy unless           Audit traceability.
+                                                 tolerance policy suppresses low-risk variance.
+
+  R-OSR-05-05                                    Stock adjustment/write-off must be approved            Governance.
+                                                 through EM-CFG-04 when policy requires it.
+
+  R-OSR-05-06                                    Camunda is used only when EM-CFG-04 policy             Operational simplicity.
+                                                 mode is BPMN.
+
+  R-OSR-05-07                                    Approved quantity correction must call OSR-01          Stock ownership.
+                                                 movement API.
+
+  R-OSR-05-08                                    Serialized write-off must call OSR-INSTANCE            Serial traceability.
+                                                 lifecycle API.
+
+  R-OSR-05-09                                    Applied resolution must be idempotent.                 Prevent double adjustment.
+
+  R-OSR-05-10                                    Audit closure requires all discrepancies               Complete audit trail.
+                                                 closed/rejected/no-action.
+
+
+
+
+ 8. Rule Engine Guidance
+ Use Drools for configurable audit policy:
+
+  Rule file                                                                  Purpose
+
+  inventory-discrepancy-severity.drl                                         Assign severity based on value, quantity, SKU family, location, and contractor.
+
+  inventory-resolution-approval.drl                                          Decide EM-CFG-04 approval policy for write-off/adjustment.
+
+  inventory-recount-policy.drl                                               Decide when recount is mandatory before resolution.
+
+
+ Example:
+              package com.sophix.osr.inventory
+
+              rule "High value write off requires finance approval"
+              when
+                $r : InventoryResolutionFact(action == "WRITE_OFF", estimatedValue >= 10000.00, currencyCode == "KES")
+                $d : InventoryResolutionDecision()
+              then
+                $d.setApprovalRequired(true);
+                $d.setApprovalPolicyCode("INVENTORY_WRITE_OFF_FINANCE");
+                $d.addReason("HIGH_VALUE_WRITE_OFF");
+              end
+
+
+
+
+ 9. Events
+  Event                                          Topic                                                  When emitted
+
+  InventoryAuditCreated                          sophix.osr.inventory.audit-created                     Audit plan created.
+
+  InventoryCountSubmitted                        sophix.osr.inventory.count-submitted                   Counter submits count.
+
+  InventoryDiscrepancyOpened                     sophix.osr.inventory.discrepancy-opene                 Variance detected.
+                                                 d
+
+  InventoryResolutionApprovalRequired            sophix.osr.inventory.approval-required                 EM-CFG-04 request started.
+
+  InventoryResolutionApplied                     sophix.osr.inventory.resolution-applie                 OSR correction applied.
+                                                 d
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                          Page 7
+  Event                                       Topic                                           When emitted
+
+  InventoryAuditClosed                        sophix.osr.inventory.audit-closed               Audit fully closed.
+
+
+
+
+ 10. Frontend/API Consumers
+  Area                                                            APIs/modules used
+
+  Backoffice inventory audit                                      OSR-05 audit, task, discrepancy, resolution APIs.
+
+  Contractor mobile app                                           Count task submit APIs for van audits if allowed.
+
+  Approval inbox                                                  EM-CFG-04 task APIs.
+
+  Stock view                                                      OSR-01 balances plus OSR-05 open discrepancy badges.
+
+  Serial lookup                                                   OSR-INSTANCE details for serialized discrepancies.
+
+  Reporting                                                       REP-01 consumes OSR-05 events.
+
+
+
+
+ 11. Infrastructure Recommendations
+ For medium deployment, run OSR-05 inside the OSR/equipment API and shared OSR worker deployment.
+
+  Component                                                       Recommendation
+
+  API                                                             Add audit/discrepancy endpoints to OSR API.
+
+  Database                                                        PostgreSQL OSR schema.
+
+  Workers                                                         Shared OSR worker for outbox, reminders, and resolution retry.
+
+  Mobile offline                                                  Contractor app can cache assigned count tasks and sync submissions with
+                                                                  idempotency.
+
+  Approval                                                        EM-CFG-04 shared service.
+
+  Rules                                                           Drools/KIE for configurable audit routing.
+
+
+ AWS notes: use ECS/EKS OSR service, RDS PostgreSQL, S3 for audit evidence/photos/files, MSK/Kafka for events, and
+ Secrets Manager for credentials.
+
+
+
+ 12. Acceptance Criteria
+   - Audit plan/task/count/discrepancy/resolution tables exist.
+
+   - Audit count freezes expected OSR-01 quantities.
+
+   - Variance creates auditable discrepancy with severity.
+
+   - Resolution approvals use EM-CFG-04; OSR-05 does not hardcode approval steps.
+
+   - Approved stock correction calls OSR-01 movement API.
+
+   - Approved serialized write-off calls OSR-INSTANCE lifecycle API.
+
+   - Contractor mobile app can submit assigned counts where configured.
+
+   - Tests cover count variance, approval, idempotent apply, OSR-01 adjustment, and OSR-INSTANCE write-off.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                           Page 8
+

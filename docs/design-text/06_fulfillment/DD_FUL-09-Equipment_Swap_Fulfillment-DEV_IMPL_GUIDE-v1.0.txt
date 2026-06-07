@@ -1,0 +1,311 @@
+ DD_FUL-09 - Equipment Swap Fulfillment - Developer
+ Implementation Guide
+ Version: v1.0 Bundle: 06_fulfillment Companion DD: DD_FUL-09-Equipment_Swap_Fulfillment-v1.0
+
+
+
+ 1. Goal
+ Implement the service/provisioning side of equipment swaps.
+
+ Keep the boundaries strict:
+
+   - OSR-RMA owns swap orchestration and recovery logistics.
+
+   - OSR-01/OSR-INSTANCE own stock and serial state.
+
+   - FUL-09 owns network/service provisioning for the swap.
+
+   - OSR-02 procurement is upstream replenishment only and is not called during a customer swap.
+
+
+
+ 2. Runtime Flow
+           sequenceDiagram
+             participant RMA as OSR-RMA-01
+             participant FUL as FUL-09
+             participant INST as OSR-INSTANCE-01
+             participant PROV as PROV-INT/FUL-03
+             participant APR as EM-CFG-04
+
+               RMA->>FUL: POST /api/equipment-swap-fulfillments
+               FUL->>INST: read source/target instances
+               FUL->>FUL: Drools chooses steps
+               FUL->>PROV: unbind old device
+               FUL->>PROV: bind/provision new device
+               FUL->>PROV: reconcile network state
+               FUL-->>RMA: fulfillment outcome
+               FUL->>APR: approval only for force-complete/override
+
+
+
+
+ 3. Step 1 - Migrations
+ Create:
+
+   - equipment_swap_fulfillment
+
+   - equipment_swap_provisioning_step
+
+   - equipment_swap_fulfillment_reconciliation
+
+   - equipment_swap_exception
+
+ Add unique (operator_code, swap_request_id) so retries from OSR-RMA return the same fulfillment.
+
+
+
+ 4. Step 2 - Start Fulfillment
+ Endpoint:
+           POST /api/equipment-swap-fulfillments
+           Idempotency-Key: esf-swap-001
+           Content-Type: application/json
+
+ Request:
+           {
+               "operatorCode": "WIK",
+               "swapRequestId": "swap-001",
+               "woId": "wo-001",
+               "subscriptionId": "SUB-700045",
+               "accountId": "ACC-900045",
+               "swapType": "DEFECT_SWAP",
+
+
+SOPHIX BSS Design Documents                                                                         Page 1
+               "technologyFamily": "GPON",
+               "sourceInstanceId": "inst-old-001",
+               "targetInstanceId": "inst-new-001",
+               "homepassId": "HP-001"
+           }
+
+ Flow:
+
+   1. Validate request and idempotency key.
+
+   2. Load OSR-RMA swap request detail if needed.
+
+   3. Load source/target instances from OSR-INSTANCE.
+
+   4. Validate target instance is reserved/assigned by OSR flow.
+
+   5. Create equipment_swap_fulfillment in REQUESTED.
+
+   6. Emit EquipmentSwapFulfillmentRequested.
+
+ Do not call procurement. If stock is missing, OSR/WO should fail availability/reservation before this point.
+
+
+
+ 5. Step 3 - Execute Fulfillment
+ Endpoint:
+           POST /api/equipment-swap-fulfillments/esf-001/execute
+
+ Flow:
+
+   1. Load fulfillment.
+
+   2. Build Drools fact.
+
+   3. Run equipment-swap-fulfillment-routing.drl.
+
+   4. Create provisioning step rows.
+
+   5. Execute steps in order through PROV-INT/FUL-03.
+
+   6. Reconcile.
+
+   7. If all pass, mark COMPLETED and callback OSR-RMA.
+
+   8. If failure, create exception and mark FAILED.
+
+
+
+ 6. Step 4 - Drools Step Selection
+ Fact:
+           public record EquipmentSwapFulfillmentFact(
+                String operatorCode,
+                String swapType,
+                String technologyFamily,
+                String sourceSkuId,
+                String targetSkuId,
+                String homepassId,
+                boolean sameTechnology,
+                boolean relocationContext
+           ) {}
+
+ Sample:
+           package com.sophix.fulfillment.equipment_swap
+
+           rule "GPON standard swap steps"
+           when
+             $f : EquipmentSwapFulfillmentFact(technologyFamily == "GPON")
+             $d : EquipmentSwapFulfillmentDecision()
+           then
+             $d.addStep("GPON_UNBIND_OLD_ONT");
+             $d.addStep("GPON_BIND_NEW_ONT");
+             $d.addStep("GPON_SERVICE_RECONCILE");
+           end
+
+           rule "HFC modem swap preserves slot and port"
+           when
+             $f : EquipmentSwapFulfillmentFact(technologyFamily == "HFC")
+
+
+SOPHIX BSS Design Documents                                                                                     Page 2
+            $d : EquipmentSwapFulfillmentDecision()
+          then
+            $d.addStep("HFC_DISABLE_OLD_MAC");
+            $d.addStep("HFC_AUTHORIZE_NEW_MAC_SAME_SLOT");
+            $d.addStep("HFC_BROADHUB_RECONCILE");
+          end
+
+
+
+
+ 7. Step 5 - Provisioning Commands
+ For each step, call PROV-INT/FUL-03 adapter with deterministic idempotency key:
+          POST /api/provisioning/commands
+          Idempotency-Key: esf-001-GPON_BIND_NEW_ONT
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "commandType": "GPON_BIND_ONT",
+              "subscriptionId": "SUB-700045",
+              "homepassId": "HP-001",
+              "equipmentInstanceId": "inst-new-001",
+              "payload": {
+                 "serialNumber": "NEW123"
+              },
+              "originRefType": "EQUIPMENT_SWAP_FULFILLMENT",
+              "originRefId": "esf-001"
+          }
+
+ Store command ref/status in equipment_swap_provisioning_step.
+
+
+
+ 8. Step 6 - Reconciliation
+ After commands:
+
+   1. Query provisioning/network read adapter.
+
+   2. Compare expected target serial/MAC/entitlement/voice mapping with actual.
+
+   3. Store equipment_swap_fulfillment_reconciliation.
+
+   4. If any FAIL, create equipment_swap_exception.
+
+ Do not mark fulfillment complete until reconciliation passes or an approved force-complete occurs.
+
+
+
+ 9. Step 7 - Callback OSR-RMA
+          POST /internal/swap-requests/swap-001/fulfillment-outcome
+          Content-Type: application/json
+
+          {
+              "fulfillmentId": "esf-001",
+              "outcome": "COMPLETED",
+              "sourceInstanceId": "inst-old-001",
+              "targetInstanceId": "inst-new-001",
+              "completedAt": "2026-07-01T08:08:00Z"
+          }
+
+ OSR-RMA then continues its own lifecycle closure and stock/routing work. FUL-09 should not directly close OSR-RMA tables.
+
+
+
+ 10. Step 8 - Exception Approval
+ For force-complete:
+          POST /api/approvals/evaluate
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "moduleCode": "FUL-09",
+              "actionCode": "EQUIPMENT_SWAP_FORCE_COMPLETE",
+              "subjectType": "EQUIPMENT_SWAP_EXCEPTION",
+              "subjectId": "ese-001",
+
+
+SOPHIX BSS Design Documents                                                                                           Page 3
+                "context": {
+                  "fulfillmentId": "esf-001",
+                  "exceptionType": "NETWORK_MISMATCH",
+                  "technologyFamily": "GPON"
+                }
+           }
+
+ If required:
+
+   1. call POST /api/approvals/requests;
+
+   2. store approval_request_id;
+
+   3. wait for callback;
+
+   4. apply approved override idempotently.
+
+ Camunda note: FUL-09 workflow may use Camunda for provisioning orchestration. EM-CFG-04 approval workflow is
+ separate and only BPMN-backed when the approval policy says so.
+
+
+
+ 11. Step 9 - Relocation/Shifting Context
+ During relocation:
+
+   1. SUB-WF-RELOCATION starts operation.
+
+   2. WO-01 SHIFTING handles field execution.
+
+   3. OSR/OSR-RMA handles old/new equipment movement and serial lifecycle.
+
+   4. FUL-09 provisions the target device/service binding.
+
+   5. Procurement is not called; missing stock blocks earlier OSR/WO availability.
+
+ This should be clear in code comments and API docs because otherwise teams may incorrectly create PO flows from
+ customer jobs.
+
+
+
+ 12. Worker Jobs
+  Job                                                             Purpose
+
+  equipment-swap-fulfillment-execute                              Executes pending fulfillment steps.
+
+  equipment-swap-reconcile                                        Retries reconciliation for pending/failed checks.
+
+  equipment-swap-exception-escalate                               Notifies teams for unresolved exceptions.
+
+  equipment-swap-outbox-publish                                   Publishes FUL-09 events.
+
+
+ These run in the shared fulfillment/provisioning worker deployment.
+
+
+
+ 13. Tests
+   - Start fulfillment idempotently from OSR-RMA.
+
+   - Reject if target instance is not reserved/assigned.
+
+   - GPON swap creates unbind/bind/reconcile steps.
+
+   - HFC swap creates old MAC disable/new MAC authorize/reconcile steps.
+
+   - Provisioning command retry uses same idempotency key.
+
+   - Reconciliation failure creates exception.
+
+   - Force-complete calls EM-CFG-04 when configured.
+
+   - Completed fulfillment calls OSR-RMA callback once.
+
+   - Relocation swap does not call OSR-02 procurement.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                           Page 4
+

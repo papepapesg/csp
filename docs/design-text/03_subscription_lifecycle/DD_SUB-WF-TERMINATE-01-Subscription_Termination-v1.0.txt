@@ -1,0 +1,845 @@
+ DD_SUB-WF-TERMINATE-01 - Subscription Termination
+ Developer implementation guide: DD_SUB-WF-TERMINATE-01-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ SUB-WF-TERMINATE-01 defines permanent subscription termination.
+
+ Termination moves a subscription to:
+           TERMINATED
+
+ TERMINATED is a terminal state. A terminated subscription must not be activated, paused, resumed, suspended, or restricted
+ again. A new service for the customer must use a new subscription.
+
+ Use this operation when:
+
+   - A customer requests cancellation.
+
+   - A BO admin closes a subscription.
+
+   - BIL-04 reaches final dunning termination.
+
+   - A contract-expiry scheduler terminates an expired contract.
+
+
+ 2. Mental Model
+ Termination is a saga:
+           flowchart LR
+               API[Terminate endpoint] --> INT[Interrupt in-flight operation]
+               INT --> FW[SUB-WF framework]
+               FW --> BPMN[Terminate BPMN]
+               BPMN --> RULES[Drools validation]
+               BPMN --> PEND[SUB-LM PENDING_TERMINATION]
+               BPMN --> BIL[Billing termination intent]
+               BPMN --> FUL[FUL-05 revoke service]
+               BPMN --> HP[Release HomePass]
+               BPMN --> LM[SUB-LM TERMINATED]
+               BPMN --> EVT[Kafka event]
+               EVT --> RMA[Equipment collection]
+               BPMN --> NOTIF[Notification]
+
+ The most important output is not only the status. It is the combination of:
+
+   - final status TERMINATED
+
+   - termination master fields on subscription
+
+   - billing settlement
+
+   - network/service revocation
+
+   - HomePass release
+
+   - equipment disposition
+
+   - SubscriptionTerminated event
+
+
+ 3. Ownership
+ This DD owns:
+
+   - Termination trigger API: POST /api/subscriptions/{subscription_id}/terminate.
+
+   - Termination preview API: POST /api/subscriptions/{subscription_id}/terminate/preview.
+
+   - Termination trigger taxonomy.
+
+   - Equipment disposition taxonomy.
+
+   - subscription_termination_config table.
+
+   - Termination business rules.
+
+   - Termination domain events.
+
+SOPHIX BSS Design Documents                                                                                            Page 1
+   - Termination worker usage.
+
+ This DD does not own:
+
+   - WIK-specific BPMN. See DD_SUB-WF-TERMINATE-01-FLOW-WIK.
+
+   - Subscription master state implementation. See SUB-LM-01.
+
+   - Operation orchestration framework. See SUB-WF-FRAMEWORK-01.
+
+   - Worker topic contracts. See DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+   - Billing settlement calculation. See BIL-01.
+
+   - Dunning final-decision logic. See BIL-04.
+
+   - Network revocation implementation. See FUL-05.
+
+   - HomePass release implementation. See FUL-07.
+
+   - Equipment pickup work orders. See OSR-RMA-01 EQP.
+
+   - Notification templates and delivery. See NOT-01.
+
+
+ 4. Deployment Unit Clarification
+ Termination is not a standalone service.
+
+ It is deployed as part of the subscription workflow capability:
+
+   - Terminate route/controller in SUB-WF API.
+
+   - Termination config migration.
+
+   - Termination BPMN, such as sub-terminate-wik.
+
+   - Termination Drools package, such as rules.subscription.terminate.wik.
+
+   - Shared worker apps from the worker catalog.
+
+ The same worker app can execute termination, resume, pause, and activation topics. Keep metrics, logs, retries, and alerts
+ visible by topic.
+
+
+ 5. Termination Triggers
+  Trigger                                     Meaning                                               Allowed roles
+
+  CUSTOMER_REQUESTED                          Customer requests cancellation through portal, call   CUSTOMER_SELF_SERVICE, CALL_CENTER,
+                                              center, or operator.                                  SUBSCRIPTION_OPERATOR
+
+  ADMIN_DECISION                              Admin/operator terminates for operational,            SUBSCRIPTION_ADMIN
+                                              compliance, or exceptional reason.
+
+  DUNNING_TERMINATION                         Billing terminates after final non-payment dunning    BILLING_INTERNAL
+                                              step.
+
+  CONTRACT_EXPIRED                            Scheduler terminates an expired fixed-term            SCHEDULER_INTERNAL
+                                              contract.
+
+
+ CUSTOMER_SELF_SERVICE also requires:
+
+   - subscription_termination_config.customer_self_service_enabled = true
+
+
+ 6. Equipment Disposition
+ Equipment disposition tells downstream systems what to do with customer-premise equipment.
+
+  Disposition                                 Meaning                                               Typical downstream behavior
+
+  CUSTOMER_RETAINS                            Customer keeps equipment.                             No collection work order.
+
+  PENDING_COLLECTION                          Equipment must be collected.                          OSR-RMA-01 creates pickup work order.
+
+  WRITTEN_OFF                                 Equipment is written off.                             No collection attempt, finance/reporting audit.
+
+
+ Resolution rules:
+
+
+
+SOPHIX BSS Design Documents                                                                                                                       Page 2
+   - Caller may supply equipmentDisposition.
+
+   - If absent and trigger is not DUNNING_TERMINATION, use default_equipment_disposition.
+
+   - If absent and trigger is DUNNING_TERMINATION, use dunning_equipment_disposition.
+
+   - If dunning auto write-off threshold is configured, BIL-01 may return a writeOffMarker; BPMN may resolve disposition to
+      WRITTEN_OFF.
+
+
+ 7. Data Model
+ 7.1 subscription_termination_config
+ What this table is for:
+
+ subscription_termination_config stores operator-level termination policy. It controls cooling-off behavior, default
+ equipment handling, dunning write-off behavior, self-service enablement, supervisor override, and churn-save routing.
+
+ Use this table when:
+
+   - Validating customer self-service termination.
+
+   - Resolving default equipment disposition.
+
+   - Deciding whether dunning termination can auto write off debt/equipment.
+
+   - Computing cooling-off window.
+
+   - Deciding whether supervisor override or churn-save step is needed.
+
+ Do not use this table for:
+
+   - Current subscription status.
+
+   - Actual billing settlement calculation.
+
+   - Actual equipment inventory ownership.
+
+   - Network revocation decisions.
+           CREATE TABLE subscription_termination_config (
+              operator_code                       TEXT PRIMARY KEY,
+              cooling_off_window_days             INTEGER NOT NULL DEFAULT 7,
+              default_equipment_disposition       TEXT NOT NULL DEFAULT 'PENDING_COLLECTION',
+              dunning_equipment_disposition       TEXT NOT NULL DEFAULT 'PENDING_COLLECTION',
+              dunning_auto_write_off_threshold    NUMERIC(18,2) NULL,
+              dunning_auto_write_off_currency     TEXT NULL,
+              customer_self_service_enabled       BOOLEAN NOT NULL DEFAULT FALSE,
+              cooling_off_supervisor_override     BOOLEAN NOT NULL DEFAULT FALSE,
+              churn_save_attempt_enabled          BOOLEAN NOT NULL DEFAULT FALSE,
+              updated_at                          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_by                          TEXT NOT NULL,
+              CHECK (default_equipment_disposition IN ('CUSTOMER_RETAINS','PENDING_COLLECTION','WRITTEN_OFF')),
+              CHECK (dunning_equipment_disposition IN ('CUSTOMER_RETAINS','PENDING_COLLECTION','WRITTEN_OFF')),
+              CHECK ((dunning_auto_write_off_threshold IS NULL) = (dunning_auto_write_off_currency IS NULL))
+           );
+
+ Column descriptions:
+
+  Column                                                         Purpose
+
+  operator_code                                                  Operator this config applies to.
+
+  cooling_off_window_days                                        Number of days after activation where customer cancellation may receive
+                                                                 cooling-off treatment.
+
+  default_equipment_disposition                                  Equipment handling when caller does not supply one for non-dunning
+                                                                 termination.
+
+  dunning_equipment_disposition                                  Equipment handling when caller does not supply one for dunning termination.
+
+  dunning_auto_write_off_threshold                               Debt threshold used to decide whether dunning termination can mark write-off.
+
+  dunning_auto_write_off_currency                                Currency for the dunning write-off threshold.
+
+  customer_self_service_enabled                                  Allows customer portal/app to start customer-requested termination.
+
+  cooling_off_supervisor_override                                Adds supervisor decision step for cooling-off cases.
+
+  churn_save_attempt_enabled                                     Adds a churn-save attempt before customer-requested termination proceeds.
+
+  updated_at                                                     Last update timestamp.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 3
+  Column                                                                          Purpose
+
+  updated_by                                                                      User/service that last updated the row.
+
+
+ Sample data:
+
+  operator_code   cooling_off_win   default_equipm    dunning_equip      dunning_auto_        dunning_auto_     customer_self_   cooling_off_su    churn_save_att
+                  dow_days          ent_disposition   ment_dispositio    write_off_thres      write_off_curre   service_enable   pervisor_overri   empt_enabled
+                                                      n                  hold                 ncy               d                de
+
+  WIK             7                 PENDING_COL       PENDING_COL        10000.00             KES               true             true              false
+                                    LECTION           LECTION
+
+  WUG             7                 PENDING_COL       PENDING_COL        NULL                 NULL              false            false             false
+                                    LECTION           LECTION
+
+  WTZ             7                 PENDING_COL       PENDING_COL        NULL                 NULL              false            false             false
+                                    LECTION           LECTION
+
+  YASSN           7                 PENDING_COL       PENDING_COL        NULL                 NULL              false            false             false
+                                    LECTION           LECTION
+
+
+ Sample meaning:
+
+   - WIK allows self-service termination.
+
+   - WIK applies a 7-day cooling-off policy.
+
+   - WIK default equipment handling is collection.
+
+   - WIK may auto write off dunning debt/equipment up to KES 10,000 according to billing policy.
+
+   - WIK does not add a churn-save BPMN step in v1.0.
+
+   - Other operator rows are conservative placeholders until their flow satellites are defined.
+
+ 7.2 Subscription Termination Master Fields
+ What this data is for:
+
+ Termination writes final audit fields onto the subscription master record. SUB-LM owns the actual subscription table and
+ state machine.
+
+ Use this data when:
+
+   - Showing support why a subscription was terminated.
+
+   - Preventing future lifecycle operations on a terminated subscription.
+
+   - Building events and reports.
+
+   - Auditing dunning/admin/customer termination.
+
+ Fields written by termination:
+
+  Field                                               Purpose                                                   Sample
+
+  terminated_at                                       Actual termination timestamp.                             2026-07-20T14:30:18Z
+
+  termination_trigger                                 Trigger that started termination.                         CUSTOMER_REQUESTED
+
+  termination_reason_code                             Operator/CVM reason.                                      CUSTOMER_MOVED_NO_COVERAGE
+
+  prior_status_at_termination                         Status before termination saga started.                   ACTIVE
+
+  contract_started_at                                 Contract start snapshot.                                  2024-01-20T10:00:00Z
+
+  contract_end_at                                     Contract end snapshot, if applicable.                     2026-01-20T10:00:00Z
+
+  contract_minimum_term_months                        Contract minimum term.                                    12
+
+
+
+
+ 8. Business Rules
+ 8.1 State And Concurrency Rules
+  Rule                                                                            Description
+
+  R-TERM-S-1                                                                      Termination rejects subscriptions already TERMINATED with 409
+                                                                                  ALREADY_TERMINATED.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                                Page 4
+  Rule                                                         Description
+
+  R-TERM-S-2                                                   Termination is terminal. No future lifecycle operation may mutate the
+                                                               subscription after success.
+
+  R-TERM-S-3                                                   Termination may interrupt another in-flight state operation on the same
+                                                               subscription.
+
+  R-TERM-S-4                                                   If another operation is in-flight, framework sends
+                                                               external-cancel-requested, waits up to 60 seconds, then starts
+                                                               termination after cancellation acknowledgement.
+
+  R-TERM-S-5                                                   During the saga, subscription moves to PENDING_TERMINATION before final
+                                                               TERMINATED.
+
+
+
+ 8.2 Trigger Rules
+  Rule                                                         Description
+
+  R-TERM-T-1                                                   Trigger must be one of the four values in section 5.
+
+  R-TERM-T-2                                                   Actor role must match the trigger role set.
+
+  R-TERM-T-3                                                   CUSTOMER_SELF_SERVICE requires operator config enabled.
+
+  R-TERM-T-4                                                   terminationReasonCode is required and passed through to reporting/CVM.
+
+
+
+ 8.3 Cooling-Off Rules
+  Rule                                                         Description
+
+  R-TERM-C-1                                                   Cooling-off applies only to CUSTOMER_REQUESTED.
+
+  R-TERM-C-2                                                   A termination is in cooling-off when activated_at +
+                                                               cooling_off_window_days >= requestTime.
+
+  R-TERM-C-3                                                   Cooling-off result is sent to BIL-01 in TERMINATION_INTENT.
+
+  R-TERM-C-4                                                   If cooling_off_supervisor_override = true, BPMN includes a
+                                                               supervisor decision step.
+
+
+
+ 8.4 Settlement Rules
+  Rule                                                         Description
+
+  R-TERM-B-1                                                   BPMN sends TERMINATION_INTENT to BIL-01.
+
+  R-TERM-B-2                                                   BIL-01 returns line items, totals, refund amount, early termination fee, and
+                                                               write-off marker.
+
+  R-TERM-B-3                                                   Settlement result is included in SubscriptionTerminated.
+
+  R-TERM-B-4                                                   Termination does not hand-code billing amounts in SUB-WF.
+
+
+
+ 8.5 Fulfillment And Equipment Rules
+  Rule                                                         Description
+
+  R-TERM-F-1                                                   BPMN calls FUL-05 to revoke network/service access.
+
+  R-TERM-F-2                                                   BPMN calls HomePass release worker after service revoke succeeds.
+
+  R-TERM-F-3                                                   Equipment bindings are passed to FUL-05 and included in the event.
+
+  R-TERM-F-4                                                   OSR-RMA-01 creates pickup work order from SubscriptionTerminated
+                                                               when disposition is PENDING_COLLECTION.
+
+
+
+
+ 9. REST APIs
+ 9.1 Trigger Termination
+          POST /api/subscriptions/{subscription_id}/terminate HTTP/1.1
+          Authorization: Bearer <jwt-or-service-token>
+          Idempotency-Key: term-sub_01HZ_KAMAU-20260720T143000-cc007
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "terminationTrigger": "CUSTOMER_REQUESTED",
+
+
+SOPHIX BSS Design Documents                                                                                                              Page 5
+              "terminationReasonCode": "CUSTOMER_MOVED_NO_COVERAGE",
+              "equipmentDisposition": "PENDING_COLLECTION",
+              "customerNotes": "Moving to a non-covered area; no service available at new address",
+              "initiatingWorkflowKind": "BO_UI",
+              "initiatingWorkflowRef": "cc-ticket-2026-07-20-4421"
+          }
+
+ Actor user and role come from the token, not the public request body.
+
+ Success:
+          202 Accepted
+
+          {
+              "operationId": "subop_01HZ_KAMAU_TERM",
+              "operatorCode": "WIK",
+              "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+              "operationKind": "TERMINATE",
+              "terminationTrigger": "CUSTOMER_REQUESTED",
+              "bpmnProcessKey": "sub-terminate-wik",
+              "currentState": "INITIATED",
+              "finalState": null
+          }
+
+ Common errors:
+
+  HTTP                                      Code                                     Meaning
+
+  400                                       UNKNOWN_TERMINATION_TRIGGER              Trigger is not recognized.
+
+  400                                       UNKNOWN_EQUIPMENT_DISPOSITION            Equipment disposition is not recognized.
+
+  400                                       TERMINATION_REASON_REQUIRED              Reason code missing.
+
+  403                                       ROLE_NOT_AUTHORIZED_FOR_TRIGGER          Actor role cannot use this trigger.
+
+  403                                       CUSTOMER_SELF_SERVICE_NOT_ENABLED        Customer self-service termination disabled.
+
+  409                                       ALREADY_TERMINATED                       Subscription is already terminal.
+
+  409                                       OPERATION_INTERRUPTION_FAILED            Existing in-flight operation did not cancel in time.
+
+  409                                       IDEMPOTENCY_KEY_REUSED                   Same idempotency key was reused with different
+                                                                                     request hash.
+
+
+
+ 9.2 Termination Preview
+ Preview is read-only. It validates request shape and asks dependent modules for estimated settlement and equipment
+ context. It does not start BPMN and does not change status.
+          POST /api/subscriptions/{subscription_id}/terminate/preview HTTP/1.1
+          Authorization: Bearer <jwt-or-service-token>
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "terminationTrigger": "CUSTOMER_REQUESTED",
+              "terminationReasonCode": "CUSTOMER_MOVED_NO_COVERAGE",
+              "equipmentDisposition": "PENDING_COLLECTION"
+          }
+
+ Response:
+          {
+              "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+              "coolingOffApplicable": false,
+              "daysActiveInContract": 920,
+              "contractMinimumTermMonths": 12,
+              "equipmentDisposition": "PENDING_COLLECTION",
+              "equipmentBindings": [
+                 {
+                    "equipmentRequirement": "GPON_ONT",
+                    "equipmentRef": "ont_01HZ_KAMAU"
+                 },
+                 {
+                    "equipmentRequirement": "ATA",
+                    "equipmentRef": "ata_01HZ_KAMAU"
+                 }
+              ],
+              "settlement": {
+                 "lineItems": [
+                    {
+                      "kind": "PRORATED_REFUND",
+                      "amount": -1200.00,
+
+
+
+SOPHIX BSS Design Documents                                                                                                         Page 6
+                         "currency": "KES",
+                         "description": "Refund for 11 unused days of July cycle"
+                        }
+                     ],
+                     "totals": {
+                        "net": -1200.00,
+                        "currency": "KES"
+                     },
+                     "refundAmount": 1200.00,
+                     "writeOffMarker": false
+                 }
+           }
+
+
+
+ 10. Worker Usage In This Operation
+ The worker list is a logical BPMN task list, not a deployment list.
+
+  Worker topic                                                         Why termination uses it
+
+  drools-decide                                                        Validate state, trigger, role, cooling-off, disposition, and routing flags.
+
+  sub-lm-cancel-in-flight-operation                                    Interrupt an existing in-flight operation when termination takes precedence.
+
+  sub-lm-put-pending-status                                            Move to PENDING_TERMINATION.
+
+  sub-lm-compute-cycle-window                                          Build billing context.
+
+  bil01-emit-intent                                                    Ask BIL-01 to compute TERMINATION_INTENT settlement.
+
+  ful-call-terminate                                                   Call FUL-05 to revoke service.
+
+  ful-call-release-homepass                                            Release HomePass slot through FUL-07 or approved stub.
+
+  sub-lm-put-master-fields                                             Write termination master fields and audit data.
+
+  sub-lm-commit-state                                                  Commit subscription to TERMINATED.
+
+  sub-lm-revert-to-prior                                               Compensation before terminal commit, if safe.
+
+  kafka-emit                                                           Emit termination success/rejected event.
+
+  notification-send                                                    Notify customer/admin, reliability-isolated.
+
+  subscription-operation-finalize                                      Mark operation terminal.
+
+
+
+
+ 11. Kafka Events
+ 11.1 SubscriptionTerminated
+ Topic:
+           sophix.subscription.subscription.terminated
+
+ Emitted after:
+
+   - FUL-05 revocation succeeds.
+
+   - HomePass release succeeds or approved stub succeeds.
+
+   - SUB-LM commits status to TERMINATED.
+
+ Sample:
+           {
+                 "eventType": "SubscriptionTerminated",
+                 "aggregateId": "sub_01HZ_KAMAU_FIBER",
+                 "timestamp": "2026-07-20T14:30:18Z",
+                 "payload": {
+                   "operatorCode": "WIK",
+                   "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+                   "customerId": "cust_01HZ_KAMAU",
+                   "homepassId": "hp_01HZ_KAREN_017",
+                   "operationId": "subop_01HZ_KAMAU_TERM",
+                   "terminationTrigger": "CUSTOMER_REQUESTED",
+                   "terminationReasonCode": "CUSTOMER_MOVED_NO_COVERAGE",
+                   "priorStatus": "ACTIVE",
+                   "newStatus": "TERMINATED",
+                   "terminatedAt": "2026-07-20T14:30:18Z",
+                   "coolingOffApplied": false,
+                   "equipmentDisposition": "PENDING_COLLECTION",
+                   "equipmentBindings": [
+                     {
+                       "equipmentRequirement": "GPON_ONT",
+
+
+SOPHIX BSS Design Documents                                                                                                                          Page 7
+                           "equipmentRef": "ont_01HZ_KAMAU"
+                       }
+                     ],
+                     "settlement": {
+                        "lineItems": [
+                           {
+                             "kind": "PRORATED_REFUND",
+                             "amount": -1200.00,
+                             "currency": "KES"
+                           }
+                        ],
+                        "totals": {
+                           "net": -1200.00,
+                           "currency": "KES"
+                        },
+                        "refundAmount": 1200.00,
+                        "writeOffMarker": false
+                     },
+                     "initiatingActorUserId": "cc-agent-wik-007",
+                     "initiatingActorRole": "CALL_CENTER"
+                 }
+             }
+
+ Consumers:
+
+   - NOT-01 for customer confirmation.
+
+   - OSR-RMA-01 EQP for pickup work order when disposition is PENDING_COLLECTION.
+
+   - BIL-04 for dunning loop closure when trigger is DUNNING_TERMINATION.
+
+   - CVM for churn analytics.
+
+   - EM-04 for reporting.
+
+ 11.2 SubscriptionTerminationRejected
+ Topic:
+             sophix.subscription.subscription.terminationrejected
+
+ Emitted after validation, billing, fulfillment, or interruption failure.
+
+
+ 12. Drools Package
+ Package pattern:
+             rules.subscription.terminate.<operator>
+
+ For WIK:
+             rules.subscription.terminate.wik
+
+ Required decisions:
+
+  Decision                                                                  Purpose
+
+  validate-preconditions                                                    Reject already terminated subscriptions and invalid state/operation context.
+
+  validate-trigger-role                                                     Trigger and actor role are compatible.
+
+  resolve-equipment-disposition                                             Chooses caller-supplied, default, dunning default, or write-off disposition.
+
+  compute-cooling-off                                                       Determines whether customer-requested termination is inside cooling-off
+                                                                            window.
+
+  compute-routing                                                           Determines churn-save and supervisor override routing.
+
+
+
+
+ 13. Auth
+ Rules:
+
+   - Resolve actor from token, not request body.
+
+   - Customer self-service requires operator config enabled.
+
+   - Dunning termination requires a BIL-04 service account.
+
+   - Contract-expired termination requires scheduler service account.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                            Page 8
+   - Admin termination requires SUBSCRIPTION_ADMIN.
+
+
+ 14. Infrastructure Recommendations
+ Termination does not need separate infrastructure from SUB-WF.
+
+ Deploy:
+
+  Artifact                                                          Where
+
+  Terminate endpoint/controller                                     SUB-WF API pods.
+
+  Termination config migration                                      Application DB migration pipeline.
+
+  Termination BPMN files                                            Camunda deployment pipeline.
+
+  Termination Drools packages                                       Drools/KIE deployment pipeline.
+
+  Termination worker usage                                          Worker pods/apps from worker DD.
+
+
+ Monitor:
+
+   - Termination request count by trigger.
+
+   - Termination failure count by rejection code.
+
+   - In-flight interruption failures.
+
+   - FUL-05 revocation failures.
+
+   - HomePass release failures/stub usage.
+
+   - Operations stuck in PENDING_TERMINATION.
+
+   - Outbox backlog for subscription.terminated.
+
+ Medium budget deployment recommendation:
+
+   - Run termination API inside existing SUB-WF API pods.
+
+   - Run termination workers inside the shared subscription worker deployment.
+
+   - Do not create a dedicated termination worker pod unless volume, security, or operational isolation requires it.
+
+   - Add alerts for terminal-state failures because manual recovery is harder after network revocation starts.
+
+
+ 15. AWS Deployment Recommendations
+ For AWS, deploy termination as part of the same subscription workflow stack:
+
+  Component                                                         AWS recommendation
+
+  SUB-WF API                                                        EKS deployment behind internal ALB/API gateway.
+
+  Worker apps                                                       EKS deployment with HPA based on Camunda external task lag and CPU.
+
+  Camunda                                                           EKS service using the approved foundation Camunda topology.
+
+  PostgreSQL                                                        RDS PostgreSQL or Aurora PostgreSQL with Multi-AZ.
+
+  Kafka                                                             MSK or approved Kafka platform.
+
+  Drools/KIE                                                        EKS service or artifact-driven rule executor.
+
+  Secrets                                                           AWS Secrets Manager or Parameter Store with IRSA.
+
+  Observability                                                     CloudWatch Container Insights plus application metrics for operation states and
+                                                                    worker topics.
+
+
+ AWS alarms:
+
+   - PENDING_TERMINATION older than SLA.
+
+   - FUL-05 failure spike.
+
+   - HomePass release failure spike.
+
+   - SubscriptionTerminationRejected spike.
+
+   - Outbox backlog for subscription.terminated.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 9
+ 16. Cross-DD Dependencies
+  DD/module                                                        Relationship
+
+  SUB-WF-FRAMEWORK-01                                              Operation rows, idempotency, interrupt behavior, Camunda start.
+
+  DD_SUB-WF-FRAMEWORK-01-WORKERS                                   Worker topic contracts.
+
+  DD_SUB-WF-TERMINATE-01-FLOW-WIK                                  WIK BPMN implementation.
+
+  SUB-LM-01                                                        Subscription state and termination master fields.
+
+  BIL-01                                                           Termination intent and settlement calculation.
+
+  BIL-04                                                           Calls DUNNING_TERMINATION.
+
+  FUL-05                                                           Network/service revocation.
+
+  FUL-07                                                           HomePass release.
+
+  OSR-RMA-01 EQP                                                   Equipment collection work order after event.
+
+  NOT-01                                                           Notifications.
+
+  Scheduler                                                        Calls CONTRACT_EXPIRED termination.
+
+
+
+
+ 17. Build Order
+ Detailed flow is in DD_SUB-WF-TERMINATE-01-DEV_IMPL_GUIDE-v1.0.md.
+
+ Recommended order:
+
+   1. Add subscription_termination_config migration and seed rows.
+
+   2. Ensure SUB-LM has termination master fields.
+
+   3. Add framework operation config for TERMINATE.
+
+   4. Implement terminate preview API.
+
+   5. Implement terminate trigger API.
+
+   6. Implement operation interrupt integration.
+
+   7. Implement Drools facts/decisions.
+
+   8. Deploy first BPMN, normally WIK.
+
+   9. Wire BIL-01 TERMINATION_INTENT.
+
+   10. Wire FUL-05 and HomePass release worker.
+
+   11. Wire outbox events and notification.
+
+   12. Wire OSR-RMA event consumer for equipment pickup.
+
+
+ 18. Test Checklist
+   - [ ] Termination rejects already TERMINATED subscriptions.
+
+   - [ ] Trigger role gating works for all four triggers.
+
+   - [ ] Customer self-service config is enforced.
+
+   - [ ] Equipment disposition defaulting works.
+
+   - [ ] Dunning equipment disposition/write-off behavior works.
+
+   - [ ] Cooling-off calculation is correct.
+
+   - [ ] Preview does not mutate state.
+
+   - [ ] Termination interrupts in-flight operations.
+
+   - [ ] Success commits subscription to TERMINATED.
+
+   - [ ] Success writes termination master fields.
+
+   - [ ] Success emits SubscriptionTerminated.
+
+   - [ ] Failure emits SubscriptionTerminationRejected.
+
+SOPHIX BSS Design Documents                                                                                                          Page 10
+   - [ ] Notification failure does not roll back successful termination.
+
+
+
+
+SOPHIX BSS Design Documents                                                Page 11
+

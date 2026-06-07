@@ -1,0 +1,780 @@
+ DD_MED-01 - Usage Mediation
+ Version: 1.0 Status: Draft for review Bundle: 05_billing Audience: billing developers, integration developers, usage rating
+ developers, QA, NOC Related DDs:
+
+   - DD_PLM-CFG-07 - Voice Tariff Catalog
+
+   - DD_RAT-01 - Usage Rating
+
+   - DD_BIL-05 - Wallet and Topup
+
+   - DD_BIL-01 - Charging Engine Core
+
+   - DD_REP-01 - Reporting Data Mart and Dashboard API
+
+   - FE-APP-01 - BSS Backoffice Web App
+
+ MVP simplification baseline: MED-01 is offline/batch mediation only in this design. Implement after payment/wallet basics are
+ stable. Do not introduce online charging mediation or real-time session control in the first release.
+
+
+
+ 1. Purpose
+ MED-01 defines how SOPHIX receives raw usage records from external usage platforms, normalizes them into a common
+ usage format, deduplicates them, quarantines invalid records, reconciles source totals, and emits trusted mediated usage
+ records for rating.
+
+ The first required use case is voice CDR mediation from VoipSwitch or another SIP/voice platform.
+
+ MED-01 is the step before usage rating:
+             Voice platform CDR
+               -> MED-01 normalize/deduplicate/quarantine
+               -> RAT-01 rate and charge
+               -> BIL-05 wallet debit or BIL-01/BIL-02 postpaid charge
+
+
+
+
+ 2. Ownership Boundary
+  Concern                                                          Owner
+
+  Source CDR import from VoipSwitch/API/SFTP/manual file           MED-01
+
+  Raw CDR storage and audit                                        MED-01
+
+  CDR normalization to canonical fields                            MED-01
+
+  Duplicate detection                                              MED-01
+
+  Quarantine and repair of invalid records                         MED-01
+
+  Source-file/API reconciliation totals                            MED-01
+
+  Tariff plans, zones, prefix tables, rates                        PLM-CFG-07
+
+  Money calculation, allowance consumption, charge creation        RAT-01
+
+  Wallet debit for PREPAID rated usage                             BIL-05 via RAT-01
+
+  POSTPAID usage charge/invoice integration                        BIL-01/BIL-02 via RAT-01
+
+
+ Rule: MED-01 never calculates price and never debits money. A mediated record can be chargeable, zero-rated
+ candidate, or rating-required, but monetary rating belongs to RAT-01.
+
+
+
+ 3. Scope
+ 3.1 In Scope
+   - Usage source registry.
+
+   - Raw CDR batch import.
+
+   - Raw CDR row storage.
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 1
+   - Canonical mediated usage record creation.
+
+   - CDR identity and idempotency hash.
+
+   - Duplicate handling.
+
+   - Basic technical validation:
+
+   - required fields;
+
+   - valid timestamps;
+
+   - valid duration;
+
+   - normalized calling/called numbers;
+
+   - resolvable subscription/customer/service where possible.
+
+   - Quarantine queue for invalid/unresolved records.
+
+   - Manual repair and replay.
+
+   - Reconciliation of source batch counts and durations against imported/mediated/quarantined counts.
+
+   - Kafka events for mediated usage and quarantine.
+
+ 3.2 Out Of Scope
+   - Tariff lookup and monetary calculation.
+
+   - Wallet debit.
+
+   - Invoice line creation.
+
+   - Tax calculation.
+
+   - Customer notification.
+
+   - Voice service provisioning.
+
+   - Vendor-specific switch configuration.
+
+
+
+ 4. High Level Architecture
+           flowchart LR
+             SRC["VoipSwitch / SIP platform"]
+             IMP["MED Importer<br/>SFTP/API/manual"]
+             RAW["Raw CDR Store"]
+             NORM["Normalizer"]
+             DEDUP["Dedup + validation"]
+             MED["Mediated Usage"]
+             QUAR["Quarantine"]
+             RAT["RAT-01 Usage Rating"]
+             BO["Backoffice Ops"]
+
+             SRC --> IMP --> RAW --> NORM --> DEDUP
+             DEDUP --> MED --> RAT
+             DEDUP --> QUAR --> BO
+             BO --> NORM
+
+
+
+
+ 5. Core Concepts
+ 5.1 Usage Source
+ A usage source is an external platform that produces usage records.
+
+ Examples:
+
+   - VOIPSWITCH_KE
+
+   - SIP_PLATFORM_NRB
+
+   - future TV pay-per-view usage source
+
+   - future data usage platform
+
+
+SOPHIX BSS Design Documents                                                                              Page 2
+ 5.2 Raw CDR
+ A raw CDR is the original provider/source record stored with minimal transformation.
+
+ Raw CDRs must be retained for audit and reprocessing.
+
+ 5.3 Mediated Usage Record
+ A mediated usage record is the canonical cleaned record consumed by RAT-01.
+
+ Example:
+           {
+               "mediatedUsageId": "med-20260602-000001",
+               "operatorCode": "WIK",
+               "usageType": "VOICE_CALL",
+               "subscriptionId": "SUB-700045",
+               "serviceRef": "svc_VOIP_STD",
+               "callingNumberNormalized": "+254700111222",
+               "calledNumberNormalized": "+254711222333",
+               "callStartedAt": "2026-06-02T10:15:00+03:00",
+               "durationSeconds": 75,
+               "sourceRecordId": "VS-CDR-998877",
+               "mediationStatus": "READY_FOR_RATING"
+           }
+
+
+ 5.4 Quarantine
+ Quarantine is the operational queue for records that cannot safely be mediated or rated.
+
+ Examples:
+
+   - missing subscription mapping;
+
+   - invalid timestamp;
+
+   - negative duration;
+
+   - missing called number;
+
+   - duplicate conflict;
+
+   - unsupported usage type.
+
+
+
+ 6. Mediation Flow
+ 6.1 Batch Import Flow
+           sequenceDiagram
+             participant S as Usage Source
+             participant I as MED Importer
+             participant DB as MED DB
+             participant M as Normalizer
+             participant R as RAT-01
+
+               S->>I: CDR file/API page
+               I->>DB: Create raw usage batch
+               I->>DB: Store raw CDR rows
+               M->>DB: Load unprocessed raw CDR
+               M->>M: Validate, normalize, deduplicate
+               M->>DB: Insert mediated usage or quarantine
+               M->>R: Emit UsageMediated event
+
+
+ 6.2 Manual Repair Flow
+           flowchart TD
+             A["Backoffice opens quarantine"]
+             B["User corrects mapping or field"]
+             C["MED validates repair"]
+             D["Replay raw CDR"]
+             E{"Valid now?"}
+             F["Create mediated usage"]
+             G["Keep quarantined with new note"]
+
+               A --> B --> C --> D --> E
+               E -->|Yes| F
+               E -->|No| G
+
+
+SOPHIX BSS Design Documents                                                                 Page 3
+ 7. Business Rules
+  Rule ID                                    Rule                                                    Notes
+
+  R-MED-01                                   Every imported CDR must be stored as raw data           Prevents source data loss.
+                                             before normalization.
+
+  R-MED-02                                   Every raw CDR must have a deterministic dedupe          Source id if stable, otherwise normalized field hash.
+                                             hash.
+
+  R-MED-03                                   Duplicate exact records are ignored after first         No double rating.
+                                             successful mediation.
+
+  R-MED-04                                   Duplicate hash with conflicting payload is              Human review required.
+                                             quarantined as DUPLICATE_CONFLICT.
+
+  R-MED-05                                   Missing required fields are quarantined, not            Data quality traceability.
+                                             dropped.
+
+  R-MED-06                                   Records with unresolved subscription/customer are       RAT-01 needs a billable target.
+                                             quarantined.
+
+  R-MED-07                                   Zero-duration calls can be mediated only if source      Avoid false chargeable records.
+                                             disposition indicates answer or regulatory reason.
+
+  R-MED-08                                   Failed calls are not sent for rating unless product     Default no rating.
+                                             policy explicitly rates them.
+
+  R-MED-09                                   Number normalization must be deterministic and          Kenya first, future regions configurable.
+                                             operator-aware.
+
+  R-MED-10                                   Source batch reconciliation must compare source         Operational control.
+                                             count/duration to stored/mediated/quarantined
+                                             totals.
+
+  R-MED-11                                   Manual repair must preserve original raw payload        Audit.
+                                             and record user id.
+
+  R-MED-12                                   Mediated records are immutable after emitted.           Avoid silent billing changes.
+                                             Corrections create adjustment/reversal flow in
+                                             RAT-01.
+
+
+
+
+ 8. Data Model
+ 8.1 usage_source
+ Stores external systems that provide usage records.
+
+ Use this table when onboarding VoipSwitch or another usage platform.
+
+  Column                         Type                                    Purpose                                   Sample
+
+  usage_source_id                UUID PK                                 Internal source id.                       usrc-001
+
+  operator_code                  TEXT                                    Operator/tenant.                          WIK
+
+  source_code                    TEXT                                    Stable source code.                       VOIPSWITCH_KE
+
+  source_type                    TEXT                                    VOIPSWITCH, SIP_SWITCH,                   VOIPSWITCH
+                                                                         DATA_PLATFORM, TV_PLATFORM.
+
+  ingestion_mode                 TEXT                                    SFTP_FILE, API_PULL, API_PUSH,            SFTP_FILE
+                                                                         MANUAL_UPLOAD.
+
+  status                         TEXT                                    ACTIVE, SUSPENDED, RETIRED.               ACTIVE
+
+  timezone                       TEXT                                    Source timestamp timezone if not          Africa/Nairobi
+                                                                         explicit.
+
+  config_json                    JSONB                                   Non-secret source config.                 {"filePattern":"cdr_*.csv"}
+
+  secret_ref                     TEXT NULL                               Secret manager reference.                 secret/med/voipswitch-ke
+
+  created_at                     TIMESTAMP                               Creation timestamp.                       2026-05-31T10:00:00Z
+
+  updated_at                     TIMESTAMP                               Last update timestamp.                    2026-05-31T10:00:00Z
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, source_code).
+
+   - (operator_code, status).
+
+SOPHIX BSS Design Documents                                                                                                                       Page 4
+ 8.2 raw_usage_batch
+ Stores one imported file, API page group, or manual upload.
+
+ Use this table to reconcile source totals and track import status.
+
+  Column                           Type                               Purpose                                  Sample
+
+  batch_id                         UUID PK                            Batch id.                                rub-001
+
+  usage_source_id                  UUID FK                            Source system.                           usrc-001
+
+  operator_code                    TEXT                               Operator/tenant.                         WIK
+
+  source_batch_ref                 TEXT                               File name, API page window, or           cdr_20260602_1000.csv
+                                                                      upload id.
+
+  period_start                     TIMESTAMP                          Source period start.                     2026-06-02T10:00:00+03:00
+
+  period_end                       TIMESTAMP                          Source period end.                       2026-06-02T10:59:59+03:00
+
+  status                           TEXT                               RECEIVED, IMPORTING, IMPORTED,           IMPORTED
+                                                                      PARTIAL, FAILED, RECONCILED.
+
+  source_record_count              INTEGER NULL                       Count declared by source.                10000
+
+  source_total_duration_second     BIGINT NULL                        Duration declared by source.             450000
+  s
+
+  stored_record_count              INTEGER                            Raw rows stored.                         10000
+
+  mediated_record_count            INTEGER                            Rows mediated.                           9950
+
+  quarantine_record_count          INTEGER                            Rows quarantined.                        50
+
+  file_checksum                    TEXT NULL                          File checksum for duplicate import       sha256:abc...
+                                                                      detection.
+
+  created_at                       TIMESTAMP                          Import timestamp.                        2026-06-02T11:05:00Z
+
+  updated_at                       TIMESTAMP                          Last update timestamp.                   2026-06-02T11:10:00Z
+
+
+ Recommended indexes:
+
+   - Unique (usage_source_id, source_batch_ref).
+
+   - (operator_code, status, period_start).
+
+ 8.3 raw_usage_record
+ Stores one raw CDR row.
+
+ Use this table for audit, replay, and exact duplicate detection.
+
+  Column                           Type                               Purpose                                  Sample
+
+  raw_record_id                    UUID PK                            Internal raw record id.                  rur-001
+
+  batch_id                         UUID FK                            Import batch.                            rub-001
+
+  usage_source_id                  UUID FK                            Source system.                           usrc-001
+
+  operator_code                    TEXT                               Operator/tenant.                         WIK
+
+  source_record_id                 TEXT NULL                          Source CDR id if present.                VS-CDR-998877
+
+  source_sequence_no               BIGINT NULL                        Source/file row number.                  42
+
+  record_hash                      TEXT                               Deterministic hash of identity fields.   sha256:def...
+
+  raw_payload_json                 JSONB                              Original row as parsed.                  {"caller":"0700111222"}
+
+  processing_status                TEXT                               NEW, MEDIATED, DUPLICATE,                MEDIATED
+                                                                      QUARANTINED, FAILED.
+
+  created_at                       TIMESTAMP                          Stored timestamp.                        2026-06-02T11:05:01Z
+
+  processed_at                     TIMESTAMP NULL                     Processing timestamp.                    2026-06-02T11:05:05Z
+
+
+ Recommended indexes:
+
+   - Unique (usage_source_id, record_hash).
+
+   - (batch_id, processing_status).
+
+   - (operator_code, processing_status, created_at).
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 5
+ 8.4 mediated_usage_record
+ Stores one normalized usage record ready for rating.
+
+ Use this table as the source for RAT-01.
+
+  Column                           Type                 Purpose                            Sample
+
+  mediated_usage_id                UUID PK              Mediated record id.                med-001
+
+  raw_record_id                    UUID FK              Raw source record.                 rur-001
+
+  operator_code                    TEXT                 Operator/tenant.                   WIK
+
+  usage_type                       TEXT                 VOICE_CALL, future DATA_USAGE,     VOICE_CALL
+                                                        TV_EVENT.
+
+  subscription_id                  TEXT                 Resolved subscription.             SUB-700045
+
+  customer_id                      TEXT                 Resolved customer.                 CUS-100045
+
+  account_id                       TEXT NULL            Billing account if available.      ACC-900045
+
+  service_ref                      TEXT                 PLM service.                       svc_VOIP_STD
+
+  package_ref                      TEXT NULL            Package active at call time.       pkg_INET_VOICE_STD
+
+  calling_number_normalized        TEXT NULL            Caller number in canonical form.   +254700111222
+
+  called_number_normalized         TEXT NULL            Called number in canonical form.   +254711222333
+
+  call_direction                   TEXT                 OUTBOUND, INBOUND, FORWARDED.      OUTBOUND
+
+  call_started_at                  TIMESTAMP            Call start time.                   2026-06-02T10:15:00+03:00
+
+  call_ended_at                    TIMESTAMP NULL       Call end time.                     2026-06-02T10:16:15+03:00
+
+  duration_seconds                 INTEGER              Actual duration from source.       75
+
+  disposition                      TEXT                 Source-normalized call result.     ANSWERED
+
+  mediation_status                 TEXT                 READY_FOR_RATING,                  READY_FOR_RATING
+                                                        SENT_TO_RATING, RATED,
+                                                        RATING_FAILED.
+
+  rated_usage_id                   TEXT NULL            RAT-01 output id when rated.       rated-001
+
+  created_at                       TIMESTAMP            Creation timestamp.                2026-06-02T11:05:05Z
+
+
+ Recommended indexes:
+
+   - Unique (raw_record_id).
+
+   - (operator_code, mediation_status, created_at).
+
+   - (subscription_id, call_started_at).
+
+ 8.5 mediation_quarantine
+ Stores raw records that cannot be safely mediated.
+
+ Use this table for operations repair.
+
+  Column                           Type                 Purpose                            Sample
+
+  quarantine_id                    UUID PK              Quarantine id.                     mq-001
+
+  raw_record_id                    UUID FK              Raw record.                        rur-002
+
+  operator_code                    TEXT                 Operator/tenant.                   WIK
+
+  reason_code                      TEXT                 Why quarantined.                   SUBSCRIPTION_NOT_FOUND
+
+  severity                         TEXT                 LOW, MEDIUM, HIGH.                 HIGH
+
+  status                           TEXT                 OPEN, IN_REVIEW, RESOLVED,         OPEN
+                                                        IGNORED.
+
+  repair_payload_json              JSONB NULL           User-provided correction.          {"subscriptionId":"SUB-70004
+                                                                                           5"}
+
+  assigned_to_user_id              TEXT NULL            Backoffice assignee.               usr-billing-001
+
+  resolution_notes                 TEXT NULL            Repair/ignore notes.               Mapped old DID to
+                                                                                           subscription
+
+  created_at                       TIMESTAMP            Creation timestamp.                2026-06-02T11:05:10Z
+
+  resolved_at                      TIMESTAMP NULL       Resolution timestamp.              NULL
+
+
+
+
+SOPHIX BSS Design Documents                                                                                         Page 6
+ Recommended indexes:
+
+   - (status, reason_code, created_at).
+
+   - (operator_code, severity, status).
+
+ 8.6 mediation_reconciliation_run
+ Stores reconciliation for a source batch or time window.
+
+ Use this table to verify that imported/mediated/quarantined records match source totals.
+
+  Column                          Type                            Purpose                       Sample
+
+  run_id                          UUID PK                         Run id.                       mrr-001
+
+  operator_code                   TEXT                            Operator/tenant.              WIK
+
+  usage_source_id                 UUID FK                         Source reconciled.            usrc-001
+
+  batch_id                        UUID NULL                       Batch if batch-level.         rub-001
+
+  period_start                    TIMESTAMP                       Reconciliation start.         2026-06-02T10:00:00+03:00
+
+  period_end                      TIMESTAMP                       Reconciliation end.           2026-06-02T10:59:59+03:00
+
+  status                          TEXT                            RUNNING, COMPLETED, FAILED,   COMPLETED
+                                                                  PARTIAL.
+
+  source_count                    INTEGER                         Count from source.            10000
+
+  stored_count                    INTEGER                         Raw rows stored.              10000
+
+  mediated_count                  INTEGER                         Mediated rows.                9950
+
+  quarantine_count                INTEGER                         Quarantined rows.             50
+
+  mismatch_count                  INTEGER                         Count of discrepancies.       0
+
+  started_at                      TIMESTAMP                       Run start.                    2026-06-02T11:20:00Z
+
+  completed_at                    TIMESTAMP NULL                  Run completion.               2026-06-02T11:21:00Z
+
+
+ Recommended indexes:
+
+   - (operator_code, status, period_start).
+
+   - (usage_source_id, period_start).
+
+
+
+ 9. APIs
+ 9.1 Source And Batch APIs
+           GET /api/usage-mediation/sources
+           POST /api/usage-mediation/sources
+           GET /api/usage-mediation/batches
+           GET /api/usage-mediation/batches/{batch_id}
+           POST /api/usage-mediation/batches/manual-upload
+           POST /api/usage-mediation/batches/{batch_id}/reprocess
+
+
+ 9.2 Mediated Usage APIs
+           GET /api/usage-mediation/records?status=READY_FOR_RATING
+           GET /api/usage-mediation/records/{mediated_usage_id}
+           POST /api/usage-mediation/records/{mediated_usage_id}/mark-sent-to-rating
+           POST /api/usage-mediation/records/{mediated_usage_id}/mark-rated
+
+
+ 9.3 Quarantine APIs
+           GET /api/usage-mediation/quarantine?status=OPEN
+           GET /api/usage-mediation/quarantine/{quarantine_id}
+           POST /api/usage-mediation/quarantine/{quarantine_id}/repair-and-replay
+           POST /api/usage-mediation/quarantine/{quarantine_id}/ignore
+
+
+ 9.4 Reconciliation APIs
+           POST /api/usage-mediation/reconciliation-runs
+           GET /api/usage-mediation/reconciliation-runs
+           GET /api/usage-mediation/reconciliation-runs/{run_id}
+
+
+
+
+SOPHIX BSS Design Documents                                                                                            Page 7
+ 10. Events
+  Event                                        Topic                                           When emitted
+
+  RawUsageBatchImported                        sophix.usage.raw-batch.imported                 Batch import completes.
+
+  UsageMediated                                sophix.usage.mediated                           One canonical usage record is ready for rating.
+
+  UsageQuarantined                             sophix.usage.quarantined                        Raw CDR cannot be mediated.
+
+  UsageMediationReplayed                       sophix.usage.mediation.replayed                 Quarantined record repaired and replayed.
+
+  UsageMediationReconciliationCompleted        sophix.usage.mediation.reconciliation.          Source batch/window reconciled.
+                                               completed
+
+
+ Sample UsageMediated:
+             {
+                 "eventType": "UsageMediated",
+                 "operatorCode": "WIK",
+                 "mediatedUsageId": "med-20260602-000001",
+                 "usageType": "VOICE_CALL",
+                 "subscriptionId": "SUB-700045",
+                 "customerId": "CUS-100045",
+                 "serviceRef": "svc_VOIP_STD",
+                 "packageRef": "pkg_INET_VOICE_STD",
+                 "calledNumberNormalized": "+254711222333",
+                 "callDirection": "OUTBOUND",
+                 "callStartedAt": "2026-06-02T10:15:00+03:00",
+                 "durationSeconds": 75
+             }
+
+
+
+
+ 11. Frontend Usage
+ FE-APP-01 Backoffice uses MED-01 for:
+
+   - Usage source configuration.
+
+   - Batch import dashboard.
+
+   - Raw batch detail and import counts.
+
+   - Quarantine queue.
+
+   - Repair and replay actions.
+
+   - Reconciliation run status.
+
+   - Deep link from customer/subscription to mediated usage history.
+
+ Self-care should not read MED-01 directly. Customer-visible usage history should come from RAT-01 or a reporting/read API
+ after records are rated and safe to display.
+
+
+
+ 12. Infra Recommendation
+ 12.1 Medium Budget Deployment
+  Component                                                        Recommendation
+
+  API pods                                                         2 pods, 1 vCPU, 1.5 GB RAM each.
+
+  Import worker                                                    1 worker, 1 vCPU, 2 GB RAM.
+
+  Mediation worker                                                 1-2 workers, 2 vCPU, 4 GB RAM each for CDR bursts.
+
+  DB                                                               Billing PostgreSQL schema usage_med; partition raw and mediated records by
+                                                                   month.
+
+  Object storage                                                   Store original files in local object storage/S3-compatible bucket.
+
+  Queue/Kafka                                                      Use Kafka or queue for batch import and mediation jobs.
+
+
+
+ 12.2 Recommended Partitions
+ Partition monthly:
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 8
+   - raw_usage_record
+
+   - mediated_usage_record
+
+   - mediation_quarantine
+
+ Batch and source tables do not need partitioning at launch.
+
+ 12.3 OS Recommendation
+ Use Ubuntu Server 24.04 LTS for VPS deployments or hardened Debian/Ubuntu slim base images for containers.
+
+ Workers should run close to the database and object storage. SFTP/API pull jobs should run from private network where
+ possible.
+
+
+
+ 13. AWS Deployment Recommendation
+  AWS component                                                 Usage
+
+  ECS/EKS                                                       Run mediation API and workers.
+
+  RDS PostgreSQL                                                Raw, mediated, quarantine, reconciliation tables.
+
+  S3 with KMS                                                   Store original CDR files.
+
+  MSK or managed Kafka equivalent                               Usage mediated/quarantine events.
+
+  Secrets Manager                                               SFTP/API credentials for source platforms.
+
+  CloudWatch                                                    Import failures, worker lag, quarantine rate alarms.
+
+
+ Required alarms:
+
+   - Source batch not received within expected window.
+
+   - Quarantine rate above threshold.
+
+   - Mediation worker backlog growing.
+
+   - Duplicate conflict spike.
+
+   - Reconciliation mismatch count above threshold.
+
+
+
+ 14. Testing Requirements
+ 14.1 Unit Tests
+   - Parse VoipSwitch CDR row.
+
+   - Normalize local Kenya MSISDN to E.164.
+
+   - Build deterministic record hash.
+
+   - Reject missing called number.
+
+   - Reject negative duration.
+
+   - Quarantine unresolved subscription.
+
+   - Exact duplicate does not create second mediated record.
+
+   - Duplicate conflict creates quarantine.
+
+ 14.2 Integration Tests
+   - Import file creates batch and raw records.
+
+   - Mediation worker creates mediated records.
+
+   - UsageMediated event is emitted.
+
+   - Quarantine repair and replay creates mediated record.
+
+   - Batch reconciliation totals match imported rows.
+
+
+SOPHIX BSS Design Documents                                                                                              Page 9
+ 14.3 End To End Tests With RAT-01
+   - Raw answered voice CDR becomes mediated usage and is rated by RAT-01.
+
+   - Failed call is not sent to rating by default.
+
+   - Unknown subscription stays quarantined until repaired.
+
+   - Duplicate CDR is not rated twice.
+
+
+
+ 15. Definition Of Done
+ MED-01 is complete when:
+
+   - Usage source configuration exists.
+
+   - Raw CDR batches can be imported from at least one source mode.
+
+   - Raw CDR rows are stored before processing.
+
+   - Normalization creates canonical mediated usage records.
+
+   - Dedupe prevents double mediation.
+
+   - Invalid records go to quarantine.
+
+   - Repair and replay works.
+
+   - UsageMediated events are consumed by RAT-01.
+
+   - Reconciliation compares source, stored, mediated, and quarantined totals.
+
+   - Backoffice can inspect batches and quarantine.
+
+
+
+
+SOPHIX BSS Design Documents                                                      Page 10
+

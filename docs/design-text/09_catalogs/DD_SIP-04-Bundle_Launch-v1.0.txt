@@ -1,0 +1,719 @@
+ DD_SIP-04 - Bundle Launch
+ Version: 1.0 Status: Draft for review Bundle: 09_catalogs Audience: product catalog developers, commercial developers,
+ subscription developers, billing developers, frontend developers, QA Related DDs:
+
+   - DD_SIP-01 - Package Management
+
+   - DD_PLM-CFG-01 - Service Catalog
+
+   - DD_PLM-CFG-04 - Discount Catalog
+
+   - DD_SIP-03 - Discount Assignment
+
+   - DD_SIP-05 - Promotional Campaigns
+
+   - DD_SUB-WF-MIGRATION-01 - Subscription Migration
+
+   - DD_SUB-WF-UPGRADE-01 - Subscription Upgrade
+
+   - DD_SUB-WF-DOWNGRADE-01 - Subscription Downgrade
+
+   - DD_BIL-01 - Charging Engine Core
+
+   - DD_FUL-02 - Order Capture
+
+   - DD_EM-CFG-04 - Approval Workflow Catalog
+
+   - FOUNDATION_DROOLS - Rules Engine Foundation
+
+   - FE-APP-01 - BSS Backoffice Web App
+
+   - FE-APP-02 - Outdoor Sales Franchise App
+
+
+
+ 1. Purpose
+ SIP-04 defines how SOPHIX launches commercial bundles and controls bundle-to-bundle migration paths.
+
+ A bundle is a commercial offer made of one or more existing package references, optional one-off charges, optional discount
+ assignment rules, and channel/region/franchise availability. Examples:
+
+   - Fiber Internet + IPTV starter bundle;
+
+   - Internet + Voice bundle for residential customers;
+
+   - franchise acquisition bundle with free installation discount;
+
+   - business bundle with static IP, higher SLA, and recurring add-on;
+
+   - migration bundle replacing an older offer with a newer commercial offer.
+
+ SIP-04 does not define low-level services. Services are owned by PLM-CFG-01. Packages are owned by SIP-01. Discounts
+ are owned by PLM-CFG-04/SIP-03. SIP-04 coordinates these catalog items into a launchable commercial bundle and
+ publishes rules that order capture, sales, subscription workflows, and billing can consume.
+
+
+
+ 2. Ownership Boundary
+  Concern                                                                Owner
+
+  Service definition                                                     PLM-CFG-01
+
+  Package definition and package versions                                SIP-01
+
+  Bundle launch, availability, commercial composition, migration rules   SIP-04
+
+  Discount definition                                                    PLM-CFG-04
+
+  Discount assignment when bundle is ordered                             SIP-03
+
+  Promotional campaign governance                                        SIP-05
+
+  Configurable launch approval process                                   EM-CFG-04
+
+  Customer order capture                                                 FUL-02
+
+  Active subscription migration/upgrade/downgrade execution              SUB workflows
+
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 1
+  Concern                                                                          Owner
+
+  Billing-time charge/discount calculation                                         BIL-01 / DIS-OP-01
+
+  Configurable launch/migration eligibility decisions                              Drools rules engine where policy is operator-variable
+
+
+ Rule: SIP-04 publishes bundle catalog and migration rules. It must not directly change existing subscriptions or create
+ invoices. SUB/FUL/BIL modules execute customer-facing operations using SIP-04 rules.
+
+ Approval rule: SIP-04 does not define approval steps locally. Launch approval should call EM-CFG-04 for
+ BUNDLE_LAUNCH_APPROVAL or similar action codes. Camunda is used only when the selected EM-CFG-04 policy is
+ BPMN-backed.
+
+
+
+ 3. When To Use This DD
+ Use SIP-04 when:
+
+   - product team needs to launch a multi-package commercial offer;
+
+   - sales team needs one selectable offer made of several packages;
+
+   - existing customers need migration from old bundle to new bundle;
+
+   - bundle availability differs by franchise, region, technology, channel, or customer segment;
+
+   - launch requires pre-checks before becoming sellable.
+
+ Do not use SIP-04 for:
+
+  Scenario                                                                         Use
+
+  Creating a single package and its price/version                                  SIP-01
+
+  Creating a discount definition                                                   PLM-CFG-04
+
+  Assigning a discount to a customer/order                                         SIP-03
+
+  Running a promotion with dates, cohorts, and channels                            SIP-05
+
+  Moving one customer's subscription                                               SUB-WF-MIGRATION/UPGRADE/DOWNGRADE
+
+
+
+
+ 4. High Level Flow
+             flowchart TD
+               A["Product manager drafts bundle"]
+               B["Select package components"]
+               C["Attach optional discounts/charges"]
+               D["Configure availability and channels"]
+               E["Validate package, price, tech, franchise, billing rules"]
+               F{"Approval required?"}
+               G["Approval review"]
+               H["Schedule launch"]
+               I["Activate bundle"]
+               J["Publish BundleLaunched event"]
+               K["Sales/FUL/SUB/BIL caches refresh"]
+               L["Customers order or migrate"]
+
+               A --> B --> C --> D --> E --> F
+               F -->|Yes| G --> H
+               F -->|No| H
+               H --> I --> J --> K --> L
+
+
+
+
+ 5. Bundle Lifecycle
+  Status                                                Meaning                                                Allowed next statuses
+
+  DRAFT                                                 Bundle is being prepared. Not visible to sales/order   READY_FOR_REVIEW, CANCELLED
+                                                        capture.
+
+  READY_FOR_REVIEW                                      Validation passed and waiting for approval/release.    APPROVED, DRAFT, REJECTED
+
+  APPROVED                                              Launch approved but not sellable until launch date.    ACTIVE, CANCELLED
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 2
+  Status                                        Meaning                                               Allowed next statuses
+
+  ACTIVE                                        Bundle can be selected by allowed                     SUSPENDED, RETIRED
+                                                channels/regions.
+
+  SUSPENDED                                     Temporarily hidden for new orders/migrations.         ACTIVE, RETIRED
+                                                Existing subscriptions unaffected.
+
+  RETIRED                                       No new sales/migrations. Kept for history.            none
+
+  REJECTED                                      Review rejected.                                      DRAFT
+
+  CANCELLED                                     Launch cancelled before activation.                   none
+
+
+ Existing customers do not automatically move when a bundle is retired. Migration requires explicit SUB workflow execution.
+
+
+
+ 6. Tables
+ 6.1 commercial_bundle
+ Stores the bundle master record.
+
+ Use this table when product/commercial teams create a named offer that combines packages and optional commercial rules.
+
+  Column                            Type                                   Purpose                                 Sample
+
+  bundle_id                         UUID PK                                Bundle id.                              bun-001
+
+  operator_code                     TEXT                                   Operator/tenant.                        WIK
+
+  bundle_code                       TEXT                                   Stable unique code.                     FIBER_TV_STARTER
+
+  display_name                      TEXT                                   Customer/agent visible name.            Fiber + TV Starter
+
+  description                       TEXT NULL                              Internal/customer description.          100M fiber with starter IPTV
+                                                                                                                   package.
+
+  status                            TEXT                                   Lifecycle status.                       ACTIVE
+
+  bundle_type                       TEXT                                   ACQUISITION, RETENTION,                 ACQUISITION
+                                                                           MIGRATION, BUSINESS, STAFF,
+                                                                           GENERAL.
+
+  currency_code                     TEXT                                   Pricing currency.                       KES
+
+  launch_date                       DATE                                   First sellable date.                    2026-07-01
+
+  retire_date                       DATE NULL                              Planned retirement.                     2026-12-31
+
+  created_by_user_id                TEXT                                   Creator.                                usr-product-001
+
+  created_at                        TIMESTAMP                              Creation timestamp.                     2026-06-10T09:00:00Z
+
+  updated_at                        TIMESTAMP                              Last update.                            2026-06-10T09:10:00Z
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, bundle_code).
+
+   - (operator_code, status, launch_date).
+
+ 6.2 commercial_bundle_component
+ Stores packages included in a bundle.
+
+ Use this table to define what the customer receives when they buy the bundle. Components reference SIP-01 packages or
+ package versions.
+
+  Column                            Type                                   Purpose                                 Sample
+
+  component_id                      UUID PK                                Component id.                           bcomp-001
+
+  bundle_id                         UUID                                   Bundle id.                              bun-001
+
+  package_ref                       TEXT                                   SIP-01 package code/id.                 pkg-fiber-100m
+
+  package_version_id                TEXT NULL                              Optional pinned version.                pkv-100m-202607
+
+  component_role                    TEXT                                   PRIMARY, ADDON, OPTIONAL,               PRIMARY
+                                                                           PROMOTIONAL.
+
+  quantity                          INT                                    Quantity/units.                         1
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                               Page 3
+  Column                          Type                             Purpose                         Sample
+
+  mandatory                       BOOLEAN                          Must be included in order.      true
+
+  display_order                   INT                              UI display order.               10
+
+  metadata_json                   JSONB                            Extra details.                  {"speed":"100M"}
+
+
+ Recommended indexes:
+
+   - (bundle_id, display_order).
+
+   - (package_ref).
+
+ 6.3 commercial_bundle_availability
+ Stores where and how a bundle can be sold.
+
+ Use this table for country/region/franchise/technology/channel gating.
+
+  Column                          Type                             Purpose                         Sample
+
+  availability_id                 UUID PK                          Availability id.                bav-001
+
+  bundle_id                       UUID                             Bundle id.                      bun-001
+
+  country_code                    TEXT                             Country.                        KE
+
+  region_code                     TEXT NULL                        Commercial/tech region.         NRB
+
+  franchise_id                    TEXT NULL                        Franchise scope.                fr_01J_NRB_002
+
+  tech_region_code                TEXT NULL                        Network technology region.      GPON-NRB-01
+
+  channel_code                    TEXT                             BACKOFFICE, SALES_APP,          SALES_APP
+                                                                   SELF_CARE, USSD, PARTNER_API.
+
+  status                          TEXT                             ACTIVE, SUSPENDED, RETIRED.     ACTIVE
+
+  effective_from                  DATE                             Start date.                     2026-07-01
+
+  effective_to                    DATE NULL                        End date.                       null
+
+
+ Recommended indexes:
+
+   - (bundle_id, status).
+
+   - (country_code, region_code, channel_code, status).
+
+   - (franchise_id, status).
+
+ 6.4 commercial_bundle_discount_rule
+ Stores optional discount assignment rules attached to a bundle.
+
+ Use this table when ordering the bundle should create a SIP-03 discount assignment, such as free installation or three
+ months discounted recurring charge.
+
+  Column                          Type                             Purpose                         Sample
+
+  discount_rule_id                UUID PK                          Rule id.                        bdr-001
+
+  bundle_id                       UUID                             Bundle id.                      bun-001
+
+  discount_code                   TEXT                             PLM-CFG-04 discount code.       ACQ_FREE_INSTALL
+
+  assignment_scope_type           TEXT                             Scope passed to SIP-03.         ORDER
+
+  validity_mode                   TEXT                             ORDER_ONLY, FIXED_WINDOW,       ORDER_ONLY
+                                                                   DURATION_FROM_ACTIVATION.
+
+  duration_days                   INT NULL                         Duration if dynamic.            90
+
+  priority                        INT                              Runtime priority.               100
+
+  stacking_group_code             TEXT NULL                        Stacking group.                 INSTALLATION
+
+  status                          TEXT                             ACTIVE, SUSPENDED, RETIRED.     ACTIVE
+
+
+ Recommended indexes:
+
+   - (bundle_id, status).
+
+   - (discount_code).
+
+
+SOPHIX BSS Design Documents                                                                                               Page 4
+ 6.5 commercial_bundle_migration_rule
+ Stores allowed bundle-to-bundle movement rules.
+
+ Use this table when existing customers may move from one bundle to another and the operator wants controlled
+ upgrade/downgrade/migration paths.
+
+  Column                            Type                         Purpose                          Sample
+
+  migration_rule_id                 UUID PK                      Rule id.                         bmr-001
+
+  operator_code                     TEXT                         Operator/tenant.                 WIK
+
+  source_bundle_id                  UUID                         Current bundle.                  bun-old-001
+
+  target_bundle_id                  UUID                         Target bundle.                   bun-001
+
+  movement_type                     TEXT                         UPGRADE, DOWNGRADE, MIGRATION,   MIGRATION
+                                                                 RETENTION, FORCED_RETIREMENT.
+
+  allowed_channel_json              JSONB                        Allowed channels.                ["BACKOFFICE","SELF_CARE"]
+
+  requires_customer_consent         BOOLEAN                      Customer must confirm.           true
+
+  requires_wo                       BOOLEAN                      Field work required.             false
+
+  fee_policy_code                   TEXT                         Fee policy.                      NO_FEE
+
+  effective_from                    DATE                         Start date.                      2026-07-01
+
+  effective_to                      DATE NULL                    End date.                        null
+
+  status                            TEXT                         ACTIVE, SUSPENDED, RETIRED.      ACTIVE
+
+
+ Recommended indexes:
+
+   - (source_bundle_id, target_bundle_id, status).
+
+   - (operator_code, movement_type, status).
+
+ 6.6 commercial_bundle_launch_check
+ Stores launch validation findings.
+
+ Use this table to make launch readiness auditable. Failed checks explain why a bundle cannot be activated.
+
+  Column                            Type                         Purpose                          Sample
+
+  check_id                          UUID PK                      Check id.                        blc-001
+
+  bundle_id                         UUID                         Bundle id.                       bun-001
+
+  check_code                        TEXT                         Validation check.                PACKAGE_ACTIVE
+
+  check_status                      TEXT                         PASS, WARN, FAIL.                PASS
+
+  message                           TEXT                         Human-readable result.           All package refs are active.
+
+  source_ref_json                   JSONB                        Supporting refs.                 {"packageRef":"pkg-fiber-100
+                                                                                                  m"}
+
+  checked_at                        TIMESTAMP                    Check timestamp.                 2026-06-10T09:15:00Z
+
+
+ Recommended indexes:
+
+   - (bundle_id, check_status).
+
+
+
+ 7. APIs
+ 7.1 Create Bundle
+            POST /api/commercial-bundles
+            Idempotency-Key: bundle-fiber-tv-starter-v1
+            Content-Type: application/json
+
+            {
+                "operatorCode": "WIK",
+                "bundleCode": "FIBER_TV_STARTER",
+                "displayName": "Fiber + TV Starter",
+                "bundleType": "ACQUISITION",
+                "currencyCode": "KES",
+                "launchDate": "2026-07-01",
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 5
+              "components": [
+                {"packageRef": "pkg-fiber-100m", "componentRole": "PRIMARY", "mandatory": true},
+                {"packageRef": "pkg-iptv-starter", "componentRole": "ADDON", "mandatory": true}
+              ]
+          }
+
+
+ 7.2 Validate Bundle
+          POST /api/commercial-bundles/{bundle_id}/validate
+
+ Validation checks package existence/status, version availability, technology compatibility, target regions/franchises, discount
+ refs, and billing event compatibility.
+
+ 7.3 Submit For Review
+          POST /api/commercial-bundles/{bundle_id}/submit-review
+
+ Allowed only when validation has no FAIL.
+
+ 7.4 Approve Launch
+          POST /api/commercial-bundles/{bundle_id}/approve
+          Content-Type: application/json
+
+          {
+              "decisionComment": "Approved for Nairobi sales launch."
+          }
+
+
+ 7.5 Activate Bundle
+          POST /api/commercial-bundles/{bundle_id}/activate
+
+ Activation can happen immediately on/after launch_date, or by scheduled worker.
+
+ 7.6 Get Available Bundles
+ Used by Backoffice, Sales App, Self-care, and order capture.
+          GET /api/commercial-bundles/available?operatorCode=WIK&channelCode=SALES_APP&franchiseId=fr_01J_NRB_002&homepassId=HP-001&
+
+ Response:
+          {
+              "bundles": [
+                {
+                  "bundleId": "bun-001",
+                  "bundleCode": "FIBER_TV_STARTER",
+                  "displayName": "Fiber + TV Starter",
+                  "components": [
+                     {"packageRef": "pkg-fiber-100m", "displayName": "Fiber 100M"},
+                     {"packageRef": "pkg-iptv-starter", "displayName": "IPTV Starter"}
+                  ],
+                  "discountRules": [
+                     {"discountCode": "ACQ_FREE_INSTALL", "assignmentScopeType": "ORDER"}
+                  ]
+                }
+              ]
+          }
+
+
+ 7.7 Preview Bundle Migration
+          POST /api/commercial-bundles/migration-preview
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "subscriptionId": "SUB-700045",
+              "sourceBundleCode": "OLD_FIBER_TV",
+              "targetBundleCode": "FIBER_TV_STARTER",
+              "channelCode": "BACKOFFICE"
+          }
+
+ Response:
+          {
+              "allowed": true,
+              "movementType": "MIGRATION",
+              "requiresCustomerConsent": true,
+              "requiresWo": false,
+              "feePolicyCode": "NO_FEE",
+
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 6
+                  "owningWorkflow": "SUB-WF-MIGRATION-01"
+              }
+
+ SIP-04 only previews and authorizes the path. SUB workflow executes the customer migration.
+
+
+
+ 8. Events
+  Event                                         Topic                                                 When emitted
+
+  CommercialBundleCreated                       sophix.commercial.bundle.created                      Bundle draft created.
+
+  CommercialBundleValidated                     sophix.commercial.bundle.validated                    Validation finished.
+
+  CommercialBundleApproved                      sophix.commercial.bundle.approved                     Launch approved.
+
+  CommercialBundleActivated                     sophix.commercial.bundle.activated                    Bundle becomes sellable.
+
+  CommercialBundleSuspended                     sophix.commercial.bundle.suspended                    Bundle hidden from new sales.
+
+  CommercialBundleRetired                       sophix.commercial.bundle.retired                      Bundle no longer sellable.
+
+  BundleMigrationRuleUpdated                    sophix.commercial.bundle.migrationrule                Migration rule changed.
+                                                updated
+
+
+
+
+ 9. Business Rules
+  Rule                                          Description                                           Reason
+
+  R-SIP-BUN-01                                  Bundle code must be unique per operator.              Stable external reference.
+
+  R-SIP-BUN-02                                  Bundle must have at least one mandatory package       Avoid empty offers.
+                                                component.
+
+  R-SIP-BUN-03                                  Package refs must exist and be active or              Prevent unsellable offers.
+                                                launch-ready.
+
+  R-SIP-BUN-04                                  Bundle availability must intersect component          Prevent sales in unsupported regions.
+                                                package availability.
+
+  R-SIP-BUN-05                                  Discount rules must reference active discount         Prevent invalid order discounts.
+                                                catalog items.
+
+  R-SIP-BUN-06                                  ACTIVE bundle cannot change component                 Preserve order/subscription history.
+                                                composition; create a new bundle/version instead.
+
+  R-SIP-BUN-07                                  Retiring a bundle blocks new orders but does not      Customer continuity.
+                                                cancel existing subscriptions.
+
+  R-SIP-BUN-08                                  Bundle migration must use an active migration rule.   Controlled movement.
+
+  R-SIP-BUN-09                                  Customer migration execution must be delegated to     Ownership boundary.
+                                                SUB workflow.
+
+  R-SIP-BUN-10                                  Sales/self-care can show only available bundles for   Avoid invalid promises.
+                                                channel, region, franchise, customer, and date.
+
+
+
+
+ 10. Rule Engine Guidance
+ Use Drools for bundle decisions that are operator-variable or combine several facts:
+
+  Rule file                                                                Purpose
+
+  bundle-launch-validation.drl                                             Launch readiness beyond fixed DB/API checks, such as minimum package mix
+                                                                           or channel restrictions.
+
+  bundle-availability.drl                                                  Dynamic availability by channel, franchise, region, customer segment, or date.
+
+  bundle-migration-eligibility.drl                                         Whether a customer can move from one bundle to another and which SUB
+                                                                           workflow owns execution.
+
+
+ Fixed checks such as bundle code uniqueness, package existence, and date parsing remain normal application validation.
+
+ Example rule:
+              rule "Self-care migration requires consent"
+              when
+                $m : BundleMigrationFact(channelCode == "SELF_CARE", movementType == "MIGRATION")
+                $out : BundleMigrationDecision()
+
+
+
+SOPHIX BSS Design Documents                                                                                                                       Page 7
+            then
+              $out.setRequiresCustomerConsent(true);
+              $out.setOwningWorkflow("SUB-WF-MIGRATION-01");
+            end
+
+
+
+
+ 11. Frontend Usage
+ 11.1 FE-APP-01 Backoffice
+ Backoffice must support:
+
+   - create/edit bundle drafts;
+
+   - add package components;
+
+   - configure availability and discount rules;
+
+   - run validation checks;
+
+   - submit/approve launch;
+
+   - activate/suspend/retire;
+
+   - manage migration rules;
+
+   - preview migration from a customer/subscription context.
+
+ 11.2 FE-APP-02 Sales App
+ Sales app uses read-only availability APIs:
+
+   - list available bundles for lead/HomePass/franchise/channel;
+
+   - show bundle components and total offer summary;
+
+   - show attached promotional terms;
+
+   - submit selected bundle into lead/order conversion payload.
+
+ Sales app must not define bundle rules locally. It displays bundle results returned by SIP-04/SIP-05 APIs.
+
+
+
+ 12. Infra Recommendation
+ For a medium budget deployment, run SIP-04 inside the existing commercial/catalog API deployment. Do not create a
+ separate pod initially.
+
+  Component                                                        Recommendation
+
+  API                                                              Existing catalog/commercial API pods expose /api/commercial-bundles.
+
+  DB                                                               Same PostgreSQL cluster/schema family as SIP package/commercial catalog.
+
+  Workers                                                          Existing worker pool handles scheduled activation, retirement, validation
+                                                                   refresh.
+
+  Events                                                           Kafka/MSK topics under sophix.commercial.bundle.*.
+
+  Cache                                                            Read model/cache for available bundles by channel/franchise/region.
+
+
+ AWS deployment: use existing ECS/EKS service and RDS cluster. Add alarms for activation worker failure, validation failures
+ on approved bundles, stale availability cache, and migration preview error rate.
+
+
+
+ 13. Testing Requirements
+ 13.1 Unit Tests
+   - Bundle code uniqueness.
+
+   - Package component validation.
+
+   - Availability intersection with package region/franchise.
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 8
+   - Discount rule validation.
+
+   - Lifecycle transition rules.
+
+   - Migration rule lookup.
+
+   - Drools availability and migration eligibility decisions.
+
+ 13.2 Integration Tests
+   - Create bundle using SIP-01 package refs.
+
+   - Validate and activate bundle.
+
+   - Available bundles API filters by channel/franchise/date.
+
+   - Bundle discount rules are passed to order/assignment flow.
+
+   - Migration preview returns SUB workflow owner.
+
+ 13.3 End To End Tests
+   - Product launches Fiber + TV bundle; sales app sees it for eligible HomePass.
+
+   - FUL order created with bundle ref and package components.
+
+   - Bundle retirement blocks new orders but existing subscription remains active.
+
+   - Customer migration from old bundle to new bundle uses SUB migration workflow.
+
+
+
+ 14. Definition Of Done
+   - Bundle tables and APIs exist.
+
+   - Bundle lifecycle is implemented and auditable.
+
+   - Bundle validation checks package, discount, availability, and billing compatibility.
+
+   - Available bundle API is usable by Backoffice, Sales App, order capture, and self-care.
+
+   - Migration rules exist and delegate execution to SUB workflows.
+
+   - Drools rule files exist for configurable launch, availability, and migration decisions where operator policy requires them.
+
+   - Events refresh downstream caches.
+
+   - Tests cover launch, availability, retirement, and migration preview.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 9
+

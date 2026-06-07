@@ -1,0 +1,319 @@
+ DEV_IMPL_GUIDE - DD: ILM-CFG-01 — Customer Service
+ Module
+ 1. Purpose
+ This guide explains how to implement DD_ILM-CFG-01-Customer_Service-v1.0.md as executable SOPHIX behavior.
+
+ Use it with:
+
+   - DD_ILM-CFG-01-Customer_Service-v1.0.md
+
+   - DD_SUB-WF-FRAMEWORK-01-Subscription_Workflow_Framework-v1.0.md when this DD participates in
+     subscription workflow operations.
+
+   - DD_SUB-WF-FRAMEWORK-01-WORKERS-v1.0.md when this DD references worker topics.
+
+
+ 2. Runtime Actors
+  Runtime component                                                 Responsibility
+
+  API pod / module service                                          Receives requests, validates, loads authoritative state, starts commands.
+
+  Owning module database                                            Stores tables/configuration owned by this DD.
+
+  Reference modules                                                 Provide data through approved APIs/client wrappers.
+
+  Camunda                                                           Runs BPMN process when this DD is workflow-driven.
+
+  Worker apps                                                       Execute logical worker topics.
+
+  Drools                                                            Evaluates packages when rules are declared.
+
+  Kafka/outbox                                                      Publishes success/failure and integration events.
+
+
+
+
+ 3. Before Implementation
+ Confirm these contracts from the DD:
+
+  Contract                                                          Value
+
+  Endpoint scan reference                                           DELETE /api/customer-accounts/{id}/flags/{flag_code}
+
+  BPMN/process key                                                  configured BPMN process
+
+  Drools package                                                    configured Drools package
+
+  Tables                                                            customer, customer_account, customer_account_flag,
+                                                                    customer_account_flag_catalog,
+                                                                    customer_account_notification_pref,
+                                                                    customer_account_status_history, customer_contact_method,
+                                                                    customer_interaction, customer_kyc_approval,
+                                                                    customer_kyc_document, customer_note,
+                                                                    customer_sub_status_catalog
+
+  Events                                                            SubscriptionCreated, SubscriptionPaused, SubscriptionResumed,
+                                                                    SubscriptionTerminated, WorkOrderCancelled, WorkOrderCreated,
+                                                                    WorkOrderFinalized, WorkOrderPhaseFinalized
+
+
+
+
+ 4. Execution Flow
+   1. Apply migrations and seed configuration/catalog rows.
+
+   2. Implement the module service/repository layer around the tables and invariants.
+
+   3. Implement public/internal APIs from the DD.
+
+   4. Implement rule evaluation if the DD defines Drools packages.
+
+   5. Implement event production/consumption through outbox where the DD defines events.
+
+   6. Add integration tests for table constraints, API validation, and event payloads.
+
+
+ 5. API And Command Handling
+
+SOPHIX BSS Design Documents                                                                                                                Page 1
+ Endpoints found in the DD:
+
+   - DELETE /api/customer-accounts/{id}/flags/{flag_code}
+
+   - DELETE /api/customer-accounts/{id}/subscription
+
+   - DELETE /api/customers/{id}
+
+   - GET /api/customer-account-flag-catalog?operatorCode=WIK
+
+   - GET /api/customer-accounts/search?key=flag&flagCode=NPD&value=true
+
+   - GET /api/customer-accounts/search?key=payment_account_number&value=<ref>
+
+   - GET /api/customer-accounts/{id}
+
+   - GET /api/customer-accounts/{id}/flags
+
+   - GET /api/customer-accounts/{id}/flags/{flag_code}
+
+   - GET /api/customer-accounts/{id}/notification-pref
+
+   - GET /api/customer-accounts?customerId=...
+
+   - GET /api/customers/search
+
+   - GET /api/customers/search?key=msisdn&value=%2B254712345678&limit=10
+
+   - GET /api/customers/{id}
+
+   - GET /api/customers/{id}/contact-methods
+
+   - GET /api/customers/{id}/interactions?limit=20
+
+   - GET /api/customers/{id}/notes?limit=20&kind=...
+
+   - GET /api/customers/{id}/notification-prefs
+
+   - GET /api/subscriptions/subs_01HX_JANE_TRIPLE_PLAY
+
+   - GET /api/subscriptions/{subscription_id}
+
+   - GET /api/work-orders/count?customerId=...&statusNotIn=COMPLETED,CANCELLED
+
+   - PATCH /api/contact-methods/{id}
+
+   - PATCH /api/customer-accounts/{id}
+
+   - PATCH /api/customers/cust_01HX3K9M2P5Q8R1T4W7Y0Z3N6
+
+   - PATCH /api/customers/{id}
+
+   - PATCH /api/notes/{id}/supersede
+
+   - POST /api/contact-methods/{id}/verify
+
+   - POST /api/customer-accounts
+
+   - POST /api/customers
+
+   - POST /api/customers/cust_01HX3K9M2P5Q8R1T4W7Y0Z3N6/kyc/final-approve
+
+   - POST /api/customers/cust_01HX3K9M2P5Q8R1T4W7Y0Z3N6/kyc/l1-approve
+
+   - POST /api/customers/{customer_id}/kyc/approvals
+
+   - POST /api/customers/{id}/contact-methods
+
+   - POST /api/customers/{id}/interactions
+
+   - POST /api/customers/{id}/kyc/final-approve
+
+   - POST /api/customers/{id}/kyc/l1-approve
+
+   - POST /api/customers/{id}/kyc/reject
+
+   - POST /api/customers/{id}/notes
+
+   - POST /engine-rest/external-task/fetchAndLock
+
+   - PUT /api/customer-accounts/acct_01HX3K9M2P5Q8R1T4W7Y0Z3N7/sub-status
+
+
+
+SOPHIX BSS Design Documents                                                      Page 2
+   - PUT /api/customer-accounts/acct_01HX3K9M2P5Q8R1T4W7Y0Z3N7/subscription
+
+   - PUT /api/customer-accounts/acct_01HZP9Q8R7S6T5U4V3W2X1Y0Za/flags/FRAUD_SUSPECTED
+
+   - PUT /api/customer-accounts/{id}/flags/{flag_code}
+
+   - PUT /api/customer-accounts/{id}/notification-pref
+
+   - PUT /api/customer-accounts/{id}/sub-status
+
+   - PUT /api/customer-accounts/{id}/subscription
+
+ Implementation rules:
+
+   - Resolve actor user and role from auth context, not from public request body.
+
+   - Check idempotency before inserting a new operation or creating a side effect.
+
+   - Return the existing operation/result for the same idempotency key and same request hash.
+
+   - Return 409 IDEMPOTENCY_KEY_REUSED for the same key with a different request hash.
+
+   - Use transactions or unique constraints for concurrency-sensitive creation.
+
+
+ 6. Data Loading
+ Load data in this order:
+
+   1. Authoritative aggregate state from the owning module.
+
+   2. Operator/module config from this DD's config tables.
+
+   3. Catalog/reference data from approved APIs or client wrappers.
+
+   4. Current in-flight operation state from the framework, where relevant.
+
+ Do not read current mutable state from cache for state-changing operations.
+
+
+ 7. Drools Configuration
+ Packages found:
+
+   - No Drools package explicitly declared.
+
+ For each package:
+
+   - Define fact classes that mirror the request, current state, config, and reference data.
+
+   - Keep rule output as explicit decision fields.
+
+   - Unit-test accept and reject cases from the DD.
+
+   - BPMN should re-check critical rules after start if state may have changed.
+
+
+ 8. BPMN And Worker Topics
+ Worker topics found:
+
+   - await-kyc-approval
+
+   - final-approve
+
+   - flag-evaluator-wik-v1
+
+   - flag-evaluator-yassn-v1
+
+   - kenya-kyc-leaders
+
+   - kenya-l1-kyc
+
+   - no-disturb
+
+   - sophix-superadmin
+
+ Implementation rules:
+
+   - Model service tasks with camunda:type="external" and the exact topic string.
+
+
+SOPHIX BSS Design Documents                                                                     Page 3
+   - Worker handler must validate required variables before calling downstream services.
+
+   - Store outputs as process variables with stable names.
+
+   - Use message correlation keys exactly as specified by the DD.
+
+   - Add compensation paths for each external side effect.
+
+
+ 9. Events
+ Events found:
+
+   - SubscriptionCreated
+
+   - SubscriptionPaused
+
+   - SubscriptionResumed
+
+   - SubscriptionTerminated
+
+   - WorkOrderCancelled
+
+   - WorkOrderCreated
+
+   - WorkOrderFinalized
+
+   - WorkOrderPhaseFinalized
+
+ Event rules:
+
+   - Emit success only after authoritative commit.
+
+   - Emit rejected/failure event only after compensation/final failure decision.
+
+   - Use the outbox table/dispatcher; do not publish directly inside the transaction boundary unless the platform standard
+     allows it.
+
+
+ 10. Smoke Tests
+ Add tests for:
+
+   - Happy path.
+
+   - Invalid role or trigger.
+
+   - Invalid state.
+
+   - Missing config/catalog row.
+
+   - Dependency failure.
+
+   - Retry/idempotency.
+
+   - Event payload correctness.
+
+   - Worker topic failure and compensation.
+
+
+ 11. Common Mistakes
+   - Treating worker-topic names as shell commands.
+
+   - Querying another module's database directly.
+
+   - Reading current state from cache in a state-changing flow.
+
+   - Emitting success before final commit.
+
+   - Hiding manual recovery paths for partial external side effects.
+
+   - Creating one deployment per topic when a consolidated worker app would be easier to operate.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                  Page 4
+

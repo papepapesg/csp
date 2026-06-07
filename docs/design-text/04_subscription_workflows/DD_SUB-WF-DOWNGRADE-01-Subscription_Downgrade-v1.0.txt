@@ -1,0 +1,1064 @@
+ DD: SUB-WF-DOWNGRADE-01 — Subscription
+ Downgrade
+ Developer implementation guide:
+ DD_SUB-WF-DOWNGRADE-01-Subscription_Downgrade-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract
+ DD_SUB-WF-DOWNGRADE-01-Subscription_Downgrade-v1.0.md.
+
+ Verdict: ■ New | Wave: 1 | Group I: Subscription Management | Version: v1.0 Operation that transitions an ACTIVE
+ subscription's package_ref from a higher-priced Package to a lower-priced Package on the same HomePass. Owns: the
+ 2-trigger taxonomy (CUSTOMER_REQUESTED_DOWNGRADE / ADMIN_DOWNGRADE), the target-package validation rules
+ (currency match, price ≤ source, ACTIVE status, HomePass service-class compatibility), the equipment-unbind logic (target
+ Package may drop service classes — e.g., triple→double-play returns STB), the cycleAnchorPolicy +
+ effectiveTiming taxonomies (mirrors UPGRADE-01), the per-operator config catalog, the trigger REST endpoint + cancel
+ endpoint, the rich domain Kafka events. Composes the framework primitives from DD_SUB-WF-FRAMEWORK-01 +
+ DD_SUB-WF-FRAMEWORK-01-WORKERS. Effective timing — customer choice per request. Three modes:
+ IMMEDIATE (downgrade takes effect at saga commit), END_OF_CURRENT_CYCLE (downgrade fires at the cycle close
+ timestamp), SCHEDULED_AT (downgrade fires at an arbitrary future timestamp within
+ subscription_downgrade_config.max_future_scheduled_days). Default is END_OF_CURRENT_CYCLE — the
+ typical customer-friendly behavior: customer paid for the cycle at higher tier, gets the value through cycle end, downgrade
+ applies at next cycle. The BPMN parks on a Camunda intermediate timer until the chosen moment, then runs
+ validate-bill-fulfill commit. Scheduled-future downgrades are cancellable via DELETE. Distinct from UPGRADE-01: price
+ comparison reversed (target ≤ source). BIL-01 returns a *credit* (signed negative) for IMMEDIATE / SCHEDULED_AT
+ mid-cycle commits with PRESERVE policy, or zero delta for END_OF_CURRENT_CYCLE + PRESERVE. Equipment-unbind
+ is enabled by default for downgrades (obsolete equipment returned to inventory), whereas UPGRADE-01 retains existing
+ equipment. Companion DDs (per-operator BPMN satellites): - DD_SUB-WF-DOWNGRADE-01-FLOW-WIK — KE WIK
+ reference BPMN (shipped v1.0) - DD_SUB-WF-DOWNGRADE-01-FLOW-WUG / -WTZ / -YASSN — pending operator deep
+ dives
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    4_subscription_workflows/DD_SUB-WF-DOWNGRADE-01-Subscripti
+                                                                    on_Downgrade-v1.0.md
+
+  Version                                                           v1.0
+
+  DD type                                                           module contract
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+  Item                                                            Value
+
+  BPMN/process keys                                               Not explicitly defined
+
+  Drools packages                                                 rules.subscription.downgrade.<operator>
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+   - DELETE /api/subscriptions/{subscription_id}/pending-downgrade/{operation_id}
+
+   - DELETE /pending-downgrade/{operationId}
+
+   - POST /api/subscriptions/{subscription_id}/downgrade
+
+ 4.2 Tables
+   - subscription_downgrade_config
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - bil01-emit-intent
+
+   - drools-decide
+
+   - external-cancel-requested
+
+   - ful-call-modify
+
+   - kafka-emit
+
+   - notification-send
+
+   - osr-equipment-unbind
+
+   - sub-lm-commit-state
+
+   - sub-lm-compute-cycle-window
+
+   - sub-lm-put-master-fields
+
+   - sub-lm-put-pending-status
+
+   - subscription-operation-finalize
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - SubscriptionDowngradeCancelled
+
+   - SubscriptionDowngradeRejected
+
+   - SubscriptionDowngradeScheduled
+
+   - SubscriptionDowngraded
+
+
+SOPHIX BSS Design Documents                                                                                              Page 2
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                           Recommendation
+
+  API/runtime                                                       Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                           Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                          Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                             Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                           Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                            Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                           Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                    Store with IRSA.
+
+  Observability                                                     Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                    dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ New | Wave: 1 | Group I: Subscription Management | Version: v1.0
+
+ Operation that transitions an ACTIVE subscription's package_ref from a higher-priced Package to a lower-priced Package
+ on the same HomePass. Owns: the 2-trigger taxonomy (CUSTOMER_REQUESTED_DOWNGRADE / ADMIN_DOWNGRADE), the
+ target-package validation rules (currency match, price ≤ source, ACTIVE status, HomePass service-class compatibility), the
+ equipment-unbind logic (target Package may drop service classes — e.g., triple→double-play returns STB), the
+ cycleAnchorPolicy + effectiveTiming taxonomies (mirrors UPGRADE-01), the per-operator config catalog, the
+ trigger REST endpoint + cancel endpoint, the rich domain Kafka events. Composes the framework primitives from
+ DD_SUB-WF-FRAMEWORK-01 + DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+ Effective timing — customer choice per request. Three modes: IMMEDIATE (downgrade takes effect at saga commit),
+ END_OF_CURRENT_CYCLE (downgrade fires at the cycle close timestamp), SCHEDULED_AT (downgrade fires at an arbitrary
+ future timestamp within subscription_downgrade_config.max_future_scheduled_days). Default is
+ END_OF_CURRENT_CYCLE — the typical customer-friendly behavior: customer paid for the cycle at higher tier, gets the value
+ through cycle end, downgrade applies at next cycle. The BPMN parks on a Camunda intermediate timer until the chosen
+ moment, then runs validate-bill-fulfill commit. Scheduled-future downgrades are cancellable via DELETE.
+
+
+SOPHIX BSS Design Documents                                                                                                                   Page 3
+ Distinct from UPGRADE-01: price comparison reversed (target ≤ source). BIL-01 returns a *credit* (signed negative) for
+ IMMEDIATE / SCHEDULED_AT mid-cycle commits with PRESERVE policy, or zero delta for END_OF_CURRENT_CYCLE
+ + PRESERVE. Equipment-unbind is enabled by default for downgrades (obsolete equipment returned to inventory),
+ whereas UPGRADE-01 retains existing equipment.
+
+ Companion DDs (per-operator BPMN satellites):
+
+ - DD_SUB-WF-DOWNGRADE-01-FLOW-WIK — KE WIK reference BPMN (shipped v1.0)
+
+ - DD_SUB-WF-DOWNGRADE-01-FLOW-WUG / -WTZ / -YASSN — pending operator deep dives
+
+
+ Glossary
+  Term                                                            Meaning
+
+  Downgrade                                                       Change of the subscription's Package reference to a lower-priced Package on
+                                                                  the same HomePass. Distinct from MIGRATION (different HomePass) and
+                                                                  UPGRADE (higher price).
+
+  Source Package                                                  The current package_ref + package_version_id snapshot at downgrade
+                                                                  time. Pinned to the row for audit; also written to previous_package_ref on
+                                                                  the subscription.
+
+  Target Package                                                  The Package the subscription is downgrading to. Must be ACTIVE in SIP-01,
+                                                                  same currency as the subscription, price ≤ source Package price, and every
+                                                                  service family it requires must be present in the HomePass's
+                                                                  service_management_endpoints (RLM-CFG-01) with a non-null port.
+
+  Credit delta                                                    The amount BIL-01 computes (negative — credit to customer) for the remaining
+                                                                  days of the current cycle at the price difference between source and target
+                                                                  Packages. For prepaid: applied as wallet top-up. For postpaid: invoice credit
+                                                                  line. Owned by BIL-01 + BIL-CFG-01.
+
+  Equipment-drop delta                                            The set of service classes in the source Package that are NOT in the target
+                                                                  Package. Equipment bound to those service classes (e.g., STB for IPTV) is
+                                                                  candidate for unbind + return per unbindObsoleteEquipment.
+
+  cycleAnchorPolicy                                               Customer/admin choice captured per downgrade request. Two values:
+                                                                  PRESERVE (keep existing cycle anchor; for IMMEDIATE/mid-cycle commits
+                                                                  BIL-01 issues credit delta for cycle-days-remaining) or
+                                                                  RESET_TO_DOWNGRADE_DATE (cycle anchor moves to commit date; BIL-01
+                                                                  issues old-cycle credit + fresh first-cycle at target price). Operator config may
+                                                                  default. Applied at actual commit time.
+
+  effectiveTiming                                                 Customer choice per request: IMMEDIATE (commit at saga start),
+                                                                  END_OF_CURRENT_CYCLE (commit at the current cycle's cycle_end; the
+                                                                  default for downgrades), SCHEDULED_AT (commit at a customer-supplied future
+                                                                  timestamp). For non-IMMEDIATE, BPMN parks on a Camunda intermediate
+                                                                  timer. The subscription remains ACTIVE on the source Package during the wait;
+                                                                  charges continue at source price.
+
+  Pending-future downgrade                                        A scheduled downgrade in its wait state. Represented by the BPMN process
+                                                                  instance parked on the timer + the subscription_operation row with
+                                                                  current_state = SCHEDULED. Cancellable via DELETE.
+
+
+
+
+ 1. What this is
+ The downgrade operation. SUB-WF-DOWNGRADE-01 is one of the 10 operation kinds in the framework. Triggered by: a
+ customer requesting a downgrade (CC, portal, retail) or an admin downgrading on the customer's behalf (e.g., as part of a
+ retention save).
+
+ Outcomes (at actual commit time, which may be NOW or a future moment per effectiveTiming): subscription
+ package_ref + package_version_id updated to target Package, previous_package_ref snapshot retained, credit
+ applied per cycleAnchorPolicy (or zero delta for END_OF_CURRENT_CYCLE + PRESERVE), network reconfigured for
+ new Service profile (FUL-03 MODIFY_SERVICE), equipment-unbind step run if equipment-drop delta exists AND
+ unbindObsoleteEquipment = true, cycle anchor preserved or reset per the operation's chosen policy, customer
+ notified.
+
+ For non-IMMEDIATE effectiveTiming, the subscription remains ACTIVE on the source Package during the wait. A
+ second pending-future downgrade against the same subscription is rejected; any state-affecting operation that fires during the
+ wait cancels the pending downgrade per R-EF-5.
+
+ What this DD owns
+
+SOPHIX BSS Design Documents                                                                                                                  Page 4
+   1. subscription_downgrade_config table — per-operator config: customer-self-service enablement, default
+     cycle-anchor policy, default effective timing, max-future-scheduled-days, default equipment-unbind behavior.
+
+   2. Trigger taxonomy — 2 triggers (CUSTOMER_REQUESTED_DOWNGRADE / ADMIN_DOWNGRADE) with role-gating.
+
+   3. Target-package validation rules — currency match, status ACTIVE, price ≤ source, HomePass compatibility,
+     equipment-drop delta computation.
+
+   4. cycleAnchorPolicy taxonomy — 2 values (PRESERVE / RESET_TO_DOWNGRADE_DATE) carried per request;
+     defaulted by operator config.
+
+   5. effectiveTiming taxonomy — 3 values (IMMEDIATE / END_OF_CURRENT_CYCLE / SCHEDULED_AT); default =
+     END_OF_CURRENT_CYCLE; for non-IMMEDIATE the BPMN parks on a Camunda intermediate timer; cancellable.
+
+   6. Trigger REST endpoints — POST /api/subscriptions/{subscription_id}/downgrade to start a downgrade;
+     DELETE /api/subscriptions/{subscription_id}/pending-downgrade/{operation_id} to cancel a
+     pending-future downgrade.
+
+   7. Domain Kafka events — SubscriptionDowngradeScheduled (non-IMMEDIATE acceptance),
+     SubscriptionDowngraded (commit), SubscriptionDowngradeRejected (failure),
+     SubscriptionDowngradeCancelled (cancellation of pending-future).
+
+   8. Downgrade workflow rules — 37 rules in §4.
+
+ What this DD does NOT own
+   - BPMN files — owned by per-operator satellites.
+
+   - Worker implementations — catalogued in DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+   - Subscription state machine — owned by SUB-LM-01.
+
+   - Package catalog — owned by SIP-01.
+
+   - Service catalog + service-class definitions + equipment-requirement declarations — owned by PLM-CFG-01.
+
+   - HomePass row mutations — owned by RLM-CFG-01. This workflow reads service_management_endpoints,
+     status_code, and the status-code catalog; it does not mutate any HomePass column. If the target Package requires a
+     service family the HomePass doesn't physically support, the downgrade is blocked at validation — caller must use
+     SUB-WF-MIGRATION-01.
+
+   - Credit delta math + refund mechanism (wallet top-up vs invoice credit) + BillableEvent definitions — owned by
+     BIL-CFG-01 + BIL-01.
+
+   - Network reconfiguration + per-service-class provisioner fan-out — owned by FUL-03 under MODIFY_SERVICE. This
+     workflow sends FUL-03 the source + target Package snapshots; FUL-03 computes the service-class diff and dispatches
+     the appropriate provisioner per service class (modifyService for unchanged, deactivate for dropped, activate for any
+     newly-required — typically none on downgrade).
+
+   - Equipment binding mechanics + return-to-inventory — owned by OSR-INSTANCE-01 + OSR-RMA-01 (return material
+     authorization for physically-recovered equipment).
+
+   - Restrictions during downgrade — preserved as-is on the subscription's active_restrictions[] array; this DD does
+     NOT clear or re-apply restrictions.
+
+   - Customer notification template + channel — owned by NOT-01.
+
+ Regional flexibility
+ Per-operator levers:
+
+  Lever                                                         Examples for DOWNGRADE
+
+  BPMN file                                                     KE: standard BPMN with conditional equipment-unbind step + credit-distribution
+                                                                step. Other operators may add a supervisor-approval user task for high-value
+                                                                retention saves.
+
+  Drools package rules.subscription.downgrade.<operator>        KE: target-package validation, equipment-drop-delta computation, self-service
+                                                                eligibility.
+
+  subscription_downgrade_config row                             KE: customer self-service enabled; default END_OF_CURRENT_CYCLE +
+                                                                PRESERVE + unbind enabled.
+
+  FOUNDATION_AUTH candidate groups                              Operator-specific resolution.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 5
+ 2. Tables overview
+ This DD owns one table: subscription_downgrade_config (per-operator config).
+
+ Cross-operation audit anchor: subscription_operation (framework-owned).
+
+ Subscription master fields updated (owned by SUB-LM-01): package_ref, package_version_id,
+ previous_package_ref, previous_package_version_id, last_status_changed_at.
+ current_transition_type = DOWNGRADE during PENDING_DOWNGRADE.
+
+
+
+ 3. Schemas
+ 3.1 subscription_downgrade_config
+ One row per operator.
+           CREATE TABLE subscription_downgrade_config (
+              operator_code                          TEXT PRIMARY KEY,
+              customer_self_service_enabled          BOOLEAN NOT NULL DEFAULT FALSE,
+              default_cycle_anchor_policy            TEXT NOT NULL DEFAULT 'PRESERVE',
+              default_effective_timing               TEXT NOT NULL DEFAULT 'END_OF_CURRENT_CYCLE',
+              max_future_scheduled_days              INTEGER NOT NULL DEFAULT 90,
+              default_unbind_obsolete_equipment      BOOLEAN NOT NULL DEFAULT TRUE,
+              customer_notification_enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+              updated_at                             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_by                             TEXT NOT NULL,
+              CHECK (default_cycle_anchor_policy IN ('PRESERVE','RESET_TO_DOWNGRADE_DATE')),
+              CHECK (default_effective_timing IN ('IMMEDIATE','END_OF_CURRENT_CYCLE','SCHEDULED_AT')),
+              CHECK (max_future_scheduled_days > 0)
+           );
+
+  Column                                                                    Notes
+
+  customer_self_service_enabled                                             When true, the CUSTOMER_REQUESTED_DOWNGRADE trigger may be initiated
+                                                                            from the customer portal (CUSTOMER_SELF_SERVICE role). When false, only
+                                                                            CALL_CENTER and admin roles may initiate it.
+
+  default_cycle_anchor_policy                                               Default cycleAnchorPolicy applied when the request does not supply one.
+                                                                            PRESERVE keeps the existing cycle anchor. RESET_TO_DOWNGRADE_DATE
+                                                                            moves cycle anchor to commit date.
+
+  default_effective_timing                                                  Default effectiveTiming applied when the request does not supply one.
+                                                                            END_OF_CURRENT_CYCLE is the standard downgrade default (customer paid
+                                                                            for the cycle, gets full value through cycle end).
+
+  max_future_scheduled_days                                                 Maximum window (days from request time) for
+                                                                            SCHEDULED_AT.scheduledAt. Requests beyond this return 400
+                                                                            SCHEDULED_AT_BEYOND_MAX_WINDOW.
+
+  default_unbind_obsolete_equipment                                         When true (default for downgrades), the workflow unbinds equipment that was
+                                                                            bound to service classes the target Package no longer requires (e.g., return
+                                                                            STB on triple→double-play). The request may override. Equipment physical
+                                                                            recovery is OSR-RMA-01's responsibility.
+
+  customer_notification_enabled                                             When true, the workflow calls notification-send at acceptance (for
+                                                                            scheduled) AND at commit. NOT-01 owns template, channel, language,
+                                                                            fallback.
+
+
+ Sample data:
+
+  operator_code      customer_self_servi   default_cycle_ancho   default_effective_tim   max_future_schedul   default_unbind_obs    customer_notificatio
+                     ce_enabled            r_policy              ing                     ed_days              olete_equipment       n_enabled
+
+  WIK                true                  PRESERVE              END_OF_CURRENT_         90                   true                  true
+                                                                 CYCLE
+
+  WUG                false                 PRESERVE              END_OF_CURRENT_         90                   true                  true
+                                                                 CYCLE
+
+  WTZ                false                 PRESERVE              END_OF_CURRENT_         90                   true                  true
+                                                                 CYCLE
+
+  YASSN              false                 PRESERVE              END_OF_CURRENT_         90                   true                  true
+                                                                 CYCLE
+
+
+
+
+ 4. Rules
+
+SOPHIX BSS Design Documents                                                                                                                      Page 6
+ 4.1 State precondition + transition
+  Rule                                 Description
+
+  R-SUB-WF-DOWNGRADE-01-S-1            Downgrade requires the subscription's status_code = ACTIVE at request
+                                       time AND at commit time. Other statuses return 409
+                                       INVALID_STATE_FOR_DOWNGRADE. For scheduled-future downgrades, the
+                                       check at commit time may fail if the subscription was paused or terminated
+                                       during the wait — handled by R-EF-5.
+
+  R-SUB-WF-DOWNGRADE-01-S-2            The transition at commit is ACTIVE → PENDING_DOWNGRADE → ACTIVE.
+                                       PENDING_DOWNGRADE is the framework-internal transient state during the
+                                       commit sequence. For scheduled-future downgrades, the subscription stays
+                                       ACTIVE during the wait — PENDING_DOWNGRADE is entered only when the
+                                       timer fires.
+
+  R-SUB-WF-DOWNGRADE-01-S-3            Per framework R-FW-1, downgrade COMMIT is mutually exclusive with other
+                                       state-affecting operations on the same subscription. A second downgrade
+                                       COMMIT cannot fire while another commit is in progress. A scheduled-future
+                                       downgrade in its wait state DOES allow other operations to fire (e.g.,
+                                       customer-requested PAUSE) — see R-EF-5 for cancellation semantics.
+
+  R-SUB-WF-DOWNGRADE-01-S-4            The subscription's current_transition_type is set to DOWNGRADE during
+                                       PENDING_DOWNGRADE. current_transition_reason_code is set to
+                                       the supplied downgradeTrigger. NOT set during scheduled-future wait.
+
+  R-SUB-WF-DOWNGRADE-01-S-5            Restrictions on the subscription (active_restrictions[]) are NEITHER
+                                       cleared NOR validated by this workflow. A customer with a restriction MAY
+                                       downgrade — the restriction persists post-downgrade.
+
+  R-SUB-WF-DOWNGRADE-01-S-6            At most one pending-future downgrade per subscription. A second
+                                       non-IMMEDIATE downgrade request returns 409
+                                       PENDING_DOWNGRADE_ALREADY_SCHEDULED with the existing operation id.
+                                       An IMMEDIATE downgrade request while a pending-future downgrade exists
+                                       returns 409 (caller must cancel the pending one first or wait).
+
+
+
+ 4.2 Trigger taxonomy + role gating
+  Rule                                 Description
+
+  R-SUB-WF-DOWNGRADE-01-RT-1           2 triggers: CUSTOMER_REQUESTED_DOWNGRADE / ADMIN_DOWNGRADE. Carried
+                                       in the request body as downgradeTrigger. Unknown values return 400
+                                       UNKNOWN_DOWNGRADE_TRIGGER.
+
+  R-SUB-WF-DOWNGRADE-01-RT-2           Role-trigger gating: CUSTOMER_REQUESTED_DOWNGRADE requires
+                                       CUSTOMER_SELF_SERVICE OR CALL_CENTER OR
+                                       SUBSCRIPTION_OPERATOR; ADMIN_DOWNGRADE requires
+                                       SUBSCRIPTION_ADMIN OR SUBSCRIPTION_OPERATOR. Mismatched role
+                                       returns 403 ROLE_NOT_AUTHORIZED_FOR_TRIGGER.
+
+  R-SUB-WF-DOWNGRADE-01-RT-3           CUSTOMER_SELF_SERVICE role allowed only when subscription_downgra
+                                       de_config.customer_self_service_enabled = true. Else 403.
+
+
+
+ 4.3 Target-package validation
+  Rule                                 Description
+
+  R-SUB-WF-DOWNGRADE-01-TP-1           targetPackageRef must reference a package row with status = ACTIVE
+                                       in SIP-01. DRAFT, INACTIVE, or END_OF_LIFE Packages return 400
+                                       TARGET_PACKAGE_NOT_ACTIVE.
+
+  R-SUB-WF-DOWNGRADE-01-TP-2           The target Package's current active package_version row supplies the price
+                                       + currency snapshot. Currency MUST match the subscription's currency.
+                                       Cross-currency downgrades return 400 CURRENCY_MISMATCH.
+
+  R-SUB-WF-DOWNGRADE-01-TP-3           Target Package's current active version price MUST be ≤ source Package's
+                                       pinned version price. Higher-priced target returns 400 NOT_A_DOWNGRADE with
+                                       guidance to use SUB-WF-UPGRADE-01.
+
+  R-SUB-WF-DOWNGRADE-01-TP-4           Target Package MUST be different from source Package (targetPackageRef
+                                       ≠ subscription.package_ref). Same-package returns 400
+                                       SAME_PACKAGE.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                 Page 7
+  Rule                         Description
+
+  R-SUB-WF-DOWNGRADE-01-TP-5   The current HomePass MUST be physically capable of carrying every service
+                               family required by the target Package. Specifically: for each Service in the target
+                               Package's package_composition, the Service's serviceManagementKey
+                               (e.g., data, voice, iptv_multicast) MUST be present in
+                               homepass.service_management_endpoints keys. If a required key is
+                               absent, return 400 PACKAGE_NOT_AVAILABLE_AT_HOMEPASS with guidance
+                               to use SUB-WF-MIGRATION-01. Note: for typical downgrades the target
+                               Package's required keys are a subset of the source's, so this check is rarely the
+                               blocker; included for symmetry and to catch edge cases (e.g., target Package
+                               adds a service family not in source).
+
+  R-SUB-WF-DOWNGRADE-01-TP-6   For each required serviceManagementKey, the resolved endpoint's port
+                               MUST NOT be null. Null port returns 400
+                               HOMEPASS_PORT_NOT_PROVISIONED.
+
+  R-SUB-WF-DOWNGRADE-01-TP-7   The HomePass status_code MUST be in a status with is_active = true
+                               per the operator's homepass_status_code catalog. HomePass in retired,
+                               suspended, or not-yet-serviceable status returns 409 HOMEPASS_NOT_ACTIVE.
+
+  R-SUB-WF-DOWNGRADE-01-TP-8   Target Package's billing-frequency-days SHOULD match the source Package's.
+                               Mismatch is not rejected but produces a warning event field
+                               billingFrequencyChanged=true; BIL-01 handles cycle implications per its
+                               policy.
+
+
+
+ 4.4 Equipment-drop delta
+  Rule                         Description
+
+  R-SUB-WF-DOWNGRADE-01-EQ-1   The workflow computes the set of service classes in the source Package that
+                               are NOT in the target Package. For each obsolete service class, the workflow
+                               inspects existing equipment bindings (OSR-INSTANCE-01) to identify
+                               equipment that fulfills only that obsolete service class. The list is
+                               obsoleteEquipmentList.
+
+  R-SUB-WF-DOWNGRADE-01-EQ-2   When unbindObsoleteEquipment = true (the request value, defaulting
+                               from operator config), the BPMN runs the equipment-unbind step for each entry
+                               in obsoleteEquipmentList. OSR-INSTANCE-01 marks the equipment as
+                               returned-to-inventory; physical recovery (RMA, pickup WO) is OSR-RMA-01's
+                               responsibility.
+
+  R-SUB-WF-DOWNGRADE-01-EQ-3   When unbindObsoleteEquipment = false, equipment stays bound to the
+                               subscription post-downgrade. The Service Profile sent to FUL-03 drops the
+                               obsolete service class, so the equipment is provisioning-orphaned — it's
+                               vestigial. Operator policy decides; some operators leave the STB with the
+                               customer in case they upgrade back later.
+
+  R-SUB-WF-DOWNGRADE-01-EQ-4   Equipment that fulfills BOTH an obsolete service class AND a retained service
+                               class is NOT unbound. Example: a multi-service ONT fulfilling both data and
+                               voice — when downgrading to data-only, the ONT stays bound (still fulfills
+                               data).
+
+
+
+ 4.5 Billing + fulfillment
+  Rule                         Description
+
+  R-SUB-WF-DOWNGRADE-01-B-1    Workflow calls bil01-emit-intent with intentKind =
+                               DOWNGRADE_INTENT. Context: {sourcePackageRef,
+                               sourcePackageVersionId, sourcePackagePrice,
+                               targetPackageRef, targetPackageVersionId,
+                               targetPackagePrice, billingFrequencyChanged,
+                               downgradeTrigger, cycleAnchorPolicy, effectiveTiming}. BIL-01
+                               computes the appropriate credit per cycleAnchorPolicy (see R-CA-3), may
+                               apply BillableEvents per BIL-CFG-01.
+
+  R-SUB-WF-DOWNGRADE-01-B-2    Pay-first gate does NOT apply (downgrade is value-decreasing — never
+                               produces a positive customer charge). Credit distribution per BIL-01's
+                               billing-mode policy: prepaid → wallet top-up; postpaid → invoice credit line.
+                               BIL-01 owns the mechanism.
+
+  R-SUB-WF-DOWNGRADE-01-B-3    FUL-03 called with intent=MODIFY_SERVICE, passing source + target
+                               Package snapshots. FUL-03 owns the per-service-class fan-out: (a) Service
+                               classes in both source and target → provisioner modifyService (or no-op if
+                               Service profile unchanged); (b) service classes in source but NOT target →
+                               provisioner deactivate, dispatched via the HomePass's
+                               service_management_endpoints[serviceManagementKey]; (c) service
+                               classes in target but NOT source → provisioner activate (rare on downgrade;
+                               possible if customer is switching service mix). FUL-03 handles per-customer
+                               network-side teardown (IGMP-snooping disable, multicast group leave, AAA
+                               channel-package removal) under the relevant provisioner's deactivate for
+                               dropped service classes.
+
+
+SOPHIX BSS Design Documents                                                                              Page 8
+  Rule                         Description
+
+  R-SUB-WF-DOWNGRADE-01-B-4    HomePass row is NOT mutated by this workflow. The HomePass's
+                               service_management_endpoints and status_code are
+                               RLM-CFG-01-owned read-only inputs. What changes during a
+                               service-class-drop downgrade is *per-customer network-side teardown*
+                               (FUL-03's responsibility) and *equipment unbinding* on the subscription (this
+                               DD's §4.4).
+
+  R-SUB-WF-DOWNGRADE-01-B-5    On commit, master fields updated: package_ref = targetPackageRef,
+                               package_version_id = targetPackageVersionId,
+                               previous_package_ref = sourcePackageRef,
+                               previous_package_version_id = sourcePackageVersionId,
+                               last_status_changed_at = NOW. If cycleAnchorPolicy =
+                               RESET_TO_DOWNGRADE_DATE: cycle_anchor_day and cycle_anchor_at
+                               master fields are also updated to NOW.
+
+
+
+ 4.6 Cycle anchor policy
+  Rule                         Description
+
+  R-SUB-WF-DOWNGRADE-01-CA-1   The request supplies cycleAnchorPolicy ∈ {PRESERVE,
+                               RESET_TO_DOWNGRADE_DATE}. If absent, the workflow defaults to
+                               subscription_downgrade_config.default_cycle_anchor_policy
+                               for the operator. Unknown value returns 400
+                               UNKNOWN_CYCLE_ANCHOR_POLICY.
+
+  R-SUB-WF-DOWNGRADE-01-CA-2   cycleAnchorPolicy is captured per downgrade — NOT a subscription-level
+                               invariant. The resolved policy is persisted to the Kafka event payload + the
+                               framework's subscription_operation audit row.
+
+  R-SUB-WF-DOWNGRADE-01-CA-3   BIL-01 interprets cycleAnchorPolicy in the DOWNGRADE_INTENT context.
+                               PRESERVE → BIL-01 returns a prorated credit line item
+                               (DOWNGRADE_PRORATE_CREDIT BillableEvent — negative amount) for
+                               cycle-days-remaining × price-difference. RESET_TO_DOWNGRADE_DATE →
+                               BIL-01 returns an old-cycle credit line (DOWNGRADE_OLD_CYCLE_CREDIT) for
+                               the unused portion of the source-priced cycle + a fresh first-cycle line
+                               (DOWNGRADE_FIRST_CYCLE — positive at target price) for the new cycle
+                               starting at commit time. Net is still ≤ 0 (downgrade never charges the customer
+                               more).
+
+  R-SUB-WF-DOWNGRADE-01-CA-4   When RESET_TO_DOWNGRADE_DATE, the new cycle starts at commit time and
+                               runs for targetPackage.billing_frequency_days. Subsequent cycles
+                               roll forward from the new anchor. Cycle-anchor mutation is committed via the
+                               master-fields step alongside package_ref.
+
+
+
+ 4.7 Effective timing
+  Rule                         Description
+
+  R-SUB-WF-DOWNGRADE-01-EF-1   The request supplies effectiveTiming ∈ {IMMEDIATE,
+                               END_OF_CURRENT_CYCLE, SCHEDULED_AT}. If absent, the workflow defaults
+                               to subscription_downgrade_config.default_effective_timing
+                               (KE v1.0: END_OF_CURRENT_CYCLE). Unknown value returns 400
+                               UNKNOWN_EFFECTIVE_TIMING.
+
+  R-SUB-WF-DOWNGRADE-01-EF-2   When effectiveTiming = SCHEDULED_AT, the request MUST also supply
+                               scheduledAt (ISO 8601 timestamp). Missing → 400
+                               SCHEDULED_AT_MISSING. scheduledAt MUST be strictly in the future AND
+                               within max_future_scheduled_days from now. Past or beyond-window →
+                               400 SCHEDULED_AT_OUT_OF_BOUNDS.
+
+  R-SUB-WF-DOWNGRADE-01-EF-3   Combination effectiveTiming = END_OF_CURRENT_CYCLE AND
+                               cycleAnchorPolicy = RESET_TO_DOWNGRADE_DATE is redundant.
+                               Returns 400 REDUNDANT_POLICY_COMBINATION with guidance to use
+                               cycleAnchorPolicy = PRESERVE for end-of-cycle downgrades.
+
+  R-SUB-WF-DOWNGRADE-01-EF-4   For non-IMMEDIATE timings: the BPMN parks on a Camunda intermediate
+                               timer. The subscription_operation.current_state is set to
+                               SCHEDULED. The trigger endpoint returns 202 with scheduledCommitAt
+                               populated. SubscriptionDowngradeScheduled is emitted on Kafka. At the
+                               timer fire, the BPMN re-validates and proceeds with the commit sequence.
+
+  R-SUB-WF-DOWNGRADE-01-EF-5   Cancellation paths during the wait: (a) explicit DELETE
+                               /pending-downgrade/{operationId} from BO admin or customer —
+                               stops the timer, emits SubscriptionDowngradeCancelled, closes the
+                               operation as CANCELLED; (b) any state-affecting operation on the same
+                               subscription (PAUSE, SUSPEND-NP, TERMINATE, UPGRADE, another
+                               DOWNGRADE) — the framework's external-cancel-requested
+                               mechanism stops the timer and emits SubscriptionDowngradeCancelled
+                               with cancellationReasonCode =
+                               SUPERSEDED_BY_<otherOperationKind>.
+
+
+SOPHIX BSS Design Documents                                                                            Page 9
+  Rule                                                           Description
+
+  R-SUB-WF-DOWNGRADE-01-EF-6                                     At commit time (after the wait), the workflow re-validates all preconditions (S-1,
+                                                                 TP-1 through TP-7, equipment-drop delta still consistent). If any check fails at
+                                                                 commit, the workflow rejects with SubscriptionDowngradeRejected
+                                                                 carrying rejectionStage = COMMIT_REVALIDATION. Example: target
+                                                                 Package transitioned to END_OF_LIFE between schedule and commit → reject.
+
+  R-SUB-WF-DOWNGRADE-01-EF-7                                     The cycleAnchorPolicy recorded at request time is honored at commit time.
+                                                                 For END_OF_CURRENT_CYCLE + PRESERVE, the commit naturally lands on the
+                                                                 cycle boundary; BIL-01 returns zero delta (the current cycle finishes on source
+                                                                 price, next cycle starts on target price); no anchor mutation needed. For
+                                                                 SCHEDULED_AT mid-cycle commits, BIL-01 behaves identically to IMMEDIATE
+                                                                 at the commit moment (credit delta if PRESERVE; old-cycle credit + fresh cycle
+                                                                 if RESET_TO_DOWNGRADE_DATE — anchor moves to the scheduled date).
+
+  R-SUB-WF-DOWNGRADE-01-EF-8                                     Credit settlement is performed at commit time (not request time) — for
+                                                                 non-IMMEDIATE downgrades, the customer's wallet / invoice is only touched at
+                                                                 commit. This matches the principle that scheduled downgrades shouldn't
+                                                                 pre-issue credits (the customer keeps using the higher-tier service through the
+                                                                 wait).
+
+
+
+
+ 5. REST API
+ 5.1 Trigger downgrade — IMMEDIATE example
+          POST /api/subscriptions/{subscription_id}/downgrade HTTP/1.1
+          Authorization: Bearer <jwt>
+          Content-Type: application/json
+          Idempotency-Key: downgrade-sub_01HZ_KAMAU-pkg_INET_100-20260520
+
+          {
+              "operatorCode":          "WIK",
+              "downgradeTrigger":      "CUSTOMER_REQUESTED_DOWNGRADE",
+              "targetPackageRef":      "pkg_01HX_INET_100M_VOIP_RES",
+              "cycleAnchorPolicy":     "PRESERVE",
+              "effectiveTiming":       "IMMEDIATE",
+              "scheduledAt":           null,
+              "unbindObsoleteEquipment": true,
+              "notes":                 "Customer downgrading after promotional period ended",
+              "initiatingActorUserId": "cc-agent-wik-007",
+              "initiatingActorRole":   "CALL_CENTER",
+              "initiatingWorkflowKind":"BO_UI",
+              "initiatingWorkflowRef": "cc-ticket-2026-05-20-5511"
+          }
+
+          → 202 Accepted
+          {
+            "operationId":               "subop_01HZ_KAMAU_DOWNGRADE",
+            "operatorCode":              "WIK",
+            "subscriptionId":            "sub_01HZ_KAMAU_FIBER",
+            "operationKind":             "DOWNGRADE",
+            "downgradeTrigger":          "CUSTOMER_REQUESTED_DOWNGRADE",
+            "resolvedCycleAnchorPolicy": "PRESERVE",
+            "resolvedEffectiveTiming":   "IMMEDIATE",
+            "scheduledCommitAt":         null,
+            "bpmnProcessKey":            "sub-downgrade-wik",
+            "bpmnProcessInstanceId":     "pi_01HZ_KAMAU_DOWNGRADE",
+            "currentState":              "VALIDATING",
+            "startedAt":                 "2026-05-20T14:00:00+03:00"
+          }
+
+
+ 5.2 Trigger downgrade — END_OF_CURRENT_CYCLE (the typical default)
+          POST /api/subscriptions/{subscription_id}/downgrade HTTP/1.1
+
+          {
+              "operatorCode":          "WIK",
+              "downgradeTrigger":      "CUSTOMER_REQUESTED_DOWNGRADE",
+              "targetPackageRef":      "pkg_01HX_INET_100M_VOIP_RES",
+              "unbindObsoleteEquipment": true,
+              ...
+          }
+
+          → 202 Accepted
+          {
+            "operationId":               "subop_01HZ_KAMAU_DOWNGRADE_EOC",
+            "resolvedCycleAnchorPolicy": "PRESERVE",
+            "resolvedEffectiveTiming":   "END_OF_CURRENT_CYCLE",
+
+
+SOPHIX BSS Design Documents                                                                                                              Page 10
+              "scheduledCommitAt":           "2026-05-31T23:59:59+03:00",
+              "currentState":                "SCHEDULED"
+          }
+
+ (Note: the request omitted both cycleAnchorPolicy and effectiveTiming; the workflow resolved both from
+ operator-config defaults — PRESERVE + END_OF_CURRENT_CYCLE for KE.)
+
+ 5.3 Errors
+ Not a downgrade (target more expensive):
+          → 400 Bad Request
+          {
+            "code":               "NOT_A_DOWNGRADE",
+            "sourcePackagePrice": 2500.00,
+            "targetPackagePrice": 4500.00,
+            "currency":           "KES",
+            "guidance":           "Target Package is more expensive. Use SUB-WF-UPGRADE-01."
+          }
+
+ Redundant policy combination:
+          → 400 Bad Request
+          {
+            "code":              "REDUNDANT_POLICY_COMBINATION",
+            "effectiveTiming":   "END_OF_CURRENT_CYCLE",
+            "cycleAnchorPolicy": "RESET_TO_DOWNGRADE_DATE",
+            "guidance":          "END_OF_CURRENT_CYCLE commit naturally aligns the new anchor with cycle close. Use cycleAnchorPolic
+          }
+
+ Already-scheduled downgrade:
+          → 409 Conflict
+          {
+            "code":                      "PENDING_DOWNGRADE_ALREADY_SCHEDULED",
+            "existingOperationId":       "subop_01HZ_KAMAU_DOWNGRADE_EOC",
+            "existingScheduledCommitAt": "2026-05-31T23:59:59+03:00",
+            "guidance":                  "Cancel the existing scheduled downgrade before submitting a new one."
+          }
+
+
+ 5.4 Cancel pending-future downgrade
+          DELETE /api/subscriptions/{subscription_id}/pending-downgrade/{operation_id} HTTP/1.1
+
+          {
+              "operatorCode":          "WIK",
+              "cancellationReasonCode":"CUSTOMER_CHANGED_MIND",
+              "notes":                 "Customer called to cancel — wants to keep current plan",
+              "initiatingActorUserId": "cc-agent-wik-007",
+              "initiatingActorRole":   "CALL_CENTER"
+          }
+
+          → 200 OK
+          {
+            "operationId":           "subop_01HZ_KAMAU_DOWNGRADE_EOC",
+            "cancellationReasonCode":"CUSTOMER_CHANGED_MIND",
+            "cancelledAt":           "2026-05-22T11:30:00+03:00",
+            "subscriptionStaysOn":   "pkg_01HX_INET_250M_VOIP_RES",
+            "finalState":            "CANCELLED"
+          }
+
+
+
+
+ 6. Kafka events emitted
+  Event                              Topic                          Fires on                             Consumers
+
+  SubscriptionDowngradeSchedul       sophix.subscription.subscrip   Acceptance of non-IMMEDIATE timing   NOT-01 (customer notification "your
+  ed                                 tion.downgradescheduled                                             downgrade is scheduled for ..."), CVM
+                                                                                                         (intent funnel), EM-04
+
+  SubscriptionDowngraded             sophix.subscription.subscrip   Successful commit (IMMEDIATE OR      NOT-01 (customer notification per
+                                     tion.downgraded                after timer fires)                   operator config), BIL-02 (cycle accrual
+                                                                                                         at new price), CVM (downgrade/churn
+                                                                                                         analytics), EM-04 reporting, SIP-01
+                                                                                                         (package-version-pinning audit),
+                                                                                                         OSR-RMA-01 (kicks off
+                                                                                                         equipment-return WO for unbound
+                                                                                                         equipment)
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 11
+  Event                              Topic                          Fires on                                 Consumers
+
+  SubscriptionDowngradeCancell       sophix.subscription.subscrip   Pending-future downgrade cancelled       NOT-01, CVM, EM-04
+  ed                                 tion.downgradecancelled
+
+  SubscriptionDowngradeRejecte       sophix.subscription.subscrip   Workflow failure (validation, billing,   NOT-01, ICN-01 ops alert, EM-04
+  d                                  tion.downgraderejected         fulfillment, commit-time revalidation)
+
+
+ Sample SubscriptionDowngradeScheduled:
+            {
+                "eventType":    "SubscriptionDowngradeScheduled",
+                "aggregateId": "sub_01HZ_KAMAU_FIBER",
+                "timestamp":    "2026-05-20T14:00:01+03:00",
+                "payload": {
+                  "operatorCode":               "WIK",
+                  "subscriptionId":             "sub_01HZ_KAMAU_FIBER",
+                  "customerId":                 "cust_01HZ_KAMAU",
+                  "operationId":                "subop_01HZ_KAMAU_DOWNGRADE_EOC",
+                  "downgradeTrigger":           "CUSTOMER_REQUESTED_DOWNGRADE",
+                  "sourcePackageRef":           "pkg_01HX_INET_250M_VOIP_RES",
+                  "targetPackageRef":           "pkg_01HX_INET_100M_VOIP_RES",
+                  "resolvedCycleAnchorPolicy": "PRESERVE",
+                  "resolvedEffectiveTiming":    "END_OF_CURRENT_CYCLE",
+                  "scheduledCommitAt":          "2026-05-31T23:59:59+03:00",
+                  "scheduledAt":                "2026-05-20T14:00:01+03:00",
+                  "unbindObsoleteEquipment":    true,
+                  "obsoleteEquipmentList":      [],
+                  "initiatingActorUserId":      "cc-agent-wik-007",
+                  "initiatingActorRole":        "CALL_CENTER"
+                }
+            }
+
+ Sample SubscriptionDowngraded (triple→double-play with STB return):
+            {
+                "eventType":    "SubscriptionDowngraded",
+                "aggregateId": "sub_01HZ_OTIENO_FIBER",
+                "timestamp":    "2026-05-31T23:59:59+03:00",
+                "payload": {
+                  "operatorCode":             "WIK",
+                  "subscriptionId":           "sub_01HZ_OTIENO_FIBER",
+                  "operationId":              "subop_01HZ_OTIENO_DOWNGRADE_EOC",
+                  "downgradeTrigger":         "CUSTOMER_REQUESTED_DOWNGRADE",
+                  "sourcePackageRef":         "pkg_01HX_INET_VOIP_IPTV_RES",
+                  "sourcePackageVersionId": "pkv_01HX_INET_VOIP_IPTV_V1",
+                  "sourcePackagePrice":       7500.00,
+                  "targetPackageRef":         "pkg_01HX_INET_VOIP_RES",
+                  "targetPackageVersionId": "pkv_01HX_INET_VOIP_V3",
+                  "targetPackagePrice":       4500.00,
+                  "currency":                 "KES",
+                  "cycleAnchorPolicy":        "PRESERVE",
+                  "resolvedEffectiveTiming": "END_OF_CURRENT_CYCLE",
+                  "scheduledCommitAt":        "2026-05-31T23:59:59+03:00",
+                  "creditDelta":              0.00,
+                  "creditBillableEventId":    null,
+                  "oldCycleCreditAmount":     null,
+                  "firstCycleCharge":         null,
+                  "cycleStart":               "2026-05-01",
+                  "cycleEnd":                 "2026-05-31",
+                  "billingFrequencyChanged": false,
+                  "droppedServiceClasses":    ["IPTV"],
+                  "unboundEquipment":         [{"equipmentId":"eqp_STB_01HZ_LAVI_042","fulfilledServiceClass":"IPTV"}],
+                  "downgradedAt":             "2026-05-31T23:59:59+03:00",
+                  "initiatingActorUserId":    "cc-agent-wik-007",
+                  "initiatingActorRole":      "CALL_CENTER"
+                }
+            }
+
+
+
+
+ 7. Cross-DD coordination
+ 7.1 Upstream callers
+  Caller                                       downgradeTrigger                                 Role
+
+  Customer portal                              CUSTOMER_REQUESTED_DOWNGRADE                     CUSTOMER_SELF_SERVICE (subject to config)
+
+  Call Center                                  CUSTOMER_REQUESTED_DOWNGRADE                     CALL_CENTER
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 12
+  Caller                                  downgradeTrigger                                 Role
+
+  BO admin                                ADMIN_DOWNGRADE                                  SUBSCRIPTION_ADMIN or
+                                                                                           SUBSCRIPTION_OPERATOR
+
+
+
+ 7.2 Sibling modules
+  Module                                  Direction                                        Contract
+
+  SUB-WF-FRAMEWORK-01 (parent)            This DD composes framework primitives            subscription_operation row + BPMN start
+
+  SUB-WF-FRAMEWORK-01-WORKERS             This DD's BPMNs reference workers by topic       Workers used: drools-decide,
+                                                                                           sub-lm-put-pending-status,
+                                                                                           sub-lm-compute-cycle-window,
+                                                                                           bil01-emit-intent, ful-call-modify,
+                                                                                           osr-equipment-unbind,
+                                                                                           sub-lm-put-master-fields,
+                                                                                           sub-lm-commit-state, kafka-emit,
+                                                                                           notification-send,
+                                                                                           subscription-operation-finalize
+
+  SUB-LM-01                               Workers write status + master fields             Status flip + package_ref/version +
+                                                                                           previous_package_ref/version
+
+  SIP-01                                  Workers read Package + Package Version catalog   Target Package validation
+
+  PLM-CFG-01                              Workers read service_class definitions           Equipment-drop delta computation
+
+  RLM-CFG-01                              Workers read HomePass                            HomePass physical-capability check; read-only
+                                          service_management_endpoints +
+                                          status_code
+
+  BIL-01                                  bil01-emit-intent worker                         DOWNGRADE_INTENT with credit math
+
+  BIL-CFG-01                              BillableEvent catalog                            Downgrade-credit definitions
+
+  FUL-03                                  ful-call-modify worker                           MODIFY_SERVICE. Owns per-service-class fan-out
+                                                                                           via HomePass service_management_endpoints
+
+  OSR-INSTANCE-01                         osr-equipment-unbind worker                      Equipment unbind (mark as returned-to-inventory)
+
+  OSR-RMA-01                              Consumes SubscriptionDowngraded event with       Kicks off equipment-return WO (RMA flow)
+                                          unboundEquipment list
+
+  NOT-01                                  notification-send worker                         Customer notification per operator config
+
+  BIL-02 / CVM / EM-04                    Consume Kafka events                             New-price cycle accrual, churn/retention analytics,
+                                                                                           reporting
+
+
+
+ 7.3 Build order
+ This DD deploys after:
+
+   1. SUB-WF-FRAMEWORK-01 (parent + WORKERS) v1.0
+
+   2. SUB-LM-01 v1.0
+
+   3. SIP-01 v1.0
+
+   4. PLM-CFG-01 v1.0
+
+   5. RLM-CFG-01 v1.0
+
+   6. FUL-03 v1.0
+
+   7. BIL-01 (DOWNGRADE_INTENT support)
+
+   8. OSR-INSTANCE-01 v1.0
+
+   9. OSR-RMA-01 v1.0 (consumer of equipment-return events)
+
+   10. At least one FLOW satellite (FLOW-WIK v1.0)
+
+ 7.4 Stub debt + open coordination items
+   - WUG / WTZ / YASSN FLOW satellites — pending operator deep dives.
+
+   - BIL-CFG-01 DOWNGRADE_INTENT BillableEvent definitions — pending BIL-CFG-01 v1.0 promotion. Credit formula
+     owned by BIL-01.
+
+   - FUL-03 MODIFY_SERVICE intent + per-service-class fan-out — pending FUL-03 v1.1 promotion (currently v1.0 ships
+     APPLY_RESTRICTION/LIFT_RESTRICTION/SUSPEND_SERVICE under FUL-04; UPGRADE + DOWNGRADE need
+
+SOPHIX BSS Design Documents                                                                                                            Page 13
+     MODIFY_SERVICE).
+
+   - OSR-RMA-01 equipment-return WO integration — pending OSR-RMA-01 consumer subscription to
+     SubscriptionDowngraded Kafka event for kicking off pickup WOs.
+
+   - PLM-CFG-01 service_class.requires_equipment field — pending PLM-CFG-01 v1.0 promotion.
+
+
+
+ B — Current TZ
+ Status: To be filled in after codebase cartography review.
+
+ Legacy package downgrade flow exists; specific implementation shape — proration credit calculation, equipment-return
+ propagation, network teardown sequencing, IPTV multicast group leave handling — requires source-code review to
+ document accurately. Until that cartography lands, this DD does not assert specific legacy structural claims.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                             Page 14
+

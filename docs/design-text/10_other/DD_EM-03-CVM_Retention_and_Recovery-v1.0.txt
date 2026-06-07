@@ -1,0 +1,472 @@
+ DD_EM-03 - CVM Retention And Recovery
+ Version: v1.0 Bundle: 10_other Status: Draft for review Primary owner: Customer value management / commercial
+ operations team Related DDs: DD_ILM-CFG-01, DD_CUST-INT-01, DD_TCK-01, DD_BIL-04, DD_BIL-01, DD_SUB-LM-01,
+ DD_SUB-WF-UPGRADE-01, DD_SUB-WF-DOWNGRADE-01, DD_SIP-03, DD_SIP-05, DD_DIS-OP-01, DD_NOT-01,
+ DD_REP-01, DD_EM-CFG-03, DD_EM-CFG-04, FOUNDATION_DROOLS
+
+ MVP simplification baseline: EM-03 starts as rule-based CVM queues, offers, outcomes, and activity tracking. Do not build an
+ ML platform, campaign automation suite, or separate analytics warehouse for CVM in the first release. Use
+ REP-01/BIL/SUB/TCK inputs and call owning module APIs for actions.
+
+
+
+ 1. Purpose
+ EM-03 defines customer value management processes for retention, recovery, churn prevention, upsell/cross-sell targeting,
+ win-back, and customer outreach activity management.
+
+ Use EM-03 when:
+
+   - a customer enters dunning or repeated payment risk;
+
+   - a subscription is downgraded, restricted, suspended, cancelled, or at churn risk;
+
+   - a customer repeatedly opens support complaints or installation issues;
+
+   - commercial teams want retention offers, recovery activities, or win-back campaigns;
+
+   - marketing/CVM needs to create targeted customer cohorts and assign outbound activities;
+
+   - the system must track offer outcomes and customer interaction history.
+
+ EM-03 does not own customer master, billing, subscription state, campaigns, discounts, or notification delivery. It consumes
+ events and calls owning module APIs.
+
+
+
+ 2. Scope And Boundaries
+  Capability                                                            Owner
+
+  CVM segment, customer risk score, activity, offer decision, outcome   EM-03
+
+  Customer/account/contact source of truth                              ILM-CFG-01
+
+  Customer interaction timeline                                         CUST-INT-01
+
+  Ticket/support case history                                           TCK-01 / ASR flows
+
+  Dunning and billing recovery state                                    BIL-04 / BIL-01
+
+  Subscription state and operations                                     SUB-LM / SUB-WF
+
+  Promotions/campaign catalog                                           SIP-05
+
+  Discount assignment and runtime discount application                  SIP-03 / DIS-OP-01
+
+  Customer messages                                                     NOT-01
+
+  Permissions                                                           EM-CFG-03
+
+  Approval for exceptional retention offer                              EM-CFG-04
+
+  Reporting                                                             REP-01
+
+  Configurable eligibility, score band, and offer rules                 Drools
+
+
+ Boundary rules:
+
+   - EM-03 does not directly apply discounts. It calls SIP-03 or campaign/discount APIs.
+
+   - EM-03 does not directly resume, restrict, or cancel subscriptions. It calls SUB/BIL workflows.
+
+   - EM-03 does not send SMS/email directly. It requests NOT-01 notification.
+
+   - EM-03 writes interaction/activity events to CUST-INT-01.
+
+   - EM-CFG-04 is used for non-standard retention offers, manual overrides, or high-value discounts.
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 1
+   - Camunda is involved only when the approval policy mode in EM-CFG-04 is BPMN.
+
+
+
+ 3. Process Overview
+           flowchart LR
+             A["BIL/SUB/TCK/customer events"] --> B["EM-03 updates signal profile"]
+             B --> C["Drools evaluates segment and risk"]
+             C --> D["Create CVM activity or offer"]
+             D --> E["Assign user/team or trigger notification"]
+             E --> F["Customer accepts, rejects, or no response"]
+             F --> G["Call owning module API"]
+             G --> H["Record outcome and interaction"]
+
+
+
+
+ 4. Data Model
+ 4.1 cvm_customer_signal_profile
+ What it is for: stores aggregated customer risk and opportunity signals used by CVM.
+
+ When to use it: update this profile from billing, subscription, ticket, campaign, payment, and interaction events.
+
+ Sample meaning: csp-001 says customer CUS-100045 has medium churn risk due to repeated dunning and complaints.
+
+  Column                           Type                             Purpose                          Sample
+
+  signal_profile_id                TEXT PK                          Profile id.                      csp-001
+
+  operator_code                    TEXT                             Tenant/operator.                 WIK
+
+  customer_id                      TEXT                             Customer id.                     CUS-100045
+
+  account_id                       TEXT NULL                        Account id.                      ACC-900045
+
+  active_subscription_count        INT                              Active services.                 1
+
+  open_ticket_count                INT                              Open tickets.                    2
+
+  dunning_level                    INT NULL                         Current dunning level.           2
+
+  days_since_last_payment          INT NULL                         Payment recency.                 18
+
+  complaint_count_90d              INT                              Recent complaint count.          3
+
+  churn_risk_score                 DECIMAL                          0-100 risk score.                72.5
+
+  upsell_score                     DECIMAL                          0-100 upsell score.              38.0
+
+  last_evaluated_at                TIMESTAMP                        Last rule/scoring time.          2026-08-25T08:00:00Z
+
+
+ Recommended indexes:
+
+   - unique (operator_code, customer_id).
+
+   - (operator_code, churn_risk_score).
+
+   - (operator_code, dunning_level).
+
+ 4.2 cvm_segment_membership
+ What it is for: stores current CVM segment membership for targeting and reporting.
+
+ When to use it: create/update rows when Drools places a customer into retention, recovery, win-back, upsell, or VIP-care
+ segments.
+
+ Sample meaning: csm-001 places customer CUS-100045 into RETENTION_HIGH_RISK.
+
+  Column                           Type                             Purpose                          Sample
+
+  membership_id                    TEXT PK                          Membership id.                   csm-001
+
+  operator_code                    TEXT                             Tenant/operator.                 WIK
+
+  segment_code                     TEXT                             Segment code.                    RETENTION_HIGH_RISK
+
+  customer_id                      TEXT                             Customer id.                     CUS-100045
+
+  status                           TEXT                             ACTIVE, EXPIRED, SUPPRESSED.     ACTIVE
+
+  reason_code                      TEXT                             Why customer is in segment.      DUNNING_AND_COMPLAINTS
+
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 2
+  Column                           Type                              Purpose                        Sample
+
+  entered_at                       TIMESTAMP                         Entry time.                    2026-08-25T08:00:00Z
+
+  expires_at                       TIMESTAMP NULL                    Expiry time.                   2026-09-25T08:00:00Z
+
+
+ Recommended indexes:
+
+   - (operator_code, segment_code, status).
+
+   - (customer_id, status).
+
+ 4.3 cvm_activity
+ What it is for: stores a customer outreach, retention, recovery, upsell, or win-back activity.
+
+ When to use it: create one row when a user/team or automated process must contact a customer or propose an offer.
+
+ Sample meaning: cva-001 is a recovery call assigned to the retention team for customer CUS-100045.
+
+  Column                           Type                              Purpose                        Sample
+
+  activity_id                      TEXT PK                           Activity id.                   cva-001
+
+  operator_code                    TEXT                              Tenant/operator.               WIK
+
+  activity_type                    TEXT                              RETENTION_CALL,                PAYMENT_RECOVERY
+                                                                     PAYMENT_RECOVERY,
+                                                                     UPSELL_OFFER, WINBACK,
+                                                                     SERVICE_RECOVERY.
+
+  customer_id                      TEXT                              Customer id.                   CUS-100045
+
+  account_id                       TEXT NULL                         Account id.                    ACC-900045
+
+  subscription_id                  TEXT NULL                         Subscription context.          SUB-700045
+
+  source_event_ref                 TEXT NULL                         Trigger event/case ref.        dunning-evt-001
+
+  assigned_to_user_id              TEXT NULL                         Owner user.                    usr-retention-01
+
+  assigned_team_id                 TEXT NULL                         Owner team.                    team-retention
+
+  status                           TEXT                              OPEN, IN_PROGRESS,             OPEN
+                                                                     WAITING_CUSTOMER, COMPLETED,
+                                                                     CANCELLED, EXPIRED.
+
+  priority                         TEXT                              LOW, MEDIUM, HIGH, CRITICAL.   HIGH
+
+  due_at                           TIMESTAMP NULL                    Due time.                      2026-08-26T17:00:00Z
+
+  created_at                       TIMESTAMP                         Creation timestamp.            2026-08-25T08:05:00Z
+
+  closed_at                        TIMESTAMP NULL                    Close timestamp.               null
+
+
+ Recommended indexes:
+
+   - (operator_code, status, priority).
+
+   - (assigned_to_user_id, status).
+
+   - (customer_id, status).
+
+ 4.4 cvm_offer_instance
+ What it is for: stores one offer proposed to a customer through CVM.
+
+ When to use it: create one row before presenting a discount, campaign, payment plan referral, upgrade, recovery credit, or
+ service-goodwill offer.
+
+ Sample meaning: cvo-001 proposes a 10% three-month retention discount to customer CUS-100045.
+
+  Column                           Type                              Purpose                        Sample
+
+  offer_instance_id                TEXT PK                           Offer instance id.             cvo-001
+
+  operator_code                    TEXT                              Tenant/operator.               WIK
+
+  activity_id                      TEXT NULL                         Parent activity.               cva-001
+
+  customer_id                      TEXT                              Customer id.                   CUS-100045
+
+  subscription_id                  TEXT NULL                         Subscription context.          SUB-700045
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 3
+  Column                             Type                        Purpose                        Sample
+
+  offer_type                         TEXT                        RETENTION_DISCOUNT,            RETENTION_DISCOUNT
+                                                                 UPGRADE_OFFER,
+                                                                 WINBACK_PACKAGE,
+                                                                 GOODWILL_CREDIT,
+                                                                 PAYMENT_REMINDER.
+
+  campaign_code                      TEXT NULL                   SIP-05 campaign.               RET-10PCT-3M
+
+  discount_ref                       TEXT NULL                   Discount/catalog ref.          DISC-RET-10
+
+  status                             TEXT                        DRAFT, PROPOSED, ACCEPTED,     PROPOSED
+                                                                 REJECTED, EXPIRED, APPLIED,
+                                                                 FAILED.
+
+  approval_request_id                TEXT NULL                   Approval ref.                  apr-cvm-001
+
+  expires_at                         TIMESTAMP NULL              Offer expiry.                  2026-08-31T23:59:59Z
+
+  created_at                         TIMESTAMP                   Creation timestamp.            2026-08-25T08:10:00Z
+
+
+ Recommended indexes:
+
+   - (operator_code, status).
+
+   - (customer_id, status).
+
+   - (approval_request_id).
+
+ 4.5 cvm_outcome
+ What it is for: stores final outcome of an activity or offer.
+
+ When to use it: create/update when customer accepted, rejected, ignored, paid, upgraded, churned, recovered, or when an
+ activity was closed.
+
+ Sample meaning: cvoo-001 records that customer accepted and discount assignment was created.
+
+  Column                             Type                        Purpose                        Sample
+
+  outcome_id                         TEXT PK                     Outcome id.                    cvoo-001
+
+  operator_code                      TEXT                        Tenant/operator.               WIK
+
+  activity_id                        TEXT NULL                   Activity id.                   cva-001
+
+  offer_instance_id                  TEXT NULL                   Offer id.                      cvo-001
+
+  customer_id                        TEXT                        Customer id.                   CUS-100045
+
+  outcome_code                       TEXT                        ACCEPTED, REJECTED,            ACCEPTED
+                                                                 NO_RESPONSE, PAID, UPGRADED,
+                                                                 RECOVERED, CHURNED.
+
+  owning_module_ref_type             TEXT NULL                   Applied module.                DISCOUNT_ASSIGNMENT
+
+  owning_module_ref_id               TEXT NULL                   Result id.                     da-001
+
+  notes                              TEXT NULL                   Closure note.                  Customer accepted retention
+                                                                                                discount.
+
+  created_at                         TIMESTAMP                   Outcome time.                  2026-08-25T09:00:00Z
+
+
+ Recommended indexes:
+
+   - (customer_id, created_at).
+
+   - (outcome_code, created_at).
+
+
+
+ 5. APIs
+ 5.1 Evaluate Customer
+           POST /api/cvm/customers/CUS-100045/evaluate
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "reason": "DUNNING_EVENT",
+               "sourceEventRef": "dunning-evt-001"
+           }
+
+
+SOPHIX BSS Design Documents                                                                                            Page 4
+ 5.2 Create Activity
+          POST /api/cvm/activities
+          Idempotency-Key: cvm-dunning-evt-001
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "activityType": "PAYMENT_RECOVERY",
+              "customerId": "CUS-100045",
+              "accountId": "ACC-900045",
+              "subscriptionId": "SUB-700045",
+              "sourceEventRef": "dunning-evt-001",
+              "assignedTeamId": "team-retention",
+              "priority": "HIGH"
+          }
+
+
+ 5.3 Propose Offer
+          POST /api/cvm/offers
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "activityId": "cva-001",
+              "customerId": "CUS-100045",
+              "subscriptionId": "SUB-700045",
+              "offerType": "RETENTION_DISCOUNT",
+              "campaignCode": "RET-10PCT-3M",
+              "discountRef": "DISC-RET-10"
+          }
+
+
+ 5.4 Accept Offer
+          POST /api/cvm/offers/cvo-001/accept
+          Content-Type: application/json
+
+          {
+              "acceptedByUserId": "usr-retention-01",
+              "customerConsentRef": "consent-001"
+          }
+
+ EM-03 then calls the owning module, such as SIP-03 discount assignment or SUB-WF upgrade request.
+
+
+
+ 6. Rules And Drools
+ Recommended packages:
+
+   - rules.cvm.segmentation
+
+   - rules.cvm.activity
+
+   - rules.cvm.offer
+
+   - rules.cvm.approval
+          package rules.cvm.segmentation
+
+          rule "High risk dunning customer"
+          when
+            $f : CvmCustomerFact(dunningLevel >= 2,
+                                 complaintCount90d >= 2)
+            $d : CvmDecision()
+          then
+            $d.addSegment("RETENTION_HIGH_RISK");
+            $d.createActivity("PAYMENT_RECOVERY", "HIGH");
+          end
+
+          package rules.cvm.offer
+
+          rule "Retention discount needs approval above threshold"
+          when
+            $f : CvmOfferFact(offerType == "RETENTION_DISCOUNT",
+                               discountPercent > 10)
+            $d : CvmDecision()
+          then
+            $d.requireApproval("CVM_HIGH_VALUE_RETENTION_OFFER");
+          end
+
+
+
+
+SOPHIX BSS Design Documents                                                                          Page 5
+ 7. Events
+  Event                                        When emitted                             Key fields
+
+  CvmCustomerEvaluated                         Signal/risk evaluation completed.        customerId, churnRiskScore, segments
+
+  CvmActivityCreated                           Activity created.                        activityId, activityType, customerId
+
+  CvmOfferProposed                             Offer proposed.                          offerInstanceId, offerType
+
+  CvmOfferAccepted                             Customer accepts.                        offerInstanceId, customerId
+
+  CvmOfferApplied                              Owning module applied offer.             owningModuleRefType, owningModuleRefId
+
+  CvmActivityClosed                            Activity closed.                         activityId, outcomeCode
+
+
+
+
+ 8. Implementation Notes
+   - Start with rules-based segmentation before ML scoring.
+
+   - Keep score explanations visible; do not create unexplained retention actions.
+
+   - CVM workers can be consolidated with reporting/event consumers if volume is low.
+
+   - All customer contact attempts must write to CUST-INT-01.
+
+   - Use REP-01 for dashboards; EM-03 should not build its own BI store.
+
+
+
+ 9. Test Scenarios
+   1. Dunning event updates signal profile.
+
+   2. High-risk customer enters retention segment.
+
+   3. CVM activity is idempotent by source event.
+
+   4. Offer over threshold calls EM-CFG-04.
+
+   5. Accepted discount offer calls SIP-03, not DIS-OP directly.
+
+   6. Notification request goes through NOT-01.
+
+   7. Interaction is written to CUST-INT-01.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 6
+

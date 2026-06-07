@@ -1,0 +1,455 @@
+ DD_REP-01 - Reporting Data Mart and Dashboard API
+ Version: v1.0
+
+ Status: Draft for review
+
+ Bundle: 10_other
+
+ Depends on:
+
+   - DD_CROSS-00-System_Traceability_and_Implementation_Map-v1.0
+
+   - FOUNDATION_AUTH
+
+   - FOUNDATION_KAFKA
+
+   - FOUNDATION_DB
+
+   - DD_SALES-01-Lead_Territory_and_Franchise_Sales_Management-v1.0
+
+   - DD_SUB-LM-01-Subscription_Lifecycle_Management-v1.0
+
+   - DD_SUB-WF-FRAMEWORK-01-Subscription_Workflow_Framework-v1.0
+
+   - DD_BIL-01-Charging_Engine-Core-v1.1
+
+   - DD_BIL-02-Invoicing-Core-v2.11
+
+   - DD_BIL-04-Dunning_Engine-v1.4
+
+   - DD_FUL-02-Order_Capture-v1.0
+
+   - DD_WO-01-Work_Order_Module-v1.0
+
+   - DD_OSR-01-Stock_Chain_Engine-v1.0
+
+   - DD_TCK-01-Ticketing_and_Case_Management-v1.0
+
+ MVP simplification baseline: REP-01 is mandatory for dashboards, exports, and aggregate reporting. First release scope is a
+ small mart for revenue, payments, active subscriptions, activations, tickets, work orders, stock summary, and dunning. Do not
+ let reporting screens fan out to operational modules for aggregate totals.
+
+
+ 1. Purpose
+ This DD defines the reporting backend used by FE-APP-05 Reporting Portal and embedded operational dashboards in
+ Backoffice.
+
+ REP-01 prevents reporting screens from directly querying operational module databases. It builds read models/data marts
+ from module events, controlled extracts, and approved read APIs.
+
+
+ 2. Scope
+ Included:
+
+  Capability                                                      Purpose
+
+  Event ingestion                                                 Consume module events into reporting staging tables.
+
+  Data mart                                                       Build daily and near-real-time aggregates for dashboards.
+
+  Dashboard APIs                                                  Provide stable APIs for FE-APP-05 and Backoffice widgets.
+
+  Export controls                                                 Controlled CSV/XLS/PDF exports with audit.
+
+  Reconciliation                                                  Compare reporting aggregates to source module counts.
+
+  PII masking                                                     Enforce role-based masking for reports.
+
+
+ Out of scope:
+
+  Out of scope                                                    Owner
+
+  Source module transactions                                      Owning operational module.
+
+  Ad hoc direct SQL into production module DBs                    Not allowed.
+
+  Payroll/commission payout                                       Future finance/commission DD if needed.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 1
+  Out of scope                                                             Owner
+
+  BI vendor dashboard design                                               Implementation choice, but APIs/data mart rules still apply.
+
+
+
+
+ 3. Data Sources
+  Source module                               Data needed                                                Method
+
+  SALES-01                                    Lead funnel, attribution, territory, agent productivity.   Kafka events and daily extract if needed.
+
+  ILM                                         Customer/account counts and KYC state.                     Events/API extract with PII masking.
+
+  SUB-LM/SUB-WF                               Subscription base, lifecycle operations, MACD              Events plus periodic reconciliation API.
+                                              outcomes.
+
+  BIL                                         Revenue, invoices, payments, wallet, dunning.              Billing events and daily summary extract.
+
+  FUL                                         Order funnel and activation pipeline.                      Order/fulfillment events.
+
+  WO                                          Work order backlog, assignment, SLA, finalization.         WO events.
+
+  OSR                                         Stock levels, movements, swaps/RMA.                        OSR events and stock snapshot extract.
+
+  TCK                                         Ticket volumes, SLA, backlog, WO-linked tickets.           TCK events.
+
+  NOT/ICN                                     Notification delivery and staff task metrics.              Notification events.
+
+
+ Rule: reporting may store copied/derived data, but operational modules remain source of truth.
+
+
+ 4. Architecture
+ Recommended medium deployment:
+            Module outbox events -> Kafka -> REP ingestion workers -> reporting_staging
+                                                               -> aggregate jobs -> reporting_mart
+            FE-APP-05 / Backoffice -> REP dashboard APIs -> reporting_mart
+
+ For budget-conscious deployment, REP can start on the same PostgreSQL cluster as other non-critical modules but should
+ use a separate database/schema. For production growth, move reporting to a separate read-optimized
+ PostgreSQL/warehouse instance.
+
+
+ 5. Core Tables
+ 5.1 rep_event_ingestion
+ What it is for: records consumed events and ingestion state.
+
+ When to use it: every Kafka event consumed by reporting.
+
+  Column                          Type                                     Purpose                                     Sample
+
+  event_id                        TEXT PK                                  Source event id.                            evt_01J9...
+
+  source_module                   TEXT                                     Producer.                                   BIL-02
+
+  event_type                      TEXT                                     Event name.                                 InvoiceIssued
+
+  operator_code                   TEXT                                     Operator.                                   WIK
+
+  occurred_at                     TIMESTAMP                                Source event time.                          2026-05-28T10:00:00Z
+
+  processed_at                    TIMESTAMP                                REP processing time.                        2026-05-28T10:00:03Z
+
+  status                          TEXT                                     PROCESSED, FAILED, SKIPPED.                 PROCESSED
+
+  payload_hash                    TEXT                                     Change detection.                           sha256:...
+
+
+
+ 5.2 rep_daily_metric
+ What it is for: stores daily aggregate metrics by operator and dimensions.
+
+ When to use it: dashboard cards, trends, exports.
+
+  Column                          Type                                     Purpose                                     Sample
+
+  metric_date                     DATE                                     Reporting date.                             2026-05-28
+
+  operator_code                   TEXT                                     Operator.                                   WIK
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                          Page 2
+  Column                           Type                                   Purpose                                 Sample
+
+  metric_code                      TEXT                                   Metric name.                            orders_activated_count
+
+  dimension_json                   JSONB                                  Dimensions.                             {"territory":"KE-NRB-LAVINGT
+                                                                                                                  ON"}
+
+  metric_value                     NUMERIC                                Value.                                  42
+
+  computed_at                      TIMESTAMP                              Computation time.                       2026-05-29T00:10:00Z
+
+
+
+ 5.3 rep_dashboard_snapshot
+ What it is for: stores precomputed dashboard payloads where queries are expensive.
+
+ When to use it: management dashboards, finance dashboards, high-traffic summary pages.
+
+  Column                           Type                                   Purpose                                 Sample
+
+  snapshot_id                      UUID PK                                Snapshot id.                            snap_01J...
+
+  dashboard_code                   TEXT                                   Dashboard.                              sales_daily_overview
+
+  operator_code                    TEXT                                   Operator.                               WIK
+
+  period_start                     DATE                                   Start date.                             2026-05-01
+
+  period_end                       DATE                                   End date.                               2026-05-28
+
+  payload_json                     JSONB                                  Dashboard data.                         {"cards":[...]}
+
+  generated_at                     TIMESTAMP                              Generation time.                        2026-05-28T18:00:00Z
+
+
+
+ 5.4 rep_export_job
+ What it is for: tracks long-running exports and audit.
+
+ When to use it: a user downloads CSV/XLS/PDF report.
+
+  Column                           Type                                   Purpose                                 Sample
+
+  export_job_id                    UUID PK                                Export job.                             exp_01J...
+
+  dashboard_code                   TEXT                                   Report source.                          billing_aging
+
+  requested_by_user_id             TEXT                                   Auth user.                              kc_user_finance_3
+
+  operator_code                    TEXT                                   Operator.                               WIK
+
+  status                           TEXT                                   PENDING, RUNNING, READY, FAILED,        READY
+                                                                          EXPIRED.
+
+  file_ref                         TEXT NULL                              File storage reference.                 file_rep_01J...
+
+  created_at                       TIMESTAMP                              Request time.                           2026-05-28T11:00:00Z
+
+  expires_at                       TIMESTAMP                              Expiry.                                 2026-06-04T11:00:00Z
+
+
+
+
+ 6. Dashboard Domains
+  Dashboard domain                             Metrics                                                 Source modules
+
+  Sales funnel                                 Leads created, qualified, converted, lost, conversion   SALES, FUL, ILM.
+                                               rate by agent/franchise/territory.
+
+  Order fulfillment                            Orders by phase, KYC SLA, payment wait, install         FUL, BIL, WO, SUB.
+                                               wait, activation success/failure.
+
+  Subscription base                            Active/paused/restricted/suspended/terminated           SUB-LM, SUB-WF.
+                                               subscriptions, MACD counts.
+
+  Billing                                      Invoices issued, paid, overdue, revenue,                BIL.
+                                               adjustments, wallet balances.
+
+  Dunning                                      Dunning levels, suspension candidates, cured            BIL-04, SUB-WF.
+                                               accounts, termination review.
+
+  Work order                                   Backlog, assignment SLA, completion rate,               WO, EM.
+                                               contractor performance.
+
+  Equipment                                    Stock by location, movements, swaps, RMA,               OSR.
+                                               recovery exceptions.
+
+  Ticketing                                    Open tickets, SLA breach, category mix, WO-linked       TCK, WO.
+                                               tickets.
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 3
+  Dashboard domain                               Metrics                                                 Source modules
+
+  Notifications                                  Delivery success/failure, staff task                    NOT, ICN.
+                                                 acknowledgement.
+
+
+
+
+ 7. APIs
+ All APIs require Authorization: Bearer <jwt> and role guards.
+
+  API                                                                         Purpose
+
+  GET /api/reports/dashboards                                                 List dashboards allowed for user.
+
+  GET /api/reports/dashboards/{dashboard_code}?operatorCode=                  Dashboard payload.
+  WIK&period=TODAY
+
+  GET /api/reports/metrics/{metric_code}?operatorCode=WIK&fr                  Metric time series.
+  om=2026-05-01&to=2026-05-28
+
+  POST /api/reports/exports                                                   Start export job.
+
+  GET /api/reports/exports/{export_job_id}                                    Export status.
+
+  GET /api/reports/exports/{export_job_id}/download                           Authorized export download.
+
+  POST /api/reports/reconcile/{source_module}                                 Run reconciliation job.
+
+  GET /api/reports/reconcile/{run_id}                                         Reconciliation result.
+
+
+
+ Dashboard Response Example
+            {
+                  "dashboardCode": "sales_daily_overview",
+                  "operatorCode": "WIK",
+                  "period": {
+                     "from": "2026-05-28",
+                     "to": "2026-05-28",
+                     "timezone": "Africa/Nairobi"
+                  },
+                  "cards": [
+                     {
+                       "metricCode": "leads_created_count",
+                       "labelKey": "reports.sales.leadsCreated",
+                       "value": 128,
+                       "trend": { "direction": "UP", "percent": 12.4 }
+                     }
+                  ],
+                  "generatedAt": "2026-05-28T18:00:00Z",
+                  "sourceFreshness": [
+                     { "module": "SALES-01", "lastEventAt": "2026-05-28T17:59:40Z" }
+                  ]
+            }
+
+
+
+ 8. Security And Privacy
+  Rule                                                                        Description
+
+  REP-SEC-1                                                                   FOUNDATION_AUTH roles control dashboard visibility.
+
+  REP-SEC-2                                                                   Exports require explicit permission and audit row.
+
+  REP-SEC-3                                                                   PII fields must be masked unless the user has an approved role.
+
+  REP-SEC-4                                                                   Export files use FOUNDATION_FILE_STORAGE and expire.
+
+  REP-SEC-5                                                                   Report APIs must always scope by operator unless user is explicitly
+                                                                              multi-operator.
+
+  REP-SEC-6                                                                   Customer-level drill-down must link back to owning module UI/API; do not
+                                                                              expose hidden copied PII.
+
+
+
+
+ 9. Reconciliation
+ Reporting data must be trusted enough for management, but source modules remain authoritative.
+
+ Required reconciliations:
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                         Page 4
+  Reconciliation                                                       Method
+
+  Invoice count/value                                                  Compare REP daily invoice totals to BIL summary API.
+
+  Payment totals                                                       Compare REP payment totals to BIL payment summary API.
+
+  Active subscriptions                                                 Compare REP active count to SUB-LM count API.
+
+  WO backlog                                                           Compare REP backlog to WO list/count API.
+
+  Lead conversion                                                      Compare SALES converted leads to FUL order attribution count.
+
+  Ticket backlog                                                       Compare REP open tickets to TCK open ticket count.
+
+
+
+
+ 10. Frontend Mapping
+  FE-APP-05 screen                               REP APIs                                          Drill-down owner
+
+  Sales dashboard                                GET /api/reports/dashboards/sales_dail            SALES lead screens, FUL order screens.
+                                                 y_overview
+
+  Order funnel                                   GET                                               FUL order monitor.
+                                                 /api/reports/dashboards/order_funnel
+
+  Billing dashboard                              GET /api/reports/dashboards/billing_ov            BIL invoice/payment screens.
+                                                 erview
+
+  Dunning dashboard                              GET /api/reports/dashboards/dunning_ov            BIL-04 queues, SUB-WF operations.
+                                                 erview
+
+  WO dashboard                                   GET /api/reports/dashboards/work_order            WO dispatch/detail.
+                                                 _overview
+
+  Equipment dashboard                            GET /api/reports/dashboards/equipment_            OSR stock/equipment screens.
+                                                 overview
+
+  Ticket dashboard                               GET /api/reports/dashboards/ticketing_            TCK ticket detail.
+                                                 overview
+
+  Exports                                        POST /api/reports/exports, download API.          File storage.
+
+
+
+
+ 11. Infra Recommendation
+ Budget-conscious medium deployment:
+
+  Component                                                            Recommendation
+
+  Ingestion worker                                                     2 pods, 1-2 vCPU, 2-4 GB RAM.
+
+  API pods                                                             2 pods, 1-2 vCPU, 2-4 GB RAM.
+
+  Database                                                             Separate reporting DB/schema; start PostgreSQL, partition large fact tables by
+                                                                       month.
+
+  Storage                                                              Use file storage for exports.
+
+  Cache                                                                Redis for dashboard payload cache.
+
+
+ Growth path:
+
+   - move reporting DB to separate managed PostgreSQL/read-optimized warehouse;
+
+   - add columnar store only if PostgreSQL aggregates become insufficient;
+
+   - keep event ingestion idempotent so backfill/replay is possible.
+
+
+ 12. Implementation Notes
+ Start with:
+
+   1. Create rep_event_ingestion, rep_daily_metric, rep_dashboard_snapshot, and rep_export_job.
+
+   2. Consume key events from SALES, FUL, BIL, SUB, WO, OSR, TCK.
+
+   3. Implement sales/order/billing/WO/ticket daily metrics first.
+
+   4. Implement dashboard list/detail APIs.
+
+   5. Implement export jobs with file storage.
+
+   6. Add reconciliation jobs for BIL, SUB, WO, TCK.
+
+SOPHIX BSS Design Documents                                                                                                                   Page 5
+   7. Build FE-APP-05 against REP APIs only.
+
+
+ 13. Acceptance Checklist
+   - [ ] FE-APP-05 does not query operational module DBs.
+
+   - [ ] Dashboard APIs are role and operator scoped.
+
+   - [ ] At least five core module event streams are ingested idempotently.
+
+   - [ ] Exports are audited and expire.
+
+   - [ ] Reconciliation exists for billing and subscription counts.
+
+   - [ ] PII masking is enforced by role.
+
+
+
+
+SOPHIX BSS Design Documents                                                   Page 6
+

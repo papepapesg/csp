@@ -1,0 +1,945 @@
+ DD_EM-CFG-04 - Approval Workflow Catalog
+ Version: v1.0
+
+ Status: Draft for review
+
+ Bundle: 10_other
+
+ Depends on:
+
+   - DD_CROSS-00-System_Traceability_and_Implementation_Map-v1.0
+
+   - DD_API-00-API_Catalog_and_Gateway_Standards-v1.0
+
+   - FOUNDATION_AUTH
+
+   - FOUNDATION_CAMUNDA
+
+   - FOUNDATION_KAFKA
+
+   - DD_EM-CFG-03-RBAC_Catalog-v1.0
+
+   - DD_EM-01-Franchise_Management-v1.0
+
+   - DD_EM-02-Contractor_and_Staff_Registry-v1.0
+
+   - DD_ICN-01-Internal_Communications-v1.0
+
+
+
+ 1. Purpose
+ This DD defines the shared Approval Workflow Catalog for SOPHIX BSS.
+
+ Many modules need human approval:
+
+   - KYC L1/L2 approval;
+
+   - invoice adjustments, write-offs, credit notes, reversals;
+
+   - wallet manual adjustment;
+
+   - tax invoice cancellation;
+
+   - HomePass sensitive status transition;
+
+   - franchise activation/retirement;
+
+   - stock write-off and procurement approval;
+
+   - discount/campaign approval;
+
+   - dunning override or clear-without-payment;
+
+   - future CVM, field audit, and service-assurance compensation decisions.
+
+ EM-CFG-04 does not own those business objects. The owning module still owns the request, state, final apply/reject logic,
+ and audit of its domain record.
+
+ EM-CFG-04 owns the reusable catalog that tells a module:
+
+   - whether approval is required;
+
+   - which approval workflow applies;
+
+   - which roles/permissions can approve;
+
+   - how many steps are needed;
+
+   - what thresholds and conditions apply;
+
+   - how user tasks should be routed;
+
+   - how approval outcome is reported back.
+
+
+
+ 2. What This Module Is For
+
+SOPHIX BSS Design Documents                                                                                             Page 1
+ Use EM-CFG-04 when a module needs to decide:
+
+  Question                                                        EM-CFG-04 answer
+
+  Does this action require approval?                              Evaluate approval policy by module/action/context.
+
+  Which workflow template should run?                             Return process key and step config.
+
+  Who can approve step 1/2/etc.?                                  Return approver role/permission/team scope rules.
+
+  Does amount/threshold change routing?                           Apply configured condition rules.
+
+  Can requester approve their own request?                        Enforce segregation-of-duties rules.
+
+  What should Backoffice show as a task?                          Return user task metadata and allowed actions.
+
+  How should module receive final decision?                       Module receives approved/rejected/revision outcome callback/event.
+
+
+
+
+ 3. Scope
+ Included:
+
+  Capability                                                      Purpose
+
+  Approval workflow catalog                                       Define reusable approval policies per module/action/operator.
+
+  Approval step catalog                                           Define ordered approver steps and required permissions.
+
+  Threshold and condition config                                  Amount, risk, status, channel, franchise, or reason-based routing.
+
+  Approval request registry                                       Track approval process instances started through this catalog.
+
+  Approval task/action APIs                                       Standard approve/reject/request-revision action contract.
+
+  Camunda template references                                     Associate policies with BPMN process keys.
+
+  RBAC integration                                                Use EM-CFG-03 roles, permissions, and scopes for approver eligibility.
+
+  Notifications/tasks                                             Emit internal task notifications through ICN.
+
+  Approval audit                                                  Immutable approval decisions and actor comments.
+
+
+ Out of scope:
+
+  Out of scope                                                    Owner
+
+  Business request creation                                       Owning module, for example BIL, ILM, RLM, OSR.
+
+  Final business apply/reject mutation                            Owning module.
+
+  Authentication/JWT                                              FOUNDATION_AUTH.
+
+  Permission catalog                                              EM-CFG-03.
+
+  BPMN engine infrastructure                                      FOUNDATION_CAMUNDA.
+
+  Payment, invoice, customer, stock, HomePass domain records      Owning modules.
+
+  Complex risk scoring                                            Owning module or future risk/CVM service.
+
+
+
+
+ 4. Ownership Pattern
+ EM-CFG-04 is a catalog and orchestration helper. It is not the owner of every approval request's business state.
+
+ Standard pattern:
+
+   1. Owning module receives a high-risk command.
+
+   2. Owning module validates the business request and creates its own pending request record.
+
+   3. Owning module calls EM-CFG-04 to evaluate approval policy.
+
+   4. If no approval is required, owning module applies request immediately.
+
+   5. If approval is required, EM-CFG-04 starts a configured approval process and creates approval tasks.
+
+   6. Approvers act through Backoffice/API.
+
+   7. EM-CFG-04 records decision audit and completes workflow step.
+
+   8. On final approved/rejected/revision outcome, EM-CFG-04 calls the owning module callback or emits an event.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 2
+   9. Owning module performs final apply/reject/revision mutation.
+
+ Rule: EM-CFG-04 never directly updates invoices, wallets, customers, HomePasses, stock, tickets, or subscriptions.
+
+
+
+ 5. Core Concepts
+  Concept                                                            Meaning
+
+  Approval subject                                                   The business object or request needing approval, for example adjustment
+                                                                     request, KYC review, stock write-off.
+
+  Approval policy                                                    Configuration that determines if approval is required and which process applies.
+
+  Approval step                                                      One human decision point in the policy.
+
+  Approver rule                                                      Role/permission/scope condition for who can act on a step.
+
+  Threshold                                                          Numeric or categorical condition that changes routing.
+
+  Segregation of duties                                              Rule preventing requester and approver from being the same person or team.
+
+  Approval request                                                   Runtime instance of an approval process started for one business subject.
+
+  Approval task                                                      Runtime user task assigned to eligible approver(s).
+
+  Approval outcome                                                   APPROVED, REJECTED, REVISION_REQUESTED, CANCELLED, EXPIRED.
+
+
+
+
+ 6. Default Approval Use Cases
+  Use case                                   Owning module                                       Suggested policy
+
+  KYC L1 review                              ILM/FUL-02                                          Single step: customer.kyc.review_l1.
+
+  KYC final approval                         ILM/FUL-02                                          Second step: customer.kyc.review_l2.
+
+  Invoice adjustment low amount              BIL-02-ADJ                                          Auto-approve or one billing lead step.
+
+  Invoice adjustment high amount             BIL-02-ADJ                                          Billing lead then finance manager.
+
+  Invoice write-off                          BIL-02-ADJ / BIL-04                                 Finance lead plus optional country head.
+
+  Wallet manual adjustment                   BIL-05                                              Wallet admin plus billing lead.
+
+  Tax invoice cancellation                   BIL-02-TAX                                          Tax admin approval.
+
+  HomePass transition into RFS/WAI/ACT       RLM-CFG-01 / FUL-07                                 HomePass admin or technical supervisor approval.
+
+  Franchise retirement                       EM-01                                               Franchise admin plus operations lead.
+
+  Stock write-off                            OSR-05 future                                       Inventory supervisor plus finance approval above
+                                                                                                 threshold.
+
+  Procurement order                          OSR-02 future                                       Procurement lead; finance approval above
+                                                                                                 threshold.
+
+  Discount/campaign launch                   SIP-03/SIP-05 future                                Commercial lead plus finance/legal if high value.
+
+  Dunning clear without payment              BIL-04                                              Billing lead plus finance approval.
+
+
+
+
+ 7. Data Ownership
+ EM-CFG-04 owns:
+
+  Entity                                                             Purpose
+
+  approval_policy                                                    Header definition for an approval policy.
+
+  approval_policy_condition                                          Conditions and thresholds that select workflow path.
+
+  approval_step                                                      Ordered step definitions for a policy.
+
+  approval_request                                                   Runtime approval instance linked to owning module subject.
+
+  approval_task                                                      Runtime task visible to approvers.
+
+  approval_decision                                                  Immutable approve/reject/revision action record.
+
+  approval_callback_log                                              Delivery attempts to owning module.
+
+
+ EM-CFG-04 references:
+
+
+SOPHIX BSS Design Documents                                                                                                                   Page 3
+  Reference                                                          Owner
+
+  Permission/role codes                                              EM-CFG-03
+
+  User id                                                            FOUNDATION_AUTH
+
+  Franchise scope                                                    EM-01
+
+  Contractor/team scope                                              EM-02
+
+  Business subject id                                                Owning module
+
+  BPMN process key                                                   FOUNDATION_CAMUNDA deployment
+
+
+
+
+ 8. Core Tables
+ 8.1 approval_policy
+ What it is for: defines one approval policy for a module action.
+
+ When to use it: a module asks which approval process applies to a command like write-off, KYC final approval, or franchise
+ retirement.
+
+  Column                           Type                              Purpose                              Sample
+
+  policy_id                        TEXT PK                           Policy id.                           apol_bil_adj_wik_v1
+
+  operator_code                    TEXT                              Operator scope.                      WIK
+
+  policy_code                      TEXT                              Stable business code.                BIL_ADJUSTMENT_APPROVAL
+
+  module_code                      TEXT                              Owning module.                       BIL-02-ADJ
+
+  action_code                      TEXT                              Business action.                     invoice.adjustment.approve_f
+                                                                                                          low
+
+  display_name                     TEXT                              Admin label.                         Invoice Adjustment Approval
+
+  status                           TEXT                              DRAFT, ACTIVE, RETIRED.              ACTIVE
+
+  approval_mode                    TEXT                              AUTO, SINGLE_STEP, MULTI_STEP,       BPMN
+                                                                     BPMN.
+
+  camunda_process_key              TEXT NULL                         BPMN process key if used.            approval_generic_threshold_v
+                                                                                                          1
+
+  callback_url                     TEXT                              Owning module callback endpoint.     /internal/billing/adjustment
+                                                                                                          s/{subjectId}/approval-outco
+                                                                                                          me
+
+  effective_from                   TIMESTAMP                         Start time.                          2026-06-01T00:00:00Z
+
+  effective_to                     TIMESTAMP NULL                    End time.                            null
+
+  created_at                       TIMESTAMP                         Creation time.                       2026-05-29T12:00:00Z
+
+  updated_at                       TIMESTAMP                         Update time.                         2026-05-29T12:00:00Z
+
+
+ Constraints:
+
+   - Unique active (operator_code, module_code, action_code).
+
+   - Active BPMN policy must have camunda_process_key.
+
+   - Active non-auto policy must have at least one active step.
+
+ 8.2 approval_policy_condition
+ What it is for: stores rules that select auto/single/multi-step branches.
+
+ When to use it: amount thresholds, risk level, reason code, franchise, channel, or request type changes approval path.
+
+  Column                           Type                              Purpose                              Sample
+
+  condition_id                     TEXT PK                           Condition id.                        apc_adj_high_amount
+
+  policy_id                        TEXT FK                           Policy.                              apol_bil_adj_wik_v1
+
+  condition_order                  INT                               Evaluation order.                    20
+
+  field_path                       TEXT                              Input field to evaluate.             amount
+
+  operator                         TEXT                              LT, LTE, GT, GTE, EQ, IN, MATCHES.   GTE
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 4
+  Column                           Type                            Purpose                             Sample
+
+  value_json                       JSONB                           Comparison value.                   {"amount": 5000, "currency":
+                                                                                                       "KES"}
+
+  result_mode                      TEXT                            Approval mode for this condition.   MULTI_STEP
+
+  result_step_set_code             TEXT NULL                       Step set to use.                    HIGH_VALUE
+
+  active                           BOOLEAN                         Whether condition applies.          true
+
+
+ Rule: conditions should be deterministic and simple. Complex eligibility/risk calculations belong to the owning module, which
+ can pass riskLevel or requiresApprovalReason into the approval request.
+
+ 8.3 approval_step
+ What it is for: defines one step in an approval policy.
+
+ When to use it: decide who can approve step 1, step 2, etc.
+
+  Column                           Type                            Purpose                             Sample
+
+  step_id                          TEXT PK                         Step id.                            aps_adj_finance_lead
+
+  policy_id                        TEXT FK                         Policy.                             apol_bil_adj_wik_v1
+
+  step_set_code                    TEXT                            Branch/set this step belongs to.    HIGH_VALUE
+
+  step_order                       INT                             Execution order.                    2
+
+  step_code                        TEXT                            Stable step code.                   FINANCE_APPROVAL
+
+  display_name                     TEXT                            UI label.                           Finance Approval
+
+  required_permission_code         TEXT                            EM-CFG-03 permission needed.        billing.adjustment.approve
+
+  required_role_code               TEXT NULL                       Optional role hint.                 BILLING_LEAD
+
+  scope_type                       TEXT                            Scope required.                     OPERATOR
+
+  assignment_strategy              TEXT                            CANDIDATE_PERMISSION,               CANDIDATE_PERMISSION
+                                                                   CANDIDATE_ROLE, TEAM,
+                                                                   EXPLICIT_USER.
+
+  candidate_team_id                TEXT NULL                       EM-02 team if used.                 team_finance_approval
+
+  timeout_hours                    INT                             Escalation/expiry timer.            48
+
+  allow_requester                  BOOLEAN                         Whether requester can approve own   false
+                                                                   request.
+
+  active                           BOOLEAN                         Whether step applies.               true
+
+
+
+ 8.4 approval_request
+ What it is for: runtime approval process instance for one business subject.
+
+ When to use it: an owning module created a pending request and asked for approval.
+
+  Column                           Type                            Purpose                             Sample
+
+  approval_request_id              TEXT PK                         Approval request id.                apr_01J_ADJ_1001
+
+  operator_code                    TEXT                            Operator scope.                     WIK
+
+  policy_id                        TEXT FK                         Policy used.                        apol_bil_adj_wik_v1
+
+  module_code                      TEXT                            Owning module.                      BIL-02-ADJ
+
+  subject_type                     TEXT                            Business subject type.              INVOICE_ADJUSTMENT
+
+  subject_id                       TEXT                            Owning module request id.           adj_01J_1001
+
+  requester_user_id                TEXT                            User who requested action.          kc_user_billing_01
+
+  status                           TEXT                            PENDING, APPROVED, REJECTED,        PENDING
+                                                                   REVISION_REQUESTED, CANCELLED,
+                                                                   EXPIRED.
+
+  current_step_order               INT NULL                        Current approval step.              1
+
+  camunda_process_instance_id      TEXT NULL                       BPMN instance id.                   cam_proc_01J_ADJ
+
+  context_json                     JSONB                           Approval facts/snapshot.            {"amount":7000,"currency":"K
+                                                                                                       ES"}
+
+  created_at                       TIMESTAMP                       Creation time.                      2026-05-29T12:30:00Z
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 5
+  Column                          Type                               Purpose                          Sample
+
+  updated_at                      TIMESTAMP                          Update time.                     2026-05-29T12:35:00Z
+
+
+
+ 8.5 approval_task
+ What it is for: approver-facing task created from an approval step.
+
+ When to use it: Backoffice task inbox or module task queues.
+
+  Column                          Type                               Purpose                          Sample
+
+  approval_task_id                TEXT PK                            Task id.                         apt_01J_ADJ_STEP1
+
+  approval_request_id             TEXT FK                            Approval request.                apr_01J_ADJ_1001
+
+  step_id                         TEXT FK                            Step definition.                 aps_adj_finance_lead
+
+  status                          TEXT                               OPEN, CLAIMED, COMPLETED,        OPEN
+                                                                     CANCELLED, EXPIRED.
+
+  candidate_permission_code       TEXT                               Permission that can act.         billing.adjustment.approve
+
+  candidate_role_code             TEXT NULL                          Role hint.                       BILLING_LEAD
+
+  candidate_team_id               TEXT NULL                          Team if task routes to a team.   team_finance_approval
+
+  claimed_by_user_id              TEXT NULL                          User who claimed task.           kc_user_finance_02
+
+  due_at                          TIMESTAMP NULL                     Due/timeout timestamp.           2026-05-31T12:30:00Z
+
+  created_at                      TIMESTAMP                          Creation time.                   2026-05-29T12:30:00Z
+
+  updated_at                      TIMESTAMP                          Update time.                     2026-05-29T12:31:00Z
+
+
+
+ 8.6 approval_decision
+ What it is for: immutable record of each human decision.
+
+ When to use it: audit, dispute review, and debugging.
+
+  Column                          Type                               Purpose                          Sample
+
+  decision_id                     TEXT PK                            Decision id.                     apd_01J_APPROVE
+
+  approval_request_id             TEXT FK                            Approval request.                apr_01J_ADJ_1001
+
+  approval_task_id                TEXT FK                            Task.                            apt_01J_ADJ_STEP1
+
+  decision                        TEXT                               APPROVE, REJECT,                 APPROVE
+                                                                     REQUEST_REVISION, CANCEL.
+
+  actor_user_id                   TEXT                               Approver user id.                kc_user_finance_02
+
+  comment                         TEXT NULL                          Approver comment.                Approved after invoice
+                                                                                                      review.
+
+  decision_at                     TIMESTAMP                          Decision time.                   2026-05-29T13:00:00Z
+
+  metadata_json                   JSONB                              Extra context.                   {"ip":"10.1.2.3"}
+
+
+
+ 8.7 approval_callback_log
+ What it is for: records callback/event delivery to owning module.
+
+ When to use it: retry failed outcome delivery and reconcile approval state.
+
+  Column                          Type                               Purpose                          Sample
+
+  callback_log_id                 TEXT PK                            Log id.                          acl_01J_ADJ_CB1
+
+  approval_request_id             TEXT FK                            Approval request.                apr_01J_ADJ_1001
+
+  target_module_code              TEXT                               Owning module.                   BIL-02-ADJ
+
+  target_url                      TEXT                               Callback endpoint.               /internal/billing/adjustment
+                                                                                                      s/adj_01J_1001/approval-outc
+                                                                                                      ome
+
+  attempt_no                      INT                                Attempt number.                  1
+
+  status                          TEXT                               PENDING, DELIVERED,              DELIVERED
+                                                                     FAILED_RETRYABLE,
+                                                                     FAILED_FINAL.
+
+  request_json                    JSONB                              Sent payload.                    {"outcome":"APPROVED"}
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 6
+  Column                           Type                                    Purpose                              Sample
+
+  response_code                    INT NULL                                HTTP response code.                  200
+
+  created_at                       TIMESTAMP                               Attempt time.                        2026-05-29T13:05:00Z
+
+
+
+
+ 9. APIs
+ All user-facing APIs require Authorization: Bearer <jwt>.
+
+ Write APIs require Idempotency-Key.
+
+ 9.1 Policy Catalog APIs
+  API                                          Purpose                                            Consumers
+
+  POST /api/approval-policies                  Create approval policy.                            Backoffice admin, config import.
+
+  GET /api/approval-policies?operatorCod       List policies.                                     Backoffice, modules.
+  e=WIK&moduleCode=BIL-02-ADJ
+
+  GET /api/approval-policies/{policy_id}       Policy detail with conditions/steps.               Backoffice, modules.
+
+  PATCH                                        Update draft policy.                               Admin.
+  /api/approval-policies/{policy_id}
+
+  POST /api/approval-policies/{policy_id       Activate policy.                                   Admin/approval admin.
+  }/activate
+
+  POST /api/approval-policies/{policy_id       Retire policy.                                     Admin.
+  }/retire
+
+  POST /api/approval-policies/{policy_id       Add condition.                                     Admin.
+  }/conditions
+
+  POST /api/approval-policies/{policy_id       Add step.                                          Admin.
+  }/steps
+
+
+
+ 9.2 Runtime APIs
+  API                                          Purpose                                            Consumers
+
+  POST /api/approvals/evaluate                 Tell owning module whether approval is required.   Owning modules.
+
+  POST /api/approvals/requests                 Start approval request.                            Owning modules.
+
+  GET /api/approvals/requests/{approval_       Approval status/detail.                            Owning modules, Backoffice.
+  request_id}
+
+  GET /api/approvals/tasks?assigneeOrCan       User task list.                                    Backoffice.
+  didate={user_id}&status=OPEN
+
+  POST /api/approvals/tasks/{approval_ta       Claim task.                                        Approver.
+  sk_id}/claim
+
+  POST /api/approvals/tasks/{approval_ta       Approve task.                                      Approver.
+  sk_id}/approve
+
+  POST /api/approvals/tasks/{approval_ta       Reject task.                                       Approver.
+  sk_id}/reject
+
+  POST /api/approvals/tasks/{approval_ta       Ask requester to revise.                           Approver.
+  sk_id}/request-revision
+
+  POST /api/approvals/requests/{approval       Cancel approval request.                           Requester/module.
+  _request_id}/cancel
+
+
+
+ 9.3 Evaluate Request Sample
+           POST /api/approvals/evaluate
+           Authorization: Bearer <service-token>
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "moduleCode": "BIL-02-ADJ",
+               "actionCode": "invoice.adjustment.approve_flow",
+               "requesterUserId": "kc_user_billing_01",
+               "subjectType": "INVOICE_ADJUSTMENT",
+               "subjectId": "adj_01J_1001",
+               "context": {
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 7
+                  "amount": 7000,
+                  "currency": "KES",
+                  "reasonCode": "SERVICE_CREDIT",
+                  "franchiseId": "fr_01J_NRB_002"
+              }
+          }
+
+ Response:
+          {
+              "approvalRequired": true,
+              "policyId": "apol_bil_adj_wik_v1",
+              "approvalMode": "MULTI_STEP",
+              "stepSetCode": "HIGH_VALUE",
+              "camundaProcessKey": "approval_generic_threshold_v1",
+              "steps": [
+                {
+                   "stepOrder": 1,
+                   "stepCode": "BILLING_LEAD_APPROVAL",
+                   "requiredPermissionCode": "billing.adjustment.approve"
+                },
+                {
+                   "stepOrder": 2,
+                   "stepCode": "FINANCE_APPROVAL",
+                   "requiredPermissionCode": "billing.adjustment.approve"
+                }
+              ]
+          }
+
+
+ 9.4 Start Approval Request Sample
+          POST /api/approvals/requests
+          Authorization: Bearer <service-token>
+          Idempotency-Key: approval-adj-01J-1001
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "policyId": "apol_bil_adj_wik_v1",
+              "moduleCode": "BIL-02-ADJ",
+              "subjectType": "INVOICE_ADJUSTMENT",
+              "subjectId": "adj_01J_1001",
+              "requesterUserId": "kc_user_billing_01",
+              "context": {
+                "amount": 7000,
+                "currency": "KES",
+                "reasonCode": "SERVICE_CREDIT",
+                "franchiseId": "fr_01J_NRB_002",
+                "summary": "Credit customer for outage."
+              }
+          }
+
+ Response:
+          {
+              "approvalRequestId": "apr_01J_ADJ_1001",
+              "status": "PENDING",
+              "currentStepOrder": 1,
+              "tasksCreated": 1
+          }
+
+
+
+
+ 10. Business Rules
+  Rule                                                            Description
+
+  APR-1                                                           Owning module must create and validate its pending business request before
+                                                                  starting approval.
+
+  APR-2                                                           EM-CFG-04 must not directly mutate owning module business records.
+
+  APR-3                                                           Approval policy selection is by operator, module, action, status, effective date,
+                                                                  and conditions.
+
+  APR-4                                                           Active non-auto policy must have at least one step.
+
+  APR-5                                                           Approver eligibility is checked through EM-CFG-03 permission and scope.
+
+  APR-6                                                           If allow_requester = false, requester cannot approve their own task.
+
+  APR-7                                                           Every approval action must create immutable approval_decision.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 8
+  Rule                                                            Description
+
+  APR-8                                                           Final outcome must be delivered to owning module through callback and/or
+                                                                  event with retry.
+
+  APR-9                                                           If callback fails, approval request remains in final approval state but callback log
+                                                                  remains retryable until delivered or manually repaired.
+
+  APR-10                                                          Retired policies remain readable for historical approval requests.
+
+  APR-11                                                          Modules must support idempotent approval outcome callbacks.
+
+
+
+
+ 11. Camunda And Worker Model
+ EM-CFG-04 can run simple single-step approvals without Camunda, but BPMN is recommended for:
+
+   - multi-step approvals;
+
+   - timer escalation;
+
+   - request revision loops;
+
+   - parallel approvals;
+
+   - operator-specific routing.
+
+ Reference BPMN service tasks:
+
+  Task/topic                                                      Purpose
+
+  approval-load-request                                           Load approval request context.
+
+  approval-create-task                                            Create EM-CFG-04 task row and ICN notification.
+
+  approval-wait-user-action                                       Human user task.
+
+  approval-complete-step                                          Record step completion.
+
+  approval-deliver-outcome                                        Call owning module callback or emit final outcome event.
+
+  approval-expire-task                                            Mark timed-out task expired and escalate/reject per policy.
+
+
+ Worker names are logical topics. One worker deployment can handle multiple topics if metrics remain visible per topic.
+
+
+
+ 12. Events
+  Event                           Topic                           Meaning                                    Consumers
+
+  ApprovalPolicyActivated         sophix.approval.policy-activ    Policy became active.                      Backoffice, modules, audit.
+                                  ated
+
+  ApprovalRequestStarted          sophix.approval.request-star    Runtime approval started.                  Backoffice, ICN, REP.
+                                  ted
+
+  ApprovalTaskCreated             sophix.approval.task-created    Human task created.                        ICN, Backoffice task inbox.
+
+  ApprovalTaskCompleted           sophix.approval.task-complet    Task approved/rejected/revisioned.         REP, audit.
+                                  ed
+
+  ApprovalRequestApproved         sophix.approval.request-appr    Final approved outcome.                    Owning module, REP.
+                                  oved
+
+  ApprovalRequestRejected         sophix.approval.request-reje    Final rejected outcome.                    Owning module, REP.
+                                  cted
+
+  ApprovalRevisionRequested       sophix.approval.revision-req    Revision requested.                        Owning module, requester UI.
+                                  uested
+
+  ApprovalRequestExpired          sophix.approval.request-expi    Request timed out.                         Owning module, Backoffice.
+                                  red
+
+
+
+
+ 13. Frontend Usage
+ 13.1 FE-APP-01 Backoffice
+ Backoffice uses EM-CFG-04 for:
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 9
+  Area                                                          API
+
+  My approval tasks                                             GET /api/approvals/tasks?assigneeOrCandidate={user_id}&sta
+                                                                tus=OPEN
+
+  Approval detail                                               GET /api/approvals/requests/{approval_request_id}
+
+  Approve/reject/revision                                       task action APIs
+
+  Approval policy admin                                         policy catalog APIs
+
+  Pending approval badges                                       owning module detail plus approval request status
+
+
+ UI rule: Backoffice displays the business subject summary, but detailed fields should come from the owning module. Approval
+ UI should not reconstruct invoices, customers, or stock records from approval context alone.
+
+ 13.2 Owning Module Screens
+ Each module screen should show:
+
+   - pending approval status;
+
+   - current approval step;
+
+   - who can act;
+
+   - approval history;
+
+   - final outcome and callback status if failed.
+
+
+
+ 14. Integration With Other Modules
+  Module                                                        Integration
+
+  EM-CFG-03                                                     Checks approver permission/scope.
+
+  ICN-01                                                        Sends internal approval task notifications.
+
+  BIL modules                                                   Start approvals for adjustments, write-offs, wallet operations, tax cancellation,
+                                                                dunning overrides.
+
+  ILM/FUL                                                       Start approvals for KYC and customer-sensitive changes.
+
+  RLM/FUL-07                                                    Start approvals for HomePass sensitive transitions.
+
+  EM-01                                                         Start approvals for franchise retirement/suspension if configured.
+
+  OSR future                                                    Start approvals for procurement and write-off.
+
+  SIP future                                                    Start approvals for campaigns, discounts, bundle launches.
+
+  REP-01                                                        Consumes approval metrics and audit events.
+
+
+
+
+ 15. Infrastructure And Deployment
+ For a budget-conscious medium deployment:
+
+  Component                                                     Recommendation
+
+  Runtime                                                       Run inside EM/business-services or workflow-services pod.
+
+  Database                                                      PostgreSQL em or approval schema in shared business DB.
+
+  Camunda                                                       Use existing Camunda cluster from foundation.
+
+  Workers                                                       Consolidate approval worker topics with workflow worker deployment.
+
+  Kafka                                                         Use transactional outbox for approval events.
+
+  Cache                                                         Cache active policy lookup briefly, 2-5 minutes. Invalidate on policy
+                                                                activation/retirement.
+
+  Notifications                                                 ICN event or internal API for task notifications.
+
+  Observability                                                 Alert on overdue tasks, callback failures, stuck BPMN instances, outbox
+                                                                backlog.
+
+
+ AWS recommendation:
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                               Page 10
+  Concern                                                              AWS guidance
+
+  Compute                                                              Shared ECS/EKS services for approval API/workers.
+
+  DB                                                                   Existing RDS PostgreSQL.
+
+  Camunda                                                              Existing Camunda deployment/database.
+
+  Events                                                               Existing MSK/Kafka.
+
+  Secrets                                                              Secrets Manager/SSM for service tokens/callback credentials.
+
+  Monitoring                                                           CloudWatch/Prometheus alerts for pending tasks and callback retries.
+
+
+
+
+ 16. Tests
+ Minimum tests:
+
+  Test                                                                 Expected result
+
+  Evaluate action with no matching policy                              Returns approval not required or configured default.
+
+  Evaluate amount below auto threshold                                 Returns approvalRequired = false if policy allows auto.
+
+  Evaluate high amount                                                 Returns multi-step policy/steps.
+
+  Start approval request                                               Request and first task created.
+
+  Requester attempts to approve own task where not allowed             403 or task action denied.
+
+  User without required permission attempts approval                   403.
+
+  Approve final step                                                   Final outcome delivered to owning module.
+
+  Reject step                                                          Final rejected outcome delivered to owning module.
+
+  Request revision                                                     Revision outcome delivered, request no longer open.
+
+  Callback failure                                                     Callback log retryable; approval state preserved.
+
+  Duplicate approval request idempotency key                           Same response, no duplicate request.
+
+  Retired policy remains readable for historical request               Historical detail still works.
+
+
+
+
+ 17. Open Decisions For Review
+  Decision                                                             Recommendation
+
+  Should all approvals use Camunda?                                    No. Single-step/simple approvals can be DB-driven. Use Camunda for
+                                                                       multi-step/timer/revision flows.
+
+  Should EM-CFG-04 own approval tasks for all modules?                 Yes for shared task visibility, but owning module still owns business state.
+
+  Should approval decisions be delivered by callback or Kafka event?   Support both; callback is immediate, event is useful for async/reconciliation.
+                                                                       Owning modules must be idempotent.
+
+  Should approver lists be users or permissions?                       Prefer permission/scope-based candidate resolution. Use explicit users only for
+                                                                       exceptions.
+
+  Should requester self-approval ever be allowed?                      Default no. Allow only for low-risk policy with explicit allow_requester =
+                                                                       true.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                     Page 11
+

@@ -1,0 +1,329 @@
+ FE-CH-USSD-01 - USSD Channel
+ Version: v1.0 Bundle: 99_frontend Status: Draft for review Primary owner: Channels / integration team Related DDs:
+ FE-APP-04, DD_ILM-CFG-01, DD_SUB-LM-01, DD_BIL-01, DD_BIL-04, DD_PAY-GW-01, DD_TCK-01, DD_NOT-01,
+ DD_EM-CFG-03, DD_EM-CFG-04, DD_CUST-INT-01
+
+ MVP simplification baseline: first release USSD scope is limited to language selection, customer lookup, balance/debt status,
+ payment instructions/status, support ticket creation/status, and callback request. Do not implement package changes,
+ subscription migration, complex Customer 360 views, or local business state in USSD v1.
+
+
+
+ 1. Purpose
+ FE-CH-USSD-01 defines the USSD self-care channel for customers using feature phones or low-bandwidth mobile access.
+
+ The USSD channel should support simple customer self-service such as account lookup, balance, invoice/debt status,
+ package/subscription summary, payment instructions, ticket creation/status, language selection, and callback request.
+
+ USSD is a channel adapter. It does not own customer, billing, payment, subscription, ticket, or notification logic.
+
+
+
+ 2. Scope And Boundaries
+  Capability                                                         Owner
+
+  USSD session, menu, screen rendering, telco gateway adapter        FE-CH-USSD-01
+
+  Customer/account/contact lookup                                    ILM-CFG-01
+
+  Subscription summary/status                                        SUB-LM-01
+
+  Balance, invoice, payment status                                   BIL-01/BIL-02/BIL-04
+
+  Payment initiation/instructions                                    PAY-GW-01 and BIL payment APIs
+
+  Support ticket create/status                                       TCK-01
+
+  Customer notifications                                             NOT-01
+
+  Interaction history                                                CUST-INT-01
+
+  Permissions/channel policies                                       EM-CFG-03 / channel config
+
+
+ Boundary rules:
+
+   - USSD does not apply payments locally.
+
+   - USSD does not change subscription state locally.
+
+   - USSD does not close tickets locally.
+
+   - USSD must call owning module APIs with idempotency keys.
+
+   - USSD screens must be short, language-aware, and timeout-safe.
+
+
+
+ 3. Process Overview
+               sequenceDiagram
+                 participant TELCO as USSD Gateway
+                 participant USSD as SOPHIX USSD Adapter
+                 participant ILM as ILM-CFG-01
+                 participant BIL as Billing
+                 participant SUB as SUB-LM
+                 participant TCK as TCK-01
+                 participant INT as CUST-INT
+
+                 TELCO->>USSD: session request MSISDN + input
+                 USSD->>USSD: load session and menu state
+                 USSD->>ILM: resolve customer by MSISDN
+                 USSD->>BIL: get balance/debt when selected
+                 USSD->>SUB: get subscription status when selected
+                 USSD->>TCK: create/list ticket when selected
+                 USSD->>INT: record interaction
+                 USSD-->>TELCO: CON/END text response
+
+
+SOPHIX BSS Design Documents                                                                                               Page 1
+ 4. Supported V1 Menus
+  Menu                                        Purpose                                                  Module APIs
+
+  Account summary                             Customer name/account status.                            ILM-CFG-01.
+
+  Balance / amount due                        Current debt, next due date, dunning state.              BIL-01, BIL-04.
+
+  Pay / payment instructions                  Show paybill/till/reference or initiate STK where        PAY-GW-01, BIL payment APIs.
+                                              enabled.
+
+  Subscription status                         Active/suspended/restricted package summary.             SUB-LM-01.
+
+  Support                                     Create simple ticket or view latest ticket status.       TCK-01.
+
+  Callback request                            Create ticket/activity for agent callback.               TCK-01 or CVM/Backoffice queue.
+
+  Language                                    Set language preference where allowed.                   ILM-CFG-01 / preferences API.
+
+
+
+
+ 5. Data Model
+ 5.1 ussd_session
+ What it is for: stores an active USSD session and menu state.
+
+ When to use it: create/update on every gateway request until session ends or times out.
+
+ Sample meaning: ussd-sess-001 is customer phone 254700000001 currently viewing balance menu.
+
+  Column                          Type                                     Purpose                                   Sample
+
+  session_id                      TEXT PK                                  Internal session id.                      ussd-sess-001
+
+  operator_code                   TEXT                                     Tenant/operator.                          WIK
+
+  gateway_session_id              TEXT                                     Telco gateway session id.                 gw-abc-001
+
+  msisdn                          TEXT                                     Customer phone number, normalized.        254700000001
+
+  customer_id                     TEXT NULL                                Resolved customer.                        CUS-100045
+
+  account_id                      TEXT NULL                                Resolved account.                         ACC-900045
+
+  language_code                   TEXT                                     Current language.                         en
+
+  current_menu_code               TEXT                                     Menu state.                               BALANCE
+
+  session_data_json               JSONB                                    Temporary menu/session data.              {"selectedAccount":"ACC-9000
+                                                                                                                     45"}
+
+  status                          TEXT                                     ACTIVE, ENDED, TIMED_OUT,                 ACTIVE
+                                                                           FAILED.
+
+  started_at                      TIMESTAMP                                Start time.                               2026-08-30T08:00:00Z
+
+  last_seen_at                    TIMESTAMP                                Last request time.                        2026-08-30T08:01:00Z
+
+  ended_at                        TIMESTAMP NULL                           End time.                                 null
+
+
+ Recommended indexes:
+
+   - unique (operator_code, gateway_session_id).
+
+   - (msisdn, status).
+
+   - (last_seen_at, status).
+
+ 5.2 ussd_menu_definition
+ What it is for: stores configurable menu definitions per operator/language.
+
+ When to use it: seed menus for Kenya/WIK and override labels/options for other operators.
+
+ Sample meaning: menu MAIN in English shows balance, payment, subscription, support, and language options.
+
+  Column                          Type                                     Purpose                                   Sample
+
+  menu_code                       TEXT                                     Menu id.                                  MAIN
+
+  operator_code                   TEXT                                     Tenant/operator.                          WIK
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 2
+  Column                            Type                              Purpose                          Sample
+
+  language_code                     TEXT                              Language.                        en
+
+  menu_text                         TEXT                              Screen text template.            1 Balance\n2 Pay\n3 Support
+
+  options_json                      JSONB                             Option routing.                  {"1":"BALANCE","2":"PAY","3"
+                                                                                                       :"SUPPORT"}
+
+  requires_customer                 BOOLEAN                           Whether customer resolution is   true
+                                                                      required.
+
+  enabled                           BOOLEAN                           Menu enabled.                    true
+
+
+ Recommended indexes:
+
+   - unique (operator_code, language_code, menu_code).
+
+ 5.3 ussd_request_log
+ What it is for: stores request/response trace for operational support and dispute handling.
+
+ When to use it: create one row per gateway request.
+
+ Sample meaning: usrl-001 stores an inbound 1 selection and the balance screen returned.
+
+  Column                            Type                              Purpose                          Sample
+
+  request_log_id                    TEXT PK                           Log id.                          usrl-001
+
+  session_id                        TEXT                              USSD session.                    ussd-sess-001
+
+  operator_code                     TEXT                              Tenant/operator.                 WIK
+
+  gateway_request_id                TEXT NULL                         Gateway message id.              gw-msg-001
+
+  input_text                        TEXT NULL                         Customer input.                  1
+
+  response_type                     TEXT                              CON, END.                        CON
+
+  response_text                     TEXT                              Rendered response.               Your balance is KES 1200...
+
+  error_code                        TEXT NULL                         Error if failed.                 null
+
+  created_at                        TIMESTAMP                         Request time.                    2026-08-30T08:01:00Z
+
+
+ Recommended indexes:
+
+   - (session_id, created_at).
+
+   - (gateway_request_id).
+
+
+
+ 6. Gateway API
+ The exact request format depends on the USSD aggregator. The internal normalized endpoint should be:
+            POST /api/channels/ussd/sessions
+            Content-Type: application/json
+
+            {
+                "operatorCode": "WIK",
+                "gateway": "SAFARICOM_AGGREGATOR",
+                "gatewaySessionId": "gw-abc-001",
+                "gatewayRequestId": "gw-msg-001",
+                "msisdn": "254700000001",
+                "inputText": "1",
+                "shortCode": "*123#",
+                "requestedAt": "2026-08-30T08:01:00Z"
+            }
+
+ Response:
+            {
+                "responseType": "CON",
+                "text": "Balance: KES 1200\n1 Pay now\n2 Main menu"
+            }
+
+
+
+
+ 7. Module API Usage
+
+SOPHIX BSS Design Documents                                                                                                   Page 3
+  USSD action                                  Owning module                                   API
+
+  Resolve customer by phone                    ILM-CFG-01                                      GET /api/customers/lookup?msisdn=...
+
+  Get account summary                          ILM-CFG-01                                      GET
+                                                                                               /api/customers/{customer_id}/summary
+
+  Get subscription summary                     SUB-LM-01                                       GET /api/subscriptions?customerId=...
+
+  Get balance/debt                             BIL                                             GET /api/accounts/{account_id}/balance
+
+  Get dunning status                           BIL-04                                          GET /api/dunning-states?accountId=...
+
+  Payment instructions                         PAY-GW-01                                       POST /api/payments/instructions
+
+  Create ticket                                TCK-01                                          POST /api/tickets
+
+  Latest ticket status                         TCK-01                                          GET
+                                                                                               /api/tickets?customerId=...&limit=1
+
+  Record interaction                           CUST-INT-01                                     POST /api/customer-interactions
+
+
+
+
+ 8. Security And Privacy
+   - Use MSISDN-based lookup carefully; do not expose sensitive data before customer match.
+
+   - For risky actions, require PIN/OTP or route to assisted support.
+
+   - Do not show full ID/KYC values.
+
+   - Keep screens short and avoid sensitive details in request logs where possible.
+
+   - Apply rate limits by MSISDN, gateway, and short code.
+
+   - Mask MSISDN in logs outside operational support views.
+
+
+
+ 9. Configuration
+  Config                                                            Purpose
+
+  shortCode                                                         Operator USSD code.
+
+  defaultLanguage                                                   Default menu language.
+
+  enabledMenus                                                      Enabled menu codes.
+
+  sessionTimeoutSeconds                                             Gateway/session timeout.
+
+  maxMenuDepth                                                      Prevent long sessions.
+
+  paymentInstructionMode                                            Paybill/reference, STK push, or both.
+
+  supportTicketCategoryMap                                          USSD option to TCK ticket type.
+
+  customerLookupPolicy                                              Single/multiple/no account behavior.
+
+
+
+
+ 10. Test Scenarios
+   1. New session resolves customer by MSISDN.
+
+   2. Unknown MSISDN shows safe registration/support message.
+
+   3. Balance menu calls billing API and renders short response.
+
+   4. Payment instruction menu calls PAY-GW/BIL API.
+
+   5. Support menu creates TCK ticket with idempotency key.
+
+   6. Duplicate gateway request returns same response.
+
+   7. Timeout marks session TIMED_OUT.
+
+   8. Interaction is written to CUST-INT-01.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 4
+

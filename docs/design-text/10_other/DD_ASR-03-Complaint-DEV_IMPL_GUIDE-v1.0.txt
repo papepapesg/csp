@@ -1,0 +1,899 @@
+ DD_ASR-03 - Complaint - Developer Implementation
+ Guide
+ Version: 1.0 Status: Draft for review Bundle: 10_other Audience: mid-level backend developers, ticketing developers, billing
+ integration developers, QA Parent DD: DD_ASR-03 - Complaint
+
+
+
+ 1. How To Read This Guide
+ Complaint is a TCK ticket flow. It is not a separate complaint engine.
+
+ The flow creates a TCK complaint ticket, loads ASR complaint rules, records an investigation, records resolution actions,
+ optionally requests BIL adjustment, sends a customer-visible response, then resolves the TCK ticket.
+
+ ASR-03 can request actions in other modules. It does not directly change invoices, wallets, subscriptions, work orders, or
+ customer master data.
+
+
+
+ 2. Step 1 - Seed TCK Complaint Categories
+ Before any complaint can be created, seed TCK categories.
+          insert into ticket_category_config (
+            category_id,
+            operator_code,
+            type_code,
+            category_code,
+            display_name,
+            default_priority,
+            default_queue_code,
+            default_sla_policy,
+            wo_allowed,
+            default_wo_kind,
+            status
+          ) values
+            ('tcat-billing-dispute', 'WIK', 'BILLING_COMPLAINT', 'BILLING_DISPUTE', 'Billing dispute', 'P2', 'BILLING_CARE', 'COMPLA
+            ('tcat-payment-dispute', 'WIK', 'BILLING_COMPLAINT', 'PAYMENT_DISPUTE', 'Payment dispute', 'P2', 'PAYMENT_OPS', 'COMPLAI
+            ('tcat-repeat-tech', 'WIK', 'TECHNICAL_SUPPORT', 'REPEATED_TECHNICAL_FAULT', 'Repeated technical fault', 'P2', 'TECH_SUP
+            ('tcat-install-delay', 'WIK', 'INSTALLATION_FOLLOWUP', 'INSTALLATION_DELAY_COMPLAINT', 'Installation delay complaint', '
+            ('tcat-staff-conduct', 'WIK', 'GENERAL_INQUIRY', 'CONTRACTOR_OR_STAFF_CONDUCT', 'Contractor or staff conduct', 'P1', 'CA
+            ('tcat-general-complaint', 'WIK', 'GENERAL_INQUIRY', 'GENERAL_COMPLAINT', 'General complaint', 'P3', 'CARE_L1', 'COMPLAI
+
+ These are TCK categories. TCK owns ticket id, status, assignment, SLA, comments, and attachments.
+
+
+
+ 3. Step 2 - Seed ASR Complaint Category Config
+ Now seed ASR behavior for those categories.
+          insert into asr_complaint_category_config (
+            config_id,
+            operator_code,
+            category_code,
+            default_type_code,
+            default_priority,
+            default_queue_code,
+            investigation_required,
+            supervisor_review_required,
+            customer_response_required,
+            compensation_allowed,
+            source_modules_json,
+            allowed_resolution_codes_json,
+            status
+          ) values
+            (
+              'acc-billing-dispute',
+              'WIK',
+              'BILLING_DISPUTE',
+              'BILLING_COMPLAINT',
+              'P2',
+              'BILLING_CARE',
+              true,
+
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 1
+                true,
+                true,
+                true,
+                '["BIL-02-READ-01","BIL-02-ADJ-01","SIP-03","DIS-OP-01"]',
+                '["VALID_COMPLAINT_CORRECTED","PARTIALLY_VALID_CORRECTED","NOT_VALID_EXPLAINED","INCONCLUSIVE_EXPLAINED"]',
+                'ACTIVE'
+              ),
+              (
+                'acc-repeat-tech',
+                'WIK',
+                'REPEATED_TECHNICAL_FAULT',
+                'TECHNICAL_SUPPORT',
+                'P2',
+                'TECH_SUPPORT_L2',
+                true,
+                true,
+                true,
+                true,
+                '["ASR-01","WO-01","PROV-INT-01"]',
+                '["VALID_COMPLAINT_CORRECTED","PARTIALLY_VALID_CORRECTED","NOT_VALID_EXPLAINED"]',
+                'ACTIVE'
+              ),
+              (
+                'acc-staff-conduct',
+                'WIK',
+                'CONTRACTOR_OR_STAFF_CONDUCT',
+                'GENERAL_INQUIRY',
+                'P1',
+                'CARE_SUPERVISOR',
+                true,
+                true,
+                true,
+                false,
+                '["EM-01","EM-02","WO-01","SALES-01","TCK-01"]',
+                '["VALID_COMPLAINT_CORRECTED","PARTIALLY_VALID_CORRECTED","NOT_VALID_EXPLAINED","ESCALATED_TO_MANAGEMENT"]',
+                'ACTIVE'
+              );
+
+ Frontend and backend must read this config. Do not hardcode complaint rules per screen.
+
+
+
+ 4. Step 3 - Customer Or Agent Creates Complaint Ticket
+ Backoffice calls TCK:
+          POST /api/tickets
+          Idempotency-Key: bo-complaint-20260604-000011
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "typeCode": "BILLING_COMPLAINT",
+              "categoryCode": "BILLING_DISPUTE",
+              "sourceChannel": "BACKOFFICE",
+              "customerId": "CUS-100045",
+              "accountId": "ACC-900045",
+              "subscriptionId": "SUB-700045",
+              "subject": "Customer disputes missing discount",
+              "description": "Customer says the June invoice did not include a retention discount promised by care.",
+              "linkedEntities": [
+                 {"entityType": "INVOICE", "entityId": "INV-2026-06-000045"},
+                 {"entityType": "SUBSCRIPTION", "entityId": "SUB-700045"}
+              ],
+              "customerVisible": true
+          }
+
+ TCK must:
+
+   1. validate typeCode and categoryCode;
+
+   2. create ticket;
+
+   3. create ticket_entity_link rows;
+
+   4. assign queue/SLA from ticket_category_config;
+
+   5. emit generic TicketCreated;
+
+   6. let ASR emit ComplaintCreated when the category maps to ASR-03.
+
+ Expected response:
+
+SOPHIX BSS Design Documents                                                                                             Page 2
+           {
+               "ticketId": "tck-20260604-000011",
+               "statusCode": "OPEN",
+               "categoryCode": "BILLING_DISPUTE",
+               "priorityCode": "P2",
+               "assignedQueueCode": "BILLING_CARE"
+           }
+
+
+
+
+ 5. Step 4 - Backoffice Loads Complaint Guidance
+ When the user opens the complaint, Backoffice calls:
+           GET /api/asr/complaints/tck-20260604-000011/guidance
+
+ Backend reads:
+           select *
+           from asr_complaint_category_config
+           where operator_code = 'WIK'
+             and category_code = 'BILLING_DISPUTE'
+             and status = 'ACTIVE';
+
+ Response:
+           {
+               "ticketId": "tck-20260604-000011",
+               "categoryCode": "BILLING_DISPUTE",
+               "defaultQueueCode": "BILLING_CARE",
+               "investigationRequired": true,
+               "supervisorReviewRequired": true,
+               "customerResponseRequired": true,
+               "compensationAllowed": true,
+               "sourceModules": ["BIL-02-READ-01", "BIL-02-ADJ-01", "SIP-03", "DIS-OP-01"],
+               "allowedResolutionCodes": [
+                  "VALID_COMPLAINT_CORRECTED",
+                  "PARTIALLY_VALID_CORRECTED",
+                  "NOT_VALID_EXPLAINED",
+                  "INCONCLUSIVE_EXPLAINED"
+               ],
+               "allowedActions": [
+                  "START_INVESTIGATION",
+                  "ADD_FINDINGS",
+                  "CREATE_RESOLUTION_ACTION",
+                  "RECOMMEND_COMPENSATION",
+                  "ESCALATE",
+                  "SEND_CUSTOMER_RESPONSE",
+                  "RESOLVE"
+               ]
+           }
+
+ The UI uses this response to decide visible buttons and required fields.
+
+
+
+ 6. Step 5 - Start Investigation
+ The agent starts investigation:
+           POST /api/asr/complaints/tck-20260604-000011/investigation
+           Content-Type: application/json
+
+           {
+               "customerClaim": "Customer says a 500 KES retention discount was promised and should appear on June invoice.",
+               "assignedQueueCode": "BILLING_CARE",
+               "sourceRefs": [
+                 {"module": "BIL-02-READ-01", "ref": "INV-2026-06-000045"},
+                 {"module": "SIP-03", "ref": "discount-assignment-8891"}
+               ]
+           }
+
+ Insert:
+           insert into asr_complaint_investigation (
+             investigation_id,
+             ticket_id,
+             operator_code,
+             category_code,
+             investigation_status,
+             assigned_queue_code,
+             assigned_user_id,
+
+
+SOPHIX BSS Design Documents                                                                                            Page 3
+             source_refs_json,
+             customer_claim,
+             findings_summary,
+             root_cause_code,
+             validity_code,
+             created_by_user_id,
+             created_at
+          ) values (
+             'aci-001',
+             'tck-20260604-000011',
+             'WIK',
+             'BILLING_DISPUTE',
+             'OPEN',
+             'BILLING_CARE',
+             'usr-billing-014',
+             '[{"module":"BIL-02-READ-01","ref":"INV-2026-06-000045"},{"module":"SIP-03","ref":"discount-assignment-8891"}]',
+             'Customer says a 500 KES retention discount was promised and should appear on June invoice.',
+             null,
+             null,
+             null,
+             'usr-care-001',
+             now()
+          );
+
+ Then update TCK:
+          POST /api/tickets/tck-20260604-000011/assign
+          Content-Type: application/json
+
+          {
+              "assignedQueueCode": "BILLING_CARE",
+              "assignedUserId": "usr-billing-014",
+              "statusCode": "ASSIGNED"
+          }
+
+
+
+
+ 7. Step 6 - Gather Source Data
+ The complaint service calls owning module APIs. It must not read another module's tables directly.
+
+ For billing dispute:
+          GET /api/invoices/INV-2026-06-000045
+          GET /api/invoices/INV-2026-06-000045/lines
+          GET /api/discount-assignments/discount-assignment-8891
+          GET /api/discount-runtime/applications?invoiceId=INV-2026-06-000045
+
+ Example source summary stored in application memory or returned to UI:
+          {
+              "invoice": {
+                 "invoiceId": "INV-2026-06-000045",
+                 "totalAmount": 4500.00,
+                 "currencyCode": "KES",
+                 "status": "ISSUED"
+              },
+              "discountAssignment": {
+                 "discountAssignmentId": "discount-assignment-8891",
+                 "status": "ACTIVE",
+                 "amount": 500.00,
+                 "validFrom": "2026-06-01",
+                 "validTo": "2026-06-30"
+              },
+              "runtimeApplication": {
+                 "found": false,
+                 "reason": "No discount runtime application record for invoice."
+              }
+          }
+
+ If a source API fails:
+
+   1. keep investigation status WAITING_SOURCE;
+
+   2. update TCK status to WAITING_INTERNAL;
+
+   3. create a TCK internal comment naming the unavailable module;
+
+   4. retry through a worker or ask the owning team.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                          Page 4
+ 8. Step 7 - Complete Investigation
+ When facts are clear, the investigator completes:
+           POST /api/asr/complaints/investigations/aci-001/complete
+           Content-Type: application/json
+
+           {
+               "findingsSummary": "The customer had an active discount assignment, but the discount runtime did not apply it to the Jun
+               "rootCauseCode": "BILLING_DISCOUNT_RUNTIME_ERROR",
+               "validityCode": "VALID",
+               "sourceRefs": [
+                 {"module": "BIL-02-READ-01", "ref": "INV-2026-06-000045"},
+                 {"module": "DIS-OP-01", "ref": "discount-runtime-log-7712"},
+                 {"module": "SIP-03", "ref": "discount-assignment-8891"}
+               ]
+           }
+
+ Update:
+           update asr_complaint_investigation
+           set investigation_status = 'COMPLETED',
+               findings_summary = 'The customer had an active discount assignment, but the discount runtime did not apply it to the J
+               root_cause_code = 'BILLING_DISCOUNT_RUNTIME_ERROR',
+               validity_code = 'VALID',
+               source_refs_json = '[{"module":"BIL-02-READ-01","ref":"INV-2026-06-000045"},{"module":"DIS-OP-01","ref":"discount-runt
+               completed_at = now()
+           where investigation_id = 'aci-001';
+
+ Emit:
+           {
+               "eventType": "ComplaintInvestigationCompleted",
+               "ticketId": "tck-20260604-000011",
+               "investigationId": "aci-001",
+               "rootCauseCode": "BILLING_DISCOUNT_RUNTIME_ERROR",
+               "validityCode": "VALID"
+           }
+
+
+
+
+ 9. Step 8 - Create Resolution Action
+ Because the complaint is valid, create an action.
+           POST /api/asr/complaints/tck-20260604-000011/resolution-actions
+           Content-Type: application/json
+
+           {
+               "investigationId": "aci-001",
+               "actionType": "BIL_ADJUSTMENT_REQUEST",
+               "owningModule": "BIL-02-ADJ-01",
+               "customerVisible": true,
+               "actionSummary": "Request credit note for 500 KES missing discount."
+           }
+
+ Insert:
+           insert into asr_complaint_resolution_action (
+             resolution_action_id,
+             ticket_id,
+             investigation_id,
+             operator_code,
+             action_type,
+             action_status,
+             owning_module,
+             owning_ref_id,
+             customer_visible,
+             action_summary,
+             created_by_user_id,
+             created_at
+           ) values (
+             'acra-001',
+             'tck-20260604-000011',
+             'aci-001',
+             'WIK',
+             'BIL_ADJUSTMENT_REQUEST',
+             'PLANNED',
+             'BIL-02-ADJ-01',
+             null,
+             true,
+             'Request credit note for 500 KES missing discount.',
+
+
+
+SOPHIX BSS Design Documents                                                                                            Page 5
+               'usr-billing-014',
+               now()
+           );
+
+
+
+
+ 10. Step 9 - Recommend Compensation
+ Create the complaint recommendation:
+           POST /api/asr/complaints/tck-20260604-000011/compensation-recommendations
+           Content-Type: application/json
+
+           {
+               "reasonCode": "WRONG_DISCOUNT_APPLICATION",
+               "recommendedDirection": "CREDIT",
+               "recommendedScope": "LINE",
+               "recommendedAmount": 500.00,
+               "currencyCode": "KES",
+               "sourceInvoiceId": "INV-2026-06-000045",
+               "sourceLineRefs": [
+                  {"lineId": "INVLINE-001", "amountOverride": 500.00}
+               ],
+               "justification": "Active approved discount was not applied to the issued invoice."
+           }
+
+ Insert:
+           insert into asr_complaint_compensation_recommendation (
+              recommendation_id,
+              ticket_id,
+              operator_code,
+              reason_code,
+              recommended_direction,
+              recommended_scope,
+              recommended_amount,
+              currency_code,
+              source_invoice_id,
+              source_line_refs_json,
+              justification,
+              status,
+              adjustment_request_id,
+              created_by_user_id,
+              created_at
+           ) values (
+              'accr-001',
+              'tck-20260604-000011',
+              'WIK',
+              'WRONG_DISCOUNT_APPLICATION',
+              'CREDIT',
+              'LINE',
+              500.00,
+              'KES',
+              'INV-2026-06-000045',
+              '[{"lineId":"INVLINE-001","amountOverride":500.00}]',
+              'Active approved discount was not applied to the issued invoice.',
+              'DRAFT',
+              null,
+              'usr-billing-014',
+              now()
+           );
+
+ Do not create a credit note here. ASR only records the recommendation.
+
+
+
+ 11. Step 10 - Supervisor Review If Required
+ For BILLING_DISPUTE, config says supervisor review is required.
+           POST /api/asr/complaints/tck-20260604-000011/escalations
+           Content-Type: application/json
+
+           {
+               "escalationLevel": "SUPERVISOR",
+               "reasonCode": "COMPENSATION_REVIEW",
+               "assignedQueueCode": "CARE_SUPERVISOR",
+               "summary": "Review validated complaint and 500 KES credit recommendation."
+           }
+
+ Insert:
+
+
+SOPHIX BSS Design Documents                                                                         Page 6
+          insert into asr_complaint_escalation (
+             escalation_id,
+             ticket_id,
+             operator_code,
+             escalation_level,
+             reason_code,
+             assigned_queue_code,
+             assigned_user_id,
+             status,
+             decision_summary,
+             created_by_user_id,
+             created_at
+          ) values (
+             'ace-001',
+             'tck-20260604-000011',
+             'WIK',
+             'SUPERVISOR',
+             'COMPENSATION_REVIEW',
+             'CARE_SUPERVISOR',
+             null,
+             'OPEN',
+             null,
+             'usr-billing-014',
+             now()
+          );
+
+ Move ticket to review:
+          POST /api/tickets/tck-20260604-000011/status
+          Content-Type: application/json
+
+          {
+              "statusCode": "UNDER_REVIEW",
+              "reasonCode": "SUPERVISOR_REVIEW_REQUIRED"
+          }
+
+ When supervisor approves:
+          update asr_complaint_escalation
+          set status = 'APPROVED',
+              assigned_user_id = 'usr-supervisor-002',
+              decision_summary = 'Approved credit recommendation and customer response.',
+              decided_at = now()
+          where escalation_id = 'ace-001';
+
+
+
+
+ 12. Step 11 - Create BIL Adjustment Request
+ After approval, ASR calls BIL-02-ADJ-01:
+          POST /api/adjustments
+          Idempotency-Key: asr-complaint-tck-20260604-000011-credit
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "customerId": "CUS-100045",
+              "accountId": "ACC-900045",
+              "direction": "CREDIT",
+              "scope": "LINE",
+              "originalInvoiceId": "INV-2026-06-000045",
+              "proposedLineItems": [
+                 {"parentLineItemId": "INVLINE-001", "amountOverride": 500.00}
+              ],
+              "reasonCode": "WRONG_DISCOUNT_APPLICATION",
+              "externalCaseRef": "tck-20260604-000011",
+              "description": "Credit requested from ASR-03 billing complaint."
+          }
+
+ Expected BIL response:
+          {
+              "adjustmentRequestId": "adj-20260604-000007",
+              "status": "PENDING_APPROVAL",
+              "approvalWorkflowRef": "adjustment_approval_threshold_v1"
+          }
+
+ Patch ASR records:
+          update asr_complaint_compensation_recommendation
+          set status = 'REQUESTED',
+              adjustment_request_id = 'adj-20260604-000007'
+
+
+
+SOPHIX BSS Design Documents                                                                 Page 7
+           where recommendation_id = 'accr-001';
+
+           update asr_complaint_resolution_action
+           set action_status = 'REQUESTED',
+               owning_ref_id = 'adj-20260604-000007'
+           where resolution_action_id = 'acra-001';
+
+ Important: BIL may still reject or request revision. ASR must show the BIL status but must not override BIL approval.
+
+
+
+ 13. Step 12 - Send Customer Response
+ After investigation and required review, the agent sends the formal response:
+           POST /api/asr/complaints/tck-20260604-000011/customer-response
+           Content-Type: application/json
+
+           {
+               "languageCode": "en",
+               "responseChannel": "BACKOFFICE",
+               "resolutionCode": "VALID_COMPLAINT_CORRECTED",
+               "responseBody": "We reviewed your invoice and confirmed that your 500 KES discount was not applied correctly. A credit r
+           }
+
+ Insert:
+           insert into asr_complaint_customer_response (
+              response_id,
+              ticket_id,
+              operator_code,
+              language_code,
+              response_body,
+              response_channel,
+              resolution_code,
+              sent_by_user_id,
+              sent_at
+           ) values (
+              'acr-001',
+              'tck-20260604-000011',
+              'WIK',
+              'en',
+              'We reviewed your invoice and confirmed that your 500 KES discount was not applied correctly. A credit request has been
+              'BACKOFFICE',
+              'VALID_COMPLAINT_CORRECTED',
+              'usr-care-001',
+              now()
+           );
+
+ Then add customer-visible TCK comment:
+           POST /api/tickets/tck-20260604-000011/comments
+           Content-Type: application/json
+
+           {
+               "visibility": "CUSTOMER",
+               "commentBody": "We reviewed your invoice and confirmed that your 500 KES discount was not applied correctly. A credit re
+           }
+
+ If the operator wants SMS/email, publish to NOT-01 with template COMPLAINT_RESPONSE_SENT.
+
+
+
+ 14. Step 13 - Resolve The TCK Ticket
+ Before resolving, validate closure conditions.
+           -- Investigation exists and is complete.
+           select investigation_status
+           from asr_complaint_investigation
+           where ticket_id = 'tck-20260604-000011';
+
+           -- Customer response exists.
+           select response_id
+           from asr_complaint_customer_response
+           where ticket_id = 'tck-20260604-000011';
+
+           -- Required supervisor escalation is approved.
+           select status
+           from asr_complaint_escalation
+           where ticket_id = 'tck-20260604-000011'
+             and reason_code = 'COMPENSATION_REVIEW';
+
+
+SOPHIX BSS Design Documents                                                                                              Page 8
+ Then call TCK:
+          POST /api/tickets/tck-20260604-000011/resolve
+          Content-Type: application/json
+
+          {
+              "resolutionCode": "VALID_COMPLAINT_CORRECTED",
+              "resolutionSummary": "Complaint validated. BIL adjustment request adj-20260604-000007 created for the missing discount."
+          }
+
+ TCK sets status to RESOLVED, stores resolution fields, emits TicketResolved, and ASR emits ComplaintResolved.
+
+
+
+ 15. Alternative Flow - Complaint Not Valid
+ If investigation shows the invoice is correct:
+
+   1. Complete investigation with validityCode = NOT_VALID.
+
+   2. Create EXPLANATION resolution action.
+
+   3. Do not create compensation recommendation.
+
+   4. Send customer response explaining the finding.
+
+   5. Resolve with NOT_VALID_EXPLAINED.
+
+ Example final response:
+          {
+              "resolutionCode": "NOT_VALID_EXPLAINED",
+              "responseBody": "We reviewed the invoice and confirmed that the package charge and taxes match your active subscription
+          }
+
+
+
+
+ 16. Alternative Flow - Technical Complaint
+ If the complaint is repeated technical fault:
+
+   1. Create TCK complaint with category REPEATED_TECHNICAL_FAULT.
+
+   2. Load ASR guidance.
+
+   3. Start complaint investigation.
+
+   4. Pull previous ASR-01 diagnostics and WO support history.
+
+   5. If repair is needed, create/link ASR-01 or support WO using TCK/WO APIs.
+
+   6. Keep complaint ticket WAITING_WORK_ORDER if TCK policy says closure depends on WO result.
+
+   7. After WO result, complete investigation with root cause.
+
+   8. Recommend compensation only if policy and outage evidence support it.
+
+   9. Send formal customer response.
+
+   10. Resolve complaint.
+
+ The complaint ticket tracks dissatisfaction and formal response. ASR-01/WO track technical restoration.
+
+
+
+ 17. Suggested Worker Commands
+ These run inside TCK/ASR workers and can be consolidated into one worker process with multiple scheduled commands.
+          asr-complaint:sla-scan
+          asr-complaint:duplicate-scan
+          asr-complaint:source-api-retry
+          asr-complaint:bil-adjustment-status-sync
+          asr-complaint:escalation-reminder
+
+  Command                                                        Purpose
+
+  asr-complaint:sla-scan                                         Finds complaints approaching/breaching SLA and emits alerts.
+
+  asr-complaint:duplicate-scan                                   Links repeated complaints by same customer/source/category.
+
+
+
+SOPHIX BSS Design Documents                                                                                                     Page 9
+  Command                                                         Purpose
+
+  asr-complaint:source-api-retry                                  Retries source API lookups that left investigation in WAITING_SOURCE.
+
+  asr-complaint:bil-adjustment-status-sync                        Reads BIL adjustment status for linked compensation recommendations.
+
+  asr-complaint:escalation-reminder                               Reminds supervisor queues about open escalation records.
+
+
+
+
+ 18. Error Codes
+  Code                                                            Meaning
+
+  ASR_COMP_CATEGORY_NOT_CONFIGURED                                TCK category has no ASR complaint config.
+
+  ASR_COMP_INVESTIGATION_ALREADY_EXISTS                           Ticket already has an investigation.
+
+  ASR_COMP_INVESTIGATION_REQUIRED                                 Cannot resolve because investigation is required and missing.
+
+  ASR_COMP_INVESTIGATION_NOT_COMPLETE                             Cannot resolve because investigation is still open.
+
+  ASR_COMP_CUSTOMER_RESPONSE_REQUIRED                             Cannot resolve without customer-visible response.
+
+  ASR_COMP_SUPERVISOR_REVIEW_REQUIRED                             Cannot proceed until supervisor review is approved.
+
+  ASR_COMP_COMPENSATION_NOT_ALLOWED                               Category does not allow compensation recommendation.
+
+  ASR_COMP_BIL_ADJUSTMENT_FAILED                                  BIL adjustment request failed.
+
+  ASR_COMP_INVALID_RESOLUTION_CODE                                Resolution code is not allowed for category.
+
+  ASR_COMP_INTERNAL_TEXT_IN_CUSTOMER_RESPONSE                     Response contains blocked internal-only wording.
+
+
+
+
+ 19. Minimum Implementation Order
+   1. Seed TCK complaint categories.
+
+   2. Create ASR complaint tables and indexes.
+
+   3. Seed ASR complaint category config.
+
+   4. Implement guidance API.
+
+   5. Implement investigation start/complete APIs.
+
+   6. Implement source API adapter pattern for BIL, PAY-GW, WO, FUL, OSR, EM.
+
+   7. Implement resolution-action API.
+
+   8. Implement compensation recommendation API.
+
+   9. Implement BIL adjustment request integration.
+
+   10. Implement escalation API.
+
+   11. Implement customer-response API.
+
+   12. Patch TCK resolve validation to call ASR complaint closure checks.
+
+   13. Emit ASR complaint events.
+
+   14. Patch Backoffice complaint screens.
+
+   15. Patch customer-safe self-care status/response view if enabled.
+
+   16. Add E2E tests.
+
+
+
+ 20. Test Scenarios
+ 20.1 Valid Billing Complaint With Credit Request
+ Input:
+
+   - Complaint category BILLING_DISPUTE.
+
+   - Invoice linked.
+
+
+
+SOPHIX BSS Design Documents                                                                                                           Page 10
+   - Investigation finds missing discount.
+
+ Expected:
+
+   - Investigation completed as VALID.
+
+   - Compensation recommendation created.
+
+   - Supervisor review approved.
+
+   - BIL adjustment request created.
+
+   - Customer response sent.
+
+   - TCK ticket resolved.
+
+ 20.2 Billing Complaint Not Valid
+ Input:
+
+   - Customer disputes invoice.
+
+   - Investigation finds invoice matches package/tax configuration.
+
+ Expected:
+
+   - Investigation completed as NOT_VALID.
+
+   - No BIL adjustment request.
+
+   - Customer response explains finding.
+
+   - Ticket resolves as NOT_VALID_EXPLAINED.
+
+ 20.3 Staff Conduct Complaint
+ Input:
+
+   - Category CONTRACTOR_OR_STAFF_CONDUCT.
+
+ Expected:
+
+   - Supervisor review required.
+
+   - Compensation disabled unless separately configured.
+
+   - Internal findings hidden from customer.
+
+   - Customer receives professional response.
+
+ 20.4 Repeated Technical Fault Complaint
+ Input:
+
+   - Category REPEATED_TECHNICAL_FAULT.
+
+   - Previous ASR-01 tickets and WO records exist.
+
+ Expected:
+
+   - Investigation reads ASR-01/WO history.
+
+   - Support WO or ASR-01 link created if needed.
+
+   - Complaint waits for WO result if policy requires.
+
+   - Customer response references outcome, not internal diagnostics.
+
+ 20.5 Closure Blocked
+ Input:
+
+   - User attempts to resolve complaint before investigation or customer response.
+
+ Expected:
+
+   - API returns 409 ASR_COMP_INVESTIGATION_REQUIRED or 409 ASR_COMP_CUSTOMER_RESPONSE_REQUIRED.
+
+   - TCK status remains open.
+
+SOPHIX BSS Design Documents                                                                        Page 11
+ 21. Developer Checklist
+   - Complaint flow uses TCK ticket lifecycle.
+
+   - ASR complaint tables do not duplicate TCK status, assignment, or comments.
+
+   - Source data is pulled through owning module APIs only.
+
+   - Investigation records root cause and validity.
+
+   - Customer response is stored and also added as TCK customer-visible comment.
+
+   - Financial correction is requested through BIL-02-ADJ-01 only.
+
+   - Closure validation blocks incomplete complaints.
+
+   - Events are emitted for reporting and timeline.
+
+   - Worker commands can run inside the existing TCK worker pool.
+
+
+
+
+SOPHIX BSS Design Documents                                                        Page 12
+

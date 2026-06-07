@@ -1,0 +1,963 @@
+ DD: BIL-CFG-01 v1.0 — BillableEvent Catalog
+ Developer implementation guide: DD_BIL-CFG-01-Billable_Event_Catalog-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract
+ DD_BIL-CFG-01-Billable_Event_Catalog-v1.0.md.
+
+ Verdict: ■ Updated | Wave: 1 | Group I: Billing | Version: v1.0 The BillableEvent catalog. Owns: the billable_event
+ table (the entries that BIL-01 charges customers under), the billable_event_category sub-catalog (finance reporting
+ classification), and the rules governing trigger types, applicability, signed-amount semantics, state callbacks, and operator
+ scoping. BIL-01 reads this catalog at runtime to resolve which BillableEvents to charge when a workflow's
+ bil01-emit-intent arrives. What changed from v0.8: - Operator scoping — operator_code column on both
+ billable_event and billable_event_category. Each operator carries its own catalog. Per memory rule #16. -
+ Signed-amount semantics — new amount_sign_policy column declaring whether the event's amount is always positive
+ (charge), always negative (credit), or signed at runtime (computed by BIL-01 / billing-rules KJAR per-call). Used by
+ MIGRATION_PRORATE which may be a charge or credit depending on source vs target Package price. - Cycle-anchor
+ support — three new catalog rows added to the KE seed: OLD_CYCLE_CREDIT, FIRST_CYCLE_CHARGE, and a refined
+ MIGRATION_PRORATE_DELTA with signed semantics. These cover the cycleAnchorPolicy = RESET_TO_X path used
+ by UPGRADE/DOWNGRADE/MIGRATION. - Section cleanup — removed Module placement, Codebase,
+ Foundation-specific configurations, Frontend, Gap & bridge, Migration approach, What's NEW in V3
+ sections per memory rule #26. The DD now specifies the catalog only.
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    5_billing/DD_BIL-CFG-01-Billable_Event_Catalog-v1.0.md
+
+  Version                                                           v1.0
+
+  DD type                                                           module contract
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   Not explicitly defined
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+   - GET /api/billing/billable-events/{id}
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+   - GET /api/billing/billable-events?operatorCode=WIK&triggerType=SAGA_INTENT&triggerIntentCod
+     e=RELOCATION_INTENT&status=ACTIVE
+
+   - PATCH /api/billing/billable-events/{id}
+
+   - POST /api/billing/billable-events
+
+   - POST /api/billing/billable-events/{id}/activate
+
+   - POST /api/billing/billable-events/{id}/retire
+
+ 4.2 Tables
+   - billable_event
+
+   - billable_event_category
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - bil01-emit-intent
+
+   - billing-rules
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - SubscriptionPaused
+
+   - SubscriptionTerminated
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+
+SOPHIX BSS Design Documents                                                                                              Page 2
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                          Recommendation
+
+  API/runtime                                                      Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                          Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                         Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                            Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                          Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                           Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                          Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                   Store with IRSA.
+
+  Observability                                                    Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                   dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ Updated | Wave: 1 | Group I: Billing | Version: v1.0
+
+ The BillableEvent catalog. Owns: the billable_event table (the entries that BIL-01 charges customers under), the
+ billable_event_category sub-catalog (finance reporting classification), and the rules governing trigger types,
+ applicability, signed-amount semantics, state callbacks, and operator scoping. BIL-01 reads this catalog at runtime to resolve
+ which BillableEvents to charge when a workflow's bil01-emit-intent arrives.
+
+ What changed from v0.8:
+
+ - Operator scoping — operator_code column on both billable_event and billable_event_category. Each
+ operator carries its own catalog. Per memory rule #16.
+
+ - Signed-amount semantics — new amount_sign_policy column declaring whether the event's amount is always
+ positive (charge), always negative (credit), or signed at runtime (computed by BIL-01 / billing-rules KJAR per-call). Used by
+ MIGRATION_PRORATE which may be a charge or credit depending on source vs target Package price.
+
+ - Cycle-anchor support — three new catalog rows added to the KE seed: OLD_CYCLE_CREDIT, FIRST_CYCLE_CHARGE,
+ and a refined MIGRATION_PRORATE_DELTA with signed semantics. These cover the cycleAnchorPolicy =
+ RESET_TO_X path used by UPGRADE/DOWNGRADE/MIGRATION.
+
+ - Section cleanup — removed Module placement, Codebase, Foundation-specific configurations,
+ Frontend, Gap & bridge, Migration approach, What's NEW in V3 sections per memory rule #26. The DD now
+ specifies the catalog only.
+
+
+ Glossary
+  Term                                                             Meaning
+
+  BillableEvent                                                    A catalog entry declaring a single chargeable event template. Carries trigger
+                                                                   metadata, applicability, eligibility filters, optional state callback, signed-amount
+                                                                   policy. Operator-scoped.
+
+  BillableEventCategory                                            Finance-reporting classification (LIFECYCLE_FEE,
+                                                                   EARLY_TERMINATION_FEE, REFUND, etc.). Operator-scoped. Drives
+                                                                   revenue-stream separation.
+
+  Trigger type                                                     The mechanism that fires a BillableEvent: SAGA_INTENT (synchronous
+                                                                   workflow billing call), LIFECYCLE_EVENT (async post-commit Kafka event),
+                                                                   ADMIN_ACTION, CUSTOMER_PURCHASE, EXTERNAL_PAYMENT, SCHEDULED.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                     Page 3
+  Term                                                               Meaning
+
+  Saga intent code                                                   Canonical intent from SUB-WF-FRAMEWORK-01: ACTIVATION_INTENT,
+                                                                     PAUSE_INTENT, RESUME_INTENT, UPGRADE_INTENT, DOWNGRADE_INTENT,
+                                                                     RELOCATION_INTENT, MIGRATION_INTENT, RESTRICTION_ADD_INTENT,
+                                                                     RESTRICTION_REMOVE_INTENT, SUSPEND_NP_INTENT,
+                                                                     TERMINATION_INTENT. A workflow's bil01-emit-intent call carries one
+                                                                     of these. BIL-01 resolves matching active BillableEvents by (operatorCode,
+                                                                     triggerType=SAGA_INTENT, triggerIntentCode) + filter rules.
+
+  State callback                                                     An optional invocation of SUB-LM-01 by BIL-01 after a successful charge, used
+                                                                     by events that drive subscription transitions (e.g.,
+                                                                     RECONNECTION_FEE_AFTER_DUNNING calls back to flip status
+                                                                     SUSPENDED_NP → ACTIVE).
+
+  Amount sign policy                                                 POSITIVE_ONLY (charge — increments customer balance owed),
+                                                                     NEGATIVE_ONLY (credit — decrements / refunds), or SIGNED
+                                                                     (runtime-computed signed amount, used for proration deltas where direction
+                                                                     depends on source vs target Package price).
+
+  Filter rule                                                        An optional Drools rule (in the billing-rules KJAR) that accepts/rejects a
+                                                                     BillableEvent match based on the workflow's intentContext (e.g., reject
+                                                                     EARLY_TERMINATION_FEE if the subscription is past its minimum-term).
+
+
+
+
+ 1. What this DD owns
+   1. The billable_event_category table.
+
+   2. The billable_event table.
+
+   3. Rules governing trigger types, applicability, signed-amount semantics, state callbacks, eligibility filters, and operator
+     scoping.
+
+   4. The CRUD API for catalog management (admin-only).
+
+   5. Kafka catalog-administration events (created/updated/activated/retired).
+
+ What this DD does NOT own
+   - Charging logic — BIL-01 (the engine that reads this catalog at runtime).
+
+   - Service catalog — PLM-CFG-01 (service_refs[] entries on BillableEvents resolve to ONE_SHOT Services there).
+
+   - Currency derivation — Services carry currency; BillableEvents inherit from referenced Services (R-B-4).
+
+   - Tax computation — Services carry default tax-group refs; BIL-01 applies them per PLM-CFG-02.
+
+   - Customer wallet / payment — handled downstream by BIL-01 + BIL-01-PAY-01.
+
+   - State transitions — SUB-LM-01 owns the actual transition mechanism; this DD only declares transition codes
+     BillableEvents may invoke via callback.
+
+ Operator scoping
+ Every BillableEvent and Category is scoped to one operator. KE WIK seeds one catalog; WUG/WTZ/YASSN seed their own.
+ Each operator's deployment adds, retires, or modifies its own catalog entries without affecting other operators.
+ Cross-operator references are rejected at create/update time.
+
+
+
+ 2. Schemas
+ 2.1 billable_event_category
+ Finance reporting classification, operator-scoped.
+                CREATE TABLE billable_event_category (
+                  id                      TEXT PRIMARY KEY,
+                  operator_code           TEXT NOT NULL,
+                  code                    TEXT NOT NULL,
+                  description             TEXT NOT NULL,
+                  gl_account_hint         TEXT NULL,
+                  is_credit               BOOLEAN NOT NULL DEFAULT FALSE,
+                  display_order           INTEGER NOT NULL DEFAULT 0,
+                  status                  TEXT NOT NULL,
+                  created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 4
+              created_by              TEXT NOT NULL,
+              updated_at              TIMESTAMPTZ NULL,
+              updated_by              TEXT NULL,
+              retired_at              TIMESTAMPTZ NULL,
+              UNIQUE (operator_code, code) WHERE retired_at IS NULL,
+              CHECK (status IN ('DRAFT','ACTIVE','RETIRED'))
+           );
+
+  Column                                                           Notes
+
+  operator_code                                                    WIK / WUG / WTZ / YASSN
+
+  code                                                             Uppercase snake-case. Unique per operator.
+
+  is_credit                                                        true for refund / credit-issuing categories (REFUND,
+                                                                   PROMOTIONAL_CREDIT, SLA_COMPENSATION, BUYBACK_CREDIT).
+                                                                   Charges that ALSO have credit-style BillableEvents (e.g., proration delta that
+                                                                   may go either way) use is_credit=false on the category and
+                                                                   amount_sign_policy=SIGNED on the event.
+
+  gl_account_hint                                                  Finance reconciliation hint. Advisory; not enforced by BIL-01.
+
+
+ Sample data (KE seed):
+
+  id                          operator_code           code                         description                       is_credit
+
+  bec_01HX_LCY_WIK            WIK                     LIFECYCLE_FEE                Subscription lifecycle fees       false
+                                                                                   (pause, reactivation, package
+                                                                                   change, address move)
+
+  bec_01HX_ETF_WIK            WIK                     EARLY_TERMINATION_FEE        Early-termination fees            false
+
+  bec_01HX_INS_WIK            WIK                     INSTALLATION_FEE             Installation and setup fees       false
+
+  bec_01HX_RCN_WIK            WIK                     RECONNECTION_FEE             Fees for resuming service         false
+                                                                                   after non-payment suspension
+
+  bec_01HX_PRO_WIK            WIK                     PRORATION                    Proration deltas —                false
+                                                                                   partial-cycle charges or
+                                                                                   credits for cycle-anchor
+                                                                                   changes
+
+  bec_01HX_VAS_WIK            WIK                     VAS                          Value-added services (PPV,        false
+                                                                                   on-demand content, premium
+                                                                                   support)
+
+  bec_01HX_RGL_WIK            WIK                     REGULATORY                   Government-mandated               false
+                                                                                   regulatory fees and levies
+
+  bec_01HX_REF_WIK            WIK                     REFUND                       Customer refunds (cash,           true
+                                                                                   service credit, deposit return)
+
+  bec_01HX_SLA_WIK            WIK                     SLA_COMPENSATION             SLA-driven service credits        true
+                                                                                   issued to customers
+
+  bec_01HX_BBK_WIK            WIK                     BUYBACK_CREDIT               Hardware buyback credits          true
+                                                                                   issued to customers
+
+  bec_01HX_PRM_WIK            WIK                     PROMOTIONAL_CREDIT           One-shot promotional or           true
+                                                                                   welcome credits
+
+
+
+ 2.2 billable_event
+ The catalog of chargeable events, operator-scoped.
+           CREATE TABLE billable_event (
+             id                               TEXT PRIMARY KEY,
+             operator_code                    TEXT NOT NULL,
+             code                             TEXT NOT NULL,
+             description                      TEXT NOT NULL,
+             category_code                    TEXT NOT NULL,
+             service_refs                     JSONB NOT NULL,
+             currency                         TEXT NOT NULL,
+             applicability                    TEXT NOT NULL,
+             amount_sign_policy               TEXT NOT NULL DEFAULT 'POSITIVE_ONLY',
+             pay_first_required               BOOLEAN NOT NULL DEFAULT TRUE,
+             trigger_type                     TEXT NOT NULL,
+             trigger_intent_code              TEXT NULL,
+             trigger_event_type               TEXT NULL,
+             trigger_filter_drl               TEXT NULL,
+             trigger_schedule                 TEXT NULL,
+             state_callback                   JSONB NULL,
+             eligibility_franchise_refs       JSONB NULL,
+             eligibility_package_refs         JSONB NULL,
+             eligibility_segment_refs         JSONB NULL,
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 5
+              display_order                   INTEGER NOT NULL DEFAULT 100,
+              status                          TEXT NOT NULL,
+              notes                           TEXT NULL,
+              created_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              created_by                      TEXT NOT NULL,
+              updated_at                      TIMESTAMPTZ NULL,
+              updated_by                      TEXT NULL,
+              retired_at                      TIMESTAMPTZ NULL,
+              UNIQUE (operator_code, code) WHERE retired_at IS NULL,
+              CHECK (status IN ('DRAFT','ACTIVE','RETIRED')),
+              CHECK (amount_sign_policy IN ('POSITIVE_ONLY','NEGATIVE_ONLY','SIGNED')),
+              CHECK (applicability IN ('PREPAID_ONLY','POSTPAID_ONLY','ANY')),
+              CHECK (trigger_type IN ('SAGA_INTENT','LIFECYCLE_EVENT','ADMIN_ACTION','CUSTOMER_PURCHASE','EXTERNAL_PAYMENT','SCHEDULED
+            );
+
+  Column                                                         Notes
+
+  operator_code                                                  WIK / WUG / WTZ / YASSN
+
+  code                                                           Uppercase snake-case business identifier. Unique per operator. Convention:
+                                                                 <TRIGGER_VERB>_<NOUN>_<VARIANT> (e.g.,
+                                                                 RELOCATION_FEE_CROSS_FRANCHISE).
+
+  category_code                                                  FK to billable_event_category(operator_code, code).
+                                                                 Same-operator required.
+
+  service_refs                                                   JSONB array of ONE_SHOT Service code refs from PLM-CFG-01 (same
+                                                                 operator). All referenced Services share one currency.
+
+  currency                                                       Derived from Service refs at create/update; immutable thereafter.
+
+  applicability                                                  Filter on subscription billing mode: PREPAID_ONLY, POSTPAID_ONLY, ANY.
+
+  amount_sign_policy                                             POSITIVE_ONLY — BIL-01 always charges (e.g., RELOCATION_FEE);
+                                                                 NEGATIVE_ONLY — BIL-01 always credits (e.g.,
+                                                                 DOWNGRADE_PRORATE_CREDIT, SLA_COMPENSATION); SIGNED — BIL-01 (or
+                                                                 its filter rule) computes a signed amount at runtime (e.g.,
+                                                                 MIGRATION_PRORATE_DELTA may yield + or − depending on source vs target
+                                                                 Package price).
+
+  pay_first_required                                             When true, the workflow waits for BIL-01 confirmation before proceeding past
+                                                                 the billing step. Required true for events with state_callback.
+
+  trigger_type                                                   See §3 — SAGA_INTENT / LIFECYCLE_EVENT / ADMIN_ACTION /
+                                                                 CUSTOMER_PURCHASE / EXTERNAL_PAYMENT / SCHEDULED.
+
+  trigger_intent_code                                            Required when trigger_type = SAGA_INTENT. One of the canonical
+                                                                 intents (§3.1).
+
+  trigger_event_type                                             Required when trigger_type = LIFECYCLE_EVENT. Kafka event name
+                                                                 from SUB-LM-01 or other publishers.
+
+  trigger_filter_drl                                             Optional. Rule name in billing-rules KJAR. Provides additional filtering
+                                                                 beyond intent-code match.
+
+  trigger_schedule                                               Required when trigger_type = SCHEDULED. Cron expression.
+
+  state_callback                                                 Optional JSONB {transitionCode, targetStatus,
+                                                                 callbackMetadata?} invoking SUB-LM-01 after successful charge.
+
+  eligibility_franchise_refs                                     Optional. Limits the event to subscriptions whose HomePass is in one of the
+                                                                 listed Franchises. NULL or empty = all Franchises.
+
+  eligibility_package_refs                                       Optional. Limits to subscriptions of specific Packages.
+
+  eligibility_segment_refs                                       Optional, reserved for CVM segments.
+
+  display_order                                                  Resolution order when multiple BillableEvents match the same trigger.
+
+  status                                                         DRAFT / ACTIVE / RETIRED.
+
+
+ Indexes:
+
+   - idx_billable_event_code UNIQUE on (operator_code, code)
+
+   - idx_billable_event_trigger_intent partial on (operator_code, trigger_intent_code) WHERE status
+     = 'ACTIVE' AND trigger_type = 'SAGA_INTENT'
+
+   - idx_billable_event_trigger_event partial on (operator_code, trigger_event_type) WHERE status =
+     'ACTIVE' AND trigger_type = 'LIFECYCLE_EVENT'
+
+   - idx_billable_event_category on (operator_code, category_code)
+
+   - idx_billable_event_applicability partial on (operator_code, applicability) WHERE status =
+     'ACTIVE'
+
+
+
+SOPHIX BSS Design Documents                                                                                                              Page 6
+ Sample data (KE WIK seed — illustrative; deployment-specific values):
+
+  code             category        trigger_type   trigger_intent_co   trigger_filter_drl   amount_sign_poli   applicability   state_callback
+                                                  de                                       cy
+
+  INSTALLATION_    INSTALLATION_   SAGA_INTENT    ACTIVATION_IN       —                    POSITIVE_ONLY      ANY             —
+  FEE              FEE                            TENT
+
+  FIRST_CYCLE_P    PRORATION       SAGA_INTENT    ACTIVATION_IN       cycleAnchorOv        POSITIVE_ONLY      ANY             —
+  RORATE                                          TENT                erflowApplied
+                                                                      == PRORATE_PA
+                                                                      RTIAL_CYCLE
+
+  PAUSE_FEE_VAC    LIFECYCLE_FEE   SAGA_INTENT    PAUSE_INTENT        pauseReasonCo        POSITIVE_ONLY      ANY             —
+  ATION                                                               de == CUSTOME
+                                                                      R_VACATION
+
+  RECONNECTION_    RECONNECTION_   SAGA_INTENT    RESUME_INTENT       resumeTrigger        POSITIVE_ONLY      ANY             —
+  FEE              FEE                                                == CUSTOMER_R
+                                                                      EQUESTED_RESU
+                                                                      ME
+
+  UPGRADE_PRORA    PRORATION       SAGA_INTENT    UPGRADE_INTEN       cycleAnchorPo        POSITIVE_ONLY      ANY             —
+  TE_DELTA                                        T                   licy ==
+                                                                      PRESERVE
+
+  DOWNGRADE_PRO    PRORATION       SAGA_INTENT    DOWNGRADE_INT       cycleAnchorPo        NEGATIVE_ONL       ANY             —
+  RATE_CREDIT                                     ENT                 licy ==              Y
+                                                                      PRESERVE AND
+                                                                      effectiveTimi
+                                                                      ng ==
+                                                                      IMMEDIATE
+
+  OLD_CYCLE_CRE    PRORATION       SAGA_INTENT    UPGRADE_INTEN       cycleAnchorPo        NEGATIVE_ONL       ANY             —
+  DIT                                             T OR DOWNGRAD       licy == RESET        Y
+                                                  E_INTENT OR M       _TO_OPERATION
+                                                  IGRATION_INTE       _DATE
+                                                  NT
+
+  FIRST_CYCLE_C    PRORATION       SAGA_INTENT    UPGRADE_INTEN       cycleAnchorPo        POSITIVE_ONLY      ANY             —
+  HARGE                                           T OR DOWNGRAD       licy == RESET
+                                                  E_INTENT OR M       _TO_OPERATION
+                                                  IGRATION_INTE       _DATE
+                                                  NT
+
+  RELOCATION_FE    LIFECYCLE_FEE   SAGA_INTENT    RELOCATION_IN       sameFranchise        POSITIVE_ONLY      ANY             —
+  E_SAME_FRANCH                                   TENT                == true
+  ISE
+
+  RELOCATION_FE    LIFECYCLE_FEE   SAGA_INTENT    RELOCATION_IN       sameFranchise        POSITIVE_ONLY      ANY             —
+  E_CROSS_FRANC                                   TENT                == false
+  HISE
+
+  RELOCATION_FE    LIFECYCLE_FEE   SAGA_INTENT    RELOCATION_IN       equipmentPath        POSITIVE_ONLY      ANY             —
+  E_NEW_INSTALL                                   TENT                ==
+                                                                      NEW_INSTALL
+
+  MIGRATION_FEE    LIFECYCLE_FEE   SAGA_INTENT    MIGRATION_INT       migrationTrig        POSITIVE_ONLY      ANY             —
+                                                  ENT                 ger != ADMIN_
+                                                                      TECH_MIGRATIO
+                                                                      N
+
+  MIGRATION_PRO    PRORATION       SAGA_INTENT    MIGRATION_INT       cycleAnchorPo        SIGNED             ANY             —
+  RATE_DELTA                                      ENT                 licy ==
+                                                                      PRESERVE
+
+  RESTRICTION_L    LIFECYCLE_FEE   SAGA_INTENT    RESTRICTION_R       restrictionCo        POSITIVE_ONLY      ANY             —
+  IFT_FEE_OUTGO                                   EMOVE_INTENT        de == OUTGOIN
+  ING_VOICE                                                           G_VOICE_BARRE
+                                                                      D
+
+  EARLY_TERMINA    EARLY_TERMINA   SAGA_INTENT    TERMINATION_I       coolingOffApp        POSITIVE_ONLY      ANY             —
+  TION_FEE         TION_FEE                       NTENT               licable ==
+                                                                      false AND day
+                                                                      sActiveInCont
+                                                                      ract < contra
+                                                                      ctMinimumTerm
+                                                                      Months * 30
+
+  PREPAID_REFUN    REFUND          SAGA_INTENT    TERMINATION_I       prepaidWallet        NEGATIVE_ONL       PREPAID_ONLY    —
+  D                                               NTENT               Balance > 0          Y
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 7
+  code               category        trigger_type   trigger_intent_co   trigger_filter_drl   amount_sign_poli    applicability        state_callback
+                                                    de                                       cy
+
+  EQUIPMENT_REP      LIFECYCLE_FEE   SAGA_INTENT    RELOCATION_IN       equipmentPath        POSITIVE_ONLY       ANY                  —
+  LACEMENT_FEE                                      TENT OR MIGRA       ==
+                                                    TION_INTENT         NEW_INSTALL
+                                                                        AND replaceme
+                                                                        ntReason !=
+                                                                        null
+
+  EQUIPMENT_BUY      BUYBACK_CREDI   ADMIN_ACTION   —                   —                    NEGATIVE_ONL        ANY                  {transitionCo
+  BACK_ONT           T                                                                       Y                                        de: "EQUIPMEN
+                                                                                                                                      T_UNBIND",
+                                                                                                                                      targetStatus:
+                                                                                                                                      "ACTIVE"}
+
+  PPV_MOVIE          VAS             CUSTOMER_PU    —                   —                    POSITIVE_ONLY       ANY                  —
+                                     RCHASE
+
+  VAT_SURCHARGE      REGULATORY      SCHEDULED      —                   —                    POSITIVE_ONLY       ANY                  —
+
+  SLA_COMPENSAT      SLA_COMPENSAT   ADMIN_ACTION   —                   —                    NEGATIVE_ONL        ANY                  —
+  ION_DOWNTIME       ION                                                                     Y
+
+  RECONNECTION_      RECONNECTION_   EXTERNAL_PAY   —                   —                    POSITIVE_ONLY       POSTPAID_ONL         {transitionCo
+  FEE_AFTER_DUN      FEE             MENT                                                                        Y                    de: "RECONNEC
+  NING                                                                                                                                T_AFTER_FEE",
+                                                                                                                                      targetStatus:
+                                                                                                                                      "ACTIVE"}
+
+
+ (All rows are operator_code = WIK. WUG/WTZ/YASSN seed their own catalogs with operator-appropriate codes, fees,
+ eligibility filters, and trigger rules. The KE seed above is illustrative — actual fee amounts and applicability rules come from
+ the workshop deep-dives for each operator.)
+
+ service_refs JSONB shape:
+          ["svc_relocation_cross_franchise_01HX"]
+
+ state_callback JSONB shape:
+          {"transitionCode": "RECONNECT_AFTER_FEE", "targetStatus": "ACTIVE", "callbackMetadata": {"reason": "DUNNING_RESOLVED"}}
+
+ trigger_filter_drl references a rule name in the billing-rules KJAR (operator-scoped package). The rule receives the
+ workflow's intentContext as facts and votes accept/reject. Example rule signature:
+          rule "filter_RelocationFeeSameFranchise"
+          when
+            $ctx: IntentContextFact(sameFranchise == true)
+          then
+            $ctx.acceptBillableEvent("RELOCATION_FEE_SAME_FRANCHISE");
+          end
+
+
+
+
+ 3. Rules
+ 3.1 BillableEvent integrity
+  Rule                                                                  Description
+
+  R-BIL-CFG-01-B-1                                                      BillableEvent code is unique per (operator_code, code) excluding retired.
+                                                                        Convention: uppercase snake-case, max 64 chars.
+
+  R-BIL-CFG-01-B-2                                                      code is immutable once any charge has been booked under the event. The
+                                                                        code is the audit-trail key; renaming would break historical ledger entries.
+
+  R-BIL-CFG-01-B-3                                                      A BillableEvent MUST reference at least one Service in service_refs[].
+                                                                        Each Service ref MUST resolve to an ACTIVE Service in PLM-CFG-01 within
+                                                                        the same operator, with consumption_model = ONE_SHOT. Continuous
+                                                                        Services cannot be referenced — they belong to Packages, not BillableEvents.
+
+  R-BIL-CFG-01-B-4                                                      currency is derived from Service refs at create/update time: all referenced
+                                                                        Services share one currency, which becomes the BillableEvent's currency.
+                                                                        Mixed-currency Service refs are rejected with 400 MIXED_CURRENCY_REFS.
+                                                                        Currency is immutable thereafter.
+
+  R-BIL-CFG-01-B-5                                                      applicability declares which subscription billing modes apply. Same shape
+                                                                        as PLM-CFG-03's wallet applicability. BIL-01 filters at charge time: a
+                                                                        PREPAID_ONLY event triggered against a postpaid subscription is skipped.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                     Page 8
+  Rule                        Description
+
+  R-BIL-CFG-01-B-6            pay_first_required MUST be true for any BillableEvent with a
+                              state_callback. The callback fires ONLY after successful charge
+                              confirmation. Setting pay_first_required = false on an event with a
+                              state_callback returns 400 PAY_FIRST_REQUIRED_FOR_STATE_CALLBACK.
+
+  R-BIL-CFG-01-B-7            category_code MUST reference an ACTIVE row in
+                              billable_event_category of the same operator. Cross-operator category
+                              reference returns 400 CATEGORY_OPERATOR_MISMATCH.
+
+  R-BIL-CFG-01-B-8            An ACTIVE BillableEvent cannot retire while any subscription has an in-flight
+                              workflow that has resolved this event as a match. Admin must let the workflow
+                              complete (or revert) before retirement.
+
+
+
+ 3.2 Amount sign policy
+  Rule                        Description
+
+  R-BIL-CFG-01-AS-1           amount_sign_policy ∈ {POSITIVE_ONLY, NEGATIVE_ONLY, SIGNED}.
+
+  R-BIL-CFG-01-AS-2           POSITIVE_ONLY — BIL-01 emits a charge with positive amount. Used for fees:
+                              RELOCATION_FEE, MIGRATION_FEE, INSTALLATION_FEE,
+                              EQUIPMENT_REPLACEMENT_FEE, etc. The category's is_credit is typically
+                              false.
+
+  R-BIL-CFG-01-AS-3           NEGATIVE_ONLY — BIL-01 emits a credit with negative amount. Used for
+                              refunds and committed credits: DOWNGRADE_PRORATE_CREDIT,
+                              OLD_CYCLE_CREDIT, PREPAID_REFUND, SLA_COMPENSATION_DOWNTIME,
+                              EQUIPMENT_BUYBACK_ONT. Category's is_credit is typically true.
+
+  R-BIL-CFG-01-AS-4           SIGNED — BIL-01's pricing rule (in billing-rules KJAR) computes the sign
+                              at runtime. Used for events where the direction depends on context, primarily
+                              MIGRATION_PRORATE_DELTA: target Package may be priced higher than
+                              source (charge) or lower (credit). The category.is_credit should be
+                              false; signing is per-call. The runtime rule MUST produce a signed amount;
+                              ambiguous outcomes return error.
+
+  R-BIL-CFG-01-AS-5           The sign policy is immutable once ACTIVE. Changing requires retire +
+                              re-create.
+
+
+
+ 3.3 Trigger taxonomy
+  Rule                        Description
+
+  R-BIL-CFG-01-T-1            trigger_type ∈ {SAGA_INTENT, LIFECYCLE_EVENT, ADMIN_ACTION,
+                              CUSTOMER_PURCHASE, EXTERNAL_PAYMENT, SCHEDULED}.
+
+  R-BIL-CFG-01-T-2            SAGA_INTENT — fires synchronously during a workflow's
+                              bil01-emit-intent call. Requires trigger_intent_code matching one
+                              of the canonical intents (§3.1 glossary). BIL-01 resolves matching
+                              BillableEvents by (operatorCode, trigger_type=SAGA_INTENT,
+                              trigger_intent_code) + filter rule, charges them in display_order then
+                              code, returns the aggregated line items to the workflow.
+
+  R-BIL-CFG-01-T-3            LIFECYCLE_EVENT — fires asynchronously on a Kafka event from SUB-LM-01
+                              or other publishers (e.g., SubscriptionPaused,
+                              SubscriptionTerminated). Requires trigger_event_type. Used for
+                              post-commit reactive billing: notifications-with-billing, deferred ancillary fees.
+                              MUST NOT carry state_callback (the lifecycle has already committed).
+
+  R-BIL-CFG-01-T-4            trigger_filter_drl — optional Drools rule name for additional matching.
+                              Rule receives the workflow's intentContext (or event payload for
+                              LIFECYCLE_EVENT) and votes accept/reject. Storing logic as a rule rather
+                              than inline JSONB keeps the rule engine consistent across decision points.
+
+  R-BIL-CFG-01-T-5            ADMIN_ACTION / CUSTOMER_PURCHASE / EXTERNAL_PAYMENT — no intent
+                              code or event type required. Invoked by direct call to BIL-01's charging endpoint
+                              with the BillableEvent's code as the parameter.
+
+  R-BIL-CFG-01-T-6            SCHEDULED — requires trigger_schedule as a cron expression. A BIL-01
+                              background job evaluates the schedule per operator and fires the event against
+                              each eligible customer.
+
+  R-BIL-CFG-01-T-7            Multiple BillableEvents may share the same trigger_intent_code (different
+                              filter rules). BIL-01 charges them in display_order then code order. Same
+                              for shared trigger_event_type on LIFECYCLE_EVENT triggers.
+
+  R-BIL-CFG-01-T-8            trigger_type is immutable once ACTIVE. Switching trigger model requires
+                              retire + re-create.
+
+
+
+ 3.4 State callbacks
+
+SOPHIX BSS Design Documents                                                                             Page 9
+  Rule                                                         Description
+
+  R-BIL-CFG-01-SC-1                                            state_callback is OPTIONAL JSONB {transitionCode,
+                                                               targetStatus, callbackMetadata?}. The callback invokes SUB-LM-01's
+                                                               transition mechanism after successful charge. The callback is named by
+                                                               transition code, NOT by URL — SUB-LM-01 owns the mapping.
+
+  R-BIL-CFG-01-SC-2                                            transitionCode MUST be one of the registered transition codes published
+                                                               by SUB-LM-01. Validated against a known list. New codes require a
+                                                               coordinated update with SUB-LM-01.
+
+  R-BIL-CFG-01-SC-3                                            When a state callback is declared, pay_first_required MUST be true.
+                                                               The callback fires only on successful charge. On charge failure, the callback is
+                                                               NOT fired and the BillableEvent outcome event carries
+                                                               stateCallbackInvoked = false.
+
+  R-BIL-CFG-01-SC-4                                            callbackMetadata (optional) is carried verbatim to SUB-LM-01. Used for
+                                                               custom transition reasons, actor identity, channel hints.
+
+  R-BIL-CFG-01-SC-5                                            If the callback invocation fails (SUB-LM-01 unreachable, transition rejected), the
+                                                               charge is NOT rolled back. The BillableEvent emits
+                                                               BillableEventStateCallbackFailed for alerting; admin intervention
+                                                               reconciles. Money in the till is prioritized over state consistency; the rollback
+                                                               alternative is more complex than the recovery scenario warrants.
+
+
+
+ 3.5 Eligibility filters
+  Rule                                                         Description
+
+  R-BIL-CFG-01-EL-1                                            eligibility_franchise_refs[] (optional) restricts the BillableEvent to
+                                                               subscriptions whose HomePass is in one of the listed Franchises. Empty /
+                                                               NULL = all. Allows regional pricing variations within an operator.
+
+  R-BIL-CFG-01-EL-2                                            eligibility_package_refs[] (optional) restricts to specific Packages.
+                                                               Allows tier-specific fees.
+
+  R-BIL-CFG-01-EL-3                                            eligibility_segment_refs[] reserved for CVM customer segments
+                                                               (future). Not enforced in v1.0.
+
+
+
+
+ 4. REST API
+ 4.1 Create BillableEvent
+          POST /api/billing/billable-events HTTP/1.1
+          Content-Type: application/json
+
+          {
+              "operatorCode":        "WIK",
+              "code":                "MIGRATION_FEE",
+              "description":         "Standard customer-initiated migration fee",
+              "categoryCode":        "LIFECYCLE_FEE",
+              "serviceRefs":         ["svc_migration_standard_01HX"],
+              "applicability":       "ANY",
+              "amountSignPolicy":    "POSITIVE_ONLY",
+              "payFirstRequired":    true,
+              "triggerType":         "SAGA_INTENT",
+              "triggerIntentCode":   "MIGRATION_INTENT",
+              "triggerFilterDrl":    "filter_MigrationFeeStandard",
+              "displayOrder":        100,
+              "status":              "DRAFT",
+              "createdBy":           "admin-wik-001"
+          }
+
+          → 201 Created
+          {
+            "id":          "be_01HX_MIGRATION_FEE_WIK",
+            "operatorCode":"WIK",
+            "code":        "MIGRATION_FEE",
+            "currency":    "KES",
+            "status":      "DRAFT",
+            "createdAt":   "2026-05-25T15:00:00+03:00"
+          }
+
+
+ 4.2 Activate BillableEvent (DRAFT → ACTIVE)
+          POST /api/billing/billable-events/{id}/activate HTTP/1.1
+          Content-Type: application/json
+
+          {"activatedBy": "admin-wik-001"}
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 10
+          → 200 OK
+          {"id": "be_01HX_MIGRATION_FEE_WIK", "status": "ACTIVE", "activatedAt": "2026-05-25T15:01:00+03:00"}
+
+ GET /api/billing/billable-events/{id} — read. GET /api/billing/billable-events?operatorCode=WI
+ K&triggerType=SAGA_INTENT&triggerIntentCode=RELOCATION_INTENT&status=ACTIVE — filter (BIL-01's hot
+ lookup). PATCH /api/billing/billable-events/{id} — update mutable fields (description, display_order, filter rule,
+ eligibility filters, status). Rejects mutation of code, currency, triggerType, amountSignPolicy. POST
+ /api/billing/billable-events/{id}/retire — soft retire (ACTIVE → RETIRED). Subject to R-B-8.
+
+ 4.3 Errors
+          → 400 Bad Request
+          {
+            "code":     "MIXED_CURRENCY_REFS",
+            "guidance": "All Service refs must share one currency. Found mixed: ['KES', 'USD']."
+          }
+
+          → 400 Bad Request
+          {
+            "code":     "PAY_FIRST_REQUIRED_FOR_STATE_CALLBACK",
+            "guidance": "Events with a state_callback must have payFirstRequired=true. State callbacks fire only on successful charg
+          }
+
+          → 409 Conflict
+          {
+            "code":              "BILLABLE_EVENT_IN_USE",
+            "inFlightWorkflows": ["subop_01HZ_..."],
+            "guidance":          "Cannot retire while in-flight workflows have resolved this event as a match. Wait for workflow com
+          }
+
+
+
+
+ 5. Kafka events
+ Catalog administration events (this DD's events). Runtime charging events are owned by BIL-01.
+
+  Event                                      Topic                                    Fires on
+
+  BillableEventCreated                       sophix.billing.billableevent.created     New row (DRAFT)
+
+  BillableEventUpdated                       sophix.billing.billableevent.updated     Mutable column change
+
+  BillableEventActivated                     sophix.billing.billableevent.activated   DRAFT → ACTIVE (BIL-01's cache invalidation
+                                                                                      trigger)
+
+  BillableEventRetired                       sophix.billing.billableevent.retired     ACTIVE → RETIRED
+
+  BillableEventCategoryCreated / Updated /   sophix.billing.billableeventcategory.*   Sub-catalog row lifecycle
+  Retired
+
+
+ Sample BillableEventActivated:
+          {
+              "eventType":   "BillableEventActivated",
+              "aggregateId": "be_01HX_MIGRATION_FEE_WIK",
+              "timestamp":   "2026-05-25T15:01:00+03:00",
+              "actor":       "admin-wik-001",
+              "payload": {
+                "operatorCode":      "WIK",
+                "code":              "MIGRATION_FEE",
+                "description":       "Standard customer-initiated migration fee",
+                "categoryCode":      "LIFECYCLE_FEE",
+                "serviceRefs":       ["svc_migration_standard_01HX"],
+                "currency":          "KES",
+                "applicability":     "ANY",
+                "amountSignPolicy": "POSITIVE_ONLY",
+                "payFirstRequired": true,
+                "triggerType":       "SAGA_INTENT",
+                "triggerIntentCode": "MIGRATION_INTENT",
+                "triggerFilterDrl": "filter_MigrationFeeStandard",
+                "stateCallback":     null,
+                "displayOrder":      100,
+                "status":            "ACTIVE"
+              }
+          }
+
+
+
+
+ 6. Cross-DD coordination
+
+SOPHIX BSS Design Documents                                                                                                  Page 11
+  Module                                     Direction                                Contract
+
+  BIL-01 (Charging Engine)                   Primary consumer                         Reads catalog at runtime to resolve which events to
+                                                                                      charge on bil01-emit-intent calls. Subscribes
+                                                                                      to admin events for cache invalidation.
+
+  SUB-WF-* workflow DDs                      Indirect consumers via BIL-01            Workflows send bil01-emit-intent with intent
+                                                                                      codes from §3.1; BIL-01 resolves matches against
+                                                                                      this catalog.
+
+  SUB-LM-01                                  State-callback target                    Publishes the registered transition codes that
+                                                                                      state_callback.transitionCode may
+                                                                                      reference.
+
+  PLM-CFG-01                                 Referenced                               service_refs[] resolve to ONE_SHOT Services
+                                                                                      per operator.
+
+  PLM-CFG-02 (Tax)                           Indirect                                 Services carry tax-group refs; BIL-01 applies them.
+
+  PLM-CFG-03 (Wallet)                        Indirect                                 applicability filter mirrors wallet applicability
+                                                                                      semantics.
+
+  CVM / Finance / EM-04                      Reporting consumers                      Use category_code for revenue-stream
+                                                                                      separation.
+
+
+
+ 6.1 Build order
+ This DD deploys after:
+
+   1. PLM-CFG-01 v1.0 (ONE_SHOT Services available for service_refs)
+
+   2. PLM-CFG-02 v1.0, PLM-CFG-03 v1.0 (tax + wallet refs)
+
+   3. SUB-LM-01 v1.0 (transition codes registered)
+
+ Consumers depending on v1.0:
+
+   1. BIL-01 v1.1 (the intent engine — reads catalog to charge per workflow intent)
+
+   2. SUB-WF-* workflow DDs that call bil01-emit-intent (indirectly via BIL-01)
+
+ 6.2 Stub debt + open coordination items
+   - WUG / WTZ / YASSN catalog seeds — pending operator deep dives.
+
+   - Billing-rules KJAR rule names — trigger_filter_drl references rules in the per-operator KJAR
+     (billing-rules-<operator>). Initial rule names listed in §2.2 sample data are illustrative; actual rule names defined
+     when BIL-01 v1.1 ships.
+
+
+
+ B — Current TZ
+ Status: To be filled in after codebase cartography review.
+
+ A BillableEvent-shaped catalog likely exists in the TZ codebase (the v0.8 baseline references workshop observation).
+ Specific structural details — whether the existing catalog has operator scoping, whether signed-amount semantics are
+ present, whether cycle-anchor RESET events are catalog rows or hardcoded — require source-code review to document
+ accurately.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                       Page 12
+

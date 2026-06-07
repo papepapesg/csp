@@ -1,0 +1,686 @@
+ DD_OSR-02 - Procurement
+ Version: v1.0 Bundle: 08_osr_equipment Status: Draft for review Primary owner: OSR / procurement operations team
+ Related DDs: DD_OSR-01, DD_OSR-INSTANCE-01, DD_PLM-CFG-06, DD_EM-02, DD_EM-CFG-03, DD_EM-CFG-04,
+ DD_ICN-01, DD_REP-01, FOUNDATION_DROOLS
+
+ MVP simplification baseline: first release may seed opening stock and implement OSR stock/equipment movements before
+ full procurement. Build OSR-02 after stock/instance basics are stable unless launch procurement operations require it.
+
+
+
+ 1. Purpose
+ OSR-02 defines the SOPHIX procurement process for equipment and stockable materials.
+
+ It covers the flow from a stock need to a purchase order, approval, vendor order, delivery receipt, goods receipt into stock,
+ serialized equipment import, discrepancy handling, and reporting.
+
+ Use OSR-02 when:
+
+   - central warehouse needs more ONTs, routers, STBs, splitters, drop cable, or smart cards;
+
+   - procurement creates a purchase order for a vendor;
+
+   - finance/procurement approval is needed before sending the order;
+
+   - warehouse receives vendor delivery;
+
+   - received quantity differs from ordered quantity;
+
+   - serialized devices must be created in OSR-INSTANCE-01;
+
+   - SKU quantity movements must be recorded in OSR-01.
+
+ OSR-02 does not own stock balances. OSR-01 owns SKU/location quantity movement and balance. OSR-INSTANCE-01
+ owns per-serial equipment records. Procurement is the business process that triggers those owning modules.
+
+
+
+ 2. Scope And Boundaries
+  Capability                                                        Owner
+
+  Procurement request, PO, vendor delivery, receipt workflow        OSR-02
+
+  SKU catalog and serialization flag                                PLM-CFG-06
+
+  Stock movements and balances                                      OSR-01
+
+  Serialized equipment instance creation/lifecycle                  OSR-INSTANCE-01
+
+  Contractor/vendor/staff reference data                            EM-02 / EM business registry
+
+  Procurement permissions                                           EM-CFG-03
+
+  Configurable procurement approval                                 EM-CFG-04
+
+  Operator-variable procurement rules                               Drools
+
+  Notifications to procurement/warehouse teams                      ICN-01
+
+  Procurement KPIs                                                  REP-01
+
+
+ Boundary rules:
+
+   - OSR-02 must not directly update stock_balance.
+
+   - OSR-02 records goods receipt, then calls OSR-01 POST /api/stock-movements for quantity stock.
+
+   - For serialized SKUs, OSR-02 calls OSR-INSTANCE-01 POST /api/equipment-instances/bulk-import or POST
+     /api/equipment-instances.
+
+   - Approval steps are owned by EM-CFG-04. OSR-02 stores only approval references and final outcome.
+
+   - Camunda is used only when EM-CFG-04 selected policy mode is BPMN.
+
+   - Drools is used for configurable vendor/order/discrepancy policy, not fixed validation.
+
+
+
+SOPHIX BSS Design Documents                                                                                                  Page 1
+ 3. Process Overview
+           flowchart LR
+             A["Stock need or manual request"] --> B["Create procurement request"]
+             B --> C["Create PO"]
+             C --> D["Validate vendor/SKU/budget"]
+             D --> E["Evaluate EM-CFG-04 approval"]
+             E --> F["PO approved"]
+             F --> G["Send PO to vendor"]
+             G --> H["Receive vendor delivery"]
+             H --> I["Record goods receipt"]
+             I --> J["Call OSR-01 stock movement"]
+             I --> K["Call OSR-INSTANCE for serialized devices"]
+             J --> L["PO closed or partially received"]
+             K --> L
+
+
+
+
+ 4. Status Models
+ 4.1 Procurement Order Status
+  Status                                                          Meaning
+
+  DRAFT                                                           PO is being prepared.
+
+  VALIDATED                                                       SKU/vendor/basic checks passed.
+
+  PENDING_APPROVAL                                                EM-CFG-04 approval request is open.
+
+  APPROVED                                                        PO is approved but not sent.
+
+  SENT_TO_VENDOR                                                  PO was sent to vendor.
+
+  PARTIALLY_RECEIVED                                              Some lines received.
+
+  RECEIVED                                                        All expected lines received.
+
+  CLOSED                                                          PO closed after receipt or business decision.
+
+  CANCELLED                                                       PO cancelled before completion.
+
+  REJECTED                                                        Approval rejected.
+
+
+
+ 4.2 Goods Receipt Status
+  Status                                                          Meaning
+
+  DRAFT                                                           Receipt capture started.
+
+  VALIDATED                                                       Receipt lines passed checks.
+
+  POSTED                                                          OSR-01/OSR-INSTANCE writes completed.
+
+  DISCREPANCY_PENDING                                             Quantity/serial/vendor discrepancy requires review.
+
+  CANCELLED                                                       Receipt voided before posting.
+
+
+
+
+ 5. Data Model
+ 5.1 procurement_vendor
+ What it is for: stores vendor master data used by procurement.
+
+ When to use it: create a vendor before raising purchase orders. Vendor records may later be folded into a wider supplier
+ registry, but OSR-02 needs a procurement-facing vendor table for v1.0.
+
+ Sample meaning: ven-huawei-ke is an approved equipment vendor for WIK, allowed to supply Huawei ONTs.
+
+  Column                          Type                            Purpose                                  Sample
+
+  vendor_id                       TEXT PK                         Vendor id.                               ven-huawei-ke
+
+  operator_code                   TEXT                            Tenant/operator.                         WIK
+
+  vendor_code                     TEXT                            Business code.                           HUAWEI_KE
+
+  vendor_name                     TEXT                            Vendor display name.                     Huawei Kenya
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 2
+  Column                           Type                             Purpose                              Sample
+
+  status                           TEXT                             DRAFT, ACTIVE, SUSPENDED,            ACTIVE
+                                                                    RETIRED.
+
+  primary_contact_json             JSONB                            Contact details.                     {"email":"orders@vendor.exam
+                                                                                                         ple"}
+
+  allowed_sku_ids                  TEXT[]                           Optional SKU allow-list.             ["WIK-ONT-HUAWEI-EG8145V5"]
+
+  payment_terms_code               TEXT NULL                        Commercial payment terms.            NET_30
+
+  created_at                       TIMESTAMP                        Creation timestamp.                  2026-06-01T08:00:00Z
+
+
+ Recommended indexes:
+
+   - unique (operator_code, vendor_code).
+
+   - (operator_code, status).
+
+ 5.2 procurement_order
+ What it is for: stores purchase order header.
+
+ When to use it: every approved or draft procurement order has one header row. Lines hold SKUs and quantities.
+
+ Sample meaning: po-2026-00045 orders 200 Huawei ONTs for WIK central warehouse, requires approval, and will receive
+ into WIK-CENTRAL-NRB.
+
+  Column                           Type                             Purpose                              Sample
+
+  po_id                            TEXT PK                          Purchase order id.                   po-2026-00045
+
+  operator_code                    TEXT                             Tenant/operator.                     WIK
+
+  po_number                        TEXT                             Human-readable PO number.            WIK-PO-2026-00045
+
+  vendor_id                        TEXT                             Vendor id.                           ven-huawei-ke
+
+  destination_location_id          TEXT                             OSR-01 stock location for receipt.   WIK-CENTRAL-NRB
+
+  currency_code                    TEXT                             Currency.                            KES
+
+  total_estimated_amount           NUMERIC(14,2)                    Estimated PO value.                  1200000.00
+
+  status                           TEXT                             PO status.                           PENDING_APPROVAL
+
+  approval_request_id              TEXT NULL                        EM-CFG-04 approval request.          apr-po-00045
+
+  approval_mode                    TEXT NULL                        EM-CFG-04 mode.                      MULTI_STEP
+
+  camunda_process_instance_id      TEXT NULL                        BPMN instance if used.               cam-po-00045
+
+  requested_by_user_id             TEXT                             Requester.                           usr-procurement-001
+
+  expected_delivery_date           DATE NULL                        Expected vendor delivery.            2026-07-15
+
+  created_at                       TIMESTAMP                        Creation timestamp.                  2026-06-15T09:00:00Z
+
+  approved_at                      TIMESTAMP NULL                   Approval timestamp.                  2026-06-15T11:00:00Z
+
+  closed_at                        TIMESTAMP NULL                   Close timestamp.                     null
+
+
+ Recommended indexes:
+
+   - unique (operator_code, po_number).
+
+   - (operator_code, status, created_at DESC).
+
+   - (approval_request_id).
+
+ 5.3 procurement_order_line
+ What it is for: stores ordered SKUs, quantities, and unit costs.
+
+ When to use it: every SKU in a PO must have one line. This table is the receipt matching reference.
+
+ Sample meaning: line pol-001 orders 200 units of Huawei ONT SKU at KES 6000 each.
+
+  Column                           Type                             Purpose                              Sample
+
+  po_line_id                       TEXT PK                          PO line id.                          pol-001
+
+  po_id                            TEXT                             Parent PO.                           po-2026-00045
+
+  sku_id                           TEXT                             PLM-CFG-06 SKU id.                   WIK-ONT-HUAWEI-EG8145V5
+
+
+
+SOPHIX BSS Design Documents                                                                                                     Page 3
+  Column                           Type                             Purpose                           Sample
+
+  description                      TEXT                             Line description.                 Huawei EG8145V5 ONT
+
+  ordered_qty                      INT                              Quantity ordered.                 200
+
+  received_qty                     INT                              Quantity posted as received.      150
+
+  unit_cost                        NUMERIC(14,2)                    Estimated unit cost.              6000.00
+
+  line_amount                      NUMERIC(14,2)                    Ordered qty times unit cost.      1200000.00
+
+  is_serialized                    BOOLEAN                          Copied from PLM-CFG-06 at order   true
+                                                                    time.
+
+  status                           TEXT                             OPEN, PARTIALLY_RECEIVED,         PARTIALLY_RECEIVED
+                                                                    RECEIVED, CANCELLED.
+
+
+ Recommended indexes:
+
+   - (po_id, status).
+
+   - (sku_id).
+
+ 5.4 goods_receipt
+ What it is for: stores one vendor delivery receipt transaction.
+
+ When to use it: warehouse receives stock against a PO. A PO can have multiple goods receipts.
+
+ Sample meaning: gr-001 records the first delivery of 150 ONTs against PO po-2026-00045.
+
+  Column                           Type                             Purpose                           Sample
+
+  receipt_id                       TEXT PK                          Goods receipt id.                 gr-001
+
+  operator_code                    TEXT                             Tenant/operator.                  WIK
+
+  po_id                            TEXT                             Related PO.                       po-2026-00045
+
+  vendor_delivery_ref              TEXT                             Vendor delivery note/ref.         DN-HW-7788
+
+  destination_location_id          TEXT                             OSR-01 receiving location.        WIK-CENTRAL-NRB
+
+  received_by_user_id              TEXT                             Warehouse user.                   usr-warehouse-001
+
+  received_at                      TIMESTAMP                        Physical receipt time.            2026-07-15T10:20:00Z
+
+  status                           TEXT                             Receipt status.                   POSTED
+
+  posted_stock_movement_batch_     TEXT NULL                        OSR-01 movement batch ref.        sm-batch-gr-001
+  id
+
+  created_at                       TIMESTAMP                        Creation timestamp.               2026-07-15T10:25:00Z
+
+  posted_at                        TIMESTAMP NULL                   Posting timestamp.                2026-07-15T10:27:00Z
+
+
+ Recommended indexes:
+
+   - (operator_code, po_id).
+
+   - (operator_code, status, received_at DESC).
+
+   - unique (operator_code, vendor_delivery_ref).
+
+ 5.5 goods_receipt_line
+ What it is for: stores received quantity and serial payload per PO line.
+
+ When to use it: each received SKU line has one row. Serialized SKUs include serial/MAC payload for OSR-INSTANCE
+ import.
+
+ Sample meaning: grl-001 receives 150 ONTs and includes 150 serial records.
+
+  Column                           Type                             Purpose                           Sample
+
+  receipt_line_id                  TEXT PK                          Receipt line id.                  grl-001
+
+  receipt_id                       TEXT                             Goods receipt id.                 gr-001
+
+  po_line_id                       TEXT                             PO line matched.                  pol-001
+
+  sku_id                           TEXT                             PLM-CFG-06 SKU id.                WIK-ONT-HUAWEI-EG8145V5
+
+  received_qty                     INT                              Quantity physically received.     150
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                  Page 4
+  Column                           Type                            Purpose                                Sample
+
+  accepted_qty                     INT                             Quantity accepted into stock.          148
+
+  rejected_qty                     INT                             Quantity rejected/damaged.             2
+
+  serial_payload_json              JSONB NULL                      Serial/MAC list for serialized SKUs.   [{"serial":"48575443ABCD1234
+                                                                                                          "}]
+
+  quality_status                   TEXT                            PASS, PARTIAL_FAIL, FAIL.              PARTIAL_FAIL
+
+  discrepancy_code                 TEXT NULL                       Discrepancy reason.                    DAMAGED_ON_ARRIVAL
+
+
+ Recommended indexes:
+
+   - (receipt_id).
+
+   - (po_line_id).
+
+   - (sku_id).
+
+ 5.6 procurement_discrepancy
+ What it is for: stores receipt/order/vendor discrepancies.
+
+ When to use it: received quantity differs from ordered quantity, serials are invalid/duplicate, items are damaged, or vendor
+ delivered wrong SKU.
+
+ Sample meaning: pd-001 records 2 damaged ONTs from vendor delivery DN-HW-7788.
+
+  Column                           Type                            Purpose                                Sample
+
+  discrepancy_id                   TEXT PK                         Discrepancy id.                        pd-001
+
+  operator_code                    TEXT                            Tenant/operator.                       WIK
+
+  po_id                            TEXT                            Related PO.                            po-2026-00045
+
+  receipt_id                       TEXT                            Related receipt.                       gr-001
+
+  receipt_line_id                  TEXT NULL                       Related receipt line.                  grl-001
+
+  discrepancy_type                 TEXT                            SHORT_DELIVERY, OVER_DELIVERY,         DAMAGED
+                                                                   DAMAGED, WRONG_SKU,
+                                                                   DUPLICATE_SERIAL,
+                                                                   INVALID_SERIAL.
+
+  quantity                         INT                             Affected quantity.                     2
+
+  status                           TEXT                            OPEN, PENDING_APPROVAL,                OPEN
+                                                                   RESOLVED, REJECTED, CLOSED.
+
+  resolution_action                TEXT NULL                       ACCEPT, REJECT_TO_VENDOR,              REJECT_TO_VENDOR
+                                                                   CREDIT_NOTE,
+                                                                   REPLACEMENT_PENDING.
+
+  approval_request_id              TEXT NULL                       EM-CFG-04 approval if required.        apr-pd-001
+
+  created_at                       TIMESTAMP                       Creation timestamp.                    2026-07-15T10:30:00Z
+
+  resolved_at                      TIMESTAMP NULL                  Resolution timestamp.                  null
+
+
+ Recommended indexes:
+
+   - (operator_code, status, created_at DESC).
+
+   - (po_id).
+
+   - (receipt_id).
+
+
+
+ 6. APIs
+ 6.1 Create Purchase Order
+           POST /api/procurement/orders
+           Idempotency-Key: po-wik-huawei-20260715
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "vendorId": "ven-huawei-ke",
+               "destinationLocationId": "WIK-CENTRAL-NRB",
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 5
+              "currencyCode": "KES",
+              "expectedDeliveryDate": "2026-07-15",
+              "lines": [
+                {
+                  "skuId": "WIK-ONT-HUAWEI-EG8145V5",
+                  "orderedQty": 200,
+                  "unitCost": 6000.00
+                }
+              ]
+          }
+
+
+ 6.2 Submit PO For Approval
+          POST /api/procurement/orders/{po_id}/submit-approval
+          Content-Type: application/json
+
+ OSR-02 calls EM-CFG-04:
+          POST /api/approvals/evaluate
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "moduleCode": "OSR-02",
+              "actionCode": "PROCUREMENT_ORDER_APPROVAL",
+              "subjectType": "PROCUREMENT_ORDER",
+              "subjectId": "po-2026-00045",
+              "context": {
+                "totalEstimatedAmount": 1200000.00,
+                "currencyCode": "KES",
+                "vendorId": "ven-huawei-ke",
+                "destinationLocationId": "WIK-CENTRAL-NRB",
+                "lineCount": 1
+              }
+          }
+
+ If approval is required, OSR-02 starts an approval request and waits for callback.
+
+ 6.3 Approval Outcome Callback
+          POST /internal/procurement/orders/{po_id}/approval-outcome
+          Content-Type: application/json
+
+          {
+              "approvalRequestId": "apr-po-00045",
+              "outcome": "APPROVED",
+              "decisionComment": "Approved for Nairobi stock replenishment."
+          }
+
+
+ 6.4 Record Goods Receipt
+          POST /api/procurement/goods-receipts
+          Idempotency-Key: gr-dn-hw-7788
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "poId": "po-2026-00045",
+              "vendorDeliveryRef": "DN-HW-7788",
+              "destinationLocationId": "WIK-CENTRAL-NRB",
+              "receivedAt": "2026-07-15T10:20:00Z",
+              "lines": [
+                {
+                  "poLineId": "pol-001",
+                  "skuId": "WIK-ONT-HUAWEI-EG8145V5",
+                  "receivedQty": 150,
+                  "acceptedQty": 148,
+                  "rejectedQty": 2,
+                  "serialPayload": [
+                     {"serialNumber": "48575443ABCD1234", "macAddress": "00:11:22:33:44:55"}
+                  ],
+                  "discrepancyCode": "DAMAGED_ON_ARRIVAL"
+                }
+              ]
+          }
+
+ Posting behavior:
+
+   - create goods_receipt and goods_receipt_line;
+
+   - create discrepancy row if received/accepted/rejected quantities do not match expectations;
+
+
+SOPHIX BSS Design Documents                                                                       Page 6
+   - call OSR-01 POST /api/stock-movements for accepted quantity;
+
+   - call OSR-INSTANCE-01 bulk import for serialized accepted units;
+
+   - update PO line received quantity and PO status.
+
+ 6.5 Resolve Procurement Discrepancy
+              POST /api/procurement/discrepancies/{discrepancy_id}/resolve
+              Content-Type: application/json
+
+              {
+                  "resolutionAction": "REJECT_TO_VENDOR",
+                  "comment": "Two ONTs physically damaged on arrival.",
+                  "requestedByUserId": "usr-warehouse-001"
+              }
+
+ Resolution may call EM-CFG-04 depending on discrepancy value and action.
+
+
+
+ 7. Business Rules
+  Rule                                          Description                                             Reason
+
+  R-OSR-02-01                                   PO vendor must be active.                               Prevent ordering from blocked vendors.
+
+  R-OSR-02-02                                   PO SKU must exist in PLM-CFG-06 and be active           Prevent invalid stock.
+                                                for operator.
+
+  R-OSR-02-03                                   Destination location must exist in OSR-01 and           Avoid wrong stock location.
+                                                accept vendor receipts.
+
+  R-OSR-02-04                                   PO approval must be evaluated through                   Governance.
+                                                EM-CFG-04.
+
+  R-OSR-02-05                                   Camunda is used only when EM-CFG-04 policy              Operational simplicity.
+                                                mode is BPMN.
+
+  R-OSR-02-06                                   Goods receipt can post only against approved/sent       Prevent unauthorized stock injection.
+                                                PO.
+
+  R-OSR-02-07                                   Accepted quantity must create OSR-01 stock              Stock balance integrity.
+                                                movement.
+
+  R-OSR-02-08                                   Serialized accepted units must create                   Serial traceability.
+                                                OSR-INSTANCE records.
+
+  R-OSR-02-09                                   Duplicate vendor delivery ref must be rejected or       Idempotency.
+                                                return existing receipt.
+
+  R-OSR-02-10                                   Discrepancy resolution may require approval based       Financial and inventory control.
+                                                on value/action.
+
+
+
+
+ 8. Rule Engine Guidance
+ Use Drools for configurable procurement decisions:
+
+  Rule file                                                                 Purpose
+
+  procurement-order-approval.drl                                            Decide approval policy based on amount, vendor, SKU family, requester, and
+                                                                            destination.
+
+  goods-receipt-discrepancy.drl                                             Decide whether discrepancy is tolerable, blocked, or approval-required.
+
+  vendor-risk-policy.drl                                                    Apply operator-specific vendor risk controls.
+
+
+ Example:
+              package com.sophix.osr.procurement
+
+              rule "High value procurement requires finance approval"
+              when
+                $po : ProcurementOrderFact(totalAmount >= 1000000.00, currencyCode == "KES")
+                $decision : ProcurementDecision()
+              then
+                $decision.setApprovalRequired(true);
+                $decision.setApprovalPolicyCode("PROCUREMENT_HIGH_VALUE_FINANCE");
+                $decision.addReason("HIGH_VALUE_PO");
+              end
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                           Page 7
+ Fixed checks such as required fields, FK existence, quantity math, and idempotency stay in application code.
+
+
+
+ 9. Events
+  Event                                      Topic                                          When emitted
+
+  ProcurementOrderCreated                    sophix.osr.procurement.order-created           PO created.
+
+  ProcurementOrderApprovalRequired           sophix.osr.procurement.approval-requir         Approval request started.
+                                             ed
+
+  ProcurementOrderApproved                   sophix.osr.procurement.order-approved          Approval completed.
+
+  GoodsReceiptPosted                         sophix.osr.procurement.goods-receipt-p         Receipt posted to OSR-01/OSR-INSTANCE.
+                                             osted
+
+  ProcurementDiscrepancyOpened               sophix.osr.procurement.discrepancy-ope         Discrepancy created.
+                                             ned
+
+  ProcurementDiscrepancyResolved             sophix.osr.procurement.discrepancy-res         Discrepancy closed.
+                                             olved
+
+
+ Use transactional outbox.
+
+
+
+ 10. Frontend/API Consumers
+  Area                                                           APIs/modules used
+
+  Backoffice procurement                                         OSR-02 order, approval, receipt, discrepancy APIs.
+
+  Approval inbox                                                 EM-CFG-04 task APIs.
+
+  Warehouse receipt screen                                       OSR-02 goods receipt, PLM-CFG-06 SKU lookup, OSR-INSTANCE serial
+                                                                 validation.
+
+  Inventory dashboard                                            OSR-01 stock balances plus OSR-02 incoming PO status.
+
+  Reporting                                                      OSR-02 events and REP-01 datasets.
+
+
+
+
+ 11. Infrastructure Recommendations
+ Run OSR-02 inside the OSR/equipment API deployment with OSR-01 and OSR-INSTANCE for a medium budget
+ deployment.
+
+  Component                                                      Recommendation
+
+  API                                                            Add procurement endpoints to OSR API service.
+
+  Database                                                       PostgreSQL OSR schema.
+
+  Workers                                                        Shared OSR worker handles outbox and receipt posting retries.
+
+  Files                                                          Use foundation file storage for uploaded delivery notes or serial CSV/XLSX.
+
+  Approval                                                       EM-CFG-04 shared service.
+
+  Rules                                                          Drools/KIE for configurable procurement rules.
+
+
+ AWS notes: use ECS/EKS OSR service, RDS PostgreSQL, S3 for vendor documents/serial uploads, MSK/Kafka for events,
+ Secrets Manager for vendor/API credentials.
+
+
+
+ 12. Acceptance Criteria
+   - PO lifecycle APIs exist and are idempotent.
+
+   - PO approval uses EM-CFG-04; OSR-02 does not hardcode approver steps.
+
+   - Goods receipt posts accepted quantity through OSR-01 stock movements.
+
+   - Serialized accepted units are created through OSR-INSTANCE-01.
+
+   - Receipt discrepancies are tracked and resolvable with approval where configured.
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 8
+   - Drools rules exist for configurable approval and discrepancy decisions.
+
+   - Backoffice can create PO, submit approval, receive goods, and resolve discrepancy.
+
+
+
+
+SOPHIX BSS Design Documents                                                               Page 9
+

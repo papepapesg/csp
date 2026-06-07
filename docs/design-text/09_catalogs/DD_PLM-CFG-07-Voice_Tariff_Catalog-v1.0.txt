@@ -1,0 +1,739 @@
+ DD_PLM-CFG-07 - Voice Tariff Catalog
+ Version: 1.0 Status: Draft for review Bundle: 09_catalogs Audience: catalog developers, billing developers, usage rating
+ developers, QA, product operations Related DDs:
+
+   - DD_PLM-CFG-01 - Service Catalog
+
+   - DD_SIP-01 - Package Management
+
+   - DD_PLM-CFG-02 - Tax Configuration
+
+   - DD_BIL-05 - Wallet and Topup
+
+   - DD_MED-01 - Usage Mediation
+
+   - DD_RAT-01 - Usage Rating
+
+   - DD_REP-01 - Reporting Data Mart and Dashboard API
+
+
+
+ 1. Purpose
+ PLM-CFG-07 defines the configurable voice tariff catalog used to rate voice usage records.
+
+ It answers these questions:
+
+   - Which tariff plan applies to a voice service or package?
+
+   - Which destination zone does a called number belong to?
+
+   - What rate applies for that zone, time period, and call type?
+
+   - What rounding increment is used?
+
+   - Which calls are free, blocked, zero-rated, or premium-rated?
+
+   - Are there bundled free minutes or allowances?
+
+ This DD is required before usage mediation and rating can be implemented. MED-01 will normalize CDRs. RAT-01 will rate
+ those mediated CDRs. PLM-CFG-07 supplies the tariff configuration that rating uses.
+
+
+
+ 2. Ownership Boundary
+  Concern                                                                         Owner
+
+  Voice tariff plans, destination zones, prefix mapping, time bands, per-minute   PLM-CFG-07
+  rates, increments, allowances
+
+  Customer/package/service composition                                            SIP-01 and PLM-CFG-01
+
+  Raw CDR ingestion from VoipSwitch or other voice platforms                      MED-01
+
+  CDR normalization, deduplication, quarantine                                    MED-01
+
+  Applying tariff to mediated CDR and producing charge/debit events               RAT-01
+
+  Wallet debit for PREPAID usage                                                  BIL-05
+
+  POSTPAID usage billable event/invoice charge                                    BIL-01 / BIL-02
+
+  Tax calculation                                                                 PLM-CFG-02
+
+  Invoice/tax invoice generation                                                  BIL-02 / BIL-02-TAX-01
+
+
+ Rule: PLM-CFG-07 never rates a CDR by itself. It exposes catalog data and validation APIs. RAT-01 performs runtime rating.
+
+
+
+ 3. When To Use This Catalog
+ Use PLM-CFG-07 when:
+
+   - A new voice product is launched.
+
+   - A voice package needs a different local/international rate plan.
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 1
+   - A destination prefix changes zone.
+
+   - A new international destination zone is added.
+
+   - Peak/off-peak pricing changes.
+
+   - Emergency, toll-free, or premium numbers need special treatment.
+
+   - Product wants to add monthly free minutes or zone-specific allowance.
+
+ Do not use this catalog for:
+
+   - Broadband recurring package prices. These stay in SIP-01.
+
+   - Equipment fees. These stay in PLM-CFG-06.
+
+   - One-shot fees. These stay in BIL-CFG-01.
+
+   - Discounts and campaigns. These stay in PLM-CFG-04, SIP-03, SIP-05, and DIS-OP-01.
+
+
+
+ 4. High Level Rating Relationship
+          flowchart LR
+            VS["VoipSwitch / SIP platform"]
+            MED["MED-01<br/>Usage Mediation"]
+            RAT["RAT-01<br/>Usage Rating"]
+            TAR["PLM-CFG-07<br/>Voice Tariff Catalog"]
+            TAX["PLM-CFG-02<br/>Tax Config"]
+            BIL["BIL-01 or BIL-05"]
+
+             VS --> MED
+             MED --> RAT
+             RAT --> TAR
+             RAT --> TAX
+             RAT --> BIL
+
+
+
+
+ 5. Core Concepts
+ 5.1 Tariff Plan
+ A tariff plan is the rated price structure for a voice service.
+
+ Example:
+          WIK_RES_VOICE_STANDARD_2026
+
+ It may contain rates for local mobile, local fixed, on-net, East Africa, international, premium, toll-free, and emergency
+ destinations.
+
+ 5.2 Destination Zone
+ A destination zone groups dialed numbers that share rating behavior.
+
+ Examples:
+
+   - WIK_ON_NET
+
+   - KE_MOBILE
+
+   - KE_FIXED
+
+   - EA_REGION
+
+   - INTERNATIONAL_ROW
+
+   - TOLL_FREE
+
+   - EMERGENCY
+
+   - PREMIUM
+
+ 5.3 Prefix Mapping
+ Prefix mapping converts a normalized called number into a destination zone using longest-prefix match.
+
+
+SOPHIX BSS Design Documents                                                                                                  Page 2
+ Example:
+            +2547 -> KE_MOBILE
+            +25420 -> KE_FIXED
+            999 -> EMERGENCY
+
+
+ 5.4 Rate
+ A rate defines price per unit for a tariff plan, destination zone, call type, time band, and effective date.
+
+ Example:
+            KE_MOBILE, PEAK, 3.00 KES per minute, 60/60 billing increment
+
+
+ 5.5 Allowance
+ An allowance is an included quantity, such as 100 on-net minutes per month.
+
+ Allowance consumption is performed by RAT-01, but the allowance definition is stored here.
+
+
+
+ 6. Rating Rules
+  Rule ID                                      Rule                                                     Notes
+
+  R-VOICE-TAR-01                               Tariff data is operator-scoped.                          A prefix/rate for WIK does not apply to another
+                                                                                                        operator.
+
+  R-VOICE-TAR-02                               Tariff plans are versioned with effective dates.         Historical CDRs must rate with the tariff active at call
+                                                                                                        time.
+
+  R-VOICE-TAR-03                               Prefix resolution uses longest-prefix match.             +254711 beats +2547 if both exist.
+
+  R-VOICE-TAR-04                               Emergency calls are zero-rated and must not              Regulatory safety.
+                                               consume allowance.
+
+  R-VOICE-TAR-05                               Toll-free calls are zero-rated to customer unless        Default zero customer charge.
+                                               operator config marks them chargeable.
+
+  R-VOICE-TAR-06                               Premium numbers require explicit zone and rate           Avoid accidental normal-rate billing.
+                                               configuration.
+
+  R-VOICE-TAR-07                               If no prefix/zone/rate is found, rating must             Do not silently rate at zero.
+                                               quarantine the CDR.
+
+  R-VOICE-TAR-08                               Rates cannot overlap for same plan, zone, call type,     Prevent ambiguous rating.
+                                               time band, and effective period.
+
+  R-VOICE-TAR-09                               Rounding increment is part of the rate row.              Supports per-destination billing increments.
+
+  R-VOICE-TAR-10                               Allowance eligibility is explicit by tariff plan and     Do not assume all minutes consume allowance.
+                                               destination zone.
+
+  R-VOICE-TAR-11                               Currency is explicit and must match                      Kenya first uses KES.
+                                               operator/package currency.
+
+  R-VOICE-TAR-12                               Tariff changes require future effective dates unless     Protect billing audit.
+                                               an elevated admin approves backdating.
+
+
+
+
+ 7. Data Model
+ 7.1 voice_tariff_plan
+ Stores a commercial voice tariff plan.
+
+ Use this table when creating a new voice pricing structure or versioning an existing plan.
+
+  Column                            Type                                     Purpose                                   Sample
+
+  tariff_plan_id                    UUID PK                                  Internal plan id.                         vtp-001
+
+  operator_code                     TEXT                                     Operator/tenant.                          WIK
+
+  tariff_plan_code                  TEXT                                     Stable plan code used by                  WIK_RES_VOICE_STD_2026
+                                                                             packages/rating.
+
+  display_name                      TEXT                                     Backoffice display name.                  Residential Voice Standard
+                                                                                                                       2026
+
+  billing_mode                      TEXT                                     PREPAID, POSTPAID, BOTH.                  BOTH
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                            Page 3
+  Column                           Type                          Purpose                                      Sample
+
+  currency_code                    TEXT                          Currency.                                    KES
+
+  status                           TEXT                          DRAFT, ACTIVE, RETIRED.                      ACTIVE
+
+  effective_from                   TIMESTAMP                     First time this plan can be used.            2026-06-01T00:00:00Z
+
+  effective_to                     TIMESTAMP NULL                End time, null means open.                   NULL
+
+  created_at                       TIMESTAMP                     Creation timestamp.                          2026-05-31T09:00:00Z
+
+  updated_at                       TIMESTAMP                     Last update timestamp.                       2026-05-31T09:00:00Z
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, tariff_plan_code).
+
+   - (operator_code, status, effective_from).
+
+ 7.2 voice_destination_zone
+ Stores rating zones for voice destinations.
+
+ Use this table when defining destination groups such as local mobile, international, emergency, or premium.
+
+  Column                           Type                          Purpose                                      Sample
+
+  zone_id                          UUID PK                       Internal zone id.                            vdz-001
+
+  operator_code                    TEXT                          Operator/tenant.                             WIK
+
+  zone_code                        TEXT                          Stable destination zone code.                KE_MOBILE
+
+  zone_name                        TEXT                          Display name.                                Kenya Mobile
+
+  zone_type                        TEXT                          ON_NET, NATIONAL, REGIONAL,                  NATIONAL
+                                                                 INTERNATIONAL, TOLL_FREE,
+                                                                 EMERGENCY, PREMIUM.
+
+  default_charge_policy            TEXT                          CHARGEABLE, ZERO_RATED,                      CHARGEABLE
+                                                                 BLOCKED, QUARANTINE.
+
+  status                           TEXT                          ACTIVE, RETIRED.                             ACTIVE
+
+  created_at                       TIMESTAMP                     Creation timestamp.                          2026-05-31T09:05:00Z
+
+  updated_at                       TIMESTAMP                     Last update timestamp.                       2026-05-31T09:05:00Z
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, zone_code).
+
+   - (operator_code, zone_type, status).
+
+ 7.3 voice_destination_prefix
+ Maps normalized dialed-number prefixes to destination zones.
+
+ Use this table for longest-prefix match during rating.
+
+  Column                           Type                          Purpose                                      Sample
+
+  prefix_id                        UUID PK                       Internal prefix id.                          vdp-001
+
+  operator_code                    TEXT                          Operator/tenant.                             WIK
+
+  prefix                           TEXT                          Normalized prefix.                           +2547
+
+  zone_id                          UUID FK                       Destination zone.                            vdz-001
+
+  match_priority                   INTEGER                       Optional priority if equal-length conflict   100
+                                                                 exists.
+
+  status                           TEXT                          ACTIVE, RETIRED.                             ACTIVE
+
+  effective_from                   TIMESTAMP                     Prefix valid from.                           2026-06-01T00:00:00Z
+
+  effective_to                     TIMESTAMP NULL                Prefix valid until.                          NULL
+
+  notes                            TEXT NULL                     Operational notes.                           Safaricom mobile range
+
+
+ Recommended indexes:
+
+   - (operator_code, status, effective_from).
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 4
+   - (operator_code, prefix).
+
+ 7.4 voice_time_band
+ Stores time-of-day and day-of-week bands used by rates.
+
+ Use this table when pricing has peak/off-peak or weekend differences.
+
+  Column                           Type                                Purpose                            Sample
+
+  time_band_id                     UUID PK                             Internal id.                       vtb-001
+
+  operator_code                    TEXT                                Operator/tenant.                   WIK
+
+  time_band_code                   TEXT                                Stable code.                       ANYTIME
+
+  display_name                     TEXT                                Display name.                      Any time
+
+  days_of_week                     TEXT                                Comma-separated or JSON day set.   MON,TUE,WED,THU,FRI,SAT,SUN
+
+  start_time_local                 TIME                                Local start time.                  00:00:00
+
+  end_time_local                   TIME                                Local end time.                    23:59:59
+
+  timezone                         TEXT                                Operator timezone for band         Africa/Nairobi
+                                                                       evaluation.
+
+  status                           TEXT                                ACTIVE, RETIRED.                   ACTIVE
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, time_band_code).
+
+ 7.5 voice_tariff_rate
+ Stores the actual price for a plan, zone, call type, and time band.
+
+ Use this table as the primary input for RAT-01 charge calculation.
+
+  Column                           Type                                Purpose                            Sample
+
+  rate_id                          UUID PK                             Internal rate id.                  vtr-001
+
+  operator_code                    TEXT                                Operator/tenant.                   WIK
+
+  tariff_plan_id                   UUID FK                             Tariff plan.                       vtp-001
+
+  zone_id                          UUID FK                             Destination zone.                  vdz-001
+
+  time_band_id                     UUID FK                             Time band.                         vtb-001
+
+  call_direction                   TEXT                                OUTBOUND, INBOUND, FORWARDED.      OUTBOUND
+
+  unit_type                        TEXT                                SECOND, MINUTE, CALL.              MINUTE
+
+  unit_price                       DECIMAL(18,6)                       Price per unit.                    3.000000
+
+  setup_fee_amount                 DECIMAL(18,6)                       One-time fee per call.             0.000000
+
+  initial_increment_seconds        INTEGER                             First billing increment.           60
+
+  subsequent_increment_seconds     INTEGER                             Later increments.                  60
+
+  minimum_charge_amount            DECIMAL(18,6)                       Minimum charge after rounding.     0.000000
+
+  charge_policy                    TEXT                                CHARGEABLE, ZERO_RATED,            CHARGEABLE
+                                                                       BLOCKED, QUARANTINE.
+
+  taxable_kind                     TEXT                                Tax lookup kind for PLM-CFG-02.    SERVICE
+
+  taxable_ref                      TEXT                                Tax lookup reference.              svc_VOIP_STD
+
+  effective_from                   TIMESTAMP                           Rate valid from.                   2026-06-01T00:00:00Z
+
+  effective_to                     TIMESTAMP NULL                      Rate valid until.                  NULL
+
+  status                           TEXT                                DRAFT, ACTIVE, RETIRED.            ACTIVE
+
+
+ Recommended indexes:
+
+   - (tariff_plan_id, zone_id, time_band_id, effective_from).
+
+   - (operator_code, status, effective_from).
+
+ 7.6 voice_tariff_allowance
+ Stores included free or bundled minutes.
+
+SOPHIX BSS Design Documents                                                                                                      Page 5
+ Use this table when a plan includes monthly or cycle-based voice allowance.
+
+  Column                            Type                              Purpose                                   Sample
+
+  allowance_id                      UUID PK                           Internal allowance id.                    vta-001
+
+  operator_code                     TEXT                              Operator/tenant.                          WIK
+
+  tariff_plan_id                    UUID FK                           Tariff plan.                              vtp-001
+
+  allowance_code                    TEXT                              Stable allowance code.                    ONNET_100_MIN
+
+  allowance_name                    TEXT                              Display name.                             100 on-net minutes
+
+  included_seconds                  INTEGER                           Included seconds per cycle.               6000
+
+  eligible_zone_codes_json          JSONB                             Zones that consume this allowance.        ["WIK_ON_NET"]
+
+  cycle_policy                      TEXT                              MONTHLY, BILL_CYCLE,                      BILL_CYCLE
+                                                                      TOPUP_VALIDITY.
+
+  carry_over_policy                 TEXT                              NONE, ONE_CYCLE, CONFIGURED.              NONE
+
+  priority                          INTEGER                           Consumption priority.                     10
+
+  status                            TEXT                              ACTIVE, RETIRED.                          ACTIVE
+
+  effective_from                    TIMESTAMP                         Allowance valid from.                     2026-06-01T00:00:00Z
+
+  effective_to                      TIMESTAMP NULL                    Allowance valid until.                    NULL
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, tariff_plan_id, allowance_code).
+
+ 7.7 voice_tariff_binding
+ Binds a tariff plan to a package, service, or explicit subscription override.
+
+ Use this table when deciding which tariff plan applies during rating.
+
+  Column                            Type                              Purpose                                   Sample
+
+  binding_id                        UUID PK                           Internal binding id.                      vtbnd-001
+
+  operator_code                     TEXT                              Operator/tenant.                          WIK
+
+  binding_scope                     TEXT                              PACKAGE, SERVICE,                         PACKAGE
+                                                                      SUBSCRIPTION_OVERRIDE.
+
+  binding_ref                       TEXT                              Package id/service id/subscription id.    pkg_INET_VOICE_STD
+
+  tariff_plan_id                    UUID FK                           Tariff plan.                              vtp-001
+
+  priority                          INTEGER                           Higher priority wins if multiple apply.   100
+
+  status                            TEXT                              ACTIVE, RETIRED.                          ACTIVE
+
+  effective_from                    TIMESTAMP                         Binding valid from.                       2026-06-01T00:00:00Z
+
+  effective_to                      TIMESTAMP NULL                    Binding valid until.                      NULL
+
+
+ Recommended indexes:
+
+   - (operator_code, binding_scope, binding_ref, status).
+
+   - (tariff_plan_id, status).
+
+
+
+ 8. APIs
+ 8.1 Tariff Plan APIs
+           GET /api/plm/voice-tariff-plans
+           POST /api/plm/voice-tariff-plans
+           GET /api/plm/voice-tariff-plans/{tariff_plan_id}
+           PATCH /api/plm/voice-tariff-plans/{tariff_plan_id}
+           POST /api/plm/voice-tariff-plans/{tariff_plan_id}/activate
+           POST /api/plm/voice-tariff-plans/{tariff_plan_id}/retire
+
+
+ 8.2 Zone And Prefix APIs
+           GET /api/plm/voice-destination-zones
+           POST /api/plm/voice-destination-zones
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 6
+          GET /api/plm/voice-destination-prefixes
+          POST /api/plm/voice-destination-prefixes
+          POST /api/plm/voice-destination-prefixes/bulk-import
+
+
+ 8.3 Rate APIs
+          GET /api/plm/voice-tariff-rates?tariffPlanCode={code}
+          POST /api/plm/voice-tariff-rates
+          POST /api/plm/voice-tariff-rates/bulk-import
+          POST /api/plm/voice-tariff-rates/validate-overlap
+
+
+ 8.4 Rating Lookup API
+ Used by RAT-01.
+          POST /api/plm/voice-rating/lookup
+
+ Request:
+          {
+              "operatorCode": "WIK",
+              "subscriptionId": "SUB-700045",
+              "packageRef": "pkg_INET_VOICE_STD",
+              "serviceRef": "svc_VOIP_STD",
+              "calledNumberNormalized": "+254711222333",
+              "callDirection": "OUTBOUND",
+              "callStartedAt": "2026-06-02T10:15:00+03:00"
+          }
+
+ Response:
+          {
+              "tariffPlanCode": "WIK_RES_VOICE_STD_2026",
+              "zoneCode": "KE_MOBILE",
+              "timeBandCode": "ANYTIME",
+              "chargePolicy": "CHARGEABLE",
+              "unitType": "MINUTE",
+              "unitPrice": 3.0,
+              "currency": "KES",
+              "initialIncrementSeconds": 60,
+              "subsequentIncrementSeconds": 60,
+              "setupFeeAmount": 0.0,
+              "minimumChargeAmount": 0.0,
+              "taxableKind": "SERVICE",
+              "taxableRef": "svc_VOIP_STD"
+          }
+
+
+
+
+ 9. Sample Rating Calculation
+ Input CDR after mediation:
+          {
+              "operatorCode": "WIK",
+              "subscriptionId": "SUB-700045",
+              "serviceRef": "svc_VOIP_STD",
+              "calledNumberNormalized": "+254711222333",
+              "durationSeconds": 75,
+              "callStartedAt": "2026-06-02T10:15:00+03:00"
+          }
+
+ Catalog lookup returns:
+          unit_price = 3.00 KES per minute
+          initial_increment_seconds = 60
+          subsequent_increment_seconds = 60
+
+ Rating calculation performed by RAT-01:
+          75 actual seconds -> rounded to 120 billable seconds
+          120 / 60 = 2 billed minutes
+          2 * 3.00 = 6.00 KES
+
+ PLM-CFG-07 supplies the data. RAT-01 performs this calculation and creates the usage charge/debit.
+
+
+
+ 10. Events
+
+
+SOPHIX BSS Design Documents                                                                           Page 7
+  Event                                        Topic                                            When emitted
+
+  VoiceTariffPlanCreated                       sophix.plm.voice-tariff.plan.created             Plan created.
+
+  VoiceTariffPlanActivated                     sophix.plm.voice-tariff.plan.activated           Plan activated.
+
+  VoiceTariffPlanRetired                       sophix.plm.voice-tariff.plan.retired             Plan retired.
+
+  VoiceTariffRateChanged                       sophix.plm.voice-tariff.rate.changed             Rate created/updated/retired.
+
+  VoiceDestinationPrefixChanged                sophix.plm.voice-destination-prefix.ch           Prefix table changes.
+                                               anged
+
+  VoiceTariffBindingChanged                    sophix.plm.voice-tariff.binding.change           Binding changes.
+                                               d
+
+
+ Consumers:
+
+   - RAT-01 invalidates tariff cache.
+
+   - REP-01 tracks catalog history and price changes.
+
+   - Backoffice refreshes configuration views.
+
+
+
+ 11. Frontend Usage
+ FE-APP-01 Backoffice uses PLM-CFG-07 for:
+
+   - Voice tariff plan list/detail.
+
+   - Destination zone management.
+
+   - Prefix import and validation.
+
+   - Rate import and overlap validation.
+
+   - Allowance setup.
+
+   - Tariff binding to package/service.
+
+   - Activation/retirement workflow.
+
+ Self-care and sales apps normally do not manage tariffs. They may display customer-friendly price summaries from package
+ APIs, not raw tariff tables.
+
+
+
+ 12. Infra Recommendation
+ PLM-CFG-07 is a catalog service feature, not a high-throughput runtime service by itself.
+
+ Recommended medium deployment:
+
+  Component                                                         Recommendation
+
+  API pods                                                          Use existing PLM/catalog API pods. No dedicated service required unless
+                                                                    catalog load grows.
+
+  DB                                                                Existing catalog PostgreSQL schema.
+
+  Cache                                                             Redis or local cache for rating lookup. RAT-01 should cache tariff lookup results
+                                                                    with event invalidation.
+
+  Workers                                                           Optional import validation worker for large prefix/rate uploads.
+
+
+ Recommended partitions:
+
+   - No partition required for core catalog tables at launch.
+
+   - Keep audit/history tables if catalog framework already supports them.
+
+   - Prefix imports should be batch-tracked for rollback and validation.
+
+ OS recommendation:
+
+   - Same as catalog service baseline: Ubuntu Server 24.04 LTS for VPS, or hardened Debian/Ubuntu slim images in
+     containers.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 8
+ 13. AWS Deployment Recommendation
+  AWS component                                                       Usage
+
+  ECS/EKS                                                             Existing catalog API containers.
+
+  RDS PostgreSQL                                                      Catalog tables.
+
+  ElastiCache Redis                                                   Optional tariff lookup cache.
+
+  S3                                                                  Optional storage for uploaded prefix/rate CSV import files.
+
+  CloudWatch                                                          Import failures, overlap validation errors, activation events.
+
+
+ No internet-facing callback is required for this DD.
+
+
+
+ 14. Testing Requirements
+ 14.1 Unit Tests
+   - Longest-prefix match picks most specific prefix.
+
+   - Rate overlap validation rejects ambiguous rates.
+
+   - Emergency zone returns zero-rated policy.
+
+   - Premium zone requires explicit rate.
+
+   - Effective-date lookup selects historical rate.
+
+   - Binding priority selects subscription override before package binding.
+
+ 14.2 Integration Tests
+   - Create draft tariff plan, add zones, add prefixes, add rates, activate plan.
+
+   - Bulk prefix import rejects duplicate active prefixes.
+
+   - Rating lookup returns correct rate for package/service/called number/time.
+
+   - Rate change event invalidates rating cache.
+
+ 14.3 End To End Tests With RAT-01
+   - 75-second mobile call rates as 2 billed minutes.
+
+   - Emergency call produces zero charge.
+
+   - Unknown prefix quarantines CDR in RAT-01.
+
+   - Package-bound allowance is consumed before paid rate.
+
+
+
+ 15. Definition Of Done
+ PLM-CFG-07 is complete when:
+
+   - Tariff plan, zone, prefix, time band, rate, allowance, and binding tables are implemented.
+
+   - Admin APIs can create, validate, activate, and retire tariff plans.
+
+   - Rating lookup API returns deterministic tariff data.
+
+   - Longest-prefix match works.
+
+   - Effective-date rating lookup works.
+
+   - Rate overlap validation works.
+
+   - Events are emitted for cache invalidation.
+
+   - Backoffice can manage the catalog.
+
+   - RAT-01 can use the lookup API without reading catalog tables directly.
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 9
+

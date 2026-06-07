@@ -1,0 +1,636 @@
+ DD_SIP-03 - Discount Assignment - Developer
+ Implementation Guide
+ Version: 1.0 Status: Draft for review Bundle: 09_catalogs Audience: mid-level backend developers, billing integration
+ developers, frontend developers, QA Parent DD: DD_SIP-03 - Discount Assignment
+
+
+
+ 1. How To Read This Guide
+ Discount assignment is the operational layer between the discount catalog and billing runtime.
+
+ PLM-CFG-04 says what the discount is. SIP-03 says who gets it and when. DIS-OP-01 later decides how the active
+ assignment is applied to a charge/invoice/wallet event.
+
+ Do not put invoice amount calculation in SIP-03.
+
+ Do not hardcode approval steps in SIP-03. Configurable approvals are owned by EM-CFG-04. SIP-03 calls EM-CFG-04 to
+ evaluate/start approval, then waits for an approval outcome callback. Camunda is involved only when the selected
+ EM-CFG-04 policy uses approvalMode = BPMN.
+
+
+
+ 2. Step 1 - Validate Discount Catalog Item
+ When a user creates an assignment, first load the discount:
+           GET /api/discounts/RETENTION_10PCT_3M
+
+ Expected:
+           {
+               "discountId": "disc-1001",
+               "discountCode": "RETENTION_10PCT_3M",
+               "effectiveStatus": "ACTIVE",
+               "flavor": "PRICE_REBATE",
+               "type": "PERCENTAGE",
+               "value": 10,
+               "eligiblePackageRefs": ["pkg-fiber-100m", "pkg-fiber-200m"],
+               "eligibleBillableEventRefs": ["RECURRING_MRC"],
+               "startDate": "2026-01-01",
+               "endDate": "2026-12-31"
+           }
+
+ Reject assignment when:
+
+   - discount does not exist;
+
+   - discount is not ACTIVE;
+
+   - requested validity does not fit policy;
+
+   - discount flavor or billable event does not match intended usage.
+
+
+
+ 3. Step 2 - Preview Assignment
+ Backoffice or sales app calls:
+           POST /api/discount-assignments/preview
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "discountCode": "RETENTION_10PCT_3M",
+               "scopeType": "SUBSCRIPTION",
+               "scopeRefId": "SUB-700045",
+               "customerId": "CUS-100045",
+               "subscriptionId": "SUB-700045",
+               "validFrom": "2026-06-01",
+               "validTo": "2026-08-31",
+               "sourceChannel": "BACKOFFICE",
+               "reasonCode": "RETENTION_SAVE"
+           }
+
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 1
+ SIP-03 calls owner APIs:
+           GET /api/subscriptions/SUB-700045
+           GET /api/packages/pkg-fiber-100m
+           GET /api/franchises/fr-019
+
+ Preview response:
+           {
+               "eligible": true,
+               "approvalRequired": false,
+               "approvalPolicyCode": null,
+               "approvalMode": "AUTO",
+               "duplicateFound": false,
+               "stackingConflicts": [],
+               "runtimeHints": {
+                 "eligibleBillableEventRefs": ["RECURRING_MRC"],
+                 "stackingGroupCode": "RECURRING_MRC",
+                 "priority": 100
+               }
+           }
+
+ Frontend should show this before creation.
+
+ Approval decision comes from EM-CFG-04:
+           POST /api/approvals/evaluate
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "moduleCode": "SIP-03",
+               "actionCode": "DISCOUNT_ASSIGNMENT_CREATE",
+               "subjectType": "DISCOUNT_ASSIGNMENT",
+               "context": {
+                 "discountCode": "RETENTION_10PCT_3M",
+                 "reasonCode": "RETENTION_SAVE",
+                 "sourceChannel": "BACKOFFICE",
+                 "scopeType": "SUBSCRIPTION",
+                 "durationDays": 92,
+                 "estimatedValue": 1500.00,
+                 "currencyCode": "KES",
+                 "requesterUserId": "usr-care-001"
+               }
+           }
+
+ Possible EM-CFG-04 response:
+           {
+               "approvalRequired": true,
+               "policyId": "apol-da-retention-wik-v1",
+               "policyCode": "DISCOUNT_ASSIGNMENT_RETENTION",
+               "approvalMode": "BPMN",
+               "camundaProcessKey": "approval_generic_threshold_v1",
+               "firstQueueCode": "CARE_SUPERVISOR"
+           }
+
+
+
+
+ 4. Step 3 - Create Assignment
+           POST /api/discount-assignments
+           Idempotency-Key: da-retention-sub-700045-20260601
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "discountCode": "RETENTION_10PCT_3M",
+               "scopeType": "SUBSCRIPTION",
+               "scopeRefId": "SUB-700045",
+               "customerId": "CUS-100045",
+               "accountId": "ACC-900045",
+               "subscriptionId": "SUB-700045",
+               "reasonCode": "RETENTION_SAVE",
+               "sourceChannel": "BACKOFFICE",
+               "validFrom": "2026-06-01",
+               "validTo": "2026-08-31",
+               "priority": 100,
+               "stackingGroupCode": "RECURRING_MRC"
+           }
+
+ Insert:
+
+
+SOPHIX BSS Design Documents                                            Page 2
+          insert into discount_assignment (
+             assignment_id,
+             operator_code,
+             discount_code,
+             discount_id,
+             scope_type,
+             scope_ref_id,
+             customer_id,
+             account_id,
+             subscription_id,
+             package_ref,
+             campaign_id,
+             franchise_id,
+             reason_code,
+             source_channel,
+             valid_from,
+             valid_to,
+             status,
+             priority,
+             stacking_group_code,
+             metadata_json,
+             created_by_user_id,
+             created_at,
+             activated_at
+          ) values (
+             'da-001',
+             'WIK',
+             'RETENTION_10PCT_3M',
+             'disc-1001',
+             'SUBSCRIPTION',
+             'SUB-700045',
+             'CUS-100045',
+             'ACC-900045',
+             'SUB-700045',
+             'pkg-fiber-100m',
+             null,
+             null,
+             'RETENTION_SAVE',
+             'BACKOFFICE',
+             '2026-06-01',
+             '2026-08-31',
+             'ACTIVE',
+             100,
+             'RECURRING_MRC',
+             '{"previewId":"dap-001"}',
+             'usr-care-001',
+             now(),
+             now()
+          );
+
+ Add history:
+          insert into discount_assignment_status_history (
+             history_id,
+             assignment_id,
+             old_status,
+             new_status,
+             reason_code,
+             changed_by_user_id,
+             changed_at
+          ) values (
+             'dash-001',
+             'da-001',
+             null,
+             'ACTIVE',
+             'CREATED_AUTO_ACTIVE',
+             'usr-care-001',
+             now()
+          );
+
+ Emit DiscountAssignmentActivated.
+
+
+
+ 5. Step 4 - Approval Required Flow
+ If EM-CFG-04 says approval is required, create the assignment as PENDING_APPROVAL, then start an EM-CFG-04 approval
+ request.
+          insert into discount_assignment_approval (
+            approval_id,
+            assignment_id,
+
+
+SOPHIX BSS Design Documents                                                                                     Page 3
+             approval_policy_code,
+             approval_request_id,
+             approval_mode,
+             camunda_process_instance_id,
+             status,
+             assigned_queue_code,
+             created_at
+          ) values (
+             'daa-001',
+             'da-002',
+             'DISCOUNT_ASSIGNMENT_RETENTION',
+             null,
+             'BPMN',
+             null,
+             'PENDING',
+             'CARE_SUPERVISOR',
+             now()
+          );
+
+ Start approval in EM-CFG-04:
+          POST /api/approvals/requests
+          Idempotency-Key: approval-da-002
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "moduleCode": "SIP-03",
+              "actionCode": "DISCOUNT_ASSIGNMENT_CREATE",
+              "subjectType": "DISCOUNT_ASSIGNMENT",
+              "subjectId": "da-002",
+              "policyId": "apol-da-retention-wik-v1",
+              "callbackUrl": "/internal/discount-assignments/da-002/approval-outcome",
+              "context": {
+                "discountCode": "RETENTION_20PCT_3M",
+                "reasonCode": "RETENTION_SAVE",
+                "scopeType": "SUBSCRIPTION",
+                "scopeRefId": "SUB-700045",
+                "durationDays": 92,
+                "estimatedValue": 3000.00,
+                "currencyCode": "KES"
+              }
+          }
+
+ Expected response:
+          {
+              "approvalRequestId": "apr-da-002",
+              "status": "PENDING",
+              "approvalMode": "BPMN",
+              "camundaProcessInstanceId": "cam-proc-da-002",
+              "firstTaskId": "apt-da-002-step1"
+          }
+
+ Patch local reference:
+          update discount_assignment_approval
+          set approval_request_id = 'apr-da-002',
+              camunda_process_instance_id = 'cam-proc-da-002'
+          where approval_id = 'daa-001';
+
+ Approver approves in the shared approval UI:
+          POST /api/approvals/tasks/apt-da-002-step1/approve
+          Content-Type: application/json
+
+          {
+              "decisionComment": "Approved 20% retention discount for customer save."
+          }
+
+ EM-CFG-04 finalizes the approval and calls SIP-03:
+          POST /internal/discount-assignments/da-002/approval-outcome
+          Content-Type: application/json
+
+          {
+              "approvalRequestId": "apr-da-002",
+              "outcome": "APPROVED",
+              "decisionComment": "Approved 20% retention discount for customer save.",
+              "decidedByUserId": "usr-supervisor-002"
+          }
+
+ SIP-03 applies the outcome idempotently:
+          update discount_assignment_approval
+
+
+SOPHIX BSS Design Documents                                                              Page 4
+          set status = 'APPROVED',
+              actor_user_id = 'usr-supervisor-002',
+              decision_comment = 'Approved 20% retention discount for customer save.',
+              decided_at = now()
+          where assignment_id = 'da-002'
+            and approval_request_id = 'apr-da-002'
+            and status = 'PENDING';
+
+          update discount_assignment
+          set status = 'ACTIVE',
+              activated_at = now()
+          where assignment_id = 'da-002'
+            and status = 'PENDING_APPROVAL';
+
+ If the outcome is REJECTED, set discount_assignment.status = REJECTED and keep it excluded from runtime
+ queries.
+
+
+
+ 6. Step 5 - Runtime Query
+ DIS-OP-01 calls SIP-03 when rating/charging an event:
+          GET /api/discount-assignments/effective?operatorCode=WIK&subscriptionId=SUB-700045&eventCode=RECURRING_MRC&onDate=2026-06-
+
+ SIP-03 query logic:
+          select *
+          from discount_assignment
+          where operator_code = 'WIK'
+            and status = 'ACTIVE'
+            and valid_from <= date '2026-06-30'
+            and (valid_to is null or valid_to >= date '2026-06-30')
+            and (
+              (scope_type = 'SUBSCRIPTION' and scope_ref_id = 'SUB-700045')
+              or (subscription_id = 'SUB-700045')
+            )
+          order by priority desc, created_at asc;
+
+ SIP-03 returns assignments only. DIS-OP-01 loads discount catalog details and computes actual application.
+
+
+
+ 7. Step 6 - Cancel Assignment
+ Cancel future use:
+          POST /api/discount-assignments/da-001/cancel
+          Content-Type: application/json
+
+          {
+              "reasonCode": "CUSTOMER_NO_LONGER_ELIGIBLE",
+              "effectiveDate": "2026-07-01",
+              "comment": "Customer changed package."
+          }
+
+ Patch:
+          update discount_assignment
+          set status = 'CANCELLED',
+              cancelled_at = now(),
+              metadata_json = metadata_json || '{"cancelReasonCode":"CUSTOMER_NO_LONGER_ELIGIBLE","cancelEffectiveDate":"2026-07-01"
+          where assignment_id = 'da-001'
+            and status in ('ACTIVE', 'SUSPENDED', 'PENDING_APPROVAL');
+
+ Important: do not reverse already issued invoices. If a past invoice must be corrected, create a BIL-02-ADJ-01 adjustment
+ request.
+
+
+
+ 8. Step 7 - Bulk Assignment
+ Commercial user creates a campaign batch:
+          POST /api/discount-assignment-batches
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "batchType": "CAMPAIGN",
+              "discountCode": "ACQ_FREE_INSTALL",
+
+
+SOPHIX BSS Design Documents                                                                                              Page 5
+              "campaignId": "camp-acq-june",
+              "validFrom": "2026-06-01",
+              "validTo": "2026-06-30",
+              "targets": [
+                {"targetRefType": "ORDER", "targetRefId": "ORD-1001"},
+                {"targetRefType": "ORDER", "targetRefId": "ORD-1002"}
+              ]
+          }
+
+ Create batch:
+          insert into discount_assignment_batch (
+             batch_id,
+             operator_code,
+             batch_type,
+             discount_code,
+             campaign_id,
+             requested_by_user_id,
+             status,
+             total_rows,
+             valid_rows,
+             failed_rows,
+             created_at
+          ) values (
+             'dab-001',
+             'WIK',
+             'CAMPAIGN',
+             'ACQ_FREE_INSTALL',
+             'camp-acq-june',
+             'usr-commercial-001',
+             'VALIDATING',
+             2,
+             0,
+             0,
+             now()
+          );
+
+ Worker validates each row, then creates assignments using idempotency key:
+          discount-batch:dab-001:ORDER:ORD-1001
+
+ Successful item:
+          insert into discount_assignment_batch_item (
+             batch_item_id,
+             batch_id,
+             target_ref_type,
+             target_ref_id,
+             status,
+             assignment_id
+          ) values (
+             'dabi-001',
+             'dab-001',
+             'ORDER',
+             'ORD-1001',
+             'CREATED',
+             'da-101'
+          );
+
+
+
+
+ 9. Suggested Worker Commands
+ These can run inside the existing catalog/commercial worker pool.
+          discount-assignment:expire
+          discount-assignment:batch-run
+          discount-assignment:approval-reminder
+          discount-assignment:runtime-cache-refresh
+
+  Command                                                        Purpose
+
+  discount-assignment:expire                                     Marks assignments EXPIRED after valid_to.
+
+  discount-assignment:batch-run                                  Validates and processes batch items.
+
+  discount-assignment:approval-reminder                          Alerts approval queues about pending approvals.
+
+  discount-assignment:runtime-cache-refresh                      Refreshes active assignment read model/cache for DIS-OP.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 6
+ 10. Drools Rule Samples
+ Use Drools for configurable assignment eligibility, stacking, and approval decisions.
+          package rules.commercial.discount_assignment
+
+          rule "Target package must be eligible for discount"
+          when
+            $a : DiscountAssignmentFact(packageEligible == false)
+            $out : DiscountAssignmentDecision()
+          then
+            $out.reject("DA_TARGET_NOT_ELIGIBLE");
+          end
+
+          rule "Same stacking group conflict blocks assignment"
+          when
+            $a : DiscountAssignmentFact(hasActiveStackingConflict == true)
+            $out : DiscountAssignmentDecision()
+          then
+            $out.reject("DA_STACKING_CONFLICT");
+          end
+
+          rule "Long manual retention assignment requires approval"
+          when
+            $a : DiscountAssignmentFact(sourceChannel == "BACKOFFICE", reasonCode == "RETENTION_SAVE", durationDays > 90)
+            $out : DiscountAssignmentDecision()
+          then
+            $out.setApprovalRequired(true);
+            $out.setApprovalPolicyCode("DISCOUNT_ASSIGNMENT_RETENTION");
+          end
+
+
+
+
+ 11. Error Codes
+  Code                                                             Meaning
+
+  DA_DISCOUNT_NOT_FOUND                                            Discount catalog item does not exist.
+
+  DA_DISCOUNT_NOT_ACTIVE                                           Discount is inactive/retired.
+
+  DA_TARGET_NOT_FOUND                                              Scope target does not exist.
+
+  DA_TARGET_NOT_ELIGIBLE                                           Target violates discount eligibility.
+
+  DA_DUPLICATE_ACTIVE_ASSIGNMENT                                   Duplicate active assignment blocked.
+
+  DA_STACKING_CONFLICT                                             Existing assignment conflicts by stacking group.
+
+  DA_APPROVAL_REQUIRED                                             Assignment cannot activate before approval.
+
+  DA_APPROVAL_REQUEST_FAILED                                       EM-CFG-04 approval request could not be started.
+
+  DA_APPROVAL_OUTCOME_MISMATCH                                     Approval callback does not match assignment/policy/request.
+
+  DA_BATCH_PARTIALLY_FAILED                                        Bulk batch has failed rows.
+
+  DA_CANNOT_CANCEL_TERMINAL_STATUS                                 Assignment is already expired/cancelled/rejected.
+
+
+
+
+ 12. Minimum Implementation Order
+   1. Create assignment tables and indexes.
+
+   2. Implement discount catalog lookup adapter.
+
+   3. Implement target lookup adapters for customer/account/subscription/order/franchise.
+
+   4. Implement preview API.
+
+   5. Implement create assignment API with idempotency.
+
+   6. Implement EM-CFG-04 approval evaluate/request/callback integration.
+
+   7. Implement cancel API.
+
+   8. Implement runtime effective assignment query.
+
+   9. Implement batch tables and batch worker.
+
+   10. Emit assignment events.
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 7
+   11. Patch Backoffice assignment screens.
+
+   12. Patch Sales App eligibility display/request.
+
+   13. Add E2E tests.
+
+
+
+ 13. Test Scenarios
+ 13.1 Manual Retention Discount
+   - Care user previews subscription assignment.
+
+   - Target is eligible.
+
+   - Assignment is created active.
+
+   - Runtime query returns assignment.
+
+ 13.2 Approval Required
+   - User creates high-value discount.
+
+   - Status is PENDING_APPROVAL.
+
+   - Runtime query excludes it.
+
+   - Supervisor approves through EM-CFG-04 task API.
+
+   - EM-CFG-04 callback activates assignment.
+
+   - Runtime query includes it.
+
+ 13.3 Duplicate Blocked
+   - Active assignment exists for same discount/scope/window.
+
+   - New create returns 409 DA_DUPLICATE_ACTIVE_ASSIGNMENT.
+
+ 13.4 Campaign Batch
+   - Batch has 100 targets.
+
+   - 96 assignments created.
+
+   - 4 failed rows stored with failure code.
+
+   - Batch status becomes PARTIALLY_FAILED.
+
+ 13.5 Cancellation
+   - Assignment is cancelled.
+
+   - Runtime query no longer returns it for future date.
+
+   - Past invoice remains unchanged.
+
+
+
+ 14. Developer Checklist
+   - Assignment validates against PLM-CFG-04.
+
+   - Assignment target is validated through owning module API.
+
+   - Runtime query returns assignments, not calculated amounts.
+
+   - Approval is configured and executed by EM-CFG-04; SIP-03 stores only the local approval reference and final outcome.
+
+   - Camunda is used only when EM-CFG-04 returns approvalMode = BPMN.
+
+   - Drools covers configurable assignment eligibility/stacking/approval decisions.
+
+   - Cancellation does not create invoice/wallet reversal.
+
+   - Bulk processing is idempotent per target.
+
+SOPHIX BSS Design Documents                                                                                            Page 8
+   - Events support DIS-OP cache refresh and reporting.
+
+
+
+
+SOPHIX BSS Design Documents                               Page 9
+

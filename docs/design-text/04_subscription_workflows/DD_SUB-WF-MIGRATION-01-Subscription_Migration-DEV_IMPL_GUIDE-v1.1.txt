@@ -1,0 +1,254 @@
+ DEV_IMPL_GUIDE - DD: SUB-WF-MIGRATION-01 —
+ Subscription Migration
+ Coherence note (2026-06-01): implement cross-technology admin migration by starting the SUB-WF operation and
+ delegating technical execution to FUL-10. Do not build a separate wo-create-migration path from this guide.
+
+
+ 1. Purpose
+ This guide explains how to implement DD_SUB-WF-MIGRATION-01-Subscription_Migration-v1.1.md as executable
+ SOPHIX behavior.
+
+ Use it with:
+
+   - DD_SUB-WF-MIGRATION-01-Subscription_Migration-v1.1.md
+
+   - DD_SUB-WF-FRAMEWORK-01-Subscription_Workflow_Framework-v1.0.md when this DD participates in
+     subscription workflow operations.
+
+   - DD_SUB-WF-FRAMEWORK-01-WORKERS-v1.0.md when this DD references worker topics.
+
+
+ 2. Runtime Actors
+  Runtime component                                                 Responsibility
+
+  API pod / module service                                          Receives requests, validates, loads authoritative state, starts commands.
+
+  Owning module database                                            Stores tables/configuration owned by this DD.
+
+  Reference modules                                                 Provide data through approved APIs/client wrappers.
+
+  Camunda                                                           Runs BPMN process when this DD is workflow-driven.
+
+  Worker apps                                                       Execute logical worker topics.
+
+  Drools                                                            Evaluates packages when rules are declared.
+
+  Kafka/outbox                                                      Publishes success/failure and integration events.
+
+
+
+
+ 3. Before Implementation
+ Confirm these contracts from the DD:
+
+  Contract                                                          Value
+
+  Endpoint scan reference                                           POST /api/subscriptions/{subscription_id}/migrate
+
+  BPMN/process key                                                  configured BPMN process
+
+  Drools package                                                    rules.subscription.migration.<operator>
+
+  Tables                                                            subscription_migration_config
+
+  Events                                                            SubscriptionMigrated, SubscriptionMigrationCancelled,
+                                                                    SubscriptionMigrationRejected,
+                                                                    SubscriptionMigrationScheduled, WorkOrderCancelled,
+                                                                    WorkOrderFinalized, WorkOrderTimedOut
+
+
+
+
+ 4. Execution Flow
+   1. Apply migrations and seed configuration/catalog rows.
+
+   2. Implement the module service/repository layer around the tables and invariants.
+
+   3. Implement public/internal APIs from the DD.
+
+   4. Implement rule evaluation if the DD defines Drools packages.
+
+   5. Implement event production/consumption through outbox where the DD defines events.
+
+   6. Add integration tests for table constraints, API validation, and event payloads.
+
+
+ 5. API And Command Handling
+
+SOPHIX BSS Design Documents                                                                                                                Page 1
+ Endpoints to implement or call:
+
+   - Public command: POST /api/subscriptions/{subscription_id}/migrate
+
+   - Public cancellation: DELETE
+     /api/subscriptions/{subscription_id}/pending-migration/{operation_id}
+
+   - Internal same-tech field-work call: POST /api/work-orders
+
+   - Internal cross-tech technical call: FUL-10 start API, as defined by DD_FUL-10-*
+
+ Implementation rules:
+
+   - Resolve actor user and role from auth context, not from public request body.
+
+   - Check idempotency before inserting a new operation or creating a side effect.
+
+   - Return the existing operation/result for the same idempotency key and same request hash.
+
+   - Return 409 IDEMPOTENCY_KEY_REUSED for the same key with a different request hash.
+
+   - Use transactions or unique constraints for concurrency-sensitive creation.
+
+
+ 6. Data Loading
+ Load data in this order:
+
+   1. Authoritative aggregate state from the owning module.
+
+   2. Operator/module config from this DD's config tables.
+
+   3. Catalog/reference data from approved APIs or client wrappers.
+
+   4. Current in-flight operation state from the framework, where relevant.
+
+ Do not read current mutable state from cache for state-changing operations.
+
+
+ 7. Drools Configuration
+ Packages found:
+
+   - rules.subscription.migration.<operator>
+
+ For each package:
+
+   - Define fact classes that mirror the request, current state, config, and reference data.
+
+   - Keep rule output as explicit decision fields.
+
+   - Unit-test accept and reject cases from the DD.
+
+   - BPMN should re-check critical rules after start if state may have changed.
+
+
+ 8. BPMN And Worker Topics
+ Worker topics found:
+
+   - bil01-emit-intent
+
+   - ful-call-activate
+
+   - ful-call-claim-homepass
+
+   - ful-call-modify-service
+
+   - ful-call-release-homepass
+
+   - ful-call-suspend
+
+   - notification-send
+
+   - payment-confirmed
+
+   - wo-cancel
+
+   - ful10-start-technology-migration
+
+
+
+SOPHIX BSS Design Documents                                                                     Page 2
+   - wo-create-shifting
+
+ Implementation rules:
+
+   - Model service tasks with camunda:type="external" and the exact topic string.
+
+   - Worker handler must validate required variables before calling downstream services.
+
+   - Store outputs as process variables with stable names.
+
+   - Use message correlation keys exactly as specified by the DD.
+
+   - Add compensation paths for each external side effect.
+
+ Cross-technology branch:
+
+   1. API receives migrationTrigger=ADMIN_TECH_MIGRATION.
+
+   2. API verifies subscription_migration_config.admin_tech_migration_enabled=true.
+
+   3. SUB-WF creates/starts the subscription operation and keeps the operation id as the correlation id.
+
+   4. BPMN calls ful10-start-technology-migration with source/target HomePass, source/target package, customer,
+     subscription, operation id, and equipment delta.
+
+   5. FUL-10 performs the technical sequence and calls WO/OSR/PROV-INT as needed.
+
+   6. SUB-WF waits for the FUL-10 completion/failure event and only then commits or compensates subscription state.
+
+
+ 9. Events
+ Events found:
+
+   - SubscriptionMigrated
+
+   - SubscriptionMigrationCancelled
+
+   - SubscriptionMigrationRejected
+
+   - SubscriptionMigrationScheduled
+
+   - WorkOrderCancelled
+
+   - WorkOrderFinalized
+
+   - WorkOrderTimedOut
+
+ Event rules:
+
+   - Emit success only after authoritative commit.
+
+   - Emit rejected/failure event only after compensation/final failure decision.
+
+   - Use the outbox table/dispatcher; do not publish directly inside the transaction boundary unless the platform standard
+     allows it.
+
+
+ 10. Smoke Tests
+ Add tests for:
+
+   - Happy path.
+
+   - Invalid role or trigger.
+
+   - Invalid state.
+
+   - Missing config/catalog row.
+
+   - Dependency failure.
+
+   - Retry/idempotency.
+
+   - Event payload correctness.
+
+   - Worker topic failure and compensation.
+
+
+ 11. Common Mistakes
+SOPHIX BSS Design Documents                                                                                                  Page 3
+   - Treating worker-topic names as shell commands.
+
+   - Querying another module's database directly.
+
+   - Reading current state from cache in a state-changing flow.
+
+   - Emitting success before final commit.
+
+   - Hiding manual recovery paths for partial external side effects.
+
+   - Creating one deployment per topic when a consolidated worker app would be easier to operate.
+
+
+
+
+SOPHIX BSS Design Documents                                                                         Page 4
+

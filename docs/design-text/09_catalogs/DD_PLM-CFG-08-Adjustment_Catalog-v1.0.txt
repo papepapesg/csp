@@ -1,0 +1,1187 @@
+ DD: PLM-CFG-08 — Bundle Catalog Configuration
+ Developer implementation guide: DD_PLM-CFG-08-Adjustment_Catalog-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract
+ DD_PLM-CFG-08-Adjustment_Catalog-v1.0.md.
+
+ Verdict: ■ Modify (Bundle entity exists in TZ but needs full lifecycle, pricing, modification rules) Wave: 4 | Section A:
+ Configuration
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    9_catalogs/DD_PLM-CFG-08-Adjustment_Catalog-v1.0.md
+
+  Version                                                           v1.0
+
+  DD type                                                           module contract
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   Not explicitly defined
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+   - DELETE /api/bundles/{id}
+
+   - GET /api/bundles/{id}
+
+   - GET /api/bundles?status=&franchise=&page=&size=
+
+   - PATCH /api/bundles/:id
+
+   - PATCH /api/bundles/{id}
+
+   - POST /api/bundles
+
+   - POST /api/bundles/:id/activate
+
+   - POST /api/bundles/preview-price-warning
+
+   - POST /api/bundles/{id}/activate
+
+
+SOPHIX BSS Design Documents                                                                                                  Page 1
+   - POST /api/bundles/{id}/retire
+
+ 4.2 Tables
+   - No CREATE TABLE block is explicitly declared in this DD.
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - plm-rules
+
+   - plm-session
+
+   - subscription-engine
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - No domain events are explicitly declared in this DD.
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                           Recommendation
+
+  API/runtime                                                       Run inside the owning module deployment or existing workflow API pods.
+
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 2
+  Concern                                                                   Recommendation
+
+  Workers                                                                   Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                                  Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                                     Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                                   Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                                    Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                                   Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                            Store with IRSA.
+
+  Observability                                                             Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                            dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ Modify (Bundle entity exists in TZ but needs full lifecycle, pricing, modification rules)
+
+ Wave: 4 | Section A: Configuration
+
+
+ A — Target
+ 1. What this process is about
+ A Bundle is a set of Packages sold as one marketed product — effectively a "mega-package" with its own properties that
+ override the components' properties when sold as part of the Bundle. Example: a "Triple Play" bundle combines an Internet
+ Package (normally billed monthly), a TV Package (normally monthly), and a Voice Package (normally weekly) into one
+ offering at one price on the Bundle's own billing cycle.
+
+ The customer subscribes to the bundle as a single entity, not to its individual packages. Billing charges the Bundle's price
+ on the Bundle's billing cycle using the Bundle's wallet and tax bindings — the components' standalone properties are not
+ used at charge time. The components retain their standalone properties for when they are sold individually (outside this
+ Bundle).
+
+ Modifications are all-or-nothing: a customer wanting to change one component must change the whole Bundle.
+
+ This DD covers the configuration of Bundles by an admin user: create, read, update, soft-delete, plus audit. There is no
+ workflow — administrative CRUD on catalog data.
+
+ PLM scope. PLM owns the catalog of products: Services, Packages, Bundles. PLM-CFG-08 owns Bundle and
+ BundleComposition. References to Packages are FK links within the plm database (Bundle's components are Packages in
+ the same module).
+
+ Downstream modules (subscription-engine, fulfillment, billing, search index, etc.) consume Bundle data via Kafka events and
+ keep their own caches in sync. PLM never calls back into them.
+
+ 2. Business rules
+  ID                                           Rule                                                    Triggered on
+
+  R-PLM-CFG-08-1                               Bundle code must be unique within the catalog           Create, Update
+                                               (across Services, Packages, and Bundles —
+                                               namespace shared with PLM-CFG-01).
+
+  R-PLM-CFG-08-2                               Bundle must have at least 2 component                   Create, Update
+                                               Packages. A bundle of one is just that Package; a
+                                               bundle of zero is not a bundle.
+
+  R-PLM-CFG-08-3                               All component Packages must be Active (not Draft,       Activate
+                                               not Retired) at the time the Bundle is moved to
+                                               Active state.
+
+  R-PLM-CFG-08-4                               Bundle price is independent of the sum of its           Create, Update
+                                               component Package prices — the operator sets it
+                                               directly. A warning (not a block) fires if the bundle
+                                               price is higher than the sum of components
+                                               (operator should confirm).
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                           Page 3
+  ID                                         Rule                                                     Triggered on
+
+  R-PLM-CFG-08-5                             Bundle availability must be a subset of the              Create, Update, Activate
+                                             intersection of its component Packages' availability
+                                             — applied to both targetFranchises and
+                                             targetTechRegions. A bundle cannot be
+                                             activated in a franchise or tech region where any
+                                             component is not available.
+
+  R-PLM-CFG-08-6                             A Bundle cannot be soft-deleted while it is              Delete
+                                             referenced by an active customer subscription. The
+                                             admin must first migrate or retire those
+                                             subscriptions.
+
+  R-PLM-CFG-08-7                             A component Package cannot be soft-deleted while         Delete (on Package) — coordinated with
+                                             it is referenced by an active Bundle. The admin          PLM-CFG-01 / SIP-01
+                                             must first remove the Package from the Bundle (or
+                                             retire the Bundle).
+
+  R-PLM-CFG-08-8                             Bundle billingFrequencyDays is a positive                Create, Update
+                                             integer (days per cycle). It is independent of the
+                                             components' frequencies — the Bundle is charged
+                                             on its own cycle, not on the components'.
+
+
+ The all-or-nothing modification rule (change the whole Bundle, not individual components) is enforced at subscription-change
+ time (FUL-04), not at catalog-config time. PLM-CFG-08 only defines what a Bundle is and what it contains.
+
+ 3. Module owner and impacted modules
+  Role                                       Module                                                   What it does in this process
+
+  Owner                                      plm                                                      Owns Bundle + BundleComposition data, REST
+                                                                                                      APIs, the bundle admin UI, the DRL rules KJAR
+
+  Impacted (downstream consumers)            subscription-engine (eligibility),                       Consume BundleCreated/Updated/Retired
+                                             fulfillment (provisioning all components at              Kafka events; refresh their local caches
+                                             activation), billing (charge bundle price), search
+                                             index, BSS Backoffice (catalog views)
+
+  Gateways                                   —                                                        None used in this process (pure CRUD)
+
+  Engines                                    Drools KIE                                               Rule evaluation on every
+                                                                                                      create/update/activate/delete
+
+
+ No workflow, no Camunda. No external system calls. PLM-CFG-08 is pure catalog admin.
+
+ 4. Foundation references
+ DB → FOUNDATION_DB.md · Drools → FOUNDATION_DROOLS.md · Kafka → FOUNDATION_KAFKA.md · Cache →
+ FOUNDATION_CACHE.md · Auth → FOUNDATION_AUTH.md.
+
+
+
+ Technical design
+ Module placement
+  Layer                                                                  Where
+
+  Frontend                                                               Shared BSS Backoffice UI (Catalog section, Bundles sub-area)
+
+  Backend                                                                Existing plm module, sub-area bundle-catalog/
+
+  Rules                                                                  Rules Engine (Drools) — plm-rules KJAR (shared with PLM-CFG-01,
+                                                                         PLM-CFG-08 adds its own DRL files)
+
+  Events                                                                 Internal Event Bus (Kafka)
+
+
+ Single-tenant: same codebase per country, config + rule packages loaded at startup.
+
+ plm module — ecosystem (PLM-CFG-08 view)
+             flowchart LR
+                 UI[BSS Backoffice UI<br/>Catalog section] -->|REST| PLM[plm module<br/>bundle-catalog]
+                 PLM -->|invoke| RE[Rules Engine]
+                 PLM -->|publish| EB[Kafka]
+                 EB --> SIP[subscription-engine cache]
+                 EB --> FUL[fulfillment cache]
+                 EB --> BIL[billing cache]
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 4
+               EB --> SEARCH[search index]
+               PLM -.FK.-> PKG[Package catalog<br/>PLM-CFG-01 / SIP-01<br/>same plm DB]
+
+ plm never calls customer services, billing engine, or fulfillment workflows. Bundle catalog is purely admin-facing.
+
+ Codebase
+ Bundle catalog adds to the existing plm module. Stack choice (Java/Spring Boot or Laravel) was made for PLM-CFG-01 and
+ stays the same — no per-DD stack switch.
+
+ #### Java/Spring Boot (continuation of PLM-CFG-01)
+          modules/plm/                                        ← existing module
+            src/main/java/com/sophix/plm/
+              service-catalog/                                ← PLM-CFG-01 (existing)
+              package-catalog/                                ← SIP-01 (later)
+              bundle-catalog/                                 ← PLM-CFG-08 (this DD)
+                {domain,repository,service,web/rest,event,exception}/
+            src/main/resources/
+              config/liquibase/changelog/plm/
+                004_bundle.xml                                ← new for PLM-CFG-08
+                005_bundle_composition.xml                    ← new for PLM-CFG-08
+
+          modules/plm-rules/                                      ← existing KJAR project
+            src/main/resources/
+              rules/
+                plm-cfg-08-bundle-defaults.drl                    ← R-PLM-CFG-08-? (none needed yet — left for future)
+                plm-cfg-08-bundle-validation.drl                  ← R-PLM-CFG-08-1, -2, -3, -4, -5, -6, -7
+            src/main/java/com/sophix/plm/facts/
+              BundleFact.java                                     ← new fact for PLM-CFG-08
+              BundleCompositionFact.java                          ← new fact
+              PackageAvailabilityFact.java                        ← new fact
+              ReferencingSubscriptionsFact.java                   ← new fact
+
+ #### Laravel (if stack chosen)
+          modules/plm/                                         ← existing module
+            app/
+              Models/
+                 Bundle.php                                    ← new
+                 BundleComposition.php                         ← new
+              Http/Controllers/
+                 BundleController.php                          ← new
+              Services/
+                 BundleCatalogService.php                      ← new
+                 BundleValidationService.php                   ← calls KIE Server
+              Events/
+                 BundleCreated.php / BundleUpdated.php / BundleRetired.php
+            database/migrations/
+              2026_05_15_000004_create_bundle_table.php
+              2026_05_15_000005_create_bundle_composition_table.php
+
+
+ Foundation-specific configurations
+ DB (FOUNDATION_DB.md):
+
+   - Cluster: A (Config & Catalog) — same as PLM-CFG-01
+
+   - Database: plm — shares the database with PLM-CFG-01
+
+   - New tables (in public schema): bundle, bundle_composition
+
+   - New events on audit_log_entry (existing table)
+
+   - Messaging tables (messaging.outbox_event, messaging.inbox_event) — already created by PLM-CFG-01,
+     shared
+
+ Kafka (FOUNDATION_KAFKA.md):
+
+   - Topics published:
+
+   - sophix.plm.bundle.created
+
+   - sophix.plm.bundle.updated
+
+   - sophix.plm.bundle.retired
+
+   - Topics consumed: none
+
+   - Key format: plm:bundle:{bundleId} (e.g., plm:bundle:bnd_01HX2Y3Z4)
+
+
+SOPHIX BSS Design Documents                                                                                              Page 5
+   - eventId format: plm:bundle:{bundleId}:evt_{ulid}
+
+ Cache (FOUNDATION_CACHE.md):
+
+   - plm does not cache its own data
+
+   - Downstream caches use key prefix sophix:plm:bundle: and TTL 24h
+
+   - Sync via Kafka topics above
+
+ Drools (FOUNDATION_DROOLS.md):
+
+   - KJAR: plm-rules-{country}_{version} (shared with PLM-CFG-01)
+
+   - KIE container ID: plm-rules-ke_1.0.0 (same)
+
+   - KIE session: plm-session (same)
+
+   - New DRL files added: plm-cfg-08-bundle-validation.drl
+
+   - New facts: BundleFact, BundleCompositionFact, PackageAvailabilityFact,
+     ReferencingSubscriptionsFact
+
+ Camunda: Not used (CRUD only, no workflow).
+
+ Frontend
+  Item                                                                  Detail
+
+  App                                                                   Shared BSS Backoffice UI (this DD adds Bundles to the Catalog section,
+                                                                        alongside Services from PLM-CFG-01)
+
+  Actor                                                                 Product Manager (full CRUD), Billing Lead (full CRUD), Admin (full CRUD), any
+                                                                        authenticated role (read-only)
+
+  Auth                                                                  Bearer JWT (see FOUNDATION_AUTH.md)
+
+  Routes                                                                /catalog/bundles, /catalog/bundles/new, /catalog/bundles/:id,
+                                                                        /catalog/bundles/:id/audit
+
+
+ #### Screens
+
+ Bundle list (/catalog/bundles)
+
+   - Table: code, name, status (Draft/Active/Retired), component count, price, available franchises, updatedAt, updatedBy
+
+   - Filters: status, franchise, search (substring on code/name)
+
+   - Pagination, default 20
+
+   - Actions: New Bundle button, row click → edit
+
+ Bundle create / edit (/catalog/bundles/new, /catalog/bundles/:id)
+
+   - Form fields:
+
+   - Code (text, required, unique — validated server-side via R-1)
+
+   - Name (text, required)
+
+   - Description (text)
+
+   - Status (Draft / Active / Retired — controlled by save-as-draft / activate / retire actions, not a free field)
+
+   - Composition (multi-select of Packages, min 2 — R-2; auto-suggests available Packages from PLM-CFG-01 / SIP-01)
+
+   - Price (number, required) + a warning shown if price > sum of component prices (R-4)
+
+   - Billing frequency in days (numeric input; presets: 30 / 28 / 15 / 7 / 180 / 365 — R-8). Independent of components.
+
+   - Default wallet (dropdown) — Bundle's wallet, overrides components
+
+   - Default tax group (dropdown, optional) — Bundle's tax, overrides components
+
+   - targetFranchises (multi-select; constrained by intersection of components' franchises — R-5)
+
+   - targetTechRegions (multi-select; constrained by intersection of components' tech regions — R-5)
+
+   - Live calculation panel showing: sum of component prices, bundle price, implied discount %, franchises available
+
+   - On Submit: POST /api/bundles (new) or PATCH /api/bundles/:id (edit)
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 6
+   - On Activate (separate button on draft bundles): POST /api/bundles/:id/activate — fires R-3
+
+ Bundle audit (/catalog/bundles/:id/audit)
+
+   - Timeline of audit_log_entry rows for this Bundle
+
+   - Each row: timestamp, actor, action (CREATE/UPDATE/ACTIVATE/RETIRE), expandable diff
+
+   - Read-only
+
+ #### Client-side validation
+
+ Basic input only (required fields, numeric format). Server is authoritative for all business rules (R-1 through R-7). The dev
+ should NOT replicate Drools logic client-side.
+
+ Data model
+           classDiagram
+               class Bundle {
+                   BundleId id
+                   String code
+                   String name
+                   String description
+                   BundleStatus status
+                   Money price
+                   Integer billingFrequencyDays
+                   String defaultWalletRef
+                   String defaultTaxGroupRef
+                   List~String~ targetFranchises
+                   List~String~ targetTechRegions
+               }
+               class BundleComposition {
+                   BundleId bundleId
+                   PackageId packageId
+                   Int sequence
+               }
+               class Package {
+                   PackageId id
+                   String code
+                   ...
+               }
+               Bundle "1" --> "n" BundleComposition
+               BundleComposition --> Package
+
+ #### Tables (PostgreSQL, database plm, schema public)
+
+ bundle — the Bundle catalog
+
+ The Bundle's own properties override those of its component Packages at charge time. The Bundle is billed on
+ billing_frequency_days, charging price (in currency), routing to default_wallet_ref, with tax computed via
+ default_tax_group_ref. Components' equivalent properties are not used when the customer is subscribed to the
+ Bundle.
+
+  Column                       Type                     Notes
+
+  id                           TEXT PK                  ULID, e.g. bnd_01HX...
+
+  code                         TEXT NOT NULL            unique across plm catalog
+
+  name                         TEXT NOT NULL            display name, e.g. "Triple Play
+                                                        Pro"
+
+  description                  TEXT
+
+  status                       TEXT NOT NULL            DRAFT \                           ACTIVE \          RETIRED
+
+  price                        NUMERIC(12,2) NOT NULL   bundle price — overrides sum
+                                                        of components (R-4)
+
+  currency                     TEXT NOT NULL            ISO 4217 (KES, UGX, TZS,
+                                                        XOF, etc.)
+
+  billing_frequency_days       INT NOT NULL             positive integer; days per
+                                                        billing cycle (R-8).
+                                                        Independent of components'
+                                                        frequencies. Typical: 30, 28,
+                                                        15, 7, 180, 365.
+
+  default_wallet_ref           TEXT NOT NULL            wallet binding for the Bundle
+                                                        — overrides components'
+                                                        wallets
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 7
+  Column                      Type                      Notes
+
+  default_tax_group_ref       TEXT NULL                 tax binding for the Bundle —
+                                                        overrides components' tax
+                                                        groups; falls back to none if
+                                                        NULL (charges with no tax
+                                                        cascade)
+
+  target_franchises           TEXT[] NOT NULL           array of franchise codes;
+                                                        non-empty when status =
+                                                        ACTIVE; must be subset of
+                                                        intersection of components'
+                                                        franchises (R-5)
+
+  target_tech_regions         TEXT[] NOT NULL DEFAULT   optional refinement
+                              '{}'
+
+  created_at                  TIMESTAMP NOT NULL
+                              DEFAULT NOW()
+
+  created_by                  TEXT NOT NULL
+
+  updated_at                  TIMESTAMP
+
+  updated_by                  TEXT
+
+  retired_at                  TIMESTAMP NULL            soft delete
+
+
+ Indexes:
+
+   - (code) WHERE retired_at IS NULL UNIQUE
+
+   - (status) for status-filtered queries
+
+   - GIN index on (target_franchises) for franchise-availability lookups
+
+ bundle_composition — Bundle → Packages many-to-many (in PLM-CFG-08 within plm DB, so FKs are OK)
+
+  Column                                        Type                                    Notes
+
+  bundle_id                                     TEXT NOT NULL                           FK → bundle.id ON DELETE CASCADE
+
+  package_id                                    TEXT NOT NULL                           FK → package.id (created by SIP-01)
+
+  sequence                                      INT NOT NULL DEFAULT 0                  display order
+
+
+ Primary key: (bundle_id, package_id). Indexes: (package_id) for reverse lookups (R-7: is this Package referenced
+ by any active Bundle?).
+
+ Rules (Drools)
+ Rule IDs match the business-rule table in Section 2. Full DRL implementation below.
+
+ #### plm-cfg-08-bundle-validation.drl
+            package com.sophix.plm.rules
+
+            import com.sophix.plm.facts.BundleFact
+            import com.sophix.plm.facts.BundleCompositionFact
+            import com.sophix.plm.facts.ExistingCodesFact
+            import com.sophix.plm.facts.PackageAvailabilityFact
+            import com.sophix.plm.facts.ReferencingSubscriptionsFact
+            import com.sophix.plm.facts.ValidationError
+            import com.sophix.plm.facts.ValidationWarning
+
+            // R-PLM-CFG-08-1 — Code unique across plm catalog (Services, Packages, Bundles share namespace)
+
+            rule "R-PLM-CFG-08-1-code-uniqueness"
+            when
+                 $b: BundleFact($code: code, $id: id)
+                 $existing: ExistingCodesFact(codes contains $code, ownerId != $id)
+            then
+                 insert(new ValidationError("R-PLM-CFG-08-1",
+                                            "code",
+                                            "Code already exists in catalog: " + $code));
+            end
+
+            // R-PLM-CFG-08-2 — Bundle must have at least 2 component Packages
+
+            rule "R-PLM-CFG-08-2-minimum-components"
+            when
+                 $b: BundleFact($id: id)
+                 $c: BundleCompositionFact(bundleId == $id, packages.size() < 2)
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 8
+          then
+                insert(new ValidationError("R-PLM-CFG-08-2",
+                                           "composition",
+                                           "Bundle must contain at least 2 Packages; found " + $c.getPackages().size()));
+          end
+
+          // R-PLM-CFG-08-3 — On activate, all components must be Active
+
+          rule "R-PLM-CFG-08-3-components-must-be-active"
+          when
+               $b: BundleFact(action == "ACTIVATE", $id: id)
+               $pa: PackageAvailabilityFact(bundleId == $id, inactivePackages.size() > 0)
+          then
+               insert(new ValidationError("R-PLM-CFG-08-3",
+                                          "composition",
+                                          "Cannot activate Bundle: component Packages not Active: " + $pa.getInactivePackages()));
+          end
+
+          // R-PLM-CFG-08-4 — Warning (not block) if bundle price > sum of components
+
+          rule "R-PLM-CFG-08-4-price-above-sum-warning"
+          when
+               $b: BundleFact($id: id, $price: price)
+               $pa: PackageAvailabilityFact(bundleId == $id, sumOfComponentPrices < $price)
+          then
+               insert(new ValidationWarning("R-PLM-CFG-08-4",
+                                            "price",
+                                            "Bundle price (" + $price + ") exceeds sum of component prices (" + $pa.getSumOfComponent
+          end
+
+          // R-PLM-CFG-08-5a — Bundle franchises must be subset of components' franchises
+
+          rule "R-PLM-CFG-08-5a-franchise-availability"
+          when
+               $b: BundleFact($id: id)
+               $pa: PackageAvailabilityFact(bundleId == $id, $franchisesNotCoveredByAllComponents: franchisesNotCoveredByAllComponent
+               eval(!$franchisesNotCoveredByAllComponents.isEmpty())
+          then
+               insert(new ValidationError("R-PLM-CFG-08-5",
+                                          "targetFranchises",
+                                          "Bundle franchises must be subset of all components' franchises. Missing in some components
+          end
+
+          // R-PLM-CFG-08-5b — Bundle tech regions must be subset of components' tech regions
+
+          rule "R-PLM-CFG-08-5b-tech-region-availability"
+          when
+               $b: BundleFact($id: id)
+               $pa: PackageAvailabilityFact(bundleId == $id, $techRegionsNotCoveredByAllComponents: techRegionsNotCoveredByAllCompone
+               eval(!$techRegionsNotCoveredByAllComponents.isEmpty())
+          then
+               insert(new ValidationError("R-PLM-CFG-08-5",
+                                          "targetTechRegions",
+                                          "Bundle tech regions must be subset of all components' tech regions. Missing in some compon
+          end
+
+          // R-PLM-CFG-08-6 — Soft-delete Bundle blocked if active subscriptions reference it
+
+          rule "R-PLM-CFG-08-6-delete-blocked-by-subscription"
+          when
+               $b: BundleFact($id: id, action == "DELETE")
+               $r: ReferencingSubscriptionsFact(bundleId == $id, activeSubscriptions.size() > 0)
+          then
+               insert(new ValidationError("R-PLM-CFG-08-6",
+                                          "id",
+                                          "Bundle is referenced by active subscriptions: " + $r.getActiveSubscriptions().size() + " s
+          end
+
+          // R-PLM-CFG-08-7 — Package referenced by an active Bundle cannot be deleted
+          // (This rule fires when SIP-01 / PLM-CFG-01 attempts a Package delete and consults
+          // this rule package; see SIP-01 for the caller-side coordination.)
+
+          rule "R-PLM-CFG-08-7-package-delete-blocked-by-bundle"
+          when
+               $p: BundleCompositionFact(action == "DELETE_PACKAGE", $packageId: packageId, $referencingActiveBundles: referencingAct
+               eval(!$referencingActiveBundles.isEmpty())
+          then
+               insert(new ValidationError("R-PLM-CFG-08-7",
+                                          "packageId",
+                                          "Package " + $packageId + " is referenced by active Bundles: " + $referencingActiveBundles)
+          end
+
+
+
+
+SOPHIX BSS Design Documents                                                                                           Page 9
+          // R-PLM-CFG-08-8 — Bundle billingFrequencyDays must be a positive integer (independent of components)
+
+          rule "R-PLM-CFG-08-8-billing-frequency-positive"
+          when
+               $b: BundleFact($freq: billingFrequencyDays, action != "DELETE")
+               eval($freq == null || $freq <= 0)
+          then
+               insert(new ValidationError("R-PLM-CFG-08-8",
+                                          "billingFrequencyDays",
+                                          "billingFrequencyDays must be a positive integer; got " + $freq));
+          end
+
+ #### Fact classes (POJOs in com.sophix.plm.facts)
+
+ A Fact class is a plain Java object that Drools evaluates DRL rules against. The KJAR project (modules/plm-rules/)
+ contains these classes; the rules engine deserializes JSON payloads (sent by the calling module over HTTPS) into these
+ objects, fires rules, returns results as JSON. Facts use the standard @Data + @NoArgsConstructor +
+ @AllArgsConstructor Lombok annotations (used throughout the codebase to remove getter/setter/constructor
+ boilerplate).
+
+ BundleFact.java
+          package com.sophix.plm.facts;
+
+          import lombok.AllArgsConstructor;
+          import lombok.Data;
+          import lombok.NoArgsConstructor;
+
+          import java.math.BigDecimal;
+          import java.util.List;
+
+          @Data
+          @NoArgsConstructor
+          @AllArgsConstructor
+          public class BundleFact {
+              private String id;
+              private String code;
+              private String name;
+              private String status;
+              private BigDecimal price;
+              private String currency;
+              private Integer billingFrequencyDays;
+              private String defaultWalletRef;
+              private String defaultTaxGroupRef;
+              private List<String> targetFranchises;
+              private List<String> targetTechRegions;
+              private String action;    // "CREATE" | "UPDATE" | "ACTIVATE" | "RETIRE" | "DELETE"
+          }
+
+ BundleCompositionFact.java
+          package com.sophix.plm.facts;
+
+          import lombok.AllArgsConstructor;
+          import lombok.Data;
+          import lombok.NoArgsConstructor;
+
+          import java.util.List;
+
+          @Data
+          @NoArgsConstructor
+          @AllArgsConstructor
+          public class BundleCompositionFact {
+              private String bundleId;
+              private List<String> packages;                   // packageIds in this bundle
+              private String packageId;                         // for R-7 (Package-delete path)
+              private List<String> referencingActiveBundles;    // for R-7
+              private String action;                            // "VALIDATE" | "DELETE_PACKAGE"
+          }
+
+ PackageAvailabilityFact.java
+          package com.sophix.plm.facts;
+
+          import lombok.AllArgsConstructor;
+          import lombok.Data;
+          import lombok.NoArgsConstructor;
+
+          import java.math.BigDecimal;
+          import java.util.List;
+
+          @Data
+
+
+SOPHIX BSS Design Documents                                                                                           Page 10
+          @NoArgsConstructor
+          @AllArgsConstructor
+          public class PackageAvailabilityFact {
+              private String bundleId;
+              private List<String> inactivePackages;                                    // for R-3
+              private BigDecimal sumOfComponentPrices;                                  // for R-4
+              private List<String> franchisesNotCoveredByAllComponents;                 // for R-5a
+              private List<String> techRegionsNotCoveredByAllComponents;                // for R-5b
+          }
+
+ ReferencingSubscriptionsFact.java
+          package com.sophix.plm.facts;
+
+          import lombok.AllArgsConstructor;
+          import lombok.Data;
+          import lombok.NoArgsConstructor;
+
+          import java.util.List;
+
+          @Data
+          @NoArgsConstructor
+          @AllArgsConstructor
+          public class ReferencingSubscriptionsFact {
+              private String bundleId;
+              private List<String> activeSubscriptions;        // subscription IDs (string refs, no FK)
+          }
+
+ ValidationWarning.java (alongside ValidationError introduced in PLM-CFG-01)
+          package com.sophix.plm.facts;
+
+          import lombok.AllArgsConstructor;
+          import lombok.Data;
+          import lombok.NoArgsConstructor;
+
+          @Data
+          @NoArgsConstructor
+          @AllArgsConstructor
+          public class ValidationWarning {
+              private String rule;     // e.g., "R-PLM-CFG-08-4"
+              private String field;    // e.g., "price"
+              private String message; // human-readable description
+          }
+
+ The caller's responsibility:
+
+   - For create/update: insert BundleFact + BundleCompositionFact (with the bundle's package list) +
+     ExistingCodesFact (from catalog) + PackageAvailabilityFact (lookup of each component's status, price, and
+     franchises); fire rules; collect ValidationError and ValidationWarning.
+
+   - For activate: same as create/update plus action="ACTIVATE" on the BundleFact to enable R-3.
+
+   - For delete: insert BundleFact (action="DELETE") + ReferencingSubscriptionsFact (from subscription-engine API
+     or local view); fire rules; if ValidationError, reject with BUSINESS_RULE_ERROR carrying the rule ID.
+
+   - For Package-delete (coordinated with PLM-CFG-01 / SIP-01): the Package-delete path inserts
+     BundleCompositionFact with action="DELETE_PACKAGE", packageId=..., and
+     referencingActiveBundles=... to enable R-7.
+
+ ValidationWarning results are returned to the caller as advisory messages — the caller (UI) presents them as
+ confirmation prompts rather than blocks.
+
+ Events (Kafka)
+  Event                            Topic                            When                              Consumers
+
+  BundleCreated                    sophix.plm.bundle.created        After successful insert           subscription-engine cache, fulfillment
+                                                                                                      cache, billing cache, search index
+
+  BundleUpdated                    sophix.plm.bundle.updated        After successful update           subscription-engine cache, fulfillment
+                                                                                                      cache, billing cache, search index
+
+  BundleRetired                    sophix.plm.bundle.retired        After soft-delete                 subscription-engine cache, fulfillment
+                                                                                                      cache, billing cache, search index
+
+
+ Key format: plm:bundle:{bundleId} · eventId format: plm:bundle:{bundleId}:evt_{ulid}.
+
+ BundleCreated envelope:
+
+
+
+SOPHIX BSS Design Documents                                                                                                         Page 11
+           {
+               "eventId":       "plm:bundle:bnd_01HX2Y3Z4:evt_01JZ5K6...",
+               "eventType":     "BundleCreated",
+               "aggregateId":   "bnd_01HX2Y3Z4",
+               "timestamp":     "2026-05-15T10:23:00Z",
+               "actor":         "alex.oyuga",
+               "correlationId": "corr_01HX...",
+               "payload": {
+                 "bundleId":             "bnd_01HX2Y3Z4",
+                 "code":                 "TRIPLE_PLAY_PRO",
+                 "name":                 "Triple Play Pro",
+                 "status":               "DRAFT",
+                 "price":                5500,
+                 "currency":             "KES",
+                 "billingFrequencyDays": 30,
+                 "defaultWalletRef":     "TVD",
+                 "defaultTaxGroupRef":   "Bundle-StandardVAT",
+                 "components":           ["pkg_inet_fast_gpon", "pkg_tv_premium", "pkg_voice_fixed"],
+                 "targetFranchises":     ["Nairobi", "Mombasa"],
+                 "targetTechRegions":    ["GPON"]
+               }
+           }
+
+ BundleUpdated envelope:
+           {
+               "eventId":     "plm:bundle:bnd_01HX2Y3Z4:evt_01JZ5L8...",
+               "eventType":   "BundleUpdated",
+               "aggregateId": "bnd_01HX2Y3Z4",
+               "timestamp":   "2026-05-15T14:02:00Z",
+               "actor":       "alex.oyuga",
+               "correlationId":"corr_01HX...",
+               "payload": {
+                 "bundleId": "bnd_01HX2Y3Z4",
+                 "changedFields": {
+                   "price":   { "from": 5500, "to": 5200 },
+                   "components": { "from": ["pkg_a", "pkg_b", "pkg_c"], "to": ["pkg_a", "pkg_b", "pkg_d"] }
+                 }
+               }
+           }
+
+ BundleRetired envelope follows the PLM-CFG-01 retired pattern: just bundleId + retiredAt.
+
+ Cache strategy: plm does not cache its own data. Downstream caches use key prefix sophix:plm:bundle: with TTL 24h.
+ See FOUNDATION_CACHE.md.
+
+ Exceptions
+ Standard exception taxonomy (reused across all DDs):
+
+  Code                                       Type                                     Triggered when
+
+  INPUT_VALIDATION_ERROR                     Input validation                         Required field missing, malformed JSON, type
+                                                                                      mismatch
+
+  BUSINESS_RULE_ERROR                        Business rule                            Any R-PLM-CFG-08-* rule rejects
+
+  BUSINESS_RULE_WARNING                      Business rule warning                    R-PLM-CFG-08-4 warning (returned alongside
+                                                                                      success unless user acknowledged)
+
+  INTERNAL_EXCEPTION                         Internal                                 Unexpected runtime error
+
+  BACKEND_ERROR                              Backend                                  DB unavailable, Kafka publish failure, KIE Server
+                                                                                      unreachable
+
+
+ Error response shape (same as PLM-CFG-01):
+           { "error": "BUSINESS_RULE_ERROR", "rule": "R-PLM-CFG-08-2", "message": "...", "details": {...} }
+
+
+ APIs (in plm/bundle-catalog/)
+ Auth (per FOUNDATION_AUTH.md):
+
+   - From UI: Bearer JWT; role from claims enforces per-endpoint permissions
+
+   - From other modules: X-Service-Token header
+
+   - Either auth path accepted on read endpoints
+  Method + Path                              Purpose                                  Auth role
+
+  POST /api/bundles                          Create (in DRAFT state)                  Product Manager, Admin
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 12
+  Method + Path                               Purpose                                         Auth role
+
+  GET /api/bundles/{id}                       Read                                            any authenticated
+
+  GET /api/bundles?status=&franchise=&pa      List/filter                                     any authenticated
+  ge=&size=
+
+  PATCH /api/bundles/{id}                     Update                                          Product Manager, Admin
+
+  POST /api/bundles/{id}/activate             Transition DRAFT → ACTIVE                       Product Manager, Admin
+
+  POST /api/bundles/{id}/retire               Transition ACTIVE → RETIRED                     Product Manager, Admin
+
+  DELETE /api/bundles/{id}                    Soft-delete (only if DRAFT or RETIRED with no   Product Manager, Admin
+                                              active subs)
+
+  POST                                        UI helper: returns R-4 warning if price > sum   any authenticated
+  /api/bundles/preview-price-warning
+
+
+ #### Status codes (same as PLM-CFG-01)
+
+ 200 read/update · 201 create · 204 delete · 400 input validation · 401 unauth · 403 forbidden · 404 not found · 409 business
+ rule conflict · 500 internal · 502/503/504 backend.
+
+ #### POST /api/bundles
+
+ Request:
+           {
+               "code": "TRIPLE_PLAY_PRO",
+               "name": "Triple Play Pro",
+               "description": "Internet + TV + Voice combined",
+               "price": 5500,
+               "currency": "KES",
+               "billingFrequencyDays": 30,
+               "defaultWalletRef": "TVD",
+               "defaultTaxGroupRef": "Bundle-StandardVAT",
+               "componentPackageIds": ["pkg_inet_fast_gpon", "pkg_tv_premium", "pkg_voice_fixed"],
+               "targetFranchises": ["Nairobi", "Mombasa"],
+               "targetTechRegions": ["GPON"]
+           }
+
+ 201 response:
+           {
+               "id": "bnd_01HX2Y3Z4",
+               "code": "TRIPLE_PLAY_PRO",
+               "name": "Triple Play Pro",
+               "status": "DRAFT",
+               "price": 5500,
+               "currency": "KES",
+               "billingFrequencyDays": 30,
+               "defaultWalletRef": "TVD",
+               "defaultTaxGroupRef": "Bundle-StandardVAT",
+               "componentPackageIds": ["pkg_inet_fast_gpon", "pkg_tv_premium", "pkg_voice_fixed"],
+               "targetFranchises": ["Nairobi", "Mombasa"],
+               "targetTechRegions": ["GPON"],
+               "warnings": [],
+               "createdAt": "2026-05-15T10:23:00Z",
+               "createdBy": "alex.oyuga"
+           }
+
+ 201 with warning (R-4 — price exceeds sum):
+           {
+               "id": "bnd_01HX2Y3Z4",
+               ...,
+               "warnings": [
+                 {
+                    "rule": "R-PLM-CFG-08-4",
+                    "field": "price",
+                    "message": "Bundle price (7500) exceeds sum of component prices (6500). Confirm intentional."
+                 }
+               ]
+           }
+
+ 409 (R-1 — duplicate code):
+           {
+               "error":   "BUSINESS_RULE_ERROR",
+               "rule":    "R-PLM-CFG-08-1",
+               "message": "Code already exists in catalog: TRIPLE_PLAY_PRO",
+               "details": { "field": "code" }
+           }
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 13
+ 400 (R-2 — too few components):
+           {
+               "error":   "BUSINESS_RULE_ERROR",
+               "rule":    "R-PLM-CFG-08-2",
+               "message": "Bundle must contain at least 2 Packages; found 1",
+               "details": { "field": "composition" }
+           }
+
+ #### POST /api/bundles/{id}/activate
+
+ No body. Fires R-3, R-5.
+
+ 200 response: full updated Bundle (status now ACTIVE).
+
+ 409 (R-3):
+           {
+               "error": "BUSINESS_RULE_ERROR",
+               "rule": "R-PLM-CFG-08-3",
+               "message":"Cannot activate Bundle: component Packages not Active",
+               "details": { "inactivePackages": ["pkg_tv_premium"] }
+           }
+
+ #### DELETE /api/bundles/{id}
+
+ Soft delete. Fires R-6.
+
+ 204 on success.
+
+ 409 (R-6 — active subscriptions reference this Bundle):
+           {
+               "error": "BUSINESS_RULE_ERROR",
+               "rule": "R-PLM-CFG-08-6",
+               "message":"Bundle is referenced by 47 active subscriptions",
+               "details": { "activeSubscriptionCount": 47 }
+           }
+
+ #### POST /api/bundles/preview-price-warning
+
+ UI helper for live calculation panel.
+
+ Request:
+           {
+               "price": 5500,
+               "componentPackageIds": ["pkg_inet_fast_gpon", "pkg_tv_premium", "pkg_voice_fixed"]
+           }
+
+ 200 response:
+           {
+               "sumOfComponentPrices": 6500,
+               "implicitDiscount":     1000,
+               "implicitDiscountPct": 15.38,
+               "warnings": []
+           }
+
+
+
+ B — Current TZ
+ Bundle entity exists in TZ codebase (Bundle Java class in one of the billing modules) but:
+
+   - No formal lifecycle states (no Draft / Active / Retired transitions)
+
+   - No per-franchise availability (TZ is single-deployment)
+
+   - No composition rules in code (the bundle's package list is set in DB but not validated)
+
+   - No price-independence enforcement (the bundle price field exists but isn't separated semantically from sum of packages)
+
+   - No KRA tax-invoice integration
+
+   - No Kafka events on bundle changes
+
+   - Catalog admin via JHipster CRUD pages (basic, not workflow-aware)
+
+ The TZ Bundle entity is essentially a database row with no behavior — all business logic happens in adjacent code
+ (subscription creation, billing).
+
+
+
+
+SOPHIX BSS Design Documents                                                                                             Page 14
+ C — Gap & bridge
+  Aspect                             TZ today                    Target                               Bridge
+
+  Bundle entity                      Java class, basic CRUD      Same shape, add status field +       Reuse class, add status column,
+                                                                 lifecycle methods                    add transition methods
+
+  Composition                        Stored as joined table      Same                                 Reuse
+
+  Pricing                            Single price field          Same field; warning rule R-4 added   Add R-4 to rules KJAR; no schema
+                                                                                                      change
+
+  Status / lifecycle                 None                        DRAFT / ACTIVE / RETIRED             Add status column; add
+                                                                                                      activate/retire endpoints
+
+  Per-franchise availability         None                        target_franchises array              New column; populate with default (all
+                                                                                                      franchises) for existing bundles during
+                                                                                                      migration
+
+  Validation rules                   Hand-coded in services      Drools KJAR with 7 rules             New plm-cfg-08-bundle-valida
+                                                                                                      tion.drl
+
+  Events                             None                        3 Kafka topics                       New publishers using existing outbox
+                                                                                                      pattern
+
+  Admin UI                           JHipster pages              BSS Backoffice Catalog section       New screens; deprecate JHipster
+                                                                                                      pages
+
+  Coordination with Package delete   None                        R-7 fires from Package delete path   Coordinated with SIP-01 (Package
+                                                                                                      management DD)
+
+
+
+ Dependencies
+   - PLM-CFG-01 (Service Catalog) — required first, since Packages compose Services. Already completed.
+
+   - SIP-01 (Package management) — required first or in parallel, since Bundles compose Packages. R-7 coordination
+     required.
+
+   - Foundations (DB, Kafka, Drools, Cache, Auth) — all required. Already in place.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                         Page 15
+

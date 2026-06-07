@@ -1,0 +1,612 @@
+ DD_ASR-01 - Technical Trouble
+ Version: 1.0 Status: Draft for review Bundle: 10_other Audience: customer care developers, ticketing developers, work-order
+ developers, NOC, QA Related DDs:
+
+   - DD_TCK-01 - Ticketing and Case Management
+
+   - DD_WO-01 - Work Order Module
+
+   - DD_WO-01-FLOW-SUPPORT - Support Work Order Flow
+
+   - DD_PROV-INT-01 - Provisioning Broadcast and Reconciliation
+
+   - DD_CUST-INT-01 - Customer Interaction Timeline
+
+   - DD_BIL-02-ADJ-01 - Invoice Adjustments
+
+   - FE-APP-01 - BSS Backoffice Web App
+
+   - FE-APP-04 - Customer Self Care Frontoffice App
+
+ MVP simplification baseline: ASR-01 is implemented as a TCK-01 ticket type, ruleset, SLA profile, and optional workflow
+ satellite. It is not a separate ticketing service, database, or deployment in the first release.
+
+
+
+ 1. Purpose
+ ASR-01 defines the technical trouble process for customer-reported service faults.
+
+ Examples:
+
+   - no internet;
+
+   - slow internet;
+
+   - intermittent connection;
+
+   - no voice service;
+
+   - TV/IPTV not working;
+
+   - equipment suspected faulty;
+
+   - repeated technical issue after recent work order;
+
+   - area outage affecting multiple customers.
+
+ This DD does not create a new ticketing engine. Technical trouble is implemented as a configured TECHNICAL_SUPPORT
+ ticket type in TCK-01, with ASR-specific category rules, diagnostics, work-order triggers, outage handling, and optional
+ billing-credit hooks.
+
+
+
+ 2. Ownership Boundary
+  Concern                                                         Owner
+
+  Ticket lifecycle, assignment, comments, attachments, timeline   TCK-01
+
+  Technical trouble category rules and diagnostic flow            ASR-01 configuration and logic inside TCK/ASR handlers
+
+  Support work order execution                                    WO-01 / WO support flow
+
+  Field notes, site visit, technician findings                    WO-01
+
+  Network command/reconciliation visibility                       PROV-INT-01 read APIs
+
+  Subscription state                                              SUB-LM / SUB-WF
+
+  Customer/account data                                           ILM-CFG-01
+
+  Credit note or compensation for outage                          BIL-02-ADJ-01, optionally triggered from ASR resolution
+
+  Customer timeline projection                                    CUST-INT-01
+
+
+ Rule: ASR-01 does not own a separate case table. The ticket record remains in TCK-01.
+
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 1
+ 3. When To Use This Flow
+ Use ASR-01 when the customer issue is a suspected service fault that may require technical diagnosis or field work.
+
+ Use other flows when:
+
+  Scenario                                                                        Use
+
+  Customer asks for package/pricing information                                   ASR-02 Information Request
+
+  Customer complains about service quality, staff conduct, billing fairness, or   ASR-03 Complaint
+  unresolved issue
+
+  Customer asks for an operational action such as SIP reset, address change, or   ASR-04 Service Request
+  service parameter change
+
+  Customer disputes an invoice amount                                             TCK billing complaint plus BIL adjustment flow
+
+
+
+
+ 4. High Level Flow
+             flowchart TD
+               A["Customer reports issue"]
+               B["Create TCK ticket<br/>type TECHNICAL_SUPPORT"]
+               C["Run ASR diagnostic checklist"]
+               D{"Known outage?"}
+               E["Attach outage reference<br/>notify customer"]
+               F{"Remote fix possible?"}
+               G["Run remote action / guide customer"]
+               H{"Resolved?"}
+               I["Create support WO"]
+               J["Wait for WO finalization"]
+               K["Review findings"]
+               L{"Credit needed?"}
+               M["Start BIL adjustment request"]
+               N["Resolve ticket"]
+
+               A --> B --> C --> D
+               D -->|Yes| E --> N
+               D -->|No| F
+               F -->|Yes| G --> H
+               H -->|Yes| N
+               H -->|No| I
+               F -->|No| I
+               I --> J --> K --> L
+               L -->|Yes| M --> N
+               L -->|No| N
+
+
+
+
+ 5. Ticket Categories
+ ASR-01 uses TCK-01.ticket.type_code = TECHNICAL_SUPPORT.
+
+ Recommended initial WIK categories:
+
+  Category code                             Meaning                               WO allowed                              Default priority
+
+  NO_INTERNET                               Customer has no data connectivity.    Yes                                     P2
+
+  SLOW_SPEED                                Customer reports speed below          Yes                                     P3
+                                            subscribed profile.
+
+  INTERMITTENT_CONNECTION                   Connection drops repeatedly.          Yes                                     P3
+
+  NO_VOICE                                  Voice service not working.            Yes                                     P2
+
+  NO_TV                                     TV/IPTV service not working.          Yes                                     P3
+
+  CPE_FAULT_SUSPECTED                       ONT/router/ATA/STB suspected          Yes                                     P3
+                                            faulty.
+
+  AREA_OUTAGE                               Customer issue linked to known area   No by default                           P1
+                                            outage.
+
+  REPEAT_FAULT                              Same issue reopened or repeated       Yes                                     P2
+                                            after recent resolution.
+
+
+ These categories are stored in TCK category configuration. ASR-01 adds rules on top of those categories.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 2
+ 6. ASR-Specific Tables
+ ASR-01 can be implemented with a small set of ASR configuration tables inside the ticketing schema. Ticket records still use
+ TCK tables.
+
+ 6.1 asr_trouble_category_config
+ Stores technical-trouble behavior per ticket category.
+
+ Use this table when deciding required diagnostics, WO policy, and resolution behavior.
+
+  Column                           Type                          Purpose                              Sample
+
+  config_id                        UUID PK                       Config id.                           asr-cat-001
+
+  operator_code                    TEXT                          Operator/tenant.                     WIK
+
+  category_code                    TEXT                          TCK category.                        NO_INTERNET
+
+  service_class_code               TEXT                          INTERNET, VOICE, TV, ANY.            INTERNET
+
+  diagnostic_profile_code          TEXT                          Checklist profile.                   INET_BASIC_DIAG
+
+  wo_policy                        TEXT                          NONE, OPTIONAL,                      REQUIRED_AFTER_DIAG
+                                                                 REQUIRED_AFTER_DIAG,
+                                                                 AUTO_CREATE.
+
+  default_wo_kind                  TEXT                          WO kind if created.                  SUPPORT
+
+  repeat_fault_window_days         INTEGER                       Window for repeat-fault detection.   30
+
+  credit_policy_code               TEXT NULL                     Optional credit policy.              OUTAGE_CREDIT_STANDARD
+
+  status                           TEXT                          ACTIVE, RETIRED.                     ACTIVE
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, category_code).
+
+ 6.2 asr_diagnostic_profile
+ Stores a diagnostic checklist definition.
+
+ Use this table to drive consistent customer-care diagnosis before creating a WO.
+
+  Column                           Type                          Purpose                              Sample
+
+  profile_id                       UUID PK                       Profile id.                          diag-001
+
+  operator_code                    TEXT                          Operator/tenant.                     WIK
+
+  profile_code                     TEXT                          Stable profile code.                 INET_BASIC_DIAG
+
+  display_name                     TEXT                          Backoffice label.                    Internet Basic Diagnostics
+
+  required_checks_json             JSONB                         Ordered checks.                      ["SUB_ACTIVE","OUTAGE_CHECK"
+                                                                                                      ,"ONT_STATUS","LAST_PROV_COM
+                                                                                                      MAND"]
+
+  status                           TEXT                          ACTIVE, RETIRED.                     ACTIVE
+
+
+
+ 6.3 asr_ticket_diagnostic_result
+ Stores diagnostic results captured for a ticket.
+
+ Use this table to avoid free-text-only troubleshooting.
+
+  Column                           Type                          Purpose                              Sample
+
+  result_id                        UUID PK                       Result id.                           diagres-001
+
+  ticket_id                        TEXT                          TCK ticket id.                       tck-001
+
+  profile_code                     TEXT                          Diagnostic profile used.             INET_BASIC_DIAG
+
+  check_code                       TEXT                          Check performed.                     ONT_STATUS
+
+  result_code                      TEXT                          PASS, FAIL, UNKNOWN, SKIPPED.        FAIL
+
+  result_payload_json              JSONB                         Structured result.                   {"ontOnline":false}
+
+  captured_by_user_id              TEXT                          User/system.                         usr-care-001
+
+  captured_at                      TIMESTAMP                     Capture time.                        2026-06-03T09:10:00Z
+
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 3
+ Recommended indexes:
+
+   - (ticket_id, check_code).
+
+ 6.4 asr_outage_link
+ Stores a ticket link to a known outage or network incident.
+
+ Use this table when multiple customer tickets are caused by the same area/platform incident.
+
+  Column                           Type                           Purpose                              Sample
+
+  outage_link_id                   UUID PK                        Link id.                             aol-001
+
+  ticket_id                        TEXT                           TCK ticket id.                       tck-001
+
+  outage_ref                       TEXT                           External/NOC outage id.              OUT-NRB-20260603-01
+
+  outage_status                    TEXT                           OPEN, RESOLVED, CANCELLED.           OPEN
+
+  linked_by_user_id                TEXT                           User/system.                         usr-noc-001
+
+  linked_at                        TIMESTAMP                      Link time.                           2026-06-03T09:12:00Z
+
+
+
+ 6.5 asr_compensation_recommendation
+ Stores optional compensation recommendation after verified trouble/outage.
+
+ Use this table when ASR recommends credit but BIL-02-ADJ-01 owns the actual adjustment.
+
+  Column                           Type                           Purpose                              Sample
+
+  recommendation_id                UUID PK                        Recommendation id.                   acr-001
+
+  ticket_id                        TEXT                           TCK ticket id.                       tck-001
+
+  operator_code                    TEXT                           Operator/tenant.                     WIK
+
+  reason_code                      TEXT                           Compensation reason.                 SERVICE_OUTAGE_VERIFIED
+
+  recommended_amount               DECIMAL(18,2) NULL             Suggested credit amount.             250.00
+
+  currency_code                    TEXT                           Currency.                            KES
+
+  adjustment_request_id            TEXT NULL                      BIL adjustment request if created.   adj-001
+
+  status                           TEXT                           RECOMMENDED, REQUESTED,              RECOMMENDED
+                                                                  APPROVED, REJECTED, CANCELLED.
+
+  created_at                       TIMESTAMP                      Creation timestamp.                  2026-06-03T11:00:00Z
+
+
+
+
+ 7. APIs
+ ASR-01 primarily uses TCK APIs. These endpoints may be implemented as ASR-specific commands within the TCK module.
+
+ 7.1 Create Technical Trouble Ticket
+           POST /api/tickets
+           Idempotency-Key: care-nointernet-20260603-001
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "typeCode": "TECHNICAL_SUPPORT",
+               "categoryCode": "NO_INTERNET",
+               "sourceChannel": "CALL_CENTER",
+               "customerId": "CUS-100045",
+               "accountId": "ACC-900045",
+               "subscriptionId": "SUB-700045",
+               "subject": "Customer reports no internet",
+               "description": "Customer says ONT has LOS light blinking after overnight rain.",
+               "customerVisible": true
+           }
+
+
+ 7.2 Run Diagnostic
+           POST /api/asr/technical-trouble/{ticket_id}/diagnostics
+           Content-Type: application/json
+
+           {
+               "profileCode": "INET_BASIC_DIAG",
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 4
+              "results": [
+                {
+                   "checkCode": "SUB_ACTIVE",
+                   "resultCode": "PASS",
+                   "payload": {"subscriptionStatus": "ACTIVE"}
+                },
+                {
+                   "checkCode": "OUTAGE_CHECK",
+                   "resultCode": "PASS",
+                   "payload": {"knownOutage": false}
+                },
+                {
+                   "checkCode": "ONT_STATUS",
+                   "resultCode": "FAIL",
+                   "payload": {"ontOnline": false, "lastSeenAt": "2026-06-02T23:10:00Z"}
+                }
+              ]
+          }
+
+
+ 7.3 Create Support Work Order From Ticket
+ Use TCK's create-WO command, with ASR context in payload:
+          POST /api/tickets/{ticket_id}/work-orders
+          Idempotency-Key: tck-001-support-wo-001
+          Content-Type: application/json
+
+          {
+              "workOrderKind": "SUPPORT",
+              "reasonCode": "NO_INTERNET",
+              "priorityCode": "P2",
+              "homepassId": "HP-300045",
+              "subscriptionId": "SUB-700045",
+              "diagnosticSummary": {
+                 "profileCode": "INET_BASIC_DIAG",
+                 "failedChecks": ["ONT_STATUS"]
+              },
+              "customerReportedSymptoms": ["LOS_BLINKING", "NO_CONNECTIVITY"]
+          }
+
+
+ 7.4 Recommend Compensation
+          POST /api/asr/technical-trouble/{ticket_id}/compensation-recommendations
+          Content-Type: application/json
+
+          {
+              "reasonCode": "SERVICE_OUTAGE_VERIFIED",
+              "recommendedAmount": 250.00,
+              "currency": "KES",
+              "notes": "Verified outage lasted 10 hours and affected subscribed internet service."
+          }
+
+ If operations approves creating a formal credit request, ASR calls BIL-02-ADJ-01. ASR does not issue the credit note directly.
+
+
+
+ 8. Events
+  Event                                      Topic                                      When emitted
+
+  TechnicalTroubleTicketCreated              sophix.asr.technical-trouble.created       Technical-support ticket created.
+
+  TechnicalTroubleDiagnosticCompleted        sophix.asr.technical-trouble.diagnosti     Diagnostic profile results captured.
+                                             ccompleted
+
+  TechnicalTroubleLinkedToOutage             sophix.asr.technical-trouble.outagelin     Ticket linked to outage.
+                                             ked
+
+  TechnicalTroubleWorkOrderRequested         sophix.asr.technical-trouble.workorder     TCK creates a support WO due to ASR flow.
+                                             requested
+
+  TechnicalTroubleResolved                   sophix.asr.technical-trouble.resolved      Ticket resolved through remote fix, outage closure,
+                                                                                        or WO result.
+
+  TechnicalTroubleCompensationRecommende     sophix.asr.technical-trouble.compensat     ASR recommends a BIL adjustment.
+  d                                          ionrecommended
+
+
+ TCK still emits its generic ticket events. ASR events are business-specific projections for reporting and downstream modules.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                         Page 5
+ 9. Work Order Rules
+ ASR may request a support WO only when:
+
+   - ticket type is TECHNICAL_SUPPORT;
+
+   - category config has wo_policy != NONE;
+
+   - required diagnostics are captured unless category has AUTO_CREATE;
+
+   - no active linked support WO already exists, unless repeat WO is explicitly allowed;
+
+   - customer/subscription/HomePass references are present where required;
+
+   - user has ticket.workorder.create or equivalent permission from EM-CFG-03.
+
+ After WO finalization:
+
+  WO result                                                          Ticket action
+
+  Fixed/resolved                                                     Move ticket to UNDER_REVIEW or RESOLVED based on category policy.
+
+  Customer unavailable                                               Move ticket to WAITING_CUSTOMER.
+
+  Network construction needed                                        Keep WAITING_INTERNAL and optionally create escalation ticket/WO.
+
+  No fault found                                                     Move UNDER_REVIEW; customer care decides closure.
+
+  Repeat fault flagged                                               Reopen/escalate as REPEAT_FAULT.
+
+
+
+
+ 10. Compensation Rules
+ Compensation is optional and policy-driven.
+
+ ASR may recommend compensation when:
+
+   - trouble is verified as operator/network fault;
+
+   - service impact duration exceeds configured threshold;
+
+   - issue affected a billable active subscription;
+
+   - ticket/WO evidence supports the claim;
+
+   - no previous compensation was granted for the same outage period.
+
+ ASR calls BIL-02-ADJ-01 only to create an adjustment request. BIL owns approval and credit-note generation.
+
+ Example adjustment request context:
+              {
+                  "sourceModule": "ASR-01",
+                  "sourceRefId": "tck-001",
+                  "customerId": "CUS-100045",
+                  "subscriptionId": "SUB-700045",
+                  "adjustmentKind": "CREDIT_NOTE",
+                  "reasonCode": "SERVICE_OUTAGE_VERIFIED",
+                  "amount": 250.00,
+                  "currency": "KES",
+                  "scope": "AMOUNT",
+                  "notes": "ASR verified 10-hour internet outage."
+              }
+
+
+
+
+ 11. Frontend Usage
+ 11.1 FE-APP-01 Backoffice
+ Backoffice uses ASR-01/TCK APIs for:
+
+   - Create technical trouble ticket from customer 360.
+
+   - Guided diagnostic checklist.
+
+   - Known outage lookup/link.
+
+   - Create support WO.
+
+
+SOPHIX BSS Design Documents                                                                                                              Page 6
+   - View WO progress on ticket.
+
+   - Resolve ticket with structured resolution code.
+
+   - Recommend compensation.
+
+   - View repeat fault history.
+
+ 11.2 FE-APP-04 Customer Self-Care
+ Self-care can expose a simplified technical support request:
+
+   - choose affected service;
+
+   - choose symptom;
+
+   - attach photo if relevant;
+
+   - create TCK ticket with sourceChannel = SELF_CARE;
+
+   - show customer-safe ticket status and WO appointment where applicable.
+
+ Self-care must not expose internal diagnostic payloads, NOC notes, or technician private notes.
+
+
+
+ 12. Infra Recommendation
+ ASR-01 should run inside the TCK service/module. No separate ASR pod is required for medium budget deployment.
+
+ Recommended deployment:
+
+  Component                                                           Recommendation
+
+  API                                                                 Existing TCK API pods.
+
+  DB                                                                  Existing TCK schema with ASR config tables.
+
+  Workers                                                             Existing TCK workers for ticket events and WO event consumers.
+
+  Cache                                                               Optional cache for category/diagnostic config.
+
+
+ AWS deployment:
+
+   - Same ECS/EKS service as TCK.
+
+   - Same RDS schema as TCK.
+
+   - Same Kafka/MSK event infrastructure.
+
+   - CloudWatch alarms for diagnostic failures, WO creation failures, and ASR SLA breach counts.
+
+
+
+ 13. Testing Requirements
+ 13.1 Unit Tests
+   - Technical trouble category config resolves diagnostic profile.
+
+   - Required diagnostic missing blocks WO creation.
+
+   - Known outage link moves ticket to correct status.
+
+   - Repeat fault detection identifies prior resolved ticket within window.
+
+   - Compensation recommendation does not create credit directly.
+
+ 13.2 Integration Tests
+   - Create NO_INTERNET ticket.
+
+   - Capture diagnostic results.
+
+   - Create support WO through TCK.
+
+   - Consume WorkOrderFinalized and update ticket.
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 7
+   - Create compensation recommendation and BIL adjustment request.
+
+ 13.3 End To End Tests
+   - Call center creates no-internet ticket, diagnostic fails ONT check, WO is created, technician fixes issue, ticket resolves.
+
+   - Customer creates self-care trouble ticket, care team links it to known outage, customer sees outage-safe status.
+
+   - Repeat fault within 30 days is escalated as REPEAT_FAULT.
+
+
+
+ 14. Definition Of Done
+ ASR-01 is complete when:
+
+   - Technical trouble categories are seeded in TCK.
+
+   - ASR category config and diagnostic profiles exist.
+
+   - Diagnostic capture APIs work.
+
+   - WO creation is gated by ASR rules.
+
+   - WO events update the ticket timeline and status.
+
+   - Known outage linking works.
+
+   - Compensation recommendation can create a BIL adjustment request without directly crediting customer.
+
+   - Customer timeline receives ASR/TCK events.
+
+   - Backoffice can execute the full trouble flow.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 8
+

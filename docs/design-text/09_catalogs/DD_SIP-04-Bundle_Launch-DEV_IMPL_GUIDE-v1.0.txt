@@ -1,0 +1,623 @@
+ DD_SIP-04 - Bundle Launch - Developer Implementation
+ Guide
+ Version: 1.0 Status: Draft for review Bundle: 09_catalogs Audience: mid-level backend developers, product catalog
+ developers, frontend developers, QA Parent DD: DD_SIP-04 - Bundle Launch
+
+
+
+ 1. How To Read This Guide
+ Bundle launch is a catalog/commercial flow.
+
+ SIP-04 creates a sellable bundle from existing SIP-01 packages, validates availability, attaches optional discount assignment
+ rules, publishes availability, and defines allowed bundle-to-bundle migration paths. It does not migrate customers by itself.
+
+
+
+ 2. Step 1 - Create Bundle Draft
+ Backoffice creates a bundle:
+           POST /api/commercial-bundles
+           Idempotency-Key: bundle-fiber-tv-starter-v1
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "bundleCode": "FIBER_TV_STARTER",
+               "displayName": "Fiber + TV Starter",
+               "description": "100M fiber with starter IPTV package.",
+               "bundleType": "ACQUISITION",
+               "currencyCode": "KES",
+               "launchDate": "2026-07-01"
+           }
+
+ Insert:
+           insert into commercial_bundle (
+              bundle_id,
+              operator_code,
+              bundle_code,
+              display_name,
+              description,
+              status,
+              bundle_type,
+              currency_code,
+              launch_date,
+              created_by_user_id,
+              created_at,
+              updated_at
+           ) values (
+              'bun-001',
+              'WIK',
+              'FIBER_TV_STARTER',
+              'Fiber + TV Starter',
+              '100M fiber with starter IPTV package.',
+              'DRAFT',
+              'ACQUISITION',
+              'KES',
+              '2026-07-01',
+              'usr-product-001',
+              now(),
+              now()
+           );
+
+
+
+
+ 3. Step 2 - Add Package Components
+ The user selects existing packages from SIP-01:
+           POST /api/commercial-bundles/bun-001/components
+           Content-Type: application/json
+
+           {
+               "components": [
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 1
+                   {"packageRef": "pkg-fiber-100m", "componentRole": "PRIMARY", "mandatory": true, "displayOrder": 10},
+                   {"packageRef": "pkg-iptv-starter", "componentRole": "ADDON", "mandatory": true, "displayOrder": 20}
+               ]
+           }
+
+ Before insert, call:
+           GET /api/packages/pkg-fiber-100m
+           GET /api/packages/pkg-iptv-starter
+
+ Reject if a package does not exist, is retired, or has no active/launch-ready version.
+
+ Insert:
+           insert into commercial_bundle_component (
+             component_id,
+             bundle_id,
+             package_ref,
+             package_version_id,
+             component_role,
+             quantity,
+             mandatory,
+             display_order,
+             metadata_json
+           ) values
+             ('bcomp-001', 'bun-001', 'pkg-fiber-100m', null, 'PRIMARY', 1, true, 10, '{}'),
+             ('bcomp-002', 'bun-001', 'pkg-iptv-starter', null, 'ADDON', 1, true, 20, '{}');
+
+
+
+
+ 4. Step 3 - Configure Availability
+           POST /api/commercial-bundles/bun-001/availability
+           Content-Type: application/json
+
+           {
+               "countryCode": "KE",
+               "regionCode": "NRB",
+               "franchiseId": "fr_01J_NRB_002",
+               "techRegionCode": "GPON-NRB-01",
+               "channelCode": "SALES_APP",
+               "effectiveFrom": "2026-07-01"
+           }
+
+ Insert:
+           insert into commercial_bundle_availability (
+              availability_id,
+              bundle_id,
+              country_code,
+              region_code,
+              franchise_id,
+              tech_region_code,
+              channel_code,
+              status,
+              effective_from
+           ) values (
+              'bav-001',
+              'bun-001',
+              'KE',
+              'NRB',
+              'fr_01J_NRB_002',
+              'GPON-NRB-01',
+              'SALES_APP',
+              'ACTIVE',
+              '2026-07-01'
+           );
+
+ Validate franchise through EM-01 and HomePass/tech context through RLM/ILM APIs where applicable.
+
+
+
+ 5. Step 4 - Attach Optional Discount Rule
+ If the bundle includes a commercial benefit, attach a discount rule.
+           POST /api/commercial-bundles/bun-001/discount-rules
+           Content-Type: application/json
+
+           {
+               "discountCode": "ACQ_FREE_INSTALL",
+               "assignmentScopeType": "ORDER",
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 2
+               "validityMode": "ORDER_ONLY",
+               "priority": 100,
+               "stackingGroupCode": "INSTALLATION"
+           }
+
+ Validate discount through PLM-CFG-04:
+           GET /api/discounts/ACQ_FREE_INSTALL
+
+ Insert:
+           insert into commercial_bundle_discount_rule (
+              discount_rule_id,
+              bundle_id,
+              discount_code,
+              assignment_scope_type,
+              validity_mode,
+              duration_days,
+              priority,
+              stacking_group_code,
+              status
+           ) values (
+              'bdr-001',
+              'bun-001',
+              'ACQ_FREE_INSTALL',
+              'ORDER',
+              'ORDER_ONLY',
+              null,
+              100,
+              'INSTALLATION',
+              'ACTIVE'
+           );
+
+ The discount rule does not create assignment now. Assignment is created later by order/campaign flow through SIP-03.
+
+
+
+ 6. Step 5 - Validate Bundle
+ Run:
+           POST /api/commercial-bundles/bun-001/validate
+
+ Implementation checks:
+
+   1. Bundle has at least one mandatory component.
+
+   2. All packages exist and are active/launch-ready.
+
+   3. Component packages support requested tech/franchise availability.
+
+   4. Discount refs are active.
+
+   5. Billing event compatibility exists for bundle components.
+
+   6. No active bundle already uses same code.
+
+ Insert check rows:
+           insert into commercial_bundle_launch_check (
+             check_id,
+             bundle_id,
+             check_code,
+             check_status,
+             message,
+             source_ref_json,
+             checked_at
+           ) values
+             ('blc-001', 'bun-001', 'PACKAGE_ACTIVE', 'PASS', 'All package refs are active.', '{"packageRefs":["pkg-fiber-100m","pkg-
+             ('blc-002', 'bun-001', 'DISCOUNT_ACTIVE', 'PASS', 'Discount ACQ_FREE_INSTALL is active.', '{"discountCode":"ACQ_FREE_INS
+
+ If any FAIL, keep bundle in DRAFT.
+
+
+
+ 7. Step 6 - Submit And Approve
+ Submit:
+           POST /api/commercial-bundles/bun-001/submit-review
+
+ Patch:
+
+SOPHIX BSS Design Documents                                                                                             Page 3
+          update commercial_bundle
+          set status = 'READY_FOR_REVIEW',
+              updated_at = now()
+          where bundle_id = 'bun-001'
+            and status = 'DRAFT';
+
+ If approval policy requires review, call EM-CFG-04. SIP-04 does not own approver steps.
+          POST /api/approvals/evaluate
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "moduleCode": "SIP-04",
+              "actionCode": "BUNDLE_LAUNCH_APPROVAL",
+              "subjectType": "COMMERCIAL_BUNDLE",
+              "subjectId": "bun-001",
+              "context": {
+                "bundleCode": "FIBER_TV_STARTER",
+                "bundleType": "ACQUISITION",
+                "channelCodes": ["SALES_APP"],
+                "franchiseIds": ["fr_01J_NRB_002"],
+                "hasDiscountRules": true
+              }
+          }
+
+ If EM-CFG-04 returns approvalRequired = true, start request:
+          POST /api/approvals/requests
+          Idempotency-Key: approval-bundle-bun-001
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "moduleCode": "SIP-04",
+              "actionCode": "BUNDLE_LAUNCH_APPROVAL",
+              "subjectType": "COMMERCIAL_BUNDLE",
+              "subjectId": "bun-001",
+              "policyId": "apol-bundle-launch-wik-v1",
+              "callbackUrl": "/internal/commercial-bundles/bun-001/approval-outcome",
+              "context": {
+                "bundleCode": "FIBER_TV_STARTER",
+                "launchDate": "2026-07-01"
+              }
+          }
+
+ Approver approves through EM-CFG-04 task API. EM-CFG-04 then calls SIP-04 callback:
+          POST /internal/commercial-bundles/bun-001/approval-outcome
+          Content-Type: application/json
+
+          {
+              "approvalRequestId": "apr-bun-001",
+              "outcome": "APPROVED",
+              "decisionComment": "Approved for Nairobi sales launch."
+          }
+
+ SIP-04 patches the bundle:
+          update commercial_bundle
+          set status = 'APPROVED',
+              updated_at = now()
+          where bundle_id = 'bun-001'
+            and status = 'READY_FOR_REVIEW';
+
+ If approval is not required, SIP-04 can apply the same status transition immediately after validation.
+
+
+
+ 8. Step 7 - Activate Bundle
+ Scheduled worker or admin action activates on/after launch date:
+          POST /api/commercial-bundles/bun-001/activate
+
+ Patch:
+          update commercial_bundle
+          set status = 'ACTIVE',
+              updated_at = now()
+          where bundle_id = 'bun-001'
+            and status = 'APPROVED'
+            and launch_date <= current_date;
+
+
+
+
+SOPHIX BSS Design Documents                                                                               Page 4
+ Emit:
+           {
+               "eventType": "CommercialBundleActivated",
+               "bundleId": "bun-001",
+               "bundleCode": "FIBER_TV_STARTER",
+               "operatorCode": "WIK"
+           }
+
+ Downstream systems refresh bundle availability caches.
+
+
+
+ 9. Step 8 - Sales App Lists Available Bundles
+ Sales app calls:
+           GET /api/commercial-bundles/available?operatorCode=WIK&channelCode=SALES_APP&franchiseId=fr_01J_NRB_002&homepassId=HP-001&
+
+ Backend filters:
+           select b.*
+           from commercial_bundle b
+           join commercial_bundle_availability a on a.bundle_id = b.bundle_id
+           where b.operator_code = 'WIK'
+             and b.status = 'ACTIVE'
+             and a.status = 'ACTIVE'
+             and a.channel_code = 'SALES_APP'
+             and a.franchise_id = 'fr_01J_NRB_002'
+             and a.effective_from <= date '2026-07-02'
+             and (a.effective_to is null or a.effective_to >= date '2026-07-02');
+
+ Return components and discount rule summaries. Do not return internal launch approval notes.
+
+
+
+ 10. Step 9 - Order Capture Uses Bundle
+ When a lead/order selects the bundle, FUL-02 order payload includes:
+           {
+               "bundleCode": "FIBER_TV_STARTER",
+               "selectedComponents": [
+                  {"packageRef": "pkg-fiber-100m"},
+                  {"packageRef": "pkg-iptv-starter"}
+               ],
+               "sourceChannel": "SALES_APP",
+               "franchiseId": "fr_01J_NRB_002"
+           }
+
+ FUL-02 calls SIP-04 to validate the bundle is still available. If discount rules exist, FUL/SIP-05/SIP-03 creates discount
+ assignments at the appropriate step.
+
+
+
+ 11. Step 10 - Configure Bundle Migration Rule
+           POST /api/commercial-bundles/migration-rules
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "sourceBundleId": "bun-old-001",
+               "targetBundleId": "bun-001",
+               "movementType": "MIGRATION",
+               "allowedChannels": ["BACKOFFICE", "SELF_CARE"],
+               "requiresCustomerConsent": true,
+               "requiresWo": false,
+               "feePolicyCode": "NO_FEE",
+               "effectiveFrom": "2026-07-01"
+           }
+
+ Insert:
+           insert into commercial_bundle_migration_rule (
+             migration_rule_id,
+             operator_code,
+             source_bundle_id,
+             target_bundle_id,
+             movement_type,
+             allowed_channel_json,
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 5
+              requires_customer_consent,
+              requires_wo,
+              fee_policy_code,
+              effective_from,
+              status
+           ) values (
+              'bmr-001',
+              'WIK',
+              'bun-old-001',
+              'bun-001',
+              'MIGRATION',
+              '["BACKOFFICE","SELF_CARE"]',
+              true,
+              false,
+              'NO_FEE',
+              '2026-07-01',
+              'ACTIVE'
+           );
+
+
+
+
+ 12. Step 11 - Preview Customer Migration
+ Backoffice calls:
+           POST /api/commercial-bundles/migration-preview
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "subscriptionId": "SUB-700045",
+               "sourceBundleCode": "OLD_FIBER_TV",
+               "targetBundleCode": "FIBER_TV_STARTER",
+               "channelCode": "BACKOFFICE"
+           }
+
+ SIP-04:
+
+   1. resolves source and target bundles;
+
+   2. checks an active migration rule;
+
+   3. checks target bundle availability;
+
+   4. returns workflow owner.
+
+ Response:
+           {
+               "allowed": true,
+               "movementType": "MIGRATION",
+               "requiresCustomerConsent": true,
+               "requiresWo": false,
+               "feePolicyCode": "NO_FEE",
+               "owningWorkflow": "SUB-WF-MIGRATION-01"
+           }
+
+ Backoffice then calls SUB workflow. SIP-04 does not change the subscription.
+
+
+
+ 13. Drools Rule Samples
+ Use Drools when launch/availability/migration decisions are operator-variable.
+           package rules.commercial.bundle
+
+           rule "Bundle with discount rules requires launch approval"
+           when
+             $b : BundleLaunchFact(hasDiscountRules == true, status == "READY_FOR_REVIEW")
+             $out : BundleLaunchDecision()
+           then
+             $out.setApprovalRequired(true);
+             $out.setApprovalPolicyCode("BUNDLE_LAUNCH_APPROVAL");
+           end
+
+           rule "Sales app availability requires active franchise"
+           when
+             $a : BundleAvailabilityFact(channelCode == "SALES_APP", franchiseStatus != "ACTIVE")
+             $out : BundleAvailabilityDecision()
+           then
+
+
+
+SOPHIX BSS Design Documents                                                                         Page 6
+            $out.reject("BUNDLE_NOT_AVAILABLE_FOR_CONTEXT");
+          end
+
+          rule "Bundle migration uses subscription migration workflow"
+          when
+            $m : BundleMigrationFact(movementType == "MIGRATION")
+            $out : BundleMigrationDecision()
+          then
+            $out.setOwningWorkflow("SUB-WF-MIGRATION-01");
+          end
+
+
+
+
+ 14. Suggested Worker Commands
+          commercial-bundle:activate-due
+          commercial-bundle:retire-due
+          commercial-bundle:validation-refresh
+          commercial-bundle:availability-cache-refresh
+
+  Command                                                           Purpose
+
+  commercial-bundle:activate-due                                    Activates approved bundles whose launch date has arrived.
+
+  commercial-bundle:retire-due                                      Retires bundles with retire date reached.
+
+  commercial-bundle:validation-refresh                              Re-checks package/discount refs for approved future launches.
+
+  commercial-bundle:availability-cache-refresh                      Refreshes read model for sales/order/self-care lookups.
+
+
+
+
+ 15. Error Codes
+  Code                                                              Meaning
+
+  BUNDLE_CODE_DUPLICATE                                             Bundle code already exists.
+
+  BUNDLE_COMPONENT_REQUIRED                                         No mandatory package component.
+
+  BUNDLE_PACKAGE_NOT_FOUND                                          Component package does not exist.
+
+  BUNDLE_PACKAGE_NOT_SELLABLE                                       Component package is not active/launch-ready.
+
+  BUNDLE_AVAILABILITY_CONFLICT                                      Availability does not match component package availability.
+
+  BUNDLE_DISCOUNT_NOT_ACTIVE                                        Discount rule references inactive discount.
+
+  BUNDLE_VALIDATION_FAILED                                          Launch validation has FAIL checks.
+
+  BUNDLE_APPROVAL_REQUIRED                                          Bundle cannot activate before EM-CFG-04 approval.
+
+  BUNDLE_APPROVAL_REQUEST_FAILED                                    EM-CFG-04 approval request failed.
+
+  BUNDLE_INVALID_STATUS_TRANSITION                                  Requested lifecycle transition is not allowed.
+
+  BUNDLE_MIGRATION_RULE_NOT_FOUND                                   No active source-to-target rule.
+
+  BUNDLE_NOT_AVAILABLE_FOR_CONTEXT                                  Channel/franchise/region/date cannot sell this bundle.
+
+
+
+
+ 16. Minimum Implementation Order
+   1. Create bundle tables and indexes.
+
+   2. Implement package lookup adapter to SIP-01.
+
+   3. Implement discount lookup adapter to PLM-CFG-04.
+
+   4. Implement bundle create/component/availability APIs.
+
+   5. Implement validation API and launch check table writes.
+
+   6. Implement EM-CFG-04 approval evaluate/request/callback integration for launch approval.
+
+   7. Implement submit/approve/activate/suspend/retire lifecycle.
+
+   8. Implement available bundles query.
+
+   9. Implement migration rule APIs.
+
+   10. Implement migration preview API.
+
+
+SOPHIX BSS Design Documents                                                                                                         Page 7
+   11. Emit bundle events.
+
+   12. Patch Backoffice bundle screens.
+
+   13. Patch Sales App bundle selection.
+
+   14. Add E2E tests.
+
+
+
+ 17. Test Scenarios
+ 17.1 Launch Bundle
+   - Create bundle draft.
+
+   - Add two active package components.
+
+   - Add sales app availability.
+
+   - Validate, approve, activate.
+
+   - Available bundles API returns the bundle.
+
+ 17.2 Invalid Package Blocks Launch
+   - Add retired package as component.
+
+   - Validation creates FAIL row.
+
+   - Submit review returns 409 BUNDLE_VALIDATION_FAILED.
+
+ 17.3 Bundle Discount Rule
+   - Attach ACQ_FREE_INSTALL.
+
+   - Available API includes discount rule summary.
+
+   - Order flow later creates SIP-03 assignment.
+
+ 17.4 Migration Preview
+   - Active migration rule exists.
+
+   - Preview returns allowed and SUB-WF-MIGRATION-01.
+
+   - No subscription state changes inside SIP-04.
+
+
+
+ 18. Developer Checklist
+   - Bundle uses SIP-01 package refs only.
+
+   - Bundle launch does not change subscriptions.
+
+   - Availability filters by channel/franchise/region/date.
+
+   - Active bundle composition is immutable.
+
+   - Launch approval is configured/executed in EM-CFG-04.
+
+   - Drools covers configurable launch/availability/migration decisions where needed.
+
+   - Migration preview delegates execution to SUB workflow.
+
+   - Events refresh downstream caches.
+
+
+
+
+SOPHIX BSS Design Documents                                                             Page 8
+

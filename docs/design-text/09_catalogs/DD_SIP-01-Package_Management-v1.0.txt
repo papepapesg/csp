@@ -1,0 +1,1302 @@
+ DD: SIP-01 — Package Management
+ Developer implementation guide: DD_SIP-01-Package_Management-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract DD_SIP-01-Package_Management-v1.0.md.
+
+ Verdict: ■ Modify (Package-like entities exist in TZ — Offre in Java billing modules + Offer in Laravel onboarding — but
+ need consolidation, geo-scoping, versioning, formal lifecycle) Wave: 4 | Section B: Subscription / Provisioning
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    9_catalogs/DD_SIP-01-Package_Management-v1.0.md
+
+  Version                                                           v1.0
+
+  DD type                                                           module contract
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   Not explicitly defined
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+   - DELETE /api/packages/{id}
+
+   - GET /api/packages/{id}
+
+   - GET /api/packages/{id}/versions
+
+   - GET /api/packages/{id}/versions/{versionId}
+
+   - GET /api/packages?status=&franchise=&billingFrequencyDays=&page=&size=
+
+   - PATCH /api/packages/:id
+
+   - PATCH /api/packages/{id}
+
+   - POST /api/packages
+
+   - POST /api/packages/:id/versions
+
+   - POST /api/packages/{id}/versions
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+ 4.2 Tables
+   - No CREATE TABLE block is explicitly declared in this DD.
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - plm-rules
+
+   - plm-session
+
+   - subscription-engine
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - No domain events are explicitly declared in this DD.
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                           Recommendation
+
+  API/runtime                                                       Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                           Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                               Page 2
+  Concern                                                               Recommendation
+
+  Database                                                              Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                                 Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                               Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                                Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                               Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                        Store with IRSA.
+
+  Observability                                                         Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                        dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ Modify (Package-like entities exist in TZ — Offre in Java billing modules + Offer in Laravel onboarding — but
+ need consolidation, geo-scoping, versioning, formal lifecycle)
+
+ Wave: 4 | Section B: Subscription / Provisioning
+
+
+ A — Target
+ 1. What this process is about
+ A Package is what customers buy. It groups one or more Services (from PLM-CFG-01) at a price, for a billing frequency,
+ available in specific franchises and tech regions. Examples: "GPON Internet 100MB Residential" packages together one
+ Service (the Internet 100MB Service from the catalog) at 5,000 KES/month, available in Nairobi and Mombasa via GPON.
+
+ This DD covers the configuration of Packages by an admin user: create, read, update, soft-delete, plus audit. There is no
+ workflow here — this is administrative CRUD on catalog data.
+
+ Important boundary: SIP-01 owns the Package's definition (code, composition, price, geo-scope, wallet/tax bindings). The
+ Package lifecycle (Draft → Active → Inactive → EndOfLife, per franchise) is owned by SIP-02 (Package launch). SIP-01
+ creates Packages in DRAFT state; transitioning them requires SIP-02 endpoints. This DD focuses on definition only.
+
+ PLM scope. PLM owns the catalog of products: Services (PLM-CFG-01), Packages (this DD), Bundles (PLM-CFG-08).
+ PLM-CFG-08 (Bundle) composes Packages from this DD. PLM never calls back into customer/billing modules.
+
+ Downstream modules (subscription-engine, fulfillment, billing, search index, etc.) consume Package data via Kafka events
+ and keep their own caches in sync.
+
+ 2. Business rules
+  ID                                        Rule                                                   Triggered on
+
+  R-SIP-01-1                                Package code must be unique within the catalog         Create, Update
+                                            (shared namespace with Service and Bundle in
+                                            PLM-CFG-01 and PLM-CFG-08).
+
+  R-SIP-01-2                                Package code is immutable once the Package             Update
+                                            leaves DRAFT state. Code is referenced by external
+                                            systems (billing records, subscription history,
+                                            partner integrations) and must be stable.
+
+  R-SIP-01-3                                A Package must compose at least 1 Service.             Create, Update
+
+  R-SIP-01-4                                All composed Services must be Active (not retired)     Create, Update
+                                            at the time the Package is created or updated.
+
+  R-SIP-01-5                                Package billingFrequencyDays is a positive             Create, Update
+                                            integer (days per cycle). Typical values: 30
+                                            (monthly), 28 (lunar cycle), 15 (prepaid bi-weekly),
+                                            7 (weekly), 180 (semi-annual), 365 (annual). The
+                                            same Package can be cloned for different
+                                            frequencies; they are separate Package records.
+
+  R-SIP-01-6                                The Package's targetTechRegions must                   Create, Update
+                                            intersect with the tech regions of each composed
+                                            Service's equipmentRequirement (an Internet
+                                            Service requiring GPON ONT can only be packaged
+                                            for GPON tech regions).
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                       Page 3
+  ID                                         Rule                                                    Triggered on
+
+  R-SIP-01-7                                 Wallet binding precedence: a charge on this             Create, Update
+                                             Package routes to (1) the Service-level wallet
+                                             binding if specified, (2) the Package's
+                                             defaultWalletRef, (3) the system default (TVD
+                                             for flat-fee, Phone for usage-based). The Package
+                                             must therefore have a defaultWalletRef
+                                             consistent with the settlement type of its composed
+                                             Services.
+
+  R-SIP-01-8                                 A Package cannot be soft-deleted while it is            Delete
+                                             referenced by an active customer subscription.
+
+  R-SIP-01-9                                 A Package cannot be soft-deleted while it is            Delete
+                                             composed into an active Bundle (coordinated with
+                                             PLM-CFG-08 rule R-PLM-CFG-08-7).
+
+  R-SIP-01-10                                Once a Package has reached ACTIVE state at least        Update
+                                             once (per SIP-02), composition changes
+                                             (services[]) are no longer allowed in SIP-01;
+                                             only pricing or
+                                             targetFranchises/targetTechRegions
+                                             adjustments via versioning. Composition changes
+                                             require retiring the Package and creating a new one.
+
+
+
+ 3. Module owner and impacted modules
+  Role                                       Module                                                  What it does in this process
+
+  Owner                                      plm                                                     Owns Package + PackageComposition +
+                                                                                                     PackageVersion data, REST APIs, the package
+                                                                                                     admin UI, the DRL rules KJAR
+
+  Impacted (downstream consumers)            subscription-engine (subscription creation              Consume PackageCreated/Updated/Retired
+                                             references packages), fulfillment (activation           /VersionPublished Kafka events; refresh their
+                                             reads composition), billing (cycle pricing reads        local caches
+                                             package version), cvm (campaign targeting), search
+                                             index, BSS Backoffice (catalog views)
+
+  Coordination                               plm (PLM-CFG-08 Bundle)                                 R-SIP-01-9 — Package delete blocked if referenced
+                                                                                                     by active Bundle; this rule is implemented in the
+                                                                                                     bundle-catalog rule set (same KJAR, same KIE
+                                                                                                     session)
+
+  Gateways                                   —                                                       None used in this process
+
+  Engines                                    Drools KIE                                              Rule evaluation on every create/update/delete
+
+
+ No workflow, no Camunda. No external system calls. SIP-01 is pure catalog admin.
+
+ 4. Foundation references
+ DB → FOUNDATION_DB.md · Drools → FOUNDATION_DROOLS.md · Kafka → FOUNDATION_KAFKA.md · Cache →
+ FOUNDATION_CACHE.md · Auth → FOUNDATION_AUTH.md.
+
+
+
+ Technical design
+ Module placement
+  Layer                                                                 Where
+
+  Frontend                                                              Shared BSS Backoffice UI (Catalog section, Packages sub-area)
+
+  Backend                                                               Existing plm module, sub-area package-catalog/
+
+  Rules                                                                 Rules Engine (Drools) — plm-rules KJAR (shared with PLM-CFG-01 and
+                                                                        PLM-CFG-08; SIP-01 adds its own DRL files and facts)
+
+  Events                                                                Internal Event Bus (Kafka)
+
+
+ Single-tenant: same codebase per country, config + rule packages loaded at startup.
+
+ plm module — ecosystem (SIP-01 view)
+             flowchart LR
+                 UI[BSS Backoffice UI<br/>Catalog section] -->|REST| PLM[plm module<br/>package-catalog]
+
+
+
+SOPHIX BSS Design Documents                                                                                                                     Page 4
+               PLM -->|invoke| RE[Rules Engine]
+               PLM -->|publish| EB[Kafka]
+               EB --> SUB[subscription-engine cache]
+               EB --> FUL[fulfillment cache]
+               EB --> BIL[billing cache]
+               EB --> CVM[cvm cache]
+               EB --> SEARCH[search index]
+               PLM -.FK.-> SVC[Service catalog<br/>PLM-CFG-01<br/>same plm DB]
+               PLM -.coordinates with.-> BND[Bundle catalog<br/>PLM-CFG-08<br/>same plm DB]
+
+ plm never calls customer services, billing engine, or fulfillment workflows. Package catalog is purely admin-facing.
+
+ Codebase
+ SIP-01 adds to the existing plm module (created by PLM-CFG-01). Stack stays as chosen for plm.
+
+ #### Java/Spring Boot (continuation of PLM-CFG-01)
+          modules/plm/                                        ← existing module
+            src/main/java/com/sophix/plm/
+              service-catalog/                                ← PLM-CFG-01
+              bundle-catalog/                                 ← PLM-CFG-08
+              package-catalog/                                ← SIP-01 (this DD)
+                {domain,repository,service,web/rest,event,exception}/
+            src/main/resources/
+              config/liquibase/changelog/plm/
+                006_package.xml                               ← new for SIP-01
+                007_package_composition.xml                   ← new for SIP-01
+                008_package_version.xml                       ← new for SIP-01
+
+          modules/plm-rules/                                      ← existing KJAR project
+            src/main/resources/
+              rules/
+                sip-01-package-validation.drl                     ← R-SIP-01-1, -3, -4, -5, -6, -7, -8, -10
+                sip-01-package-immutability.drl                   ← R-SIP-01-2
+            src/main/java/com/sophix/plm/facts/
+              PackageFact.java                                    ← new
+              PackageCompositionFact.java                         ← new
+              PackageVersionFact.java                             ← new
+              ReferencingActiveSubscriptionsFact.java             ← new
+              ReferencingActiveBundlesFact.java                   ← new (coordination with PLM-CFG-08 R-7)
+
+ #### Laravel (if stack chosen for plm)
+          modules/plm/
+            app/
+              Models/
+                 Package.php                                   ← new
+                 PackageComposition.php                        ← new
+                 PackageVersion.php                            ← new
+              Http/Controllers/
+                 PackageController.php                         ← new
+              Services/
+                 PackageCatalogService.php
+                 PackageValidationService.php                  ← calls KIE Server
+              Events/
+                 PackageCreated.php / PackageUpdated.php / PackageRetired.php / PackageVersionPublished.php
+            database/migrations/
+              2026_05_18_000006_create_package_table.php
+              2026_05_18_000007_create_package_composition_table.php
+              2026_05_18_000008_create_package_version_table.php
+
+
+ Foundation-specific configurations
+ DB (FOUNDATION_DB.md):
+
+   - Cluster: A (Config & Catalog) — same as PLM-CFG-01 and PLM-CFG-08
+
+   - Database: plm — shares with PLM-CFG-01 and PLM-CFG-08
+
+   - New tables (in public schema): package, package_composition, package_version
+
+   - New events on audit_log_entry (existing table)
+
+   - Messaging tables (messaging.outbox_event, messaging.inbox_event) — already created by PLM-CFG-01,
+     shared
+
+ Kafka (FOUNDATION_KAFKA.md):
+
+   - Topics published:
+
+
+
+SOPHIX BSS Design Documents                                                                                             Page 5
+   - sophix.plm.package.created
+
+   - sophix.plm.package.updated
+
+   - sophix.plm.package.retired
+
+   - sophix.plm.package.version-published
+
+   - Topics consumed: none
+
+   - Key format: plm:package:{packageId} (e.g., plm:package:pkg_01HX...)
+
+   - eventId format: plm:package:{packageId}:evt_{ulid}
+
+ Cache (FOUNDATION_CACHE.md):
+
+   - plm does not cache its own data
+
+   - Downstream caches use key prefix sophix:plm:package: with TTL 24h
+
+   - Versions cached separately under sophix:plm:package-version:{packageId}:{versionId} (long-lived since
+     versions are immutable once published)
+
+   - Sync via Kafka topics above
+
+ Drools (FOUNDATION_DROOLS.md):
+
+   - KJAR: plm-rules-{country}_{version} (shared with PLM-CFG-01, PLM-CFG-08)
+
+   - KIE container ID: plm-rules-ke_1.0.0
+
+   - KIE session: plm-session
+
+   - New DRL files: sip-01-package-validation.drl, sip-01-package-immutability.drl
+
+   - New facts: PackageFact, PackageCompositionFact, PackageVersionFact,
+     ReferencingActiveSubscriptionsFact, ReferencingActiveBundlesFact
+
+   - Build and deploy: per the reference DD (PLM-CFG-01 — "Building and deploying the rules KJAR")
+
+ Camunda: Not used (CRUD only, no workflow).
+
+ Frontend
+  Item                                                              Detail
+
+  App                                                               Shared BSS Backoffice UI (this DD adds Packages to the Catalog section,
+                                                                    alongside Services and Bundles)
+
+  Actor                                                             Product Manager (full CRUD), Billing Lead (full CRUD), Admin (full CRUD), any
+                                                                    authenticated role (read-only)
+
+  Auth                                                              Bearer JWT (see FOUNDATION_AUTH.md)
+
+  Routes                                                            /catalog/packages, /catalog/packages/new,
+                                                                    /catalog/packages/:id, /catalog/packages/:id/versions,
+                                                                    /catalog/packages/:id/audit
+
+
+ #### Screens
+
+ Package list (/catalog/packages)
+
+   - Table: code, name, status (Draft/Active/Inactive/EndOfLife — read-only display; lifecycle controlled by SIP-02), current
+     price, billing frequency, services (count), target franchises, updatedAt, updatedBy
+
+   - Filters: status, billing frequency, franchise, search (substring on code/name)
+
+   - Pagination, default 20
+
+   - Actions: New Package button, row click → edit
+
+ Package create / edit (/catalog/packages/new, /catalog/packages/:id)
+
+   - Form fields:
+
+   - Code (text, required, unique — R-1; immutable once Package leaves DRAFT — R-2)
+
+   - Name + display name (text)
+
+   - Description (text)
+
+
+SOPHIX BSS Design Documents                                                                                                              Page 6
+   - Services composition (multi-select from PLM-CFG-01 Active Services, min 1 — R-3, R-4)
+
+   - Price (number, required) + currency (from country deployment config)
+
+   - Billing frequency in days (numeric input; common presets shown as quick buttons: 30 / 28 / 15 / 7 / 180 / 365 — R-5)
+
+   - defaultWalletRef (dropdown — R-7)
+
+   - defaultTaxGroupRef (dropdown — optional override; falls back to Service-level)
+
+   - targetFranchises (multi-select)
+
+   - targetTechRegions (multi-select — must intersect with composed Services' tech regions — R-6)
+
+   - After Package leaves DRAFT (managed by SIP-02), the form locks code and services fields; only pricing and
+     geo-scope can change (and those changes create a new PackageVersion — see below)
+
+   - On Submit: POST /api/packages (new in DRAFT) or PATCH /api/packages/:id (edit)
+
+ Package versions (/catalog/packages/:id/versions)
+
+   - Read-only timeline of PackageVersion records (effectiveFrom date, price, status: Pending / Active / Superseded)
+
+   - Active customers stay on their subscribed version until they upgrade (FUL-04)
+
+   - New subscriptions get the latest Active version
+
+   - Admin can publish a new version: POST /api/packages/:id/versions (changes price / geo-scope, not composition;
+     creates a new PackageVersion record)
+
+ Package audit (/catalog/packages/:id/audit)
+
+   - Timeline of audit_log_entry rows for this Package
+
+   - Each row: timestamp, actor, action (CREATE/UPDATE/RETIRE/VERSION_PUBLISHED), expandable diff
+
+   - Read-only
+
+ #### Client-side validation
+
+ Basic input only (required fields, format). Server is authoritative for all business rules (R-1 through R-10). The dev should
+ NOT replicate Drools logic client-side.
+
+ Data model
+          classDiagram
+              class Package {
+                  PackageId id
+                  String code
+                  String name
+                  String displayName
+                  String description
+                  PackageStatus status
+                  Integer billingFrequencyDays
+                  String defaultWalletRef
+                  String defaultTaxGroupRef
+                  List~String~ targetFranchises
+                  List~String~ targetTechRegions
+                  PackageVersionId currentVersionId
+              }
+              class PackageComposition {
+                  PackageId packageId
+                  ServiceId serviceId
+                  Int sequence
+              }
+              class PackageVersion {
+                  PackageVersionId id
+                  PackageId packageId
+                  Money price
+                  Date effectiveFrom
+                  VersionStatus status
+              }
+              class Service {
+                  ServiceId id
+                  String code
+                  ...
+              }
+              Package "1" --> "n" PackageComposition
+              PackageComposition --> Service
+              Package "1" --> "n" PackageVersion
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 7
+                Package --> PackageVersion : currentVersionId
+
+ #### Tables (PostgreSQL, database plm, schema public)
+
+ package — Package catalog
+
+  Column                Type                 Notes
+
+  id                    TEXT PK              ULID, e.g.
+                                             pkg_01HX...
+
+  code                  TEXT NOT NULL        unique across plm
+                                             catalog (R-1); immutable
+                                             post-DRAFT (R-2)
+
+  name                  TEXT NOT NULL        internal name, e.g.
+                                             "Internet 100MB
+                                             Residential"
+
+  display_name          TEXT                 customer-facing display
+                                             name
+
+  description           TEXT
+
+  status                TEXT NOT NULL        DRAFT \                     ACTIVE \   INACTIVE \            END_OF_LIFE (per
+                        DEFAULT 'DRAFT'                                                                   franchise: see SIP-02;
+                                                                                                          this column is the master
+                                                                                                          status across all
+                                                                                                          franchises — current
+                                                                                                          minimum)
+
+  billing_frequency_    INT NOT NULL         positive integer; days
+  days                                       per billing cycle (R-5).
+                                             Typical: 30, 28, 15, 7,
+                                             180, 365.
+
+  default_wallet_ref    TEXT NOT NULL        string ref (R-7)
+
+  default_tax_group_    TEXT NULL            string ref; falls back to
+  ref                                        Service-level if NULL
+
+  target_franchises     TEXT[] NOT NULL      franchise codes
+                        DEFAULT '{}'
+
+  target_tech_region    TEXT[] NOT NULL      tech region codes
+  s                     DEFAULT '{}'
+
+  current_version_id    TEXT NULL            FK → package_versi
+                                             on.id; the active
+                                             version for new
+                                             subscriptions
+
+  created_at            TIMESTAMP NOT
+                        NULL DEFAULT NOW()
+
+  created_by            TEXT NOT NULL
+
+  updated_at            TIMESTAMP
+
+  updated_by            TEXT
+
+  retired_at            TIMESTAMP NULL       soft delete
+
+
+ Indexes:
+
+   - (code) WHERE retired_at IS NULL UNIQUE
+
+   - (status) for status-filtered queries
+
+   - GIN index on (target_franchises) for franchise-availability lookups
+
+ package_composition — Package → Services many-to-many
+
+  Column                                     Type                                   Notes
+
+  package_id                                 TEXT NOT NULL                          FK → package.id ON DELETE CASCADE
+
+  service_id                                 TEXT NOT NULL                          FK → service.id (in same plm DB;
+                                                                                    PLM-CFG-01)
+
+  sequence                                   INT NOT NULL DEFAULT 0                 display order
+
+
+ Primary key: (package_id, service_id). Indexes:
+
+   - (service_id) for reverse lookups (PLM-CFG-01 R-5: is this Service referenced by any active Package?)
+
+ package_version — Pricing/geo-scope versions of a Package
+
+
+SOPHIX BSS Design Documents                                                                                                Page 8
+  Column                      Type                      Notes
+
+  id                          TEXT PK                   ULID, e.g. pkv_01HX...
+
+  package_id                  TEXT NOT NULL             FK → package.id
+
+  price                       NUMERIC(12,2) NOT NULL    price at this version
+
+  currency                    TEXT NOT NULL             ISO 4217 (e.g., KES)
+
+  target_franchises           TEXT[] NOT NULL DEFAULT   snapshot of franchises for this
+                              '{}'                      version
+
+  target_tech_regions         TEXT[] NOT NULL DEFAULT   snapshot of tech regions for
+                              '{}'                      this version
+
+  effective_from              TIMESTAMP NOT NULL        when this version takes effect
+                                                        for new subscriptions
+
+  effective_until             TIMESTAMP NULL            when this version was
+                                                        superseded (set when next
+                                                        version becomes active)
+
+  status                      TEXT NOT NULL             PENDING \                         ACTIVE \   SUPERSEDED
+
+  created_at                  TIMESTAMP NOT NULL
+                              DEFAULT NOW()
+
+  created_by                  TEXT NOT NULL
+
+
+ Indexes:
+
+   - (package_id, effective_from DESC) for version timeline queries
+
+   - (package_id, status) for finding the current active version
+
+ Versioning model: Package definition (code, name, composition, wallet/tax bindings) lives on the package row. Pricing
+ and geo-scope changes create a new package_version row. The package.current_version_id points at the active
+ version. When the admin publishes a new version, the previous one transitions to SUPERSEDED and the new one becomes
+ ACTIVE at its effective_from. Active customer subscriptions reference a specific package_version_id and remain on
+ that version until they upgrade (FUL-04) — preserving historical pricing.
+
+ Rules (Drools)
+ Rule IDs match the business-rule table in Section 2. Full DRL implementation below.
+
+ #### sip-01-package-validation.drl
+            package com.sophix.plm.rules
+
+            import com.sophix.plm.facts.PackageFact
+            import com.sophix.plm.facts.PackageCompositionFact
+            import com.sophix.plm.facts.ExistingCodesFact
+            import com.sophix.plm.facts.ReferencingActiveSubscriptionsFact
+            import com.sophix.plm.facts.ReferencingActiveBundlesFact
+            import com.sophix.plm.facts.ValidationError
+
+            // R-SIP-01-1 — Package code must be unique across plm catalog
+
+            rule "R-SIP-01-1-code-uniqueness"
+            when
+                 $p: PackageFact($code: code, $id: id, action != "DELETE")
+                 $existing: ExistingCodesFact(codes contains $code, ownerId != $id)
+            then
+                 insert(new ValidationError("R-SIP-01-1",
+                                            "code",
+                                            "Code already exists in catalog: " + $code));
+            end
+
+            // R-SIP-01-3 — Package must compose at least 1 Service
+
+            rule "R-SIP-01-3-minimum-composition"
+            when
+                 $p: PackageFact($id: id, action != "DELETE")
+                 $c: PackageCompositionFact(packageId == $id, services.size() < 1)
+            then
+                 insert(new ValidationError("R-SIP-01-3",
+                                            "services",
+                                            "Package must compose at least 1 Service"));
+            end
+
+            // R-SIP-01-4 — All composed Services must be Active
+
+
+
+
+SOPHIX BSS Design Documents                                                                                       Page 9
+          rule "R-SIP-01-4-services-must-be-active"
+          when
+               $p: PackageFact($id: id, action != "DELETE")
+               $c: PackageCompositionFact(packageId == $id, retiredServices.size() > 0)
+          then
+               insert(new ValidationError("R-SIP-01-4",
+                                          "services",
+                                          "Composed Services are retired: " + $c.getRetiredServices()));
+          end
+
+          // R-SIP-01-5 — billingFrequencyDays must be a positive integer
+
+          rule "R-SIP-01-5-billing-frequency-positive"
+          when
+               $p: PackageFact($freq: billingFrequencyDays, action != "DELETE")
+               eval($freq == null || $freq <= 0)
+          then
+               insert(new ValidationError("R-SIP-01-5",
+                                          "billingFrequencyDays",
+                                          "billingFrequencyDays must be a positive integer; got " + $freq));
+          end
+
+          // R-SIP-01-6 — targetTechRegions must intersect composed Services' tech regions
+
+          rule "R-SIP-01-6-tech-region-intersection"
+          when
+               $p: PackageFact($id: id, action != "DELETE")
+               $c: PackageCompositionFact(packageId == $id, techRegionMismatch == true)
+          then
+               insert(new ValidationError("R-SIP-01-6",
+                                          "targetTechRegions",
+                                          "Package targetTechRegions must intersect with each composed Service's tech regions"));
+          end
+
+          // R-SIP-01-7 — defaultWalletRef must be consistent with composed Services' settlement model
+
+          rule "R-SIP-01-7-wallet-consistency"
+          when
+               $p: PackageFact($id: id, action != "DELETE")
+               $c: PackageCompositionFact(packageId == $id, walletInconsistency == true)
+          then
+               insert(new ValidationError("R-SIP-01-7",
+                                          "defaultWalletRef",
+                                          "defaultWalletRef inconsistent with composed Services' settlement model"));
+          end
+
+          // R-SIP-01-8 — Soft-delete blocked if active subscriptions reference this Package
+
+          rule "R-SIP-01-8-delete-blocked-by-subscription"
+          when
+               $p: PackageFact($id: id, action == "DELETE")
+               $r: ReferencingActiveSubscriptionsFact(packageId == $id, activeSubscriptions.size() > 0)
+          then
+               insert(new ValidationError("R-SIP-01-8",
+                                          "id",
+                                          "Package is referenced by " + $r.getActiveSubscriptions().size() + " active subscriptions")
+          end
+
+          // R-SIP-01-9 — Soft-delete blocked if Package is composed into an active Bundle
+          // Coordinated with PLM-CFG-08 R-7
+
+          rule "R-SIP-01-9-delete-blocked-by-bundle"
+          when
+               $p: PackageFact($id: id, action == "DELETE")
+               $r: ReferencingActiveBundlesFact(packageId == $id, activeBundles.size() > 0)
+          then
+               insert(new ValidationError("R-SIP-01-9",
+                                          "id",
+                                          "Package is composed into active Bundles: " + $r.getActiveBundles()));
+          end
+
+ #### sip-01-package-immutability.drl
+          package com.sophix.plm.rules
+
+          import com.sophix.plm.facts.PackageFact
+          import com.sophix.plm.facts.ValidationError
+
+          // R-SIP-01-2 — Code is immutable once Package leaves DRAFT
+
+          rule "R-SIP-01-2-code-immutable-after-draft"
+          when
+               $p: PackageFact(action == "UPDATE", $newCode: code, $oldCode: previousCode, $oldStatus: previousStatus)
+
+
+SOPHIX BSS Design Documents                                                                                         Page 10
+                eval(!$newCode.equals($oldCode) && !"DRAFT".equals($oldStatus))
+          then
+                insert(new ValidationError("R-SIP-01-2",
+                                           "code",
+                                           "Package code cannot be changed after Package has left DRAFT state"));
+          end
+
+          // R-SIP-01-10 — Composition is immutable once Package has been ACTIVE at least once
+
+          rule "R-SIP-01-10-composition-immutable-post-active"
+          when
+               $p: PackageFact(action == "UPDATE", $hasBeenActive: hasBeenActive == true, $compositionChanged: compositionChanged ==
+          then
+               insert(new ValidationError("R-SIP-01-10",
+                                          "services",
+                                          "Package composition cannot be changed once Package has been ACTIVE. Retire and create a ne
+          end
+
+ #### Fact classes (POJOs in com.sophix.plm.facts)
+
+ Convention: Lombok @Data + @NoArgsConstructor + @AllArgsConstructor as established in PLM-CFG-01.
+
+ PackageFact.java
+          package com.sophix.plm.facts;
+
+          import lombok.AllArgsConstructor;
+          import lombok.Data;
+          import lombok.NoArgsConstructor;
+
+          import java.util.List;
+
+          @Data
+          @NoArgsConstructor
+          @AllArgsConstructor
+          public class PackageFact {
+              private String id;
+              private String code;
+              private String previousCode;            // for R-2 (compare new vs old)
+              private String name;
+              private String status;
+              private String previousStatus;          // for R-2 (was it DRAFT before?)
+              private boolean hasBeenActive;          // for R-10
+              private boolean compositionChanged;     // for R-10
+              private Integer billingFrequencyDays;
+              private String defaultWalletRef;
+              private String defaultTaxGroupRef;
+              private List<String> targetFranchises;
+              private List<String> targetTechRegions;
+              private String action;   // "CREATE" | "UPDATE" | "RETIRE" | "DELETE"
+          }
+
+ PackageCompositionFact.java
+          package com.sophix.plm.facts;
+
+          import lombok.AllArgsConstructor;
+          import lombok.Data;
+          import lombok.NoArgsConstructor;
+
+          import java.util.List;
+
+          @Data
+          @NoArgsConstructor
+          @AllArgsConstructor
+          public class PackageCompositionFact {
+              private String packageId;
+              private List<String> services;             // serviceIds composed into this Package
+              private List<String> retiredServices;      // for R-4
+              private boolean techRegionMismatch;        // for R-6
+              private boolean walletInconsistency;       // for R-7
+          }
+
+ PackageVersionFact.java (used by version publish flow — minor; full validation lives in SIP-02 for lifecycle, this is for
+ SIP-01 version-publish only)
+          package com.sophix.plm.facts;
+
+          import lombok.AllArgsConstructor;
+          import lombok.Data;
+          import lombok.NoArgsConstructor;
+
+          import java.math.BigDecimal;
+
+
+SOPHIX BSS Design Documents                                                                                             Page 11
+          import java.time.Instant;
+
+          @Data
+          @NoArgsConstructor
+          @AllArgsConstructor
+          public class PackageVersionFact {
+              private String id;
+              private String packageId;
+              private BigDecimal price;
+              private String currency;
+              private Instant effectiveFrom;
+              private String status;
+          }
+
+ ReferencingActiveSubscriptionsFact.java
+          package com.sophix.plm.facts;
+
+          import lombok.AllArgsConstructor;
+          import lombok.Data;
+          import lombok.NoArgsConstructor;
+
+          import java.util.List;
+
+          @Data
+          @NoArgsConstructor
+          @AllArgsConstructor
+          public class ReferencingActiveSubscriptionsFact {
+              private String packageId;
+              private List<String> activeSubscriptions;   // subscription IDs from subscription-engine (string refs)
+          }
+
+ ReferencingActiveBundlesFact.java
+          package com.sophix.plm.facts;
+
+          import lombok.AllArgsConstructor;
+          import lombok.Data;
+          import lombok.NoArgsConstructor;
+
+          import java.util.List;
+
+          @Data
+          @NoArgsConstructor
+          @AllArgsConstructor
+          public class ReferencingActiveBundlesFact {
+              private String packageId;
+              private List<String> activeBundles;   // bundleIds where this Package is composed (local lookup in same plm DB)
+          }
+
+ (ExistingCodesFact and ValidationError were defined in PLM-CFG-01 and are reused.)
+
+ The caller's responsibility:
+
+   - For create/update: insert PackageFact + PackageCompositionFact (with composition state computed by the service
+     layer, including retiredServices, techRegionMismatch, walletInconsistency) + ExistingCodesFact; fire
+     rules; collect ValidationError.
+
+   - For delete: insert PackageFact (action="DELETE") + ReferencingActiveSubscriptionsFact (looked up from
+     subscription-engine API) + ReferencingActiveBundlesFact (local query in same plm DB); fire rules.
+
+   - For version publish: insert PackageFact + PackageVersionFact; fire rules.
+
+ Build and deploy the KJAR: per the reference DD (PLM-CFG-01 — "Building and deploying the rules KJAR").
+
+ Events (Kafka)
+  Event                            Topic                          When                                 Consumers
+
+  PackageCreated                   sophix.plm.package.created     After successful insert (in DRAFT)   subscription-engine cache, fulfillment
+                                                                                                       cache, billing cache, search index
+
+  PackageUpdated                   sophix.plm.package.updated     After successful update              All consumers above
+
+  PackageRetired                   sophix.plm.package.retired     After soft-delete                    All consumers above
+
+  PackageVersionPublished          sophix.plm.package.version-p   After new version published          billing cache (prices),
+                                   ublished                                                            subscription-engine cache
+                                                                                                       (new-subscription pricing), search
+                                                                                                       index
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                          Page 12
+ Key format: plm:package:{packageId} · eventId format: plm:package:{packageId}:evt_{ulid}.
+
+ PackageCreated envelope:
+           {
+               "eventId":       "plm:package:pkg_01HX2Y3Z4:evt_01JZ5K6...",
+               "eventType":     "PackageCreated",
+               "aggregateId":   "pkg_01HX2Y3Z4",
+               "timestamp":     "2026-05-18T10:23:00Z",
+               "actor":         "alex.oyuga",
+               "correlationId": "corr_01HX...",
+               "payload": {
+                 "packageId":         "pkg_01HX2Y3Z4",
+                 "code":              "INET_100_RES",
+                 "name":              "Internet 100MB Residential",
+                 "displayName":       "Home Fast 100",
+                 "status":            "DRAFT",
+                 "billingFrequencyDays": 30,
+                 "defaultWalletRef": "TVD",
+                 "defaultTaxGroupRef":"Internet-ExciseAndVAT",
+                 "services":          ["svc_gpon_internet_100mb"],
+                 "targetFranchises": ["Nairobi", "Mombasa"],
+                 "targetTechRegions": ["GPON"]
+               }
+           }
+
+ PackageVersionPublished envelope:
+           {
+               "eventId":     "plm:package:pkg_01HX2Y3Z4:evt_01JZ5N3...",
+               "eventType":   "PackageVersionPublished",
+               "aggregateId": "pkg_01HX2Y3Z4",
+               "timestamp":   "2026-05-18T16:10:00Z",
+               "actor":       "alex.oyuga",
+               "correlationId":"corr_01HX...",
+               "payload": {
+                 "packageId":     "pkg_01HX2Y3Z4",
+                 "versionId":     "pkv_01JZ5N3...",
+                 "price":         5500,
+                 "currency":      "KES",
+                 "effectiveFrom": "2026-06-01T00:00:00Z",
+                 "supersedesVersionId": "pkv_01HX..."
+               }
+           }
+
+ PackageUpdated and PackageRetired follow the same patterns as PLM-CFG-01 (changedFields diff for update,
+ packageId + retiredAt for retire).
+
+ Cache strategy: plm does not cache its own data. Downstream caches use key prefix sophix:plm:package:;
+ PackageVersion under sophix:plm:package-version:. See FOUNDATION_CACHE.md.
+
+ Exceptions
+ Standard taxonomy (per PLM-CFG-01).
+
+ APIs (in plm/package-catalog/)
+ Auth (per FOUNDATION_AUTH.md):
+
+   - From UI: Bearer JWT; role from claims enforces per-endpoint permissions
+
+   - From other modules: X-Service-Token header
+
+   - Either auth path accepted on read endpoints
+  Method + Path                              Purpose                                          Auth role
+
+  POST /api/packages                         Create (in DRAFT)                                Product Manager, Admin
+
+  GET /api/packages/{id}                     Read                                             any authenticated
+
+  GET /api/packages?status=&franchise=&b     List/filter                                      any authenticated
+  illingFrequencyDays=&page=&size=
+
+  PATCH /api/packages/{id}                   Update                                           Product Manager, Admin
+
+  DELETE /api/packages/{id}                  Soft-delete                                      Product Manager, Admin
+
+  GET /api/packages/{id}/versions            List version history                             any authenticated
+
+  POST /api/packages/{id}/versions           Publish new version (pricing/geo-scope change)   Product Manager, Admin
+
+
+
+
+SOPHIX BSS Design Documents                                                                                            Page 13
+  Method + Path                                Purpose                                   Auth role
+
+  GET /api/packages/{id}/versions/{versi       Read specific version                     any authenticated
+  onId}
+
+
+ #### Status codes (same as PLM-CFG-01)
+
+ 200 read/update · 201 create · 204 delete · 400 input validation · 401 unauth · 403 forbidden · 404 not found · 409 business
+ rule conflict · 500 internal · 502/503/504 backend.
+
+ #### POST /api/packages
+
+ Request:
+           {
+               "code": "INET_100_RES",
+               "name": "Internet 100MB Residential",
+               "displayName": "Home Fast 100",
+               "description": "100Mbps residential GPON internet",
+               "billingFrequencyDays": 30,
+               "defaultWalletRef": "TVD",
+               "defaultTaxGroupRef": "Internet-ExciseAndVAT",
+               "serviceIds": ["svc_gpon_internet_100mb"],
+               "price": 5500,
+               "currency": "KES",
+               "targetFranchises": ["Nairobi", "Mombasa"],
+               "targetTechRegions": ["GPON"]
+           }
+
+ The Package is created in DRAFT with an initial PackageVersion (PENDING until SIP-02 activates the Package).
+
+ 201 response:
+           {
+               "id": "pkg_01HX2Y3Z4",
+               "code": "INET_100_RES",
+               "status": "DRAFT",
+               "currentVersionId": "pkv_01HX2Y3Z5",
+               "currentVersion": {
+                  "id": "pkv_01HX2Y3Z5",
+                  "price": 5500,
+                  "currency": "KES",
+                  "status": "PENDING"
+               },
+               ...
+           }
+
+ 409 (R-1 — duplicate code):
+           {
+               "error":   "BUSINESS_RULE_ERROR",
+               "rule":    "R-SIP-01-1",
+               "message": "Code already exists in catalog: INET_100_RES",
+               "details": { "field": "code" }
+           }
+
+ 400 (R-4 — retired service in composition):
+           {
+               "error":   "BUSINESS_RULE_ERROR",
+               "rule":    "R-SIP-01-4",
+               "message": "Composed Services are retired",
+               "details": { "field": "services", "retiredServices": ["svc_old_gpon"] }
+           }
+
+ #### POST /api/packages/{id}/versions
+
+ Used to publish a new pricing/geo-scope version of an existing Package (without changing composition).
+
+ Request:
+           {
+               "price": 5800,
+               "currency": "KES",
+               "targetFranchises": ["Nairobi", "Mombasa", "Kisumu"],
+               "targetTechRegions": ["GPON"],
+               "effectiveFrom": "2026-06-01T00:00:00Z"
+           }
+
+ 201 response:
+           {
+               "id": "pkv_01JZ5N3...",
+
+
+SOPHIX BSS Design Documents                                                                                               Page 14
+              "packageId": "pkg_01HX2Y3Z4",
+              "price": 5800,
+              "currency": "KES",
+              "effectiveFrom": "2026-06-01T00:00:00Z",
+              "status": "PENDING"
+          }
+
+ On effectiveFrom, a scheduled job (or the next request after the cutover) transitions the new version to ACTIVE and the
+ previous to SUPERSEDED. Active subscriptions stay on their stored packageVersionId until they upgrade (FUL-04).
+
+ #### DELETE /api/packages/{id}
+
+ Fires R-8 and R-9.
+
+ 204 on success.
+
+ 409 (R-8 — active subscriptions reference Package):
+          {
+              "error": "BUSINESS_RULE_ERROR",
+              "rule": "R-SIP-01-8",
+              "message":"Package is referenced by 412 active subscriptions",
+              "details": { "activeSubscriptionCount": 412 }
+          }
+
+ 409 (R-9 — Package composed into active Bundle):
+          {
+              "error": "BUSINESS_RULE_ERROR",
+              "rule": "R-SIP-01-9",
+              "message":"Package is composed into active Bundles",
+              "details": { "activeBundles": ["bnd_triple_play_pro"] }
+          }
+
+
+
+ B — Current TZ
+ Two parallel Package-like entities exist in TZ codebase:
+
+   - Offre (Java) — in sofixAccountModule and duplicated across 2-3 other Java modules. Conflates Service + Package
+     roles. JHipster CRUD via OffreResource. Has price, services, billing frequency.
+
+   - Offer (Laravel) — in onboarding module. Used during subscription capture. Stores selected offer ID; queries Java
+     module for details.
+
+ Neither has:
+
+   - Per-franchise availability (TZ is single deployment)
+
+   - Tech region constraints
+
+   - Formal Draft/Active/Inactive/EndOfLife states
+
+   - Versioning (price changes overwrite, breaking historical subscriptions)
+
+   - Bundle coordination
+
+   - Kafka events on package changes
+
+   - Drools-based validation
+
+ Wallet/tax bindings exist via separate BindWalletOffer / BindTaxOffer entities (Java); these need to migrate into the
+ Package entity itself.
+          classDiagram
+              class Offre {
+                  Long id
+                  String code
+                  String nom
+                  Float prix
+                  String frequenceFacturation
+              }
+              class BindWalletOffre {
+                  Long offreId
+                  Long walletId
+              }
+              class BindTaxOffre {
+                  Long offreId
+                  Long taxId
+              }
+              class Offer {
+
+
+
+SOPHIX BSS Design Documents                                                                                             Page 15
+                         Long id
+                         String code
+                         Long sourceOffreId
+                     }
+                     Offre --> BindWalletOffre
+                     Offre --> BindTaxOffre
+                     Offer -.points to.-> Offre
+
+
+
+ C — Gap & bridge
+  Aspect                               TZ today                          Target                                Bridge
+
+  Package entity                       Offre (Java) + Offer (Laravel     Single Package entity in plm module   Consolidate; migrate data from Offre
+                                       duplicate)                                                              → package table; deprecate Offer
+                                                                                                               in onboarding (reference Package by
+                                                                                                               ID instead)
+
+  Composition                          OffreService join                 package_composition join              Reuse pattern; migrate data
+
+  Wallet/Tax binding                   Separate BindWalletOffre /        Inline defaultWalletRef /             Migrate bindings into Package
+                                       BindTaxOffre tables               defaultTaxGroupRef on Package         columns; drop bind tables after
+                                                                                                               migration
+
+  Versioning                           None (overwrites break history)   package_version table                 New table; backfill: create one
+                                                                                                               PackageVersion for each existing
+                                                                                                               Offre at current price
+
+  Geo-scope                            None                              target_franchises[] +                 New columns; populate with default
+                                                                         target_tech_regions[] arrays          (all franchises in current deployment)
+                                                                                                               for existing packages during migration
+
+  Lifecycle                            Status field, ad-hoc              DRAFT / ACTIVE / INACTIVE /           This DD adds the status column with
+                                                                         END_OF_LIFE — owned by SIP-02         DRAFT default; SIP-02 owns
+                                                                                                               transitions
+
+  Validation rules                     Hand-coded in services            Drools KJAR with 10 rules             New DRL files
+
+  Events                               None                              4 Kafka topics                        New publishers using outbox pattern
+
+  Admin UI                             JHipster pages                    BSS Backoffice Catalog section        New screens; deprecate JHipster
+                                                                                                               pages after migration
+
+  Coordination with Bundle             None                              R-9 fires from Package delete         Coordinated with PLM-CFG-08 R-7
+
+
+
+ Dependencies
+   - PLM-CFG-01 (Service Catalog) — required. Packages compose Services. Already completed.
+
+   - PLM-CFG-08 (Bundle Catalog) — required for R-9 coordination. Already completed.
+
+   - PLM-CFG-02 (Tax configuration) — required for defaultTaxGroupRef validation. Pending.
+
+   - PLM-CFG-03 (Wallet configuration) — required for defaultWalletRef validation. Pending.
+
+   - SIP-02 (Package launch & lifecycle) — paired DD; this DD creates Packages in DRAFT; SIP-02 manages transitions.
+     Both can be developed in parallel since SIP-02 only reads from this DD's tables.
+
+   - Foundations (DB, Kafka, Drools, Cache, Auth) — all in place.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 16
+

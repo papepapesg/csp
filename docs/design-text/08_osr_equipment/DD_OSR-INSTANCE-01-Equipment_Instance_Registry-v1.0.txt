@@ -1,0 +1,1295 @@
+ DD: OSR-INSTANCE-01 — Equipment Instance Registry
+ Developer implementation guide:
+ DD_OSR-INSTANCE-01-Equipment_Instance_Registry-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract
+ DD_OSR-INSTANCE-01-Equipment_Instance_Registry-v1.0.md.
+
+ Verdict: ■ New | Wave: 2 | Group: OSR (Operator Stock Registry) | Version: v1.0 | Module: Equipment Instance Registry
+ The system of record for one row per physical, serialized device the operator owns or has dispatched: ONTs, cable
+ modems, MTAs, STBs, smart cards, routers. Tracks the device's identity (SKU + serial number + MAC addresses), its current
+ location (which warehouse, which contractor van, or with which customer), and the append-only lifecycle of how it got there.
+ Answers the question *"where is serial number XYZ123 right now, and how did it get there?"* Owned at operator scope.
+ Referenced by OSR-RMA-01 (swap workflows), OSR-01 Stock Chain Engine (existing — extends SKU+quantity tracking with
+ instance resolution for serialized SKUs), WO module (instance binding at WO finalization), PLM-CFG-06
+ (equipment_sku.is_serialized=TRUE SKUs MUST have rows in this table). v1.0 scope: instance master + lifecycle
+ event ledger + current-state derivation + customer binding. Foundation for OSR-RMA-01 and any future serial-number-driven
+ workflow.
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    8_osr_equipment/DD_OSR-INSTANCE-01-Equipment_Instance_Regi
+                                                                    stry-v1.0.md
+
+  Version                                                           v1.0
+
+  DD type                                                           module contract
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   Not explicitly defined
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+   - GET /api/equipment-instance-lifecycle-events?contractorId=wik-internal-tech-team&reasonCod
+     e=CONTRACTOR_RECOVERED_FROM_FIELD&since=2026-01-01
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+   - GET /api/equipment-instance-lifecycle-events?originRefKind=wo&originRefId=wo_01HZ_WANJIKU_
+     INSTALL
+
+   - GET /api/equipment-instances/{instance_id}
+
+   - GET /api/equipment-instances/{instance_id}/lifecycle-events
+
+   - GET /api/equipment-instances/{instance_id}/lifecycle-events?reasonCode=CONTRACTOR_RECOVERE
+     D_FROM_FIELD
+
+   - GET /api/equipment-instances?operator=WIK&accountId=acct_01HZ_WANJIKU
+
+   - GET /api/equipment-instances?operator=WIK&locationId=WIK-VAN-contractor_ke_nairobi_a&state
+     =IN_CONTRACTOR_STOCK
+
+   - GET /api/equipment-instances?operator=WIK&macAddress=00:11:22:33:44:55
+
+   - GET /api/equipment-instances?operator=WIK&serial=48575443ABCD1234
+
+   - GET
+     /api/equipment-instances?operator=WIK&skuId=WIK-ONT-HUAWEI-EG8145V5&state=IN_MAIN_WAREHOUSE
+
+   - GET /api/equipment-instances?operator=WIK&smartCard=7676543210
+
+   - GET /api/equipment-instances?serial=...
+
+   - GET /api/equipment-instances?state=IN_FIELD_ACTIVE
+
+   - PATCH /api/equipment-instances/{instance_id}
+
+   - POST /api/equipment-instances
+
+   - POST /api/equipment-instances/bulk-import
+
+   - POST /api/equipment-instances/{id}/lifecycle-events
+
+   - POST /api/equipment-instances/{instance_id}/lifecycle-events
+
+ 4.2 Tables
+   - equipment_instance
+
+   - equipment_instance_lifecycle_event
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - sophix-superadmin
+
+   - wik-dispatcher-02
+
+   - wik-internal-tech-team
+
+   - wik-internal-tech-team-dispatcher
+
+   - wik-procurement-01
+
+   - wik-warehouse-01
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+
+SOPHIX BSS Design Documents                                                                                              Page 2
+ 4.4 Events
+   - EquipmentInstanceBoundToCustomer
+
+   - EquipmentInstanceCreated
+
+   - EquipmentInstanceDecommissioned
+
+   - EquipmentInstanceLifecycleTransition
+
+   - EquipmentInstanceRecoveredByContractor
+
+   - EquipmentInstanceUnboundFromCustomer
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                           Recommendation
+
+  API/runtime                                                       Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                           Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                          Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                             Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                           Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                            Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                           Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                    Store with IRSA.
+
+  Observability                                                     Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                    dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ New | Wave: 2 | Group: OSR (Operator Stock Registry) | Version: v1.0 | Module: Equipment Instance Registry
+
+ The system of record for one row per physical, serialized device the operator owns or has dispatched: ONTs, cable
+ modems, MTAs, STBs, smart cards, routers. Tracks the device's identity (SKU + serial number + MAC addresses), its current
+ location (which warehouse, which contractor van, or with which customer), and the append-only lifecycle of how it got there.
+
+
+SOPHIX BSS Design Documents                                                                                                                   Page 3
+ Answers the question *"where is serial number XYZ123 right now, and how did it get there?"*
+
+ Owned at operator scope. Referenced by OSR-RMA-01 (swap workflows), OSR-01 Stock Chain Engine (existing — extends
+ SKU+quantity tracking with instance resolution for serialized SKUs), WO module (instance binding at WO finalization),
+ PLM-CFG-06 (equipment_sku.is_serialized=TRUE SKUs MUST have rows in this table).
+
+ v1.0 scope: instance master + lifecycle event ledger + current-state derivation + customer binding. Foundation for
+ OSR-RMA-01 and any future serial-number-driven workflow.
+
+
+
+ 1. What this module is
+ When PLM-CFG-06 flags an SKU as is_serialized=TRUE (every ONT, every modem, every STB, every smart card),
+ each physical unit gets its own row in equipment_instance. The row carries the device's identity (serial number, MAC
+ addresses for hybrid chassis, smart card number for STBs) and a pointer to its current location.
+
+ Location is a discriminated union: a stock_location from OSR-01 (warehouse or contractor van) OR an account_id
+ from ILM-CFG-01 (the device is in the field at a customer premises) OR a special sentinel for IN_TRANSIT_TO_VENDOR /
+ DECOMMISSIONED. Exactly one current location per active instance.
+
+ The lifecycle is captured by an append-only event ledger. Every state transition (received from vendor → moved to contractor
+ van → assigned to WO → installed at customer → recovered after fault → returned to contractor warehouse) is one row. The
+ current location and current state of any instance are derived from the latest event row, but the events themselves are
+ immutable and form the audit trail.
+
+ One critical operational pain this module enables fixing: Wananchi KE reports ~40+ stale equipment items where
+ unassigned devices on WO finalization auto-route to the main warehouse instead of the contractor team's warehouse that
+ physically recovered them. The instance ledger captures *which contractor was holding the device when it was recovered*
+ and downstream consumers (OSR-RMA-01, OSR-01 stock movements) use that to route the device back to the contractor
+ team, not main warehouse.
+
+ What this module does
+   1. Master per serialized physical device — one row per ONT, modem, MTA, STB, smart card. Identity carries serial
+     number, optional MAC addresses (CM-MAC, MTA-MAC, CPMAC for static IP packages, all derivable from chassis ID per
+     workshop), smart card number for STBs (10 digits, starts with 767 for HFC TV), and the SKU FK to PLM-CFG-06.
+
+   2. Track current location — pointer to either stock_location (warehouse or van) OR account (with customer) OR a
+     sentinel state. Updated atomically with each lifecycle event.
+
+   3. Track current state — derived enum: IN_VENDOR_WAREHOUSE / IN_MAIN_WAREHOUSE / IN_CONTRACTOR_STOCK /
+     RESERVED_FOR_WO / IN_FIELD_ACTIVE / IN_FIELD_DEFECTIVE / RECOVERED_BY_CONTRACTOR /
+     RETURNED_TO_MAIN_WAREHOUSE / RMA_SHIPPED_TO_VENDOR / REPAIRED_BY_VENDOR / DECOMMISSIONED.
+
+   4. Maintain append-only lifecycle ledger — every transition is one row with timestamp, actor, from-state, to-state,
+     from-location, to-location, reason code, and free-text note.
+
+   5. Bind / unbind to customer — at WO finalization, the instance binds to an account_id (and its subscription_id if
+     relevant). On disconnect / swap, the instance unbinds. The binding is the structural source of truth for *"which device does
+     this customer have?"*
+
+   6. Resolve from various lookup keys — by serial number, by MAC address (any of CM-MAC / MTA-MAC / CPMAC), by
+     smart card number, by SKU, by current location, by current customer.
+
+   7. Bulk import — XLSX/CSV upload (matching Wananchi's existing Equipment Batch Actions Utility) for new vendor
+     batches. Each row creates one instance with state = IN_MAIN_WAREHOUSE (or IN_VENDOR_WAREHOUSE if marked as
+     pre-delivery).
+
+ What this module does NOT do
+   - Doesn't track non-serialized consumables. Cable lengths, splices, drop cables, faceplates — those live in OSR-01 as
+     SKU+quantity rows (PLM-CFG-06 is_serialized=FALSE). This module is exclusively for SKUs flagged
+     is_serialized=TRUE.
+
+   - Doesn't replace OSR-01. OSR-01 still owns SKU+quantity rollups, stock movements at the SKU level, balance views,
+     reservations. This module overlays per-instance resolution onto OSR-01's stock world for serialized items. The two
+     coexist; OSR-01 emits a StockMovementRecorded event for a serialized SKU and this module captures the
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 4
+     corresponding EquipmentInstanceLifecycleTransition row(s) — both are written by the same business
+     transaction.
+
+   - Doesn't orchestrate swap workflows. The workflows (HFC field pickup, GPON remote unassign, EQP termination
+     retrieval, EQU upgrade) belong to OSR-RMA-01. This module only records lifecycle transitions when consumers call its
+     APIs.
+
+   - Doesn't talk to network systems. Broadhub, NMS, CMTS, Verimatrix, VoipSwitch — those are downstream of
+     provisioning workflows through capability-named provisioning adapters. This module is the BSS-side ledger of where
+     devices are; network-side configuration is performed by Service Activation (FUL-03 → Network Provisioning Adapter) and
+     recorded as device state by other modules.
+
+   - Doesn't enforce slot/port binding semantics. UC-PR4 (HFC modem authorization bound to slot/port) is a workflow-level
+     constraint enforced by OSR-RMA-01 swap flows. This module records the slot/port as instance metadata when supplied;
+     it doesn't validate that the slot/port matches across swaps.
+
+   - Doesn't track warranty / repair history. Vendor warranty terms, RMA SLA per vendor, repair history per serial — out of
+     v1.0 scope. The lifecycle state set includes RMA_SHIPPED_TO_VENDOR and REPAIRED_BY_VENDOR as transitions, but
+     no warranty / vendor-RMA metadata. Future expansion.
+
+   - Doesn't perform reconciliation against the network's ground truth. Wananchi's
+     malogs.wananchi.com/gpon_auto_find/ portal lists what ONT serials are physically connected to the OLT.
+     Comparing that to instance bindings (drift detection) is a separate future reconciliation workflow.
+
+ Regional flexibility
+ Workshop sources are KE workshops (Zuku 2026-04-27+). KE is the v1.0 seed; schema designed to accommodate
+ WUG/WTZ/YASSN variants:
+
+   - MAC structure varies by tech. HFC hybrid chassis carry CM-MAC + MTA-MAC + optional CPMAC; GPON ONT carries
+     only its ONT serial; smart cards carry only the 10-digit number. Schema uses three nullable MAC columns + optional
+     smart card number, not a single MAC field.
+
+   - Slot/port semantics vary. HFC modems bind to a CMTS slot/port (UC-PR4 — KE-specific Wananchi requirement);
+     GPON ONTs bind to an OLT Frame/Slot/Port (F/S/P) reported by the OLT auto-discovery feed. Schema carries
+     network_slot_ref as a free-text + JSONB pair to accommodate both formats without forcing a single shape.
+
+   - Vendor RMA process varies. WIK uses different vendors than YASSN (Huawei + FiberHome for GPON, Cisco for HFC in
+     KE; Free Sénégal-side vendors for YASSN). The lifecycle states are vendor-agnostic; vendor metadata (RMA reference
+     number, ship date, expected return date) is in a JSONB column rather than a structured table.
+
+ Glossary
+  Term                                                           Meaning
+
+  Instance                                                       One row in equipment_instance representing one physical device with a
+                                                                 unique serial number.
+
+  Lifecycle event                                                One row in equipment_instance_lifecycle_event capturing one state
+                                                                 transition. Append-only.
+
+  Current state                                                  The derived state of an instance, equal to the to_state of its latest lifecycle
+                                                                 event.
+
+  Current location                                               The derived location of an instance, equal to the to_location_id of its latest
+                                                                 lifecycle event (or to_account_id if the instance is in the field).
+
+  Binding                                                        The relationship (instance, account) when the device is at a customer
+                                                                 premises. Established by a BOUND_TO_CUSTOMER event, cleared by an
+                                                                 UNBOUND_FROM_CUSTOMER event.
+
+  Sentinel location                                              A reserved location ID used when the instance is not at a stock_location or
+                                                                 customer: IN_TRANSIT_TO_VENDOR, AT_VENDOR_FOR_REPAIR,
+                                                                 DECOMMISSIONED. Encoded as well-known string constants.
+
+  CM-MAC / MTA-MAC / CPMAC                                       The three MAC addresses an HFC hybrid chassis can carry. CM-MAC = chars
+                                                                 4–15 of chassis Equipment ID formatted with colon every 2 chars; MTA-MAC =
+                                                                 CM-MAC + 2; CPMAC = optional public-IP carrier for static-IP HFC packages.
+
+  Smart card number                                              10-digit serial starting with 767 for HFC TV STBs (Verimatrix). Carries
+                                                                 entitlements; printed on the card itself.
+
+
+
+
+ 2. Tables overview + relationships
+
+SOPHIX BSS Design Documents                                                                                                                Page 5
+ 2.1 Tables overview
+ OSR-INSTANCE-01 owns two tables:
+
+  Table                                                          Purpose
+
+  equipment_instance                                             Master per serialized physical device. Identity + current location + current state.
+
+  equipment_instance_lifecycle_event                             Append-only ledger of every state / location transition for every instance.
+
+
+ Full DDL in §3.
+
+ 2.2 Entity relationships
+ [Missing image: file:///home/claude/diagrams/osr_instance_erd.png]
+
+ Reading the diagram:
+
+   - equipment_instance is the root. One row per physical serialized device.
+
+   - equipment_sku (PLM-CFG-06) is referenced by instance.sku_id — every instance carries its SKU; the SKU defines
+     the device kind (ONT vs modem vs STB) and is_serialized=TRUE.
+
+   - stock_location (OSR-01) is referenced by instance.current_location_id when the device is in a warehouse or
+     contractor van (NOT when it's at a customer premises).
+
+   - account (ILM-CFG-01) is referenced by instance.current_account_id when the device is at a customer premises.
+
+   - equipment_instance_lifecycle_event is one-to-many off equipment_instance — every transition is one row.
+     The latest event row determines the instance's current location and state (denormalized into the instance row for fast
+     lookup).
+
+   - External references from this module: stock_location (OSR-01), account (ILM-CFG-01), equipment_sku
+     (PLM-CFG-06), wo (WO-01) — never owned by OSR-INSTANCE-01.
+
+ 2.3 Cross-DD anchoring
+   - OSR-01 Stock Chain Engine — for serialized SKUs, every stock_movement row (movement of a serialized item
+     between locations) corresponds to one lifecycle event in this module. The two writes happen in the same business
+     transaction. OSR-01 carries the SKU+qty rollup; OSR-INSTANCE-01 carries the per-serial detail. v1.0 design pattern:
+     when OSR-01 records a stock_movement against a serialized SKU, the caller MUST also call POST
+     /api/equipment-instances/{id}/lifecycle-events with the matching serial. Application layer enforces this via
+     a transactional outbox.
+
+   - PLM-CFG-06 Equipment Type Catalog — equipment_instance.sku_id is FK to equipment_sku.sku_id. The
+     SKU's is_serialized flag determines whether instances exist at all. PLM-CFG-06 also defines equipment_kind
+     (ONT / CABLE_MODEM / STB / etc.) and that drives which MAC / smart-card columns are populated on the instance.
+
+   - ILM-CFG-01 Customer Service Catalog — equipment_instance.current_account_id is FK to
+      account.account_id when the instance is bound to a customer. Account ownership of the device follows
+      account.account_id (not customer.customer_id): Customer is identity-only; operational concerns including equipment
+      binding anchor at the Account.
+
+   - WO-01 Work Order Module — at WO finalization, the WO carries a list of wo_equipment(wo_id, sku_id, qty,
+     serial_number_ref) rows (per PLM-CFG-06 §7 migration). The serial_number_ref is resolved to an
+     equipment_instance.instance_id and a lifecycle event BOUND_TO_CUSTOMER is emitted with wo_id as the origin
+     reference.
+
+   - EM-02 Contractor & Staff Registry — every lifecycle event optionally carries a contractor_id (FK to EM-02)
+     recording which contractor held the device during the transition. THIS IS THE FIX for the Wananchi 40+ stale-equipment
+     routing pain: when a device is recovered from the field, the recovering contractor is recorded on the event, and
+     downstream RMA / return-to-warehouse logic in OSR-RMA-01 reads this contractor_id to route the device back to the
+     right contractor warehouse instead of main.
+
+   - OSR-RMA-01 Equipment Swap & RMA (pending) — the primary workflow consumer. Calls POST
+     /api/equipment-instances/{id}/lifecycle-events at each swap step to advance the instance state.
+
+
+
+ 3. Schemas
+
+SOPHIX BSS Design Documents                                                                                                                 Page 6
+ 3.1 equipment_instance
+           CREATE TABLE equipment_instance (
+              instance_id             TEXT PRIMARY KEY,                 -- ULID 'inst_01HZ...'
+              operator_code           TEXT NOT NULL,                    -- 'WIK' | 'WUG' | 'WTZ' | 'YASSN'
+              sku_id                  TEXT NOT NULL REFERENCES equipment_sku(sku_id),
+              serial_number           TEXT NOT NULL,                    -- vendor-printed serial; primary identification
+              cm_mac                  TEXT NULL,                        -- HFC cable modem MAC; format AA:BB:CC:DD:EE:FF
+              mta_mac                 TEXT NULL,                        -- HFC MTA MAC = CM-MAC + 2 (hybrid chassis only)
+              cp_mac                  TEXT NULL,                        -- HFC public-IP MAC (static-IP packages only)
+              smart_card_number       TEXT NULL,                        -- HFC TV STB: 10 digits, starts with '767'
+              manufacturer            TEXT NULL,                        -- 'Huawei' | 'FiberHome' | 'Cisco' | 'Pace' | ...
+              model                   TEXT NULL,                        -- vendor model code; copied from SKU at instance creation but k
+              network_slot_ref        TEXT NULL,                        -- 'F1/S2/P3' for GPON; 'cmts-nrb-01:slot-3:port-12' for HFC; fr
+              network_slot_metadata JSONB NULL,                         -- structured fields per tech: {'frame':'1','slot':'2','port':'3
+              current_state           TEXT NOT NULL,                    -- denormalized from latest lifecycle event for fast lookup
+              current_location_id     TEXT NULL REFERENCES stock_location(location_id), -- NULL iff in field at customer OR sentinel s
+              current_account_id      TEXT NULL REFERENCES account(account_id),           -- NULL unless in field at customer
+              current_sentinel        TEXT NULL,                        -- 'IN_TRANSIT_TO_VENDOR' | 'AT_VENDOR_FOR_REPAIR' | 'DECOMMISSI
+              vendor_metadata         JSONB NULL,                       -- {'vendor_ref':'RMA-2026-001','shipped_date':'2026-03-15'} whe
+              active                  BOOLEAN NOT NULL DEFAULT TRUE,    -- false when DECOMMISSIONED (kept for history)
+              created_at              TIMESTAMP NOT NULL DEFAULT NOW(),
+              updated_at              TIMESTAMP NOT NULL DEFAULT NOW(),
+              updated_by              TEXT NOT NULL,
+              CHECK (current_state IN (
+                 'IN_VENDOR_WAREHOUSE','IN_MAIN_WAREHOUSE','IN_CONTRACTOR_STOCK','RESERVED_FOR_WO',
+                 'IN_FIELD_ACTIVE','IN_FIELD_DEFECTIVE','RECOVERED_BY_CONTRACTOR','RETURNED_TO_MAIN_WAREHOUSE',
+                 'RMA_SHIPPED_TO_VENDOR','REPAIRED_BY_VENDOR','DECOMMISSIONED'
+              )),
+              CHECK (
+                 -- Exactly one of current_location_id, current_account_id, current_sentinel is set
+                 (CASE WHEN current_location_id IS NOT NULL THEN 1 ELSE 0 END +
+                  CASE WHEN current_account_id IS NOT NULL THEN 1 ELSE 0 END +
+                  CASE WHEN current_sentinel     IS NOT NULL THEN 1 ELSE 0 END) = 1
+              ),
+              CHECK (
+                 -- Smart card number format: 10 digits, starts with 767 (per workshop 2026-04-30)
+                 smart_card_number IS NULL OR smart_card_number ~ '^767[0-9]{7}$'
+              )
+           );
+
+           CREATE UNIQUE INDEX uq_instance_serial
+             ON equipment_instance (operator_code, serial_number);
+           CREATE UNIQUE INDEX uq_instance_cm_mac
+             ON equipment_instance (operator_code, cm_mac) WHERE cm_mac IS NOT NULL;
+           CREATE UNIQUE INDEX uq_instance_smart_card
+             ON equipment_instance (operator_code, smart_card_number) WHERE smart_card_number IS NOT NULL;
+           CREATE INDEX idx_instance_sku           ON equipment_instance (operator_code, sku_id, current_state);
+           CREATE INDEX idx_instance_location      ON equipment_instance (current_location_id) WHERE current_location_id IS NOT NULL;
+           CREATE INDEX idx_instance_account       ON equipment_instance (current_account_id) WHERE current_account_id IS NOT NULL;
+           CREATE INDEX idx_instance_state         ON equipment_instance (operator_code, current_state);
+           CREATE INDEX idx_instance_active_field ON equipment_instance (operator_code) WHERE current_state IN ('IN_FIELD_ACTIVE','I
+
+ Sample data:
+
+  instance_id   operator_cod   sku_id       serial_numbe   cm_mac       mta_mac      smart_card_n   current_state   current_locati   current_acco
+                e                           r                                        umber                          on_id            unt_id
+
+  inst_01HZ_    WIK            WIK-ONT-HU   48575443AB     NULL         NULL         NULL           IN_FIELD_A      NULL             acct_01HZ_
+  ONT_WANJIK                   AWEI-EG814   CD1234                                                  CTIVE                            WANJIKU
+  U                            5V5
+
+  inst_01HZ_    WIK            WIK-CM-CIS   0011223344     00:11:22:3   00:11:22:3   NULL           IN_FIELD_A      NULL             acct_01HZ_
+  CM_KAMAU                     CO-DPC3848   556677         3:44:55      3:44:57                     CTIVE                            KAMAU
+
+  inst_01HZ_    WIK            WIK-STB-PA   STB-767654     NULL         NULL         7676543210     IN_FIELD_A      NULL             acct_01HZ_
+  STB_OTIENO                   CE-TDC575D   3210                                                    CTIVE                            OTIENO
+
+  inst_01HZ_    WIK            WIK-ONT-HU   48575443BE     NULL         NULL         NULL           IN_CONTRAC      WIK-VAN-co       NULL
+  ONT_VAN_A_                   AWEI-EG814   EF5678                                                  TOR_STOCK       ntractor_k
+  01                           5V5                                                                                  e_nairobi_
+                                                                                                                    a
+
+  inst_01HZ_    WIK            WIK-ONT-HU   48575443CA     NULL         NULL         NULL           RESERVED_F      WIK-VAN-co       NULL
+  ONT_VAN_A_                   AWEI-EG814   FE9012                                                  OR_WO           ntractor_k
+  02                           5V5                                                                                  e_nairobi_
+                                                                                                                    a
+
+  inst_01HZ_    WIK            WIK-CM-CIS   00AABBCCDD     00:AA:BB:C   00:AA:BB:C   NULL           IN_MAIN_WA      WIK-CENTRA       NULL
+  CM_MAIN_01                   CO-DPC3848   EEFF11         C:DD:EE      C:DD:F0                     REHOUSE         L-NRB
+
+  inst_01HZ_    WIK            WIK-ONT-HU   48575443DE     NULL         NULL         NULL           IN_FIELD_D      NULL             acct_01HZ_
+  ONT_DEFECT                   AWEI-EG814   ADBEEF                                                  EFECTIVE                         NJERI
+  _01                          5V5
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 7
+  instance_id   operator_cod   sku_id       serial_numbe   cm_mac   mta_mac   smart_card_n   current_state   current_locati   current_acco
+                e                           r                                 umber                          on_id            unt_id
+
+  inst_01HZ_    WIK            WIK-ONT-HU   48575443AB     NULL     NULL      NULL           RECOVERED_      WIK-VAN-co       NULL
+  ONT_RECOVE                   AWEI-EG814   BA0001                                           BY_CONTRAC      ntractor_k
+  RED                          5V5                                                           TOR             e_nairobi_
+                                                                                                             a
+
+  inst_01HZ_    WIK            WIK-ONT-HU   48575443BA     NULL     NULL      NULL           RMA_SHIPPE      NULL             NULL
+  ONT_RMA_01                   AWEI-EG814   BE2222                                           D_TO_VENDO
+                               5V5                                                           R
+
+  inst_01HZ_    WIK            WIK-ONT-HU   48575443FA     NULL     NULL      NULL           REPAIRED_B      WIK-CENTRA       NULL
+  ONT_REPAIR                   AWEI-EG814   CE3333                                           Y_VENDOR        L-NRB
+  ED                           5V5
+
+  inst_01HZ_    WIK            WIK-ONT-HU   48575443DE     NULL     NULL      NULL           DECOMMISSI      NULL             NULL
+  ONT_DECOMM                   AWEI-EG814   AD0000                                           ONED
+  _01                          5V5
+
+  inst_01HZ_    YASSN          YASSN-ONT-   464849504B     NULL     NULL      NULL           IN_MAIN_WA      YASSN-CENT       NULL
+  ONT_DKR_01                   FIBERHOME-   4C4D4E                                           REHOUSE         RAL-DKR
+                               AN5506-04F
+
+
+ Row 1: Wanjiku has a Huawei GPON ONT installed at her premises. The ONT is in the field, bound to her account. No MAC
+ fields populated because GPON ONTs are identified by their ONT serial alone (the OLT auto-discovers the serial; no MAC
+ handshake at the BSS level).
+
+ Row 2: Kamau has an HFC hybrid chassis cable modem. Both CM-MAC and MTA-MAC populated; MTA-MAC = CM-MAC +
+ 2 per workshop. No CPMAC because his package is dynamic-IP not static-IP. No smart card because this is the cable
+ modem, not the STB.
+
+ Row 3: Otieno has an HFC TV STB. Smart card number populated (10 digits, starts with 767). No MAC fields because the
+ STB is identified by smart card, not MAC, in the Verimatrix flow.
+
+ Rows 4–5: Two ONTs sitting in Franchise A's van. Row 4 is unreserved; row 5 has been reserved for a specific WO (state
+ advanced to RESERVED_FOR_WO at WO finalization scheduling).
+
+ Row 6: A cable modem sitting in main warehouse, waiting to be dispatched to a contractor van.
+
+ Row 7: An ONT physically at Njeri's premises but reported defective by the customer. State = IN_FIELD_DEFECTIVE.
+ Customer binding still active because the device hasn't been physically recovered yet. OSR-RMA-01 swap workflow will
+ trigger a contractor visit, recover this unit, and transition it to RECOVERED_BY_CONTRACTOR.
+
+ Row 8: An ONT that was recovered from a customer's premises by Franchise A. State = RECOVERED_BY_CONTRACTOR,
+ location = Franchise A's van. The customer binding has been cleared (NULL current_account_id). The contractor_id of
+ the recovering team is recorded on the lifecycle event (visible in §3.2 sample data).
+
+ Row 9: An ONT shipped to vendor for repair. current_sentinel='IN_TRANSIT_TO_VENDOR' (deduced from
+ current_state='RMA_SHIPPED_TO_VENDOR'). No location, no account, no contractor.
+
+ Row 10: A previously-shipped ONT returned from vendor, in main warehouse again. State = REPAIRED_BY_VENDOR. Can
+ re-enter the dispatch cycle on the next outbound movement.
+
+ Row 11: An ONT that was permanently decommissioned (e.g., declared beyond repair by vendor). State =
+ DECOMMISSIONED, active = false (not shown in this column subset).
+
+ Row 12: A YASSN-operator ONT in their central warehouse in Dakar. Different SKU vendor (FiberHome AN5506-04F vs
+ Huawei EG8145V5 for WIK). Same schema applies.
+
+ 3.2 equipment_instance_lifecycle_event
+           CREATE TABLE equipment_instance_lifecycle_event (
+             event_id              TEXT PRIMARY KEY,                -- ULID 'evt_01HZ...'
+             instance_id           TEXT NOT NULL REFERENCES equipment_instance(instance_id),
+             event_sequence        BIGINT NOT NULL,                 -- monotonically increasing per instance; the LATEST row's event_
+             from_state            TEXT NULL,                       -- NULL for the first event (instance creation)
+             to_state              TEXT NOT NULL,
+             from_location_id      TEXT NULL REFERENCES stock_location(location_id),
+             to_location_id        TEXT NULL REFERENCES stock_location(location_id),
+             from_account_id       TEXT NULL REFERENCES account(account_id),
+             to_account_id         TEXT NULL REFERENCES account(account_id),
+             from_sentinel         TEXT NULL,
+             to_sentinel           TEXT NULL,
+             reason_code           TEXT NOT NULL,                   -- e.g., 'VENDOR_RECEIPT','TRANSFER_MAIN_TO_VAN','RESERVE_FOR_WO'
+             contractor_id         TEXT NULL,                       -- EM-02 contractor_id of the team handling this transition. Crit
+             origin_ref_kind       TEXT NULL,                       -- 'wo' | 'swap_request' | 'rma_batch' | 'manual'
+
+
+
+SOPHIX BSS Design Documents                                                                                                          Page 8
+              origin_ref_id         TEXT NULL,                        -- the wo_id, swap_request_id, rma_batch_id, or NULL for manual o
+              actor_user_id         TEXT NOT NULL,                    -- FOUNDATION_AUTH user who performed (or system identity for aut
+              notes                 TEXT NULL,                        -- free text per workshop ('Customer reported intermittent intern
+              occurred_at           TIMESTAMP NOT NULL DEFAULT NOW(),
+              CHECK (to_state IN (
+                'IN_VENDOR_WAREHOUSE','IN_MAIN_WAREHOUSE','IN_CONTRACTOR_STOCK','RESERVED_FOR_WO',
+                'IN_FIELD_ACTIVE','IN_FIELD_DEFECTIVE','RECOVERED_BY_CONTRACTOR','RETURNED_TO_MAIN_WAREHOUSE',
+                'RMA_SHIPPED_TO_VENDOR','REPAIRED_BY_VENDOR','DECOMMISSIONED'
+              )),
+              CHECK (origin_ref_kind IS NULL OR origin_ref_kind IN ('wo','swap_request','rma_batch','manual'))
+            );
+
+            CREATE UNIQUE INDEX uq_instance_event_seq
+              ON equipment_instance_lifecycle_event (instance_id, event_sequence);
+            CREATE INDEX idx_instance_event_by_instance
+              ON equipment_instance_lifecycle_event (instance_id, occurred_at DESC);
+            CREATE INDEX idx_instance_event_by_reason
+              ON equipment_instance_lifecycle_event (reason_code, occurred_at DESC);
+            CREATE INDEX idx_instance_event_by_contractor
+              ON equipment_instance_lifecycle_event (contractor_id, reason_code) WHERE contractor_id IS NOT NULL;
+            CREATE INDEX idx_instance_event_by_origin
+              ON equipment_instance_lifecycle_event (origin_ref_kind, origin_ref_id) WHERE origin_ref_id IS NOT NULL;
+
+ Sample data (showing the full lifecycle of inst_01HZ_ONT_WANJIKU from Row 1 above):
+
+  event_i   instanc   event_s   from_st   to_state   from_lo    to_locat   from_ac   to_acco   reason_   contract   origin_r   origin_r   actor_u   occurre
+  d         e_id      equenc    ate                  cation_i   ion_id     count_i   unt_id    code      or_id      ef_kind    ef_id      ser_id    d_at
+                      e                              d                     d
+
+  evt_01    inst_0    1         NULL      IN_VEN     NULL       NULL       NULL      NULL      VENDOR    NULL       manual     NULL       wik-pr    2026-0
+  HZ_E1     1HZ_ON                        DOR_WA                                               _PURCH                                     ocurem    1-10T0
+            T_WANJ                        REHOUS                                               ASE_OR                                     ent-01    9:00:0
+            IKU                           E                                                    DER_CR                                               0Z
+                                                                                               EATED
+
+  evt_01    inst_0    2         IN_VEN    IN_MAI     NULL       WIK-CE     NULL      NULL      VENDOR    NULL       manual     NULL       wik-wa    2026-0
+  HZ_E2     1HZ_ON              DOR_WA    N_WARE                NTRAL-                         _RECEI                                     rehous    1-20T1
+            T_WANJ              REHOUS    HOUSE                 NRB                            PT                                         e-01      1:30:0
+            IKU                 E                                                                                                                   0Z
+
+  evt_01    inst_0    3         IN_MAI    IN_CON     WIK-CE     WIK-VA     NULL      NULL      TRANSF    wik-in     manual     NULL       wik-di    2026-0
+  HZ_E3     1HZ_ON              N_WARE    TRACTO     NTRAL-     N-wik-                         ER_MAI    ternal                           spatch    2-20T0
+            T_WANJ              HOUSE     R_STOC     NRB        intern                         N_TO_V    -tech-                           er-02     8:00:0
+            IKU                           K                     al-tec                         AN        team                                       0Z
+                                                                h-team
+
+  evt_01    inst_0    4         IN_CON    RESERV     WIK-VA     WIK-VA     NULL      NULL      RESERV    wik-in     wo         wo_01H     wik-in    2026-0
+  HZ_E4     1HZ_ON              TRACTO    ED_FOR     N-wik-     N-wik-                         E_FOR_    ternal                Z_WANJ     ternal    2-22T1
+            T_WANJ              R_STOC    _WO        intern     intern                         WO        -tech-                IKU_IN     -tech-    7:00:0
+            IKU                 K                    al-tec     al-tec                                   team                  STALL      team-d    0Z
+                                                     h-team     h-team                                                                    ispatc
+                                                                                                                                          her
+
+  evt_01    inst_0    5         RESERV    IN_FIE     WIK-VA     NULL       NULL      acct_0    WO_INS    wik-in     wo         wo_01H     tech_w    2026-0
+  HZ_E5     1HZ_ON              ED_FOR    LD_ACT     N-wik-                          1HZ_WA    TALL_F    ternal                Z_WANJ     ik_int    2-23T1
+            T_WANJ              _WO       IVE        intern                          NJIKU     INALIZ    -tech-                IKU_IN     ernal_    5:45:0
+            IKU                                      al-tec                                    ED        team                  STALL      01        0+03:0
+                                                     h-team                                                                                         0
+
+
+ Row 1: ONT created in the instance registry the moment the procurement team enters the purchase order. State =
+ IN_VENDOR_WAREHOUSE; the device hasn't physically arrived yet, but the BSS knows about it. No location, no account, no
+ contractor.
+
+ Row 2: ONT physically arrives at WIK Central Warehouse Nairobi. State transitions to IN_MAIN_WAREHOUSE, location set to
+ WIK-CENTRAL-NRB. Reason: VENDOR_RECEIPT. Actor: warehouse staff who scanned it in.
+
+ Row 3: Two weeks later, the dispatcher transfers a batch of ONTs (including this one) from main warehouse to the WIK
+ Internal Tech Team's van. State = IN_CONTRACTOR_STOCK, location = WIK-VAN-wik-internal-tech-team.
+ contractor_id populated with the receiving team's ID — this is the critical field that downstream return-routing reads.
+
+ Row 4: Two days before Wanjiku's install appointment, the dispatcher reserves this specific ONT for her WO. State =
+ RESERVED_FOR_WO, location stays at the van but it's no longer available for other WOs. origin_ref_kind='wo',
+ origin_ref_id carries the WO ID.
+
+ Row 5: On install day, the technician finalizes the WO. State = IN_FIELD_ACTIVE, to_location_id becomes NULL
+ (device is in the field, not at a stock location), to_account_id carries Wanjiku's account. Contractor still recorded — the
+ WIK Internal Tech Team is the contractor who placed it at the customer's premises. This is the contractor that, if the device
+ ever fails and needs recovery, will own the routing back to their warehouse.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                         Page 9
+ The denormalized fields on equipment_instance (current_state, current_location_id, current_account_id)
+ are kept in sync with the latest event's to_* fields by the application layer in the same transaction that inserts the event. The
+ event_sequence provides optimistic concurrency control: a write that doesn't match current_event_sequence + 1
+ aborts.
+
+
+
+ 4. Rules
+  Rule                                                              Description
+
+  R-OSR-INST-1                                                      One instance per (operator_code, serial_number). The serial number is the
+                                                                    primary natural key; two operators may share serial collisions across different
+                                                                    vendors (handled by the operator_code partition in the unique index).
+
+  R-OSR-INST-2                                                      Only SKUs with is_serialized=TRUE in PLM-CFG-06 may have instances.
+                                                                    INSERT is rejected if the SKU is not serialized. Migration tooling for the OSR-01
+                                                                    transition handles legacy SKU+qty rollups; net-new instances always go
+                                                                    through the typed API.
+
+  R-OSR-INST-3                                                      An instance has exactly one current location: either current_location_id
+                                                                    (warehouse / van), current_account_id (customer premises), or
+                                                                    current_sentinel ('IN_TRANSIT_TO_VENDOR' /
+                                                                    'AT_VENDOR_FOR_REPAIR' / 'DECOMMISSIONED'). Enforced by CHECK
+                                                                    constraint.
+
+  R-OSR-INST-4                                                      Every state transition is one row in
+                                                                    equipment_instance_lifecycle_event. The instance row's
+                                                                    denormalized current_* fields MUST equal the latest event row's to_* fields after
+                                                                    the transaction. Application layer enforces this.
+
+  R-OSR-INST-5                                                      event_sequence is per-instance, monotonically increasing, no gaps. Each
+                                                                    new event MUST have event_sequence = previous_event_sequence
+                                                                    + 1. Concurrency conflict (two clients trying to write event sequence N+1
+                                                                    simultaneously) is detected by the UNIQUE constraint and one client receives a
+                                                                    409 — that client must re-read the instance and retry.
+
+  R-OSR-INST-6                                                      Legal state transitions are enforced at the application layer per a state machine
+                                                                    (§4.1). Illegal transitions (e.g., DECOMMISSIONED → IN_FIELD_ACTIVE) are
+                                                                    rejected by the API with HTTP 409 + a code=ILLEGAL_STATE_TRANSITION
+                                                                    body.
+
+  R-OSR-INST-7                                                      When an instance transitions to RECOVERED_BY_CONTRACTOR, the event's
+                                                                    contractor_id MUST be populated. This is the field downstream routing
+                                                                    logic (OSR-RMA-01) reads to decide "route this device back to which
+                                                                    warehouse?" — fixing the Wananchi 40+ stale-equipment pain. Application
+                                                                    layer enforces via NOT NULL guard on this specific reason_code.
+
+  R-OSR-INST-8                                                      Customer binding lifecycle: state IN_FIELD_ACTIVE or
+                                                                    IN_FIELD_DEFECTIVE requires current_account_id set and
+                                                                    current_location_id NULL. All other states require
+                                                                    current_account_id NULL. Enforced by CHECK constraint + application
+                                                                    layer.
+
+  R-OSR-INST-9                                                      DECOMMISSIONED is terminal. Once an instance enters this state, no further
+                                                                    lifecycle events are accepted (application layer rejects with HTTP 409 +
+                                                                    code=INSTANCE_DECOMMISSIONED). The instance row's active field is set
+                                                                    to false. Row is kept indefinitely for audit history.
+
+  R-OSR-INST-10                                                     Smart card number format: must match ^767[0-9]{7}$ (10 digits starting
+                                                                    767, per workshop 2026-04-30 — Verimatrix-issued smart cards for HFC TV).
+                                                                    Enforced by CHECK constraint.
+
+  R-OSR-INST-11                                                     MAC address format: AA:BB:CC:DD:EE:FF (colon-separated hex pairs,
+                                                                    case-insensitive). Application layer normalizes to uppercase on write. CM-MAC
+                                                                    and MTA-MAC values per workshop: MTA-MAC computed as CM-MAC + 2;
+                                                                    application layer may validate this for hybrid chassis SKUs but does NOT
+                                                                    auto-populate (the import file is the source of truth).
+
+  R-OSR-INST-12                                                     network_slot_metadata JSONB shape varies by tech: for GPON
+                                                                    {'frame':int,'slot':int,'port':int,'olt':text}; for HFC
+                                                                    {'cmts':text,'slot':int,'port':int,'authz_bound':bool}.
+                                                                    Application layer parses + validates per the SKU's equipment_kind
+                                                                    (PLM-CFG-06). Unknown shapes are accepted (stored as-is) for forward
+                                                                    compatibility.
+
+  R-OSR-INST-13                                                     Cross-operator scoping: operator_code on equipment_instance MUST
+                                                                    match the operator_code of the SKU referenced (PLM-CFG-06 SKUs are
+                                                                    operator-scoped). Cross-operator instance creation is rejected. Cross-operator
+                                                                    query requires sophix-superadmin role.
+
+  R-OSR-INST-14                                                     vendor_metadata JSONB is populated only when the instance is in
+                                                                    RMA_SHIPPED_TO_VENDOR or REPAIRED_BY_VENDOR state. Cleared (set to
+                                                                    NULL) on transition out of either state. Application layer enforces.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 10
+ 4.1 State machine
+ Legal transitions (rows = from, columns = to):
+
+  From \ To   IN_VEND    IN_MAIN_   IN_CONT    RESERVE    IN_FIELD   IN_FIELD   RECOVE     RETURNE    RMA_SHI    REPAIRE    DECOMM
+              OR_WH      WH         RACTOR_    D_FOR_W    _ACTIVE    _DEFECTI   RED        D_TO_MA    PPED       D
+                                    STOCK      O                     VE                    IN
+
+  ---         :-:        :-:        :-:        :-:        :-:        :-:        :-:        :-:        :-:        :-:        :-:
+
+  (initial    ✓          ✓
+  creation)
+
+  IN_VEND                ✓                                                                                                  ✓
+  OR_WAR
+  EHOUSE
+
+  IN_MAIN_                          ✓                                                                 ✓                     ✓
+  WAREHO
+  USE
+
+  IN_CONT                ✓                     ✓                                                                            ✓
+  RACTOR_
+  STOCK
+
+  RESERVE                           ✓                     ✓                                                                 ✓
+  D_FOR_W
+  O
+
+  IN_FIELD                                                           ✓          ✓
+  _ACTIVE
+
+  IN_FIELD                                                ✓                     ✓
+  _DEFECTI
+  VE
+
+  RECOVE                            ✓                                                      ✓                                ✓
+  RED_BY_
+  CONTRA
+  CTOR
+
+  RETURNE                ✓                                                                            ✓                     ✓
+  D_TO_MA
+  IN_WARE
+  HOUSE
+
+  RMA_SHI                                                                                                        ✓          ✓
+  PPED_TO
+  _VENDOR
+
+  REPAIRE                ✓                                                                                                  ✓
+  D_BY_VE
+  NDOR
+
+  DECOMMI     terminal   terminal   terminal   terminal   terminal   terminal   terminal   terminal   terminal   terminal   terminal
+  SSIONED
+
+
+ Notes on the state machine:
+
+   - IN_FIELD_DEFECTIVE → IN_FIELD_ACTIVE is allowed (a customer-reported issue resolved without truck roll — e.g.,
+     remote reboot fixed it; the swap workflow cancels).
+
+   - RECOVERED_BY_CONTRACTOR → IN_CONTRACTOR_STOCK is the swap-success path: contractor brings the recovered
+     unit back to van; it's now part of contractor stock awaiting return-to-main or RMA decision.
+
+   - RECOVERED_BY_CONTRACTOR → RETURNED_TO_MAIN_WAREHOUSE skips the contractor stock step when the
+     contractor batch-transfers recovered units directly to main warehouse.
+
+   - RETURNED_TO_MAIN_WAREHOUSE → IN_MAIN_WAREHOUSE moves the unit back into available stock after main
+     warehouse inspection (a recovered unit that tests OK can be re-dispatched).
+
+   - RETURNED_TO_MAIN_WAREHOUSE → RMA_SHIPPED_TO_VENDOR is the path for units failing main-warehouse
+     inspection.
+
+   - Most states can transition to DECOMMISSIONED (write-off allowed at almost any point — lost, stolen, declared beyond
+     repair).
+
+
+
+ 5. REST API
+ 5.1 Instance master CRUD
+
+SOPHIX BSS Design Documents                                                                                                       Page 11
+          POST /api/equipment-instances HTTP/1.1
+          Authorization: Bearer <service-jwt>
+          Content-Type: application/json
+
+          {
+              "operatorCode":      "WIK",
+              "skuId":             "WIK-ONT-HUAWEI-EG8145V5",
+              "serialNumber":      "48575443ABCD1234",
+              "manufacturer":      "Huawei",
+              "model":             "EG8145V5",
+              "initialState":      "IN_VENDOR_WAREHOUSE",
+              "initialReasonCode": "VENDOR_PURCHASE_ORDER_CREATED",
+              "actorUserId":       "wik-procurement-01",
+              "notes":             "PO# WIK-PO-2026-002, 200-unit batch"
+          }
+
+          → 201 Created
+          {
+            "instanceId":           "inst_01HZ_ONT_NEW_BATCH_47",
+            "operatorCode":         "WIK",
+            "skuId":                "WIK-ONT-HUAWEI-EG8145V5",
+            "serialNumber":         "48575443ABCD1234",
+            "currentState":         "IN_VENDOR_WAREHOUSE",
+            "currentLocationId":    null,
+            "currentAccountId":     null,
+            "currentSentinel":      null,
+            "active":               true,
+            "createdAt":            "2026-01-10T09:00:00Z"
+          }
+
+          GET /api/equipment-instances/{instance_id}
+          GET /api/equipment-instances?operator=WIK&serial=48575443ABCD1234
+          GET /api/equipment-instances?operator=WIK&smartCard=7676543210
+          GET /api/equipment-instances?operator=WIK&macAddress=00:11:22:33:44:55          # matches cm_mac, mta_mac, or cp_mac
+          GET /api/equipment-instances?operator=WIK&accountId=acct_01HZ_WANJIKU            # all devices at a customer
+          GET /api/equipment-instances?operator=WIK&locationId=WIK-VAN-contractor_ke_nairobi_a&state=IN_CONTRACTOR_STOCK
+          GET /api/equipment-instances?operator=WIK&skuId=WIK-ONT-HUAWEI-EG8145V5&state=IN_MAIN_WAREHOUSE
+          PATCH /api/equipment-instances/{instance_id}                                     # update metadata fields (model, manufact
+
+
+ 5.2 Lifecycle event recording
+ The primary write endpoint — every state/location change goes through here:
+          POST /api/equipment-instances/{instance_id}/lifecycle-events HTTP/1.1
+          Authorization: Bearer <service-jwt>
+          Content-Type: application/json
+
+          {
+              "toState":          "IN_FIELD_ACTIVE",
+              "toAccountId":      "acct_01HZ_WANJIKU",
+              "reasonCode":       "WO_INSTALL_FINALIZED",
+              "contractorId":     "wik-internal-tech-team",
+              "originRefKind":    "wo",
+              "originRefId":      "wo_01HZ_WANJIKU_INSTALL",
+              "actorUserId":      "tech_wik_internal_01",
+              "notes":            "ONT installed at customer premises; OLT auto-discovered serial; final WO finalization at 15:45",
+              "expectedEventSequence": 4
+          }
+
+          → 201 Created
+          {
+            "eventId":                 "evt_01HZ_WANJIKU_INSTALL",
+            "instanceId":              "inst_01HZ_ONT_WANJIKU",
+            "eventSequence":           5,
+            "fromState":               "RESERVED_FOR_WO",
+            "toState":                 "IN_FIELD_ACTIVE",
+            "fromLocationId":          "WIK-VAN-wik-internal-tech-team",
+            "toLocationId":            null,
+            "fromAccountId":           null,
+            "toAccountId":             "acct_01HZ_WANJIKU",
+            "reasonCode":              "WO_INSTALL_FINALIZED",
+            "contractorId":            "wik-internal-tech-team",
+            "originRefKind":           "wo",
+            "originRefId":             "wo_01HZ_WANJIKU_INSTALL",
+            "actorUserId":             "tech_wik_internal_01",
+            "occurredAt":              "2026-02-23T15:45:00+03:00"
+          }
+
+ Concurrency: if expectedEventSequence doesn't equal the instance's current event_sequence, the API returns 409:
+          → 409 Conflict
+          {
+
+
+
+SOPHIX BSS Design Documents                                                                                          Page 12
+               "code":         "STALE_EVENT_SEQUENCE",
+               "message":      "Expected event sequence 4 but instance is at 5. Re-fetch and retry.",
+               "currentEventSequence": 5
+           }
+
+ Illegal state transition:
+           → 409 Conflict
+           {
+             "code":         "ILLEGAL_STATE_TRANSITION",
+             "message":      "Cannot transition instance from DECOMMISSIONED to IN_FIELD_ACTIVE (terminal state).",
+             "currentState": "DECOMMISSIONED"
+           }
+
+
+ 5.3 Lifecycle event read
+           GET /api/equipment-instances/{instance_id}/lifecycle-events                       # full history, newest first
+           GET /api/equipment-instances/{instance_id}/lifecycle-events?reasonCode=CONTRACTOR_RECOVERED_FROM_FIELD
+           GET /api/equipment-instance-lifecycle-events?contractorId=wik-internal-tech-team&reasonCode=CONTRACTOR_RECOVERED_FROM_FIEL
+           GET /api/equipment-instance-lifecycle-events?originRefKind=wo&originRefId=wo_01HZ_WANJIKU_INSTALL    # all events tied to
+
+
+ 5.4 Bulk import (workshop alignment)
+ Mirrors the Wananchi Equipment Batch Actions Utility pattern (workshop 2026-04-30: upload book file → assign status →
+ process):
+           POST /api/equipment-instances/bulk-import HTTP/1.1
+           Authorization: Bearer <bo-user-jwt>
+           Content-Type: application/json
+
+           {
+               "operatorCode":        "WIK",
+               "skuId":               "WIK-ONT-HUAWEI-EG8145V5",
+               "initialState":        "IN_MAIN_WAREHOUSE",
+               "initialLocationId": "WIK-CENTRAL-NRB",
+               "initialReasonCode": "VENDOR_RECEIPT",
+               "actorUserId":         "wik-warehouse-01",
+               "instances": [
+                  { "serialNumber": "48575443ABCD1234", "manufacturer": "Huawei", "model": "EG8145V5" },
+                  { "serialNumber": "48575443ABCD1235", "manufacturer": "Huawei", "model": "EG8145V5" },
+                  { "serialNumber": "48575443ABCD1236", "manufacturer": "Huawei", "model": "EG8145V5" }
+               ],
+               "batchRef":            "VENDOR-PO-2026-002-batch-A"
+           }
+
+           → 200 OK
+           {
+             "imported":    3,
+             "rejected":    0,
+             "rowResults": [
+                { "row": 1, "serialNumber": "48575443ABCD1234", "instanceId": "inst_01HZ_BATCH_001", "status": "created" },
+                { "row": 2, "serialNumber": "48575443ABCD1235", "instanceId": "inst_01HZ_BATCH_002", "status": "created" },
+                { "row": 3, "serialNumber": "48575443ABCD1236", "instanceId": "inst_01HZ_BATCH_003", "status": "created" }
+             ],
+             "batchRef":    "VENDOR-PO-2026-002-batch-A"
+           }
+
+ Partial-reject mode (default): rows with duplicate serial are reported but don't block the batch. Hard mode
+ (mode=all-or-nothing query param): any duplicate aborts the batch.
+
+ For HFC modems with hybrid chassis (CM-MAC + MTA-MAC + optional CPMAC), the bulk import payload row carries those
+ fields:
+           {
+               "serialNumber": "HFC-CHASSIS-707C4-A123",
+               "manufacturer": "Cisco",
+               "model":        "DPC3848",
+               "cmMac":        "00:11:22:33:44:55",
+               "mtaMac":       "00:11:22:33:44:57",
+               "cpMac":        null
+           }
+
+ For STBs with smart cards:
+           {
+               "serialNumber":      "STB-7676543210",
+               "manufacturer":      "Pace",
+               "model":             "TDC575D",
+               "smartCardNumber":   "7676543210"
+           }
+
+
+
+
+SOPHIX BSS Design Documents                                                                                           Page 13
+ 6. Kafka events
+ Topics: sophix.osr.instance.*
+
+  Event                            Topic                           Fires on                                   Consumers
+
+  EquipmentInstanceCreated         sophix.osr.instance.created     New instance row inserted                  OSR-01 (sync stock_balance), EM-04
+                                                                                                              Reporting (pending)
+
+  EquipmentInstanceLifecycleTr     sophix.osr.instance.lifecycl    Any state transition (including location   OSR-01 (sync stock_movement for
+  ansition                         e-transition                    change without state change)               serialized SKUs), OSR-RMA-01
+                                                                                                              (drive swap workflows), WO-01 (mark
+                                                                                                              wo_equipment finalized), BIL-01
+                                                                                                              Charging Engine (filter on
+                                                                                                              reason=WO_INSTALL_FINALIZED to
+                                                                                                              trigger deposit charge; filter on reason
+                                                                                                              =CONTRACTOR_RECOVERED_FR
+                                                                                                              OM_FIELD or
+                                                                                                              RETURN_VAN_TO_MAIN to trigger
+                                                                                                              deposit refund)
+
+  EquipmentInstanceBoundToCust     sophix.osr.instance.bound-to    Transition to IN_FIELD_ACTIVE with         NOT-01 (customer notification),
+  omer                             -customer                       current_account_id populated               ICN-01 (internal staff notification:
+                                                                                                              "your install completed"), BIL-01
+                                                                                                              (deposit recognition), reporting
+
+  EquipmentInstanceUnboundFrom     sophix.osr.instance.unbound-    Transition out of IN_FIELD_ACTIVE /        NOT-01, ICN-01, BIL-01 (deposit
+  Customer                         from-customer                   IN_FIELD_DEFECTIVE to                      refund eligibility)
+                                                                   non-customer state
+
+  EquipmentInstanceRecoveredBy     sophix.osr.instance.recovere    Transition to                              OSR-RMA-01 (drive routing-back
+  Contractor                       d-by-contractor                 RECOVERED_BY_CONTRACTOR                    logic), EM-04 Reporting
+
+  EquipmentInstanceDecommissio     sophix.osr.instance.decommis    Transition to DECOMMISSIONED               OSR-01 (zero out the SKU's
+  ned                              sioned                                                                     contribution to balance), BIL-01
+                                                                                                              (write-off accounting), EM-04
+                                                                                                              Reporting
+
+
+
+ 6.1 Sample event — EquipmentInstanceLifecycleTransition (WO install)
+          {
+              "eventType":        "EquipmentInstanceLifecycleTransition",
+              "aggregateId":      "inst_01HZ_ONT_WANJIKU",
+              "timestamp":        "2026-02-23T15:45:00.000Z",
+              "payload": {
+                "operatorCode":      "WIK",
+                "instanceId":        "inst_01HZ_ONT_WANJIKU",
+                "skuId":             "WIK-ONT-HUAWEI-EG8145V5",
+                "serialNumber":      "48575443ABCD1234",
+                "eventSequence":     5,
+                "lifecycleEventId": "evt_01HZ_WANJIKU_INSTALL",
+                "fromState":         "RESERVED_FOR_WO",
+                "toState":           "IN_FIELD_ACTIVE",
+                "fromLocationId":    "WIK-VAN-wik-internal-tech-team",
+                "toLocationId":      null,
+                "fromAccountId":     null,
+                "toAccountId":       "acct_01HZ_WANJIKU",
+                "fromSentinel":      null,
+                "toSentinel":        null,
+                "reasonCode":        "WO_INSTALL_FINALIZED",
+                "contractorId":      "wik-internal-tech-team",
+                "originRefKind":     "wo",
+                "originRefId":       "wo_01HZ_WANJIKU_INSTALL",
+                "actorUserId":       "tech_wik_internal_01",
+                "occurredAt":        "2026-02-23T15:45:00+03:00"
+              }
+          }
+
+
+ 6.2 Sample event — EquipmentInstanceRecoveredByContractor (THE Wananchi
+ routing fix)
+          {
+              "eventType":         "EquipmentInstanceRecoveredByContractor",
+              "aggregateId":       "inst_01HZ_ONT_NJERI",
+              "timestamp":         "2026-03-12T11:20:00.000Z",
+              "payload": {
+                "operatorCode":       "WIK",
+                "instanceId":         "inst_01HZ_ONT_NJERI",
+                "skuId":              "WIK-ONT-HUAWEI-EG8145V5",
+                "serialNumber":       "48575443DEADBEEF",
+                "eventSequence":      6,
+
+
+SOPHIX BSS Design Documents                                                                                                                   Page 14
+                   "lifecycleEventId":   "evt_01HZ_NJERI_RECOVERED",
+                   "fromState":          "IN_FIELD_DEFECTIVE",
+                   "toState":            "RECOVERED_BY_CONTRACTOR",
+                   "fromLocationId":     null,
+                   "toLocationId":       "WIK-VAN-contractor_ke_nairobi_a",
+                   "fromAccountId":      "acct_01HZ_NJERI",
+                   "toAccountId":        null,
+                   "reasonCode":         "CONTRACTOR_RECOVERED_FROM_FIELD",
+                   "contractorId":       "contractor_ke_nairobi_a",
+                   "originRefKind":      "swap_request",
+                   "originRefId":        "swap_01HZ_NJERI_MODEM_FAULT",
+                   "actorUserId":        "tech_franchise_a_03",
+                   "occurredAt":         "2026-03-12T11:20:00+03:00",
+                   "notes":              "Customer reported intermittent connection; tech replaced ONT on site; defective unit returned to
+               }
+           }
+
+ The contractorId field is what OSR-RMA-01 reads to know "route the defective unit back through Franchise A's
+ warehouse, not main." This is the explicit fix for the documented 40+ stale-equipment routing pain.
+
+
+
+ 7. Cross-DD coordination
+ 7.1 Upstream callers
+  Caller                                        Endpoint                                   When
+
+  Procurement (pending DD)                      POST                                       New vendor batch received at main warehouse
+                                                /api/equipment-instances/bulk-import
+
+  OSR-01 stock-movement                         POST /api/equipment-instances/{id}/lif     For serialized SKUs, every stock movement triggers
+                                                ecycle-events                              an instance lifecycle event in the same transaction
+
+  WO-01 finalization                            POST /api/equipment-instances/{id}/lif     At WO finalization, the technician's reported serial(s)
+                                                ecycle-events                              are bound to the customer
+
+  OSR-RMA-01 (pending)                          POST /api/equipment-instances/{id}/lif     Throughout swap workflows: customer-reported
+                                                ecycle-events                              defect, contractor recovery, return-to-warehouse,
+                                                                                           RMA-ship, etc.
+
+  BO admin UI                                   GET                                        Operator support: "where is serial XYZ?" lookup
+                                                /api/equipment-instances?serial=...
+
+  Network reconciliation (future DD)            GET /api/equipment-instances?state=IN_     Daily drift detection vs OLT auto-discovery
+                                                FIELD_ACTIVE
+
+
+
+ 7.2 Downstream consumers (Kafka)
+  Consumer                                      Events subscribed                          Action
+
+  OSR-01 Stock Chain Engine                     EquipmentInstanceLifecycleTransition       Sync stock_balance + emit corresponding
+                                                (for serialized SKUs)                      stock_movement row
+
+  OSR-RMA-01 (pending)                          EquipmentInstanceLifecycleTransition,      Drive swap workflows; route recovered units to
+                                                EquipmentInstanceRecoveredByContractor     contractor warehouse
+
+  WO-01                                         EquipmentInstanceBoundToCustomer,          Update wo_equipment status; close WO when
+                                                EquipmentInstanceUnboundFromCustomer       binding event arrives
+
+  BIL-01 Charging Engine                        EquipmentInstanceBoundToCustomer (filter   Apply equipment deposit charge at install; trigger
+                                                reason=WO_INSTALL_FINALIZED),              refund adjustment at recovery
+                                                EquipmentInstanceUnboundFromCustomer
+                                                (filter reason=CONTRACTOR_RECOVERED_FRO
+                                                M_FIELD)
+
+  NOT-01                                        EquipmentInstanceBoundToCustomer           Customer-facing notification: "your install is
+                                                                                           complete; device serial XYZ activated"
+
+  ICN-01                                        EquipmentInstanceRecoveredByContractor     Notify contractor's main handler: "device XYZ
+                                                                                           recovered, awaiting van check-in"
+
+  EM-04 Reporting (pending)                     All sophix.osr.instance.*                  Equipment lifecycle metrics: install rates, defect
+                                                                                           rates, mean-time-to-recover, per-contractor
+                                                                                           recovery volumes
+
+
+
+ 7.3 Sibling modules
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 15
+  Module                                      Direction                                   Contract
+
+  OSR-01 Stock Chain Engine                   Bidirectional                               OSR-01 owns SKU+qty rollups;
+                                                                                          OSR-INSTANCE-01 owns per-serial detail. Every
+                                                                                          serialized SKU stock_movement (OSR-01)
+                                                                                          corresponds to one or more lifecycle events
+                                                                                          (OSR-INSTANCE-01). Transactional outbox
+                                                                                          ensures consistency.
+
+  PLM-CFG-06 Equipment Type Catalog           OSR-INSTANCE-01 → PLM-CFG-06 (read)         equipment_instance.sku_id is FK to
+                                                                                          equipment_sku.sku_id. PLM-CFG-06 is
+                                                                                          upstream; no reverse FK.
+
+  ILM-CFG-01 Customer Service Catalog         OSR-INSTANCE-01 → ILM-CFG-01 (read)         equipment_instance.current_account_id
+                                                                                          is FK to account.account_id. Binding is at
+                                                                                          account level, not customer level.
+
+  EM-02 Contractor & Staff Registry           OSR-INSTANCE-01 → EM-02 (read)              equipment_instance_lifecycle_event.con
+                                                                                          tractor_id is FK to
+                                                                                          contractor.contractor_id. Critical for
+                                                                                          return-routing logic.
+
+  WO-01 Work Order Module                     OSR-INSTANCE-01 → WO-01 (read)              equipment_instance_lifecycle_event.ori
+                                                                                          gin_ref_id (when origin_ref_kind='wo') is
+                                                                                          FK to wo.wo_id.
+
+
+
+ 7.4 Dependencies (build order)
+ OSR-INSTANCE-01 v1.0 deploys after:
+
+   1. PLM-CFG-06 (equipment_sku table must exist for FK reference)
+
+   2. OSR-01 (stock_location table must exist for FK reference)
+
+   3. ILM-CFG-01 (account table must exist for FK reference)
+
+   4. EM-02 (contractor table must exist for contractor_id reference on lifecycle events; deployable in parallel since the FK is
+     loosely typed)
+
+   5. WO-01 (wo table must exist for origin_ref_id when origin_ref_kind='wo'; deployable in parallel)
+
+ OSR-RMA-01 deploys after OSR-INSTANCE-01.
+
+
+
+ 8. Workshop sources
+ Workshop sources for v1.0 (KE Zuku 2026-04-27+; no fabricated TZ baselines — TBD pending cartography):
+
+   - Workshop 2026-04-29 (Work Order & Field Operations deep dive) — Equipment Lookup screen behavior (search by
+     last 5 hex digits returns all sub-interfaces of a chassis, e.g. 707C4 → CMD/MTP/MTA); Hybrid Chassis dialog (HYB
+     chassis carries CM-MAC + MTA-MAC; CM-MAC = chars 4-15 of chassis Equipment ID, MTA-MAC = CM-MAC + 2);
+     Equipment Batch Actions Utility on named persistent lists.
+
+   - Workshop 2026-04-30 (Provisioning deep dive) — Smart card 10-digit format starting 767 (Verimatrix-issued for HFC
+     TV); HFC modem authorization bound to slot/port (UC-PR4, KE-specific — moving the modem to a different slot breaks
+     authorization); static-IP HFC requires double config (Broadhub + Clearcable NOMS); static-IP GPON manual via DHCP
+     console; voice device (MTA/IAD) can carry multiple phone numbers each bound to an equipment port.
+
+   - Workshop 2026-04-30 (Customer Management deep dive — Equipment-routing gap) — Today: unassigned
+     equipment goes to main warehouse on WO finalization, not to the contractor team that recovered it. ~40+ stale items
+     reported. Wananchi target: SOPHIX must trace the contractor team that recovered the equipment and route it back to that
+     team's warehouse. THIS DD'S contractor_id on equipment_instance_lifecycle_event is the mechanism that
+     enables that fix in OSR-RMA-01.
+
+   - Workshop 2026-04-30 (Provisioning deep dive — Service Termination) — Equipment dismantle is a separate retrieval
+     WO if customer doesn't bring CPE back. For both GPON and HFC, an agent contractor is sent on site. Refund processed
+     via Invoice Adjustments. This drives the lifecycle states IN_FIELD_DEFECTIVE and RECOVERED_BY_CONTRACTOR and
+     the contractor_id tracking.
+
+   - wo_lifecycle.md Job Type table — EQP Equipment Pickup, EQU Equipment Upgrade, EQR Equipment Recovery
+     (failed: "client paid for CPE & refuses return"). These map to OSR-RMA-01 satellite workflows; this DD's instance state
+     machine accommodates them via DECOMMISSIONED reachability and RECOVERED_BY_CONTRACTOR semantics.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 16
+   - BP-08 Equipment Swap (RMA) GAP analysis — Anchor Wananchi: technology-specific swap (HFC modem = field
+     pickup, GPON ONT = remote unassign + new bind), device authorization slot/port mandatory (UC-PR4), serial
+     unbind/rebind (UC-PR9), stock movement default main warehouse — link contractor stock broken (documented gap).
+     G-08-1 (workflow) and G-08-2 (contractor stock traceability) are addressed by this DD + OSR-RMA-01 (pending).
+
+ TZ codebase coverage today: to be filled in after codebase review (no equivalent of per-instance lifecycle ledger has been
+ confirmed in the TZ codebase yet; SIP-05 has SKU+qty CRUD + bulk import without per-serial lifecycle tracking, but full
+ assessment pending cartography).
+
+ Gap & V3 design rationale: OSR-INSTANCE-01 introduces the per-instance ledger that makes the documented Wananchi
+ contractor-stock-routing gap fixable. The schema design preserves the bulk-import pattern Wananchi already uses
+ (Equipment Batch Actions Utility) while adding the per-event audit + contractor_id tracking that today's BSS lacks.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 17
+

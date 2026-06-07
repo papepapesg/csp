@@ -1,0 +1,518 @@
+ DD_FA-01 - Equipment Field Audit - Developer
+ Implementation Guide
+ Version: v1.0 Bundle: 10_other Companion DD: DD_FA-01-Equipment_Field_Audit-v1.0
+
+
+
+ 1. Goal
+ Implement the standalone equipment field audit process.
+
+ The implementation must let operations create audit tasks, freeze expected equipment from OSR-INSTANCE, let field users
+ capture observations from the mobile app, compare expected vs observed state, and route discrepancies to the correct
+ module.
+
+ Do not use FA-01 as a replacement for every normal work order. Installation, shifting, support, and swap flows keep their own
+ WO evidence. FA-01 is for planned audits and exception-driven verification.
+
+
+
+ 2. Runtime Flow
+           sequenceDiagram
+             participant BO as Backoffice Audit Console
+             participant FA as FA-01
+             participant INST as OSR-INSTANCE
+             participant WO as WO-01
+             participant MOB as Contractor Mobile App
+             participant RULES as Drools
+             participant TCK as TCK-01
+             participant RMA as OSR-RMA
+             participant APR as EM-CFG-04
+
+             BO->>FA: POST /api/equipment-field-audits/tasks
+             FA->>INST: GET expected equipment by customer/subscription/homepass
+             FA->>FA: create expected item snapshot
+             FA->>WO: optional POST /api/work-orders kind FIELD_AUDIT
+             MOB->>FA: GET assigned tasks
+             MOB->>FA: POST observations with serial/photo/GPS
+             MOB->>FA: POST submit
+             FA->>FA: compare expected vs observed
+             FA->>RULES: severity/routing decision
+             FA->>TCK: create ticket when service/customer issue
+             FA->>RMA: create recovery/RMA when equipment action needed
+             FA->>APR: approval for write-off/state correction
+
+
+
+
+ 3. Step 1 - Database Migrations
+ Create:
+
+   - equipment_field_audit_campaign
+
+   - equipment_field_audit_task
+
+   - equipment_field_audit_expected_item
+
+   - equipment_field_audit_observation
+
+   - equipment_field_audit_discrepancy
+
+ Implementation details:
+
+   - Add a unique index for mobile offline submissions: (operator_code, offline_client_ref) on observations.
+
+   - Store expected state snapshots as JSON so the audit remains explainable even if OSR-INSTANCE changes later.
+
+   - Store only file ids in observations, not binary photo content.
+
+   - Add indexes for assigned user task lists and discrepancy work queues.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 1
+ 4. Step 2 - Create Campaign
+ Backoffice calls:
+           POST /api/equipment-field-audits/campaigns
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "campaignType": "CUSTOMER_EQUIPMENT_VERIFY",
+               "areaCode": "NRB-WEST",
+               "technologyFamily": "GPON",
+               "scheduledStartAt": "2026-08-10T08:00:00Z",
+               "scheduledEndAt": "2026-08-20T17:00:00Z"
+           }
+
+ FA-01:
+
+   1. Validates permissions through EM-CFG-03.
+
+   2. Creates equipment_field_audit_campaign in SCHEDULED.
+
+   3. Emits EquipmentFieldAuditCampaignCreated.
+
+ Campaigns are optional. A support user may create one direct audit task without a campaign.
+
+
+
+ 5. Step 3 - Create Audit Task And Freeze Expected Items
+ Backoffice or another module calls:
+           POST /api/equipment-field-audits/tasks
+           Idempotency-Key: efat-CUS-100045-202608
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "campaignId": "efac-001",
+               "taskType": "CUSTOMER_PREMISES",
+               "customerId": "CUS-100045",
+               "accountId": "ACC-900045",
+               "subscriptionId": "SUB-700045",
+               "homepassId": "HP-GPON-0440",
+               "assignedToUserId": "usr-tech-010",
+               "dueAt": "2026-08-12T17:00:00Z",
+               "createWorkOrder": true
+           }
+
+ FA-01:
+
+   1. Validates request and idempotency key.
+
+   2. Creates equipment_field_audit_task in CREATED.
+
+   3. Calls OSR-INSTANCE to load expected equipment:
+           GET /api/equipment-instances?operatorCode=WIK&customerId=CUS-100045&subscriptionId=SUB-700045&state=INSTALLED
+
+   4. For each returned equipment instance, inserts equipment_field_audit_expected_item.
+
+   5. If no expected item exists, task can still be created for investigation, but mark it with a warning.
+
+   6. Emits EquipmentFieldAuditTaskCreated.
+
+ Expected item sample from OSR-INSTANCE:
+           {
+               "equipmentInstanceId": "inst-gpon-001",
+               "skuId": "WIK-ONT-HUAWEI-EG8145V5",
+               "serialNumber": "ONT123456",
+               "state": "INSTALLED",
+               "binding": {
+                 "customerId": "CUS-100045",
+                 "subscriptionId": "SUB-700045",
+                 "homepassId": "HP-GPON-0440"
+               }
+           }
+
+
+
+
+SOPHIX BSS Design Documents                                                                                          Page 2
+ 6. Step 4 - Create Work Order When Dispatch Is Needed
+ If createWorkOrder=true, call WO-01:
+           POST /api/work-orders
+           Idempotency-Key: efat-001-wo
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "kind": "FIELD_AUDIT",
+               "originatingContextType": "EQUIPMENT_FIELD_AUDIT_TASK",
+               "originatingContextId": "efat-001",
+               "customerId": "CUS-100045",
+               "accountId": "ACC-900045",
+               "subscriptionId": "SUB-700045",
+               "homepassId": "HP-GPON-0440",
+               "metadata": {
+                 "requiredEvidence": ["serialScan", "photos", "gps", "condition"],
+                 "expectedSerials": ["ONT123456"]
+               }
+           }
+
+ FA-01 stores wo_id and moves the task to ASSIGNED.
+
+ If the operator does not want a WO for simple audits, assign the task directly to a user/team and expose it through the mobile
+ task API.
+
+
+
+ 7. Step 5 - Mobile App Downloads Task
+ Mobile app calls:
+           GET /api/equipment-field-audits/tasks?assignedToUserId=usr-tech-010&status=ASSIGNED
+
+ Response:
+           {
+               "items": [
+                 {
+                   "auditTaskId": "efat-001",
+                   "customerId": "CUS-100045",
+                   "subscriptionId": "SUB-700045",
+                   "homepassId": "HP-GPON-0440",
+                   "dueAt": "2026-08-12T17:00:00Z",
+                   "expectedItems": [
+                     {
+                       "expectedItemId": "efae-001",
+                       "skuId": "WIK-ONT-HUAWEI-EG8145V5",
+                       "serialNumber": "ONT123456",
+                       "expectedCondition": "INSTALLED_WORKING"
+                     }
+                   ]
+                 }
+               ]
+           }
+
+ Mobile app must support:
+
+   - serial/QR scan;
+
+   - manual serial entry with reason;
+
+   - photo upload through foundation file storage;
+
+   - GPS capture;
+
+   - offline client reference for retry-safe submission.
+
+
+
+ 8. Step 6 - Submit Observations
+ Mobile app uploads files first and receives file ids. Then it calls:
+           POST /api/equipment-field-audits/tasks/efat-001/observations
+           Idempotency-Key: mob-obs-7788
+           Content-Type: application/json
+
+           {
+
+
+SOPHIX BSS Design Documents                                                                                                Page 3
+              "expectedItemId": "efae-001",
+              "observedSerialNumber": "ONT123456",
+              "observedSkuId": "WIK-ONT-HUAWEI-EG8145V5",
+              "presenceStatus": "PRESENT",
+              "conditionStatus": "WORKING",
+              "photoFileIds": ["file-001", "file-002"],
+              "gpsLatitude": -1.2921,
+              "gpsLongitude": 36.8219,
+              "notes": "ONT installed beside router.",
+              "capturedAt": "2026-08-12T10:15:00Z",
+              "offlineClientRef": "mob-obs-7788"
+          }
+
+ FA-01:
+
+   1. Checks task assignment and status.
+
+   2. Checks idempotency by offline client ref.
+
+   3. Validates file ids exist and are attached to the current operator.
+
+   4. Stores equipment_field_audit_observation.
+
+   5. Does not compare or route until task submit, unless the operator wants immediate discrepancy preview.
+
+
+
+ 9. Step 7 - Submit Task And Compare
+ Mobile app calls:
+          POST /api/equipment-field-audits/tasks/efat-001/submit
+          Content-Type: application/json
+
+          {
+              "submittedByUserId": "usr-tech-010",
+              "submittedAt": "2026-08-12T10:30:00Z"
+          }
+
+ FA-01 comparison logic:
+
+   1. Load expected items.
+
+   2. Load observations.
+
+   3. For each expected item:
+
+   - no matching observation means MISSING;
+
+   - different serial means WRONG_SERIAL;
+
+   - conditionStatus=DAMAGED means DAMAGED;
+
+   - GPS too far from expected location may mean WRONG_LOCATION.
+
+   4. For each observation without expected match, create FOUND_EXTRA.
+
+   5. If no discrepancy, set task CLOSED and emit EquipmentFieldAuditTaskClosed.
+
+   6. If discrepancies exist, set task DISCREPANCY_OPEN and emit EquipmentFieldAuditDiscrepancyOpened.
+
+ Do not change OSR-INSTANCE state during comparison.
+
+
+
+ 10. Step 8 - Route Discrepancies
+ Run Drools for every discrepancy:
+          public record EquipmentFieldAuditFact(
+               String operatorCode,
+               String discrepancyType,
+               String expectedLocationType,
+               String observedCondition,
+               boolean equipmentRecoverable,
+               boolean customerServiceImpacted,
+               boolean serialBelongsToAnotherCustomer,
+               String technologyFamily
+          ) {}
+
+ Severity rules:
+
+
+SOPHIX BSS Design Documents                                                                                   Page 4
+          package rules.field_audit.equipment.severity
+
+          rule "Wrong serial assigned to another customer is critical"
+          when
+            $f : EquipmentFieldAuditFact(discrepancyType == "WRONG_SERIAL",
+                                         serialBelongsToAnotherCustomer == true)
+            $d : EquipmentFieldAuditDecision()
+          then
+            $d.setSeverity("CRITICAL");
+          end
+
+          rule "Missing customer premises equipment is high severity"
+          when
+            $f : EquipmentFieldAuditFact(discrepancyType == "MISSING",
+                                         expectedLocationType == "CUSTOMER_PREMISES")
+            $d : EquipmentFieldAuditDecision()
+          then
+            $d.setSeverity("HIGH");
+          end
+
+ Routing rules:
+          package rules.field_audit.equipment.routing
+
+          rule "Damaged equipment with customer impact creates ticket"
+          when
+            $f : EquipmentFieldAuditFact(discrepancyType == "DAMAGED",
+                                         customerServiceImpacted == true)
+            $d : EquipmentFieldAuditDecision()
+          then
+            $d.route("CREATE_TICKET");
+          end
+
+          rule "Recoverable missing equipment creates RMA recovery"
+          when
+            $f : EquipmentFieldAuditFact(discrepancyType == "MISSING",
+                                         equipmentRecoverable == true)
+            $d : EquipmentFieldAuditDecision()
+          then
+            $d.route("CREATE_RMA_RECOVERY");
+          end
+
+          rule "Unrecoverable equipment requests write off approval"
+          when
+            $f : EquipmentFieldAuditFact(discrepancyType == "MISSING",
+                                         equipmentRecoverable == false)
+            $d : EquipmentFieldAuditDecision()
+          then
+            $d.route("REQUEST_WRITE_OFF");
+            $d.requireApproval("EQUIPMENT_FIELD_AUDIT_WRITE_OFF");
+          end
+
+
+
+
+ 11. Step 9 - Execute Route Actions
+ 11.1 Create Ticket
+ Use when the discrepancy is customer/service-facing:
+          POST /api/tickets
+          Idempotency-Key: efad-001-ticket
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "ticketType": "EQUIPMENT_FIELD_AUDIT_ISSUE",
+              "customerId": "CUS-100045",
+              "subscriptionId": "SUB-700045",
+              "originRefType": "EQUIPMENT_FIELD_AUDIT_DISCREPANCY",
+              "originRefId": "efad-001",
+              "summary": "Damaged ONT found during field audit"
+          }
+
+
+ 11.2 Create Recovery Or RMA
+ Use when equipment must be recovered, swapped, or investigated physically:
+          POST /api/osr-rma/requests
+          Idempotency-Key: efad-001-rma
+          Content-Type: application/json
+
+
+
+SOPHIX BSS Design Documents                                                             Page 5
+          {
+              "operatorCode": "WIK",
+              "requestType": "EQUIPMENT_RECOVERY",
+              "originRefType": "EQUIPMENT_FIELD_AUDIT_DISCREPANCY",
+              "originRefId": "efad-001",
+              "equipmentInstanceId": "inst-gpon-001",
+              "customerId": "CUS-100045",
+              "reasonCode": "FIELD_AUDIT_MISSING"
+          }
+
+
+ 11.3 Request OSR-INSTANCE Correction
+ Use only when evidence proves OSR-INSTANCE state is wrong:
+          POST /api/equipment-instances/inst-gpon-001/lifecycle-corrections
+          Idempotency-Key: efad-001-correction
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "originRefType": "EQUIPMENT_FIELD_AUDIT_DISCREPANCY",
+              "originRefId": "efad-001",
+              "correctionType": "LOCATION_CORRECTION",
+              "targetLocationType": "CUSTOMER_PREMISES",
+              "targetLocationRef": "CUS-100045",
+              "evidenceFileIds": ["file-001", "file-002"]
+          }
+
+ If rules or policy require approval, call EM-CFG-04 before this correction.
+
+ 11.4 Request Write-Off Approval
+          POST /api/approval-requests
+          Idempotency-Key: efad-001-writeoff-approval
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "approvalCode": "EQUIPMENT_FIELD_AUDIT_WRITE_OFF",
+              "originRefType": "EQUIPMENT_FIELD_AUDIT_DISCREPANCY",
+              "originRefId": "efad-001",
+              "requestedByUserId": "usr-audit-manager",
+              "payload": {
+                "equipmentInstanceId": "inst-gpon-001",
+                "serialNumber": "ONT123456",
+                "reason": "Missing after field audit and marked unrecoverable"
+              }
+          }
+
+ After approval, FA-01 routes the actual write-off to OSR-05/OSR-INSTANCE according to the existing inventory governance.
+ FA-01 does not write off equipment directly.
+
+
+
+ 12. Step 10 - Events
+ Emit through outbox:
+
+   - EquipmentFieldAuditCampaignCreated
+
+   - EquipmentFieldAuditTaskCreated
+
+   - EquipmentFieldAuditTaskAssigned
+
+   - EquipmentFieldAuditSubmitted
+
+   - EquipmentFieldAuditDiscrepancyOpened
+
+   - EquipmentFieldAuditDiscrepancyRouted
+
+   - EquipmentFieldAuditTaskClosed
+
+ Each event must include:
+
+   - operatorCode
+
+   - auditTaskId or campaignId
+
+   - customerId and subscriptionId when available
+
+
+
+SOPHIX BSS Design Documents                                                                                          Page 6
+   - correlationId
+
+   - causationId
+
+
+
+ 13. Step 11 - Tests
+ Build tests in this order:
+
+   1. Create task and freeze expected items from OSR-INSTANCE.
+
+   2. Same idempotency key returns same task.
+
+   3. Mobile observation duplicate offline ref returns same observation.
+
+   4. Matching observation closes the task.
+
+   5. Missing expected item creates MISSING discrepancy.
+
+   6. Extra serial creates FOUND_EXTRA discrepancy.
+
+   7. Wrong serial belonging to another customer becomes CRITICAL.
+
+   8. Damaged equipment with service impact creates a ticket.
+
+   9. Missing recoverable equipment creates OSR-RMA recovery.
+
+   10. Write-off route calls EM-CFG-04 and waits for approval.
+
+   11. FA-01 never calls OSR-02 procurement.
+
+
+
+ 14. Operational Notes
+   - Mobile app uploads may arrive after the field visit because connectivity can be poor. Use offline refs everywhere.
+
+   - Keep evidence immutable after submission. If a reviewer adds notes, create review comments instead of changing field
+     evidence.
+
+   - Do not let field users directly mark equipment written off or corrected.
+
+   - Keep discrepancy routing visible in backoffice so audit managers can see the downstream ticket/RMA/approval reference.
+
+   - Reporting should use FA-01 events and discrepancy tables, not screenshots from the mobile app.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 7
+

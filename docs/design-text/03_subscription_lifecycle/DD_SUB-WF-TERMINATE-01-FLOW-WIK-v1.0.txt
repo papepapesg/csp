@@ -1,0 +1,685 @@
+ DD_SUB-WF-TERMINATE-01-FLOW-WIK - WIK
+ Termination BPMN
+ Developer implementation guide: DD_SUB-WF-TERMINATE-01-FLOW-WIK-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This DD defines the WIK operator BPMN for subscription termination.
+
+ Process key:
+          sub-terminate-wik
+
+ This BPMN implements the parent termination contract from
+ DD_SUB-WF-TERMINATE-01-Subscription_Termination-v1.0.md for WIK.
+
+ The WIK termination flow is:
+          validate -> cancel in-flight operation -> PENDING_TERMINATION -> compute billing window -> settlement -> resolve equipment
+
+
+
+ 2. Ownership
+ This DD owns:
+
+   - WIK-specific termination BPMN process key.
+
+   - WIK happy-path BPMN sequence.
+
+   - WIK cooling-off supervisor task behavior.
+
+   - WIK equipment disposition behavior.
+
+   - WIK service revoke and HomePass release sequencing.
+
+   - WIK worker-topic composition.
+
+   - WIK message catches.
+
+   - WIK use of rules.subscription.terminate.wik.
+
+   - WIK termination examples.
+
+ This DD does not own:
+
+   - Generic termination API contract and rules. See parent termination DD.
+
+   - Shared operation framework. See SUB-WF-FRAMEWORK-01.
+
+   - Worker contracts. See DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+   - Worker implementation code.
+
+   - SUB-LM, BIL, FUL, NOT, OSR-RMA, BIL-04, scheduler internals.
+
+
+ 3. Required Runtime Configuration
+ 3.1 Framework Operation Config
+ What this table is for:
+
+ subscription_operation_config tells the subscription workflow framework which BPMN process to start for an
+ operator and operation kind.
+
+ When to use it:
+
+ Use it when the API receives a TERMINATE request and needs to resolve the WIK BPMN process key.
+
+ Required row:
+          INSERT INTO subscription_operation_config (
+            operator_code,
+            operation_kind,
+            default_bpmn_process_key,
+            operation_timeout_seconds,
+
+
+SOPHIX BSS Design Documents                                                                                         Page 1
+              feature_flags,
+              enabled,
+              updated_by
+            )
+            VALUES (
+               'WIK',
+               'TERMINATE',
+               'sub-terminate-wik',
+               120,
+               '{"customer_self_service_enabled": true, "cooling_off_supervisor_override_required": true, "churn_save_attempt_enabled":
+               TRUE,
+               'migration'
+            );
+
+ Column meaning:
+
+  Column                          Purpose                         Sample                         Meaning
+
+  operator_code                   Operator scope.                 WIK                            This row applies to WIK.
+
+  operation_kind                  Subscription operation.         TERMINATE                      This row is used for termination
+                                                                                                 requests.
+
+  default_bpmn_process_key        Camunda process key to start.   sub-terminate-wik              Start the WIK termination BPMN.
+
+  operation_timeout_seconds       Framework operation timeout.    120                            WIK termination should finish quickly
+                                                                                                 unless waiting on supervisor or
+                                                                                                 fulfillment.
+
+  feature_flags                   WIK-specific operation flags.   {"cooling_off_supervisor_ove   Supervisor task is enabled;
+                                                                  rride_required":true}          churn-save is not in v1.0.
+
+  enabled                         Runtime enablement.             TRUE                           API may start WIK termination.
+
+  updated_by                      Audit actor.                    migration                      Seeded by migration.
+
+
+
+ 3.2 WIK Termination Config
+ What this table is for:
+
+ subscription_termination_config stores WIK termination policy.
+
+ When to use it:
+
+ Load it before Drools validation and pass it as a fact into rules.subscription.terminate.wik.
+
+ Required row:
+            INSERT INTO subscription_termination_config (
+               operator_code,
+               cooling_off_window_days,
+               default_equipment_disposition,
+               dunning_equipment_disposition,
+               dunning_auto_write_off_threshold,
+               dunning_auto_write_off_currency,
+               customer_self_service_enabled,
+               cooling_off_supervisor_override,
+               churn_save_attempt_enabled,
+               updated_by
+            )
+            VALUES (
+               'WIK',
+               7,
+               'PENDING_COLLECTION',
+               'PENDING_COLLECTION',
+               10000.00,
+               'KES',
+               TRUE,
+               TRUE,
+               FALSE,
+               'migration'
+            );
+
+ Column meaning:
+
+  Column                          Purpose                         Sample                         Meaning
+
+  operator_code                   Operator scope.                 WIK                            Policy applies to WIK.
+
+  cooling_off_window_days         Cooling-off period.             7                              Customer-requested termination
+                                                                                                 inside 7 days is cooling-off.
+
+  default_equipment_dispositio    Default non-dunning equipment   PENDING_COLLECTION             Collect WIK equipment by default.
+  n                               handling.
+
+
+
+SOPHIX BSS Design Documents                                                                                                     Page 2
+  Column                         Purpose                                   Sample                                      Meaning
+
+  dunning_equipment_dispositio   Default dunning equipment handling.       PENDING_COLLECTION                          Collect equipment after dunning
+  n                                                                                                                    termination unless write-off applies.
+
+  dunning_auto_write_off_thres   Threshold for dunning write-off policy.   10000.00                                    BIL-01 may return write-off marker
+  hold                                                                                                                 around this policy.
+
+  dunning_auto_write_off_curre   Threshold currency.                       KES                                         Threshold is in Kenyan shillings.
+  ncy
+
+  customer_self_service_enable   Allows customer portal termination.       TRUE                                        WIK customers may request
+  d                                                                                                                    termination through self-service.
+
+  cooling_off_supervisor_overr   Enables supervisor task.                  TRUE                                        WIK cooling-off cases require
+  ide                                                                                                                  supervisor decision.
+
+  churn_save_attempt_enabled     Enables churn-save task.                  FALSE                                       No WIK churn-save BPMN step in
+                                                                                                                       v1.0.
+
+
+
+
+ 4. BPMN Start Variables
+ The shared framework starts Camunda with these variables.
+
+  Variable                                     Purpose                                                  Example
+
+  operationId                                  Links BPMN to subscription_operation.                    subop_01HZ_KAMAU_TERM
+
+  operatorCode                                 Operator scope.                                          WIK
+
+  subscriptionId                               Subscription being terminated.                           sub_01HZ_KAMAU_FIBER
+
+  operationKind                                Always TERMINATE.                                        TERMINATE
+
+  customerId                                   Customer reference from SUB-LM.                          cust_01HZ_KAMAU
+
+  homepassId                                   HomePass to release.                                     hp_01HZ_KAREN_017
+
+  terminationTrigger                           Trigger requesting termination.                          CUSTOMER_REQUESTED
+
+  terminationReasonCode                        Operator/CVM reason.                                     CUSTOMER_MOVED_NO_COVERAGE
+
+  resolvedEquipmentDisposition                 Final equipment disposition.                             PENDING_COLLECTION
+
+  coolingOffApplicable                         Whether cooling-off applies.                             false
+
+  requiresCoolingOffSupervisorDecision         Whether supervisor user task runs.                       false
+
+  equipmentBindings                            Equipment at customer premises.                          [{"equipmentRef":"ont_01HZ"}]
+
+  initiatingActorUserId                        Actor user/service.                                      cc-agent-wik-007
+
+  initiatingActorRole                          Actor role.                                              CALL_CENTER
+
+  initiatingWorkflowKind                       Upstream workflow.                                       BO_UI
+
+  initiatingWorkflowRef                        Upstream reference.                                      cc-ticket-2026-07-20-4421
+
+
+
+
+ 5. Worker Topics Used
+ These are logical Camunda external-task topics, not separate deployments. One worker app may subscribe to many topics,
+ but logs, retries, metrics, and contracts must remain visible per topic.
+
+  Worker topic                                                             Why WIK termination uses it
+
+  drools-decide                                                            Re-check eligibility, role, cooling-off, and equipment disposition.
+
+  sub-lm-cancel-in-flight-operation                                        Cancel in-flight lifecycle operation before terminal flow.
+
+  sub-lm-put-pending-status                                                Move subscription to PENDING_TERMINATION.
+
+  sub-lm-compute-cycle-window                                              Compute billing-cycle context for BIL-01.
+
+  bil01-emit-intent                                                        Ask BIL-01 to compute TERMINATION_INTENT settlement.
+
+  ful-call-terminate                                                       Ask FUL-05 to revoke service.
+
+  ful-call-release-homepass                                                Release HomePass through FUL-07 or approved stub.
+
+  sub-lm-put-master-fields                                                 Write termination master fields.
+
+  sub-lm-commit-state                                                      Commit subscription to TERMINATED.
+
+  kafka-emit                                                               Write termination success/failure event to outbox.
+
+  notification-send                                                        Send termination notification without failing BPMN on notification failure.
+
+  subscription-operation-finalize                                          Set operation terminal state.
+
+
+SOPHIX BSS Design Documents                                                                                                                              Page 3
+  Worker topic                                                        Why WIK termination uses it
+
+  sub-lm-revert-to-prior                                              Compensation before terminal commit, when safe.
+
+
+
+
+ 6. Happy Path BPMN
+           Start
+             -> update operation state VALIDATING
+             -> drools-decide
+             -> gateway: eligible?
+                 no -> termination rejected path
+                 yes
+             -> gateway: in-flight operation exists?
+                 yes -> sub-lm-cancel-in-flight-operation -> wait cancellation acknowledgement
+                 no -> continue
+             -> update operation state PENDING_STATE_FLIP
+             -> sub-lm-put-pending-status
+             -> sub-lm-compute-cycle-window
+             -> update operation state BILLING_CALL
+             -> bil01-emit-intent
+             -> drools-decide resolve-equipment-disposition
+             -> gateway: cooling-off supervisor required?
+                 yes -> user task cooling-off-override-decision
+                 no -> continue
+             -> update operation state FULFILLMENT_CALL
+             -> ful-call-terminate
+             -> wait fulfillment-completed
+             -> ful-call-release-homepass
+             -> update operation state COMMITTING_FINAL_STATE
+             -> sub-lm-put-master-fields
+             -> sub-lm-commit-state
+             -> update operation state EMITTING_EVENT
+             -> kafka-emit SubscriptionTerminated
+             -> notification-send
+             -> subscription-operation-finalize COMPLETED
+             -> End
+
+
+
+ 7. Step Details
+ 7.1 drools-decide - Validation And Cooling-Off
+ Inputs:
+           {
+                 "kjarPackage": "rules.subscription.terminate.wik",
+                 "requestedDecisions": [
+                    "validate-eligibility",
+                    "compute-cooling-off-applicability"
+                 ],
+                 "factsJson": "{...termination facts...}"
+           }
+
+ Expected output for Kamau:
+           {
+                 "decisionsJson": {
+                   "eligible": true,
+                   "coolingOffApplicable": false,
+                   "daysActiveInContract": 920,
+                   "requiresCoolingOffSupervisorDecision": false
+                 }
+           }
+
+ If eligible = false, route to termination rejection.
+
+ 7.2 sub-lm-put-pending-status
+ Inputs:
+           {
+                 "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+                 "toStatus": "PENDING_TERMINATION",
+                 "currentTransitionType": "TERMINATE",
+                 "currentTransitionReasonCode": "CUSTOMER_MOVED_NO_COVERAGE"
+           }
+
+ Output consumed later:
+           {
+
+
+SOPHIX BSS Design Documents                                                                                             Page 4
+               "priorStatusSnapshot": {
+                 "statusCode": "ACTIVE",
+                 "currentTransitionType": null,
+                 "currentTransitionReasonCode": null
+               }
+           }
+
+
+ 7.3 bil01-emit-intent
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "intentKind": "TERMINATION_INTENT",
+               "intentContext": {
+                  "terminationTrigger": "CUSTOMER_REQUESTED",
+                  "terminationReasonCode": "CUSTOMER_MOVED_NO_COVERAGE",
+                  "priorStatus": "ACTIVE",
+                  "coolingOffApplicable": false,
+                  "daysActiveInContract": 920,
+                  "contractMinimumTermMonths": 12,
+                  "equipmentDispositionRequested": "PENDING_COLLECTION"
+               },
+               "cycleWindow": {
+                  "cycleStart": "2026-07-01",
+                  "cycleEnd": "2026-07-31"
+               }
+           }
+
+ Expected result:
+           {
+               "intentDecisionId": "bidec_01HZ_KAMAU_TERM",
+               "settlement": {
+                 "lineItems": [
+                    {
+                      "kind": "PRORATED_REFUND",
+                      "amount": -1200.00,
+                      "currency": "KES"
+                    }
+                 ],
+                 "totals": {
+                    "net": -1200.00,
+                    "currency": "KES"
+                 },
+                 "refundAmount": 1200.00,
+                 "writeOffMarker": false
+               }
+           }
+
+
+ 7.4 drools-decide - Resolve Equipment Disposition
+ Inputs:
+           {
+               "kjarPackage": "rules.subscription.terminate.wik",
+               "requestedDecisions": [
+                  "resolve-equipment-disposition"
+               ],
+               "factsJson": "{caller disposition, WIK config, billing writeOffMarker}"
+           }
+
+ Expected output:
+           {
+               "equipmentDisposition": "PENDING_COLLECTION"
+           }
+
+ Caller-supplied disposition wins unless policy explicitly rejects it. For dunning termination with no supplied disposition, BIL-01
+ writeOffMarker=true may resolve to WRITTEN_OFF.
+
+ 7.5 Cooling-Off Supervisor User Task
+ The user task runs only when:
+           terminationTrigger == CUSTOMER_REQUESTED
+           AND coolingOffApplicable == true
+           AND cooling_off_supervisor_override == true
+
+ User task:
+           cooling-off-override-decision
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 5
+ Candidate group:
+           COOLING_OFF_SUPERVISORS
+
+ Form fields:
+
+  Field                                                           Purpose
+
+  overrideApproved                                                Supervisor approves continuing termination.
+
+  overrideReason                                                  Required reason when approval is true.
+
+  notes                                                           Optional supervisor note.
+
+
+ If not completed within 24 hours, alert operations through ICN-01. Do not auto-terminate without the configured decision.
+
+ 7.6 ful-call-terminate
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "intent": "TERMINATE_SERVICE",
+               "reasonCategory": "CUSTOMER_REQUESTED",
+               "equipmentDisposition": "PENDING_COLLECTION",
+               "equipmentBindings": [
+                  {
+                     "equipmentRequirement": "GPON_ONT",
+                     "equipmentRef": "ont_01HZ_KAMAU"
+                  },
+                  {
+                     "equipmentRequirement": "ATA",
+                     "equipmentRef": "ata_01HZ_KAMAU"
+                  }
+               ],
+               "fulfillmentCorrelationId": "subop_01HZ_KAMAU_TERM:terminate"
+           }
+
+ FUL-05 revokes service, for example voice profile deletion and OLT/AAA deprovisioning. The BPMN waits for
+ fulfillment-completed or fulfillment-failed correlated by fulfillmentCorrelationId.
+
+ 7.7 ful-call-release-homepass
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "homepassId": "hp_01HZ_KAREN_017",
+               "releaseReason": "SUBSCRIPTION_TERMINATED",
+               "fulfillmentCorrelationId": "subop_01HZ_KAMAU_TERM:release-homepass"
+           }
+
+ Until FUL-07 ships, this worker may call an approved stub. The stub must persist a durable release request and emit metrics.
+ If no durable stub exists, route failures to manual recovery before committing TERMINATED.
+
+ 7.8 sub-lm-put-master-fields
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "fieldsJson": {
+                 "terminated_at": "2026-07-20T14:30:18Z",
+                 "termination_trigger": "CUSTOMER_REQUESTED",
+                 "termination_reason_code": "CUSTOMER_MOVED_NO_COVERAGE",
+                 "prior_status_at_termination": "ACTIVE",
+                 "last_status_changed_at": "2026-07-20T14:30:18Z"
+               }
+           }
+
+ This step writes audit fields before the final state commit.
+
+ 7.9 sub-lm-commit-state
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "expectedFromStatus": "PENDING_TERMINATION",
+               "toStatus": "TERMINATED"
+
+
+SOPHIX BSS Design Documents                                                                                                  Page 6
+             }
+
+ Emit success only after this commit succeeds.
+
+
+ 8. Message Catches
+  Message                                       Correlation key                                 Used when
+
+  fulfillment-completed                         fulfillmentCorrelationId                        FUL-05 revoked service, and optionally HomePass
+                                                                                                release completed.
+
+  fulfillment-failed                            fulfillmentCorrelationId                        FUL-05 or HomePass release failed.
+
+
+ Use distinct correlation IDs:
+             subop_01HZ_KAMAU_TERM:terminate
+             subop_01HZ_KAMAU_TERM:release-homepass
+
+
+
+ 9. Drools Package
+ Required package:
+             rules.subscription.terminate.wik
+
+ Required decisions:
+
+  Decision                                                          Purpose
+
+  validate-eligibility                                              Checks not terminated, trigger, role, and self-service config.
+
+  compute-cooling-off-applicability                                 Computes cooling-off and active days.
+
+  resolve-equipment-disposition                                     Resolves caller-supplied, default, dunning default, or write-off disposition.
+
+
+ Example rule intent:
+             rule "WIK termination rejects already terminated"
+             when
+               $req: TerminateRequestFact()
+               $sub: SubscriptionStateFact(subscriptionId == $req.subscriptionId, statusCode == "TERMINATED")
+             then
+               modify($req) {
+                  setEligible(false);
+                  setEligibilityReasonCode("ALREADY_TERMINATED")
+               }
+             end
+
+             rule "WIK customer requested termination allowed roles"
+             when
+               $req: TerminateRequestFact(
+                  terminationTrigger == "CUSTOMER_REQUESTED",
+                  eligible == null,
+                  initiatingActorRole not in ("CUSTOMER_SELF_SERVICE", "CALL_CENTER", "SUBSCRIPTION_OPERATOR")
+               )
+             then
+               modify($req) {
+                  setEligible(false);
+                  setEligibilityReasonCode("ROLE_NOT_AUTHORIZED_FOR_TRIGGER")
+               }
+             end
+
+             rule "WIK dunning write-off disposition"
+             salience 10
+             when
+               $req: TerminateRequestFact(terminationTrigger == "DUNNING_TERMINATION", equipmentDispositionRequested == null)
+               $intent: BillingIntentDecisionFact(writeOffMarker == true)
+             then
+               modify($req) {
+                  setEquipmentDisposition("WRITTEN_OFF")
+               }
+             end
+
+
+
+ 10. Compensation Paths
+  Failure point                                                     BPMN compensation
+
+  Drools rejects request                                            Emit SubscriptionTerminationRejected; finalize FAILED.
+
+  In-flight cancellation fails                                      Do not start termination; return OPERATION_INTERRUPTION_FAILED.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 7
+  Failure point                                                      BPMN compensation
+
+  Pending status update fails                                        No committed mutation expected; emit rejected; finalize FAILED.
+
+  Billing settlement fails                                           Run sub-lm-revert-to-prior; emit rejected; finalize FAILED.
+
+  FUL-05 revoke fails before network change                          Run sub-lm-revert-to-prior; emit rejected; finalize FAILED.
+
+  FUL-05 partial/unknown revoke                                      Manual recovery.
+
+  HomePass release fails                                             Retry or manual recovery unless a durable release stub is accepted.
+
+  Master fields or state commit fails                                Manual recovery.
+
+  Kafka emit fails                                                   Outbox retries. BPMN should not mark event delivered synchronously.
+
+  Notification fails                                                 Log and continue. Notification is reliability-isolated.
+
+
+
+
+ 11. Worked Example
+ Kamau calls WIK Call Center to terminate because he is moving to a non-covered area.
+
+ Request:
+             POST /api/subscriptions/sub_01HZ_KAMAU_FIBER/terminate
+             Idempotency-Key: term-sub_01HZ_KAMAU-20260720T143000-cc007
+             Content-Type: application/json
+
+             {
+                  "operatorCode": "WIK",
+                  "terminationTrigger": "CUSTOMER_REQUESTED",
+                  "terminationReasonCode": "CUSTOMER_MOVED_NO_COVERAGE",
+                  "equipmentDisposition": "PENDING_COLLECTION",
+                  "customerNotes": "Moving to a non-covered area; no service available at new address",
+                  "initiatingWorkflowKind": "BO_UI",
+                  "initiatingWorkflowRef": "cc-ticket-2026-07-20-4421"
+             }
+
+ Runtime result:
+             API validates request
+               -> loads SUB-LM subscription summary: ACTIVE
+               -> loads WIK termination config and equipment bindings
+               -> Drools accepts CALL_CENTER CUSTOMER_REQUESTED termination
+               -> framework creates operation subop_01HZ_KAMAU_TERM
+               -> Camunda starts sub-terminate-wik
+               -> subscription moves ACTIVE -> PENDING_TERMINATION
+               -> billing receives TERMINATION_INTENT and computes prorated refund
+               -> Drools resolves equipmentDisposition=PENDING_COLLECTION
+               -> cooling-off supervisor task is skipped because subscription is past cooling-off window
+               -> FUL-05 revokes service
+               -> HomePass release worker releases/stubs release
+               -> termination master fields are written
+               -> subscription moves PENDING_TERMINATION -> TERMINATED
+               -> SubscriptionTerminated event is emitted
+               -> notification is sent
+               -> operation is COMPLETED
+
+ After success:
+
+   - Subscription status is TERMINATED.
+
+   - Customer service is revoked.
+
+   - HomePass slot is released or has a durable release request.
+
+   - SubscriptionTerminated includes settlement and equipment bindings.
+
+   - OSR-RMA creates pickup work order because equipment disposition is PENDING_COLLECTION.
+
+
+ 12. Cross-DD Dependencies
+  Dependency                                                         Why it matters
+
+  DD_SUB-WF-TERMINATE-01-Subscription_Termination-v1.0.md            Owns generic termination API, trigger rules, events, and invariants.
+
+  DD_SUB-WF-FRAMEWORK-01-Subscription_Workflow_Framework-v1.         Owns operation creation, interrupt handling, and process start.
+  0.md
+
+  DD_SUB-WF-FRAMEWORK-01-WORKERS-v1.0.md                             Owns worker-topic contracts.
+
+  DD_SUB-LM-01-Subscription_Lifecycle_Management-v1.0.md             Owns subscription status source of truth.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 8
+  Dependency                                                      Why it matters
+
+  BIL-01                                                          Owns termination settlement.
+
+  BIL-04                                                          Calls dunning termination and consumes termination event.
+
+  FUL-05                                                          Owns network/service revocation.
+
+  FUL-07                                                          Owns HomePass release; stub is temporary.
+
+  OSR-RMA-01 EQP                                                  Creates pickup work order from termination event.
+
+  NOT-01                                                          Owns customer notification.
+
+
+
+
+ 13. Open Items
+   - FUL-07 HomePass release DD is still pending; WIK uses approved release stub until then.
+
+   - WUG, WTZ, and YASSN termination flow satellites still require operator-specific deep dives.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 9
+

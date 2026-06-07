@@ -1,0 +1,1127 @@
+ DD: SUB-WF-MIGRATION-01 — Subscription Migration
+ Developer implementation guide:
+ DD_SUB-WF-MIGRATION-01-Subscription_Migration-DEV_IMPL_GUIDE-v1.1.md.
+
+ Coherence note (2026-06-01): cross-technology migration is no longer a vague future WO item. SUB-WF-MIGRATION-01
+ owns the business operation and subscription state transition. FUL-10 owns the technical cross-technology fulfillment
+ sequence and calls WO/OSR/PROV-INT as needed. Any older "not yet supported" wording must be read as pre-FUL-10
+ history, not current implementation guidance.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract
+ DD_SUB-WF-MIGRATION-01-Subscription_Migration-v1.1.md.
+
+ Verdict: ■ Updated | Wave: 1 | Group I: Subscription Management | Version: v1.1 Operation that transitions an ACTIVE
+ subscription's homepass_id AND package_ref simultaneously. The compound operation distinct from RELOCATION
+ (HomePass only) and from UPGRADE/DOWNGRADE (Package only). Used when: (a) customer requests move AND
+ package change at same time (typical case); (b) operator-driven technology migration (cross-tech retirement cohort, for
+ example HFC -> GPON). Owns: the 2-trigger taxonomy, target-Package + target-HomePass validation, equipmentPath
+ taxonomy, disconnectMode taxonomy, the cycleAnchorPolicy + effectiveTiming taxonomies (since Package
+ change is involved), the integration surface to WO-01 (SHIFTING flow for same-tech case), the per-operator config catalog,
+ the trigger + cancel REST endpoints, the rich domain Kafka events. Physical work delegated to WO-01/FUL-10 as
+ appropriate. For same-technology migration (source network root type == target network root type), the workflow creates
+ ONE Work Order with kind=SHIFTING via POST /api/work-orders — same integration as RELOCATION-01 v1.1. The
+ WO module's SHIFTING flow handles physical work internally. Per DD_WO-01-CONTRACT-FOR-SUB-WF. For
+ cross-technology migration, ADMIN_TECH_MIGRATION starts the subscription operation and calls FUL-10 for the technical
+ fulfillment sequence. Atomic-switch service continuity: subscription stays ACTIVE on source HomePass + source
+ Package until target activate succeeds. PENDING_MIGRATION is entered only during the commit window. What changed
+ from v1.0: - Replaced the made-up "two-WO orchestration" with single SHIFTING WO per
+ DD_WO-01-CONTRACT-FOR-SUB-WF for same-tech cases. - Cross-tech now delegates to FUL-10 instead of a vague
+ future WO satellite. - Added MODIFY_SERVICE step — Package change requires per-Service-class fan-out at target. After
+ target activation, workflow calls FUL-03 v1.1 MODIFY_SERVICE to diff source vs target Package compositions and apply
+ add/drop/modify per service class. - Operator-neutral framing. Per-operator concerns (job_type_codes, BPMN file names,
+ equipment recovery policy, account-status codes) live in WO/FUL-10 operator catalogs.
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    4_subscription_workflows/DD_SUB-WF-MIGRATION-01-Subscripti
+                                                                    on_Migration-v1.1.md
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+  Item                                                            Value
+
+  Version                                                         v1.1
+
+  DD type                                                         module contract
+
+  BPMN/process keys                                               Not explicitly defined
+
+  Drools packages                                                 rules.subscription.migration.<operator>
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+   - DELETE /api/subscriptions/{subscription_id}/pending-migration/{operation_id}
+
+   - DELETE /pending-migration/{operationId}
+
+   - POST /api/subscriptions/{subscription_id}/migrate
+
+   - POST /api/work-orders
+
+ 4.2 Tables
+   - subscription_migration_config
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - bil01-emit-intent
+
+   - ful-call-activate
+
+   - ful-call-claim-homepass
+
+   - ful-call-modify-service
+
+   - ful-call-release-homepass
+
+   - ful-call-suspend
+
+   - notification-send
+
+   - payment-confirmed
+
+   - wo-cancel
+
+   - ful10-start-technology-migration
+
+   - wo-create-shifting
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - SubscriptionMigrated
+
+   - SubscriptionMigrationCancelled
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 2
+   - SubscriptionMigrationRejected
+
+   - SubscriptionMigrationScheduled
+
+   - WorkOrderCancelled
+
+   - WorkOrderFinalized
+
+   - WorkOrderTimedOut
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                           Recommendation
+
+  API/runtime                                                       Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                           Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                          Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                             Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                           Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                            Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                           Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                    Store with IRSA.
+
+  Observability                                                     Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                    dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ Updated | Wave: 1 | Group I: Subscription Management | Version: v1.1
+
+ Operation that transitions an ACTIVE subscription's homepass_id AND package_ref simultaneously. The compound
+ operation distinct from RELOCATION (HomePass only) and from UPGRADE/DOWNGRADE (Package only). Used when: (a)
+ customer requests move AND package change at same time (typical case); (b) operator-driven technology migration
+ (cross-tech retirement cohort — e.g., HFC → GPON). Owns: the 2-trigger taxonomy, target-Package + target-HomePass
+ validation, equipmentPath taxonomy, disconnectMode taxonomy, the cycleAnchorPolicy + effectiveTiming
+ taxonomies (since Package change is involved), the integration surface to WO-01 (SHIFTING flow for same-tech case), the
+
+
+SOPHIX BSS Design Documents                                                                                                                   Page 3
+ per-operator config catalog, the trigger + cancel REST endpoints, the rich domain Kafka events.
+
+ Physical work delegated to WO-01. For same-technology migration (source network root type == target network root type),
+ the workflow creates ONE Work Order with kind=SHIFTING via POST /api/work-orders — same integration as
+ RELOCATION-01 v1.1. The WO module's SHIFTING flow handles physical work internally. Per
+ DD_WO-01-CONTRACT-FOR-SUB-WF.
+
+ Cross-tech migration delegated to FUL-10. ADMIN_TECH_MIGRATION trigger involves moving customers across network
+ technology (e.g., HFC -> GPON). SUB-WF-MIGRATION-01 validates the business request and owns the subscription
+ operation. FUL-10 owns the technical fulfillment sequence and calls WO-01, OSR, FUL-09, and PROV-INT as required. If
+ FUL-10 is not enabled for the operator, return 400 TECHNOLOGY_MIGRATION_NOT_ENABLED.
+
+ Atomic-switch service continuity: subscription stays ACTIVE on source HomePass + source Package until target activate
+ succeeds. PENDING_MIGRATION is entered only during the commit window.
+
+ What changed from v1.0:
+
+ - Replaced the made-up "two-WO orchestration" with single SHIFTING WO per DD_WO-01-CONTRACT-FOR-SUB-WF
+ — same correction as RELOCATION-01 v1.1.
+
+ - Replaced fabricated message catches (disconnection-completed, installation-completed) with
+ WorkOrderFinalized. Replaced fabricated config columns (disconnect_wo_timeout_days,
+ install_wo_timeout_days) with WO-01's wo_kind_config.default_timeout_days. Single worker
+ wo-create-shifting.
+
+ - Added MODIFY_SERVICE step — Package change requires per-Service-class fan-out at target. After target activation,
+ workflow calls FUL-03 v1.1 MODIFY_SERVICE to diff source vs target Package compositions and apply add/drop/modify per
+ service class.
+
+ - ADMIN_TECH_MIGRATION delegated — calls FUL-10 when
+ subscription_migration_config.admin_tech_migration_enabled = true; otherwise returns 400
+ TECHNOLOGY_MIGRATION_NOT_ENABLED.
+
+ - Operator-neutral framing. Per-operator concerns (job_type_codes, BPMN file names, equipment recovery policy,
+ account-status codes) live in WO-01 FLOW satellites + operator catalogs.
+
+
+ Glossary
+  Term                                                           Meaning
+
+  Migration                                                      Change of subscription's homepass_id AND package_ref simultaneously.
+                                                                 Distinct from RELOCATION (HomePass only) and UPGRADE/DOWNGRADE
+                                                                 (Package only).
+
+  Source HomePass + source Package                               Current snapshots at migration time.
+
+  Target HomePass + target Package                               Where the subscription is moving and what new Package it will be on. Target
+                                                                 Package's required service families MUST be supported by target HomePass.
+
+  equipmentPath                                                  KEEP_EXISTING (re-home existing equipment at target — only valid if target
+                                                                 Package's equipment requirements match source) or NEW_INSTALL (install
+                                                                 fresh equipment, recover old). Auto-inferred + can be overridden.
+
+  disconnectMode                                                 TECH_DISPATCH (workflow creates SHIFTING WO) or CUSTOMER_SELF_MOVE
+                                                                 (no WO; customer self-handles). NEW_INSTALL always forces
+                                                                 TECH_DISPATCH.
+
+  cycleAnchorPolicy                                              Per BIL-01 v1.1 §3.2: PRESERVE (current cycle continues, prorate delta) or
+                                                                 RESET_TO_OPERATION_DATE (issue OLD_CYCLE_CREDIT +
+                                                                 FIRST_CYCLE_CHARGE). Operator config default; per-request override.
+
+  effectiveTiming                                                IMMEDIATE / END_OF_CURRENT_CYCLE / SCHEDULED_AT.
+                                                                 END_OF_CURRENT_CYCLE + PRESERVE short-circuits proration delta to zero
+                                                                 (cycle finishes on source, next starts on target).
+
+  Same-tech migration                                            sourceHomePass.networkRootType ==
+                                                                 targetHomePass.networkRootType. Uses WO-01 SHIFTING flow.
+                                                                 Supported in v1.1.
+
+  Cross-tech migration                                           sourceHomePass.networkRootType !=
+                                                                 targetHomePass.networkRootType. Supported through
+                                                                 ADMIN_TECH_MIGRATION when FUL-10 is enabled for the operator.
+                                                                 Customer-requested cross-tech remains blocked unless the operator explicitly
+                                                                 enables it.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 4
+  Term                                                           Meaning
+
+  SHIFTING WO                                                    A Work Order with kind=SHIFTING per
+                                                                 DD_WO-01-CONTRACT-FOR-SUB-WF.
+
+
+
+
+ 1. What this is
+ The migration operation. Triggered by: a customer requesting a HomePass change + Package change in one operation
+ (CUSTOMER_REQUESTED_MIGRATION), or admin-driven tech cohort migration (ADMIN_TECH_MIGRATION). Admin-driven
+ cross-technology migration requires FUL-10 to be enabled for the operator.
+
+ Outcomes (at actual commit time): subscription homepass_id updated to target, previous_homepass_id snapshot
+ retained, package_ref + package_version_id updated to target Package, previous_package_ref +
+ previous_package_version_id snapshot retained, migration fee + signed proration delta (or RESET cycle pair) charged
+ per BIL-01 v1.1, physical work via WO-01 SHIFTING flow (or self-move), FUL-07 bookkeeping updated on both
+ HomePasses, source HomePass network-side de-provisioned + target HomePass provisioned for target Package via FUL-03
+ + FUL-04, last_migrated_at master field updated, customer notified.
+
+ For non-IMMEDIATE effectiveTiming, the subscription remains ACTIVE on source HomePass + source Package during
+ the wait. A second pending-future migration is rejected; any state-affecting operation during the wait cancels the pending
+ migration.
+
+ What this DD owns
+   1. subscription_migration_config table — per-operator config.
+
+   2. Trigger taxonomy — 2 triggers with role gating.
+
+   3. Target-Package validation rules — target Package must differ from source, status sellable.
+
+   4. Target-HomePass validation rules — sellable, status active, service-family compatibility for TARGET Package,
+     port-provisioned.
+
+   5. equipmentPath taxonomy + auto-inference rules — taking target Package's equipment requirements into account.
+
+   6. disconnectMode taxonomy + resolution rules.
+
+   7. cycleAnchorPolicy taxonomy + resolution rules.
+
+   8. effectiveTiming taxonomy + non-IMMEDIATE timer + cancellation paths.
+
+   9. WO-01 SHIFTING integration sequencing — same as RELOCATION-01 v1.1, with extra MODIFY_SERVICE step
+     post-activation for Package fan-out.
+
+   10. Trigger + cancel REST endpoints.
+
+   11. Domain Kafka events — SubscriptionMigrationScheduled, SubscriptionMigrated,
+     SubscriptionMigrationRejected, SubscriptionMigrationCancelled.
+
+ What this DD does NOT own
+   - BPMN files — per-operator satellites.
+
+   - Worker implementations — DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+   - Subscription state machine — SUB-LM-01.
+
+   - Package + Package Version catalog — SIP-01.
+
+   - Service catalog + Provisioner interfaces — PLM-CFG-01.
+
+   - HomePass row mutations — RLM-CFG-01. Read-only.
+
+   - WO state machine, BPMN, contractor model, finalization mechanics — WO-01-FRAMEWORK +
+     WO-01-FLOW-SHIFTING.
+
+   - Equipment binding mutations — handled internally by WO-01 SHIFTING flow.
+
+   - Migration-fee math + BillableEvent definitions + signed proration math — BIL-01 v1.1 + BIL-CFG-01 v1.0.
+
+   - Source-side service teardown + target-side activation + MODIFY_SERVICE fan-out — FUL-03 v1.1 + FUL-04 v1.1.
+
+   - HomePass bookkeeping — FUL-07.
+
+
+SOPHIX BSS Design Documents                                                                                            Page 5
+   - Cross-technology technical migration — FUL-10. This DD starts and monitors the operation; FUL-10 performs the
+     technical sequence.
+
+   - Customer notification template + channel — NOT-01.
+
+ Regional flexibility
+  Lever                                                            Examples
+
+  BPMN file                                                        One per operator: Subscription_Migration_<operator>.bpmn.
+                                                                   Operator-specific branching, payment-timeout durations, notification policy live
+                                                                   in the BPMN.
+
+  Drools package rules.subscription.migration.<operator>           Operator-specific validation thresholds, equipment-path inference matrix,
+                                                                   disconnect-mode defaults, cycle-anchor defaults.
+
+  subscription_migration_config row                                Per-operator defaults: self-service enablement, effective-timing default,
+                                                                   cycle-anchor default, scheduled-window length, customer-notification policy.
+
+  WO-01 FLOW-SHIFTING (referenced)                                 Per-operator job-type codes, equipment-recovery policy, contractor-payment
+                                                                   side effects.
+
+  FUL-10 Technology Migration Fulfillment                          Per-operator cross-tech migration handling. Enables
+                                                                   ADMIN_TECH_MIGRATION when configured for the operator.
+
+
+
+
+ 2. Tables overview
+ This DD owns one table: subscription_migration_config (per-operator config).
+
+ Cross-operation audit anchor: subscription_operation (framework-owned).
+
+ Subscription master fields updated (owned by SUB-LM-01): homepass_id, previous_homepass_id, package_ref,
+ package_version_id, previous_package_ref, previous_package_version_id, last_migrated_at,
+ last_status_changed_at. current_transition_type = MIGRATION during PENDING_MIGRATION.
+
+
+
+ 3. Schemas
+ 3.1 subscription_migration_config
+ One row per operator.
+              CREATE TABLE subscription_migration_config (
+                 operator_code                          TEXT PRIMARY KEY,
+                 customer_self_service_enabled          BOOLEAN NOT NULL DEFAULT FALSE,
+                 pay_first_required                     BOOLEAN NOT NULL DEFAULT TRUE,
+                 default_effective_timing               TEXT NOT NULL DEFAULT 'SCHEDULED_AT',
+                 max_future_scheduled_days              INTEGER NOT NULL DEFAULT 60,
+                 default_disconnect_mode_keep_existing TEXT NOT NULL DEFAULT 'TECH_DISPATCH',
+                 default_cycle_anchor_policy            TEXT NOT NULL DEFAULT 'PRESERVE',
+                 admin_tech_migration_enabled           BOOLEAN NOT NULL DEFAULT FALSE,
+                 customer_notification_enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+                 updated_at                             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                 updated_by                             TEXT NOT NULL,
+                 CHECK (default_effective_timing IN ('IMMEDIATE','END_OF_CURRENT_CYCLE','SCHEDULED_AT')),
+                 CHECK (default_disconnect_mode_keep_existing IN ('TECH_DISPATCH','CUSTOMER_SELF_MOVE')),
+                 CHECK (default_cycle_anchor_policy IN ('PRESERVE','RESET_TO_OPERATION_DATE')),
+                 CHECK (max_future_scheduled_days > 0)
+              );
+
+  Column                                                           Notes
+
+  customer_self_service_enabled                                    When true, CUSTOMER_REQUESTED_MIGRATION may be initiated from
+                                                                   customer portal.
+
+  pay_first_required                                               When true AND BIL-01 returns positive totals.net: pay-first gate at
+                                                                   COMMIT time.
+
+  default_effective_timing                                         Default applied when request omits.
+
+  max_future_scheduled_days                                        Max window for SCHEDULED_AT.scheduledAt.
+
+  default_disconnect_mode_keep_existing                            Default for KEEP_EXISTING. NEW_INSTALL forces TECH_DISPATCH.
+
+  default_cycle_anchor_policy                                      Default cycle-anchor policy when request omits. Operator policy.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 6
+  Column                                                                         Notes
+
+  admin_tech_migration_enabled                                                   When true, ADMIN_TECH_MIGRATION trigger is accepted and the workflow
+                                                                                 calls FUL-10. Set to false for operators that have not approved cross-tech
+                                                                                 migration yet.
+
+  customer_notification_enabled                                                  Notification at acceptance + commit. NOT-01 owns template/channel/language.
+
+
+ WO timeouts are NOT configured here — they live in WO-01's wo_kind_config.
+
+ Sample data:
+
+  operator_code   customer_self_   pay_first_requir   default_effectiv   max_future_sc    default_discon     default_cycle_a   admin_tech_mi      customer_notifi
+                  service_enable   ed                 e_timing           heduled_days     nect_mode_ke       nchor_policy      gration_enable     cation_enabled
+                  d                                                                       ep_existing                          d
+
+  WIK             true             true               SCHEDULED_A        60               TECH_DISPAT        PRESERVE          false              true
+                                                      T                                   CH
+
+  WUG             false            true               SCHEDULED_A        60               TECH_DISPAT        PRESERVE          false              true
+                                                      T                                   CH
+
+  WTZ             false            true               SCHEDULED_A        60               TECH_DISPAT        PRESERVE          false              true
+                                                      T                                   CH
+
+  YASSN           false            true               SCHEDULED_A        60               TECH_DISPAT        PRESERVE          false              true
+                                                      T                                   CH
+
+
+
+
+ 4. Rules
+ 4.1 State precondition + transition
+  Rule                                                                           Description
+
+  R-SUB-WF-MIGRATION-01-S-1                                                      Migration requires subscription's status_code = ACTIVE at request time
+                                                                                 AND at commit time. Other statuses return 409
+                                                                                 INVALID_STATE_FOR_MIGRATION.
+
+  R-SUB-WF-MIGRATION-01-S-2                                                      The transition at commit is ACTIVE → PENDING_MIGRATION → ACTIVE.
+                                                                                 PENDING_MIGRATION entered only during commit window.
+
+  R-SUB-WF-MIGRATION-01-S-3                                                      Per framework R-FW-1, migration COMMIT is mutually exclusive with other
+                                                                                 state-affecting operations. Scheduled-future migration in wait state allows other
+                                                                                 operations (which cancel the pending migration).
+
+  R-SUB-WF-MIGRATION-01-S-4                                                      current_transition_type = MIGRATION during
+                                                                                 PENDING_MIGRATION. current_transition_reason_code =
+                                                                                 migrationTrigger. Not set during scheduled-future wait.
+
+  R-SUB-WF-MIGRATION-01-S-5                                                      Restrictions on the subscription preserved post-migration. New HomePass +
+                                                                                 new Package inherit the restriction set. Operator policy may decide to clear or
+                                                                                 re-evaluate; this DD does not.
+
+  R-SUB-WF-MIGRATION-01-S-6                                                      At most one pending-future migration per subscription. Second
+                                                                                 non-IMMEDIATE returns 409 PENDING_MIGRATION_ALREADY_SCHEDULED.
+
+
+
+ 4.2 Trigger taxonomy + role gating
+  Rule                                                                           Description
+
+  R-SUB-WF-MIGRATION-01-RT-1                                                     2 triggers: CUSTOMER_REQUESTED_MIGRATION and
+                                                                                 ADMIN_TECH_MIGRATION. Carried as migrationTrigger. Unknown values
+                                                                                 → 400 UNKNOWN_MIGRATION_TRIGGER.
+
+  R-SUB-WF-MIGRATION-01-RT-2                                                     Role gating: CUSTOMER_REQUESTED_MIGRATION requires
+                                                                                 CUSTOMER_SELF_SERVICE OR CALL_CENTER OR
+                                                                                 SUBSCRIPTION_OPERATOR; ADMIN_TECH_MIGRATION requires
+                                                                                 SUBSCRIPTION_ADMIN. Mismatched role returns 403.
+
+  R-SUB-WF-MIGRATION-01-RT-3                                                     CUSTOMER_SELF_SERVICE role allowed only when subscription_migrati
+                                                                                 on_config.customer_self_service_enabled = true.
+
+  R-SUB-WF-MIGRATION-01-RT-4                                                     ADMIN_TECH_MIGRATION trigger is gated by
+                                                                                 subscription_migration_config.admin_tech_migration_enabled.
+                                                                                 When false, return 400 TECHNOLOGY_MIGRATION_NOT_ENABLED. When
+                                                                                 true, call FUL-10 for the technical fulfillment sequence.
+
+
+
+ 4.3 Target-Package validation
+
+SOPHIX BSS Design Documents                                                                                                                               Page 7
+  Rule                                      Description
+
+  R-SUB-WF-MIGRATION-01-TP-1                targetPackageRef MUST reference a sellable Package in SIP-01 within the
+                                            same operator. Otherwise 400 TARGET_PACKAGE_NOT_FOUND or
+                                            TARGET_PACKAGE_NOT_SELLABLE.
+
+  R-SUB-WF-MIGRATION-01-TP-2                targetPackageRef MUST differ from source package_ref. Same-Package
+                                            returns 400 SAME_PACKAGE (use RELOCATION instead).
+
+  R-SUB-WF-MIGRATION-01-TP-3                Target Package's billing_mode MUST match source billing_mode.
+                                            Cross-mode (PREPAID ↔ POSTPAID) returns 400
+                                            BILLING_MODE_MISMATCH (operator policy — may relax in future).
+
+  R-SUB-WF-MIGRATION-01-TP-4                Target Package's currency MUST match source currency. Cross-currency
+                                            returns 400 CURRENCY_MISMATCH.
+
+  R-SUB-WF-MIGRATION-01-TP-5                The Package version is pinned at commit time. Even for SCHEDULED_AT, the
+                                            version captured at commit-time revalidation is the one stored on the
+                                            subscription.
+
+
+
+ 4.4 Target-HomePass validation
+  Rule                                      Description
+
+  R-SUB-WF-MIGRATION-01-TH-1                targetHomepassId MUST reference a HomePass with
+                                            status_code.is_sellable = true. Otherwise 400
+                                            TARGET_HOMEPASS_NOT_SELLABLE.
+
+  R-SUB-WF-MIGRATION-01-TH-2                targetHomepassId MAY equal source homepass_id (Package-only change
+                                            at same HomePass — degenerate case; UPGRADE/DOWNGRADE may be a
+                                            better fit).
+
+  R-SUB-WF-MIGRATION-01-TH-3                Target HomePass MUST physically support every service family required by the
+                                            TARGET Package. Per Service in target package_composition,
+                                            service.service_management_key MUST be present in
+                                            targetHomepass.service_management_endpoints keys + the
+                                            endpoint's port MUST NOT be null (commit-time enforcement). Missing keys →
+                                            400 TARGET_PACKAGE_NOT_AVAILABLE_AT_TARGET_HOMEPASS with
+                                            missing keys list.
+
+  R-SUB-WF-MIGRATION-01-TH-4                If source.networkRootType != target.networkRootType AND
+                                            migrationTrigger = CUSTOMER_REQUESTED_MIGRATION: reject with 400
+                                            CROSS_TECH_CUSTOMER_REQUEST_NOT_ALLOWED unless the operator
+                                            explicitly enables customer-requested cross-tech migration. Cross-tech is
+                                            normally admin-driven through FUL-10.
+
+
+
+ 4.5 Equipment-path + equipment-delta resolution
+  Rule                                      Description
+
+  R-SUB-WF-MIGRATION-01-EQ-1                equipmentPath ∈ {KEEP_EXISTING, NEW_INSTALL}. If request supplies a
+                                            value, Drools validates; otherwise auto-infers.
+
+  R-SUB-WF-MIGRATION-01-EQ-2                Auto-inference: if sourceNetworkRootType ==
+                                            targetNetworkRootType AND target Package's equipment requirements
+                                            are a SUBSET of source Package's (i.e., no new equipment needed): inferred =
+                                            KEEP_EXISTING. Otherwise inferred = NEW_INSTALL.
+
+  R-SUB-WF-MIGRATION-01-EQ-3                Request override KEEP_EXISTING with cross-tech OR with target Package
+                                            requiring equipment not present at source returns 400
+                                            EQUIPMENT_INCOMPATIBLE_WITH_TARGET.
+
+  R-SUB-WF-MIGRATION-01-EQ-4                equipmentDelta is computed: addedEquipmentKinds[] (target Package
+                                            needs but source doesn't) + obsoleteEquipmentKinds[] (source has but
+                                            target doesn't need). Carried to WO-01 via flowContext for the SHIFTING
+                                            flow's internal equipment handling.
+
+  R-SUB-WF-MIGRATION-01-EQ-5                The resolved equipmentPath + equipmentDelta are persisted to the Kafka
+                                            event payload + the framework's subscription_operation audit row.
+
+
+
+ 4.6 Disconnect mode resolution
+  Rule                                      Description
+
+  R-SUB-WF-MIGRATION-01-DM-1                disconnectMode ∈ {TECH_DISPATCH, CUSTOMER_SELF_MOVE}. Resolution:
+                                            (a) equipmentPath = NEW_INSTALL → force TECH_DISPATCH; (b)
+                                            equipmentPath = KEEP_EXISTING + request supplies → use request; (c)
+                                            request omits → default from subscription_migration_config.defaul
+                                            t_disconnect_mode_keep_existing.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                     Page 8
+  Rule                         Description
+
+  R-SUB-WF-MIGRATION-01-DM-2   When disconnectMode = TECH_DISPATCH: workflow creates SHIFTING
+                               WO via WO-01 POST /api/work-orders (per
+                               DD_WO-01-CONTRACT-FOR-SUB-WF §1.3), parks on
+                               WorkOrderFinalized. Same integration as RELOCATION-01 v1.1.
+
+  R-SUB-WF-MIGRATION-01-DM-3   When disconnectMode = CUSTOMER_SELF_MOVE: NO SHIFTING WO is
+                               created. Customer self-handles physical move. Equipment bindings remain
+                               unchanged on subscription. Only valid for KEEP_EXISTING.
+
+  R-SUB-WF-MIGRATION-01-DM-4   Resolved disconnectMode persisted to Kafka event payload +
+                               subscription_operation audit row.
+
+
+
+ 4.7 Billing
+  Rule                         Description
+
+  R-SUB-WF-MIGRATION-01-B-1    Workflow calls bil01-emit-intent with intentCode =
+                               MIGRATION_INTENT. Context: {sourceHomepassId,
+                               sourceFranchiseId, sourceNetworkRootType,
+                               sourcePackageRef, sourcePackageVersionId,
+                               sourcePackagePrice, targetHomepassId, targetFranchiseId,
+                               targetNetworkRootType, sameFranchise, targetPackageRef,
+                               targetPackageVersionId, targetPackagePrice, equipmentPath,
+                               disconnectMode, migrationTrigger, cycleAnchorPolicy,
+                               effectiveTiming, scheduledCommitAt?, cycleWindow}.
+
+  R-SUB-WF-MIGRATION-01-B-2    BIL-01 v1.1 resolves matching BillableEvents from BIL-CFG-01 v1.0 per the
+                               cycleAnchorPolicy: PRESERVE → MIGRATION_FEE +
+                               MIGRATION_PRORATE_DELTA (signed, may be charge or credit);
+                               RESET_TO_OPERATION_DATE → MIGRATION_FEE + OLD_CYCLE_CREDIT +
+                               FIRST_CYCLE_CHARGE. Plus EQUIPMENT_REPLACEMENT_FEE if
+                               equipmentPath = NEW_INSTALL.
+
+  R-SUB-WF-MIGRATION-01-B-3    END_OF_CURRENT_CYCLE + PRESERVE: BIL-01 short-circuits proration to
+                               zero. Only MIGRATION_FEE (and possibly EQUIPMENT_REPLACEMENT_FEE)
+                               apply.
+
+  R-SUB-WF-MIGRATION-01-B-4    If pay_first_required = true AND totals.net > 0: pay-first gate at
+                               COMMIT time. Workflow waits for payment-confirmed before creating
+                               SHIFTING WO (or before proceeding past self-move acknowledgement).
+                               Payment timeout (7 days operator default) → cancel migration.
+
+  R-SUB-WF-MIGRATION-01-B-5    If totals.net <= 0 (net credit — possible with DOWNGRADE-flavored
+                               migration + RESET cycle pair where credit exceeds new charge): POSTPAID
+                               rejected with REQUIRES_CREDIT_NOTE_WORKFLOW per BIL-01 v1.1 R-SE-3 →
+                               workflow emits Rejected with BILLING_REJECTED_NEGATIVE_NET.
+                               PREPAID wallet absorbs the credit (top-up).
+
+
+
+ 4.8 Cycle anchor policy
+  Rule                         Description
+
+  R-SUB-WF-MIGRATION-01-CA-1   Request supplies cycleAnchorPolicy ∈ {PRESERVE,
+                               RESET_TO_OPERATION_DATE}. If absent, default from
+                               subscription_migration_config.default_cycle_anchor_policy.
+                               Unknown → 400 UNKNOWN_CYCLE_ANCHOR_POLICY.
+
+  R-SUB-WF-MIGRATION-01-CA-2   RESET_TO_OPERATION_DATE + effectiveTiming =
+                               END_OF_CURRENT_CYCLE: rejected with 400
+                               INCOMPATIBLE_CYCLE_ANCHOR_AND_EFFECTIVE_TIMING (redundant —
+                               END_OF_CURRENT_CYCLE already starts new cycle on operation date).
+
+  R-SUB-WF-MIGRATION-01-CA-3   Resolved cycleAnchorPolicy persisted to Kafka event payload +
+                               subscription_operation audit row. Carried to BIL-01 v1.1 context per
+                               R-B-1.
+
+
+
+ 4.9 Fulfillment sequence
+
+
+
+
+SOPHIX BSS Design Documents                                                                      Page 9
+  Rule                                                         Description
+
+  R-SUB-WF-MIGRATION-01-F-1                                    Fulfillment sequence (in order, during commit window): (a) FUL-04
+                                                               SUSPEND_SERVICE at source HomePass with source Package composition;
+                                                               (b) FUL-07 RELEASE on source HomePass; (c) physical work — if
+                                                               disconnectMode = TECH_DISPATCH: create SHIFTING WO via POST
+                                                               /api/work-orders with flowContext={equipmentPath,
+                                                               disconnectMode, sourceHomepassId, targetHomepassId,
+                                                               equipmentDelta}, park on WorkOrderFinalized; if
+                                                               CUSTOMER_SELF_MOVE: log self-move acknowledgement; (d) FUL-03
+                                                               ACTIVATE_SERVICE at target HomePass with TARGET Package composition
+                                                               + equipment bindings (from
+                                                               WorkOrderFinalized.finalEquipmentBindings for tech-dispatch; from
+                                                               pre-existing for self-move) + target service_management_endpoints; (e)
+                                                               FUL-03 MODIFY_SERVICE at target — diff source vs target Package
+                                                               composition, dispatch per-Service add/drop/modify per FUL-03 v1.1 §3; (f)
+                                                               FUL-07 CLAIM on target HomePass; (g) commit master fields atomically
+                                                               (homepass_id, previous_homepass_id, package_ref,
+                                                               package_version_id, previous_package_ref,
+                                                               previous_package_version_id, last_migrated_at).
+
+  R-SUB-WF-MIGRATION-01-F-2                                    Atomic-switch: subscription stays ACTIVE on source HomePass + source
+                                                               Package until step (f) succeeds. Failure in any step before (f) → revert: FUL-04
+                                                               RESUME at source (best-effort), FUL-07 CLAIM back on source (best-effort),
+                                                               revert state to ACTIVE, emit SubscriptionMigrationRejected. If WO
+                                                               already finalized but later step failed → operational alert (equipment moved +
+                                                               customer expecting service).
+
+  R-SUB-WF-MIGRATION-01-F-3                                    WO timeout handled by WO-01 framework
+                                                               (wo_kind_config(kind=SHIFTING).default_timeout_days). On
+                                                               WorkOrderTimedOut, BPMN runs compensation per F-2 + emits Rejected
+                                                               with rejectionReasonCode = WO_TIMEOUT.
+
+  R-SUB-WF-MIGRATION-01-F-4                                    WO cancellation: dispatcher force-cancels SHIFTING WO →
+                                                               WorkOrderCancelled fires the BPMN's boundary; compensation runs per
+                                                               F-2 + emits Rejected with rejectionReasonCode =
+                                                               WO_CANCELLED_BY_DISPATCHER.
+
+  R-SUB-WF-MIGRATION-01-F-5                                    HomePass row is NOT mutated by this workflow. RLM-CFG-01 is read-only.
+
+
+
+ 4.10 Effective timing
+  Rule                                                         Description
+
+  R-SUB-WF-MIGRATION-01-EF-1                                   Request supplies effectiveTiming. If absent: default from
+                                                               subscription_migration_config.default_effective_timing.
+
+  R-SUB-WF-MIGRATION-01-EF-2                                   SCHEDULED_AT requires scheduledAt strictly future, within
+                                                               max_future_scheduled_days.
+
+  R-SUB-WF-MIGRATION-01-EF-3                                   For non-IMMEDIATE: BPMN parks on Camunda timer.
+                                                               subscription_operation.current_state = SCHEDULED.
+                                                               SubscriptionMigrationScheduled emitted. At fire, BPMN re-validates
+                                                               and enters commit sequence.
+
+  R-SUB-WF-MIGRATION-01-EF-4                                   Cancellation during wait: DELETE /pending-migration/{operationId}
+                                                               OR any state-affecting operation on same subscription.
+
+  R-SUB-WF-MIGRATION-01-EF-5                                   Commit-time revalidation re-checks all preconditions including
+                                                               target-HomePass + target-Package + cycle-anchor + equipment-path. Failures
+                                                               → rejectionStage = COMMIT_REVALIDATION.
+
+  R-SUB-WF-MIGRATION-01-EF-6                                   Cancellation in commit window not allowed via DELETE → 409
+                                                               OPERATION_IN_COMMIT_WINDOW. Dispatcher may force-cancel SHIFTING
+                                                               WO via WO-01 endpoint.
+
+  R-SUB-WF-MIGRATION-01-EF-7                                   Pay-first gate at COMMIT time, not request time.
+
+
+
+
+ 5. REST API
+ 5.1 Trigger migration — scheduled (the typical customer case)
+          POST /api/subscriptions/{subscription_id}/migrate HTTP/1.1
+          Authorization: Bearer <jwt>
+          Content-Type: application/json
+          Idempotency-Key: migrate-sub_01HZ_OTIENO-hp_LAVI_073-pkg_INET_VOIP_IPTV-20260601
+
+          {
+              "operatorCode":        "WIK",
+              "migrationTrigger":    "CUSTOMER_REQUESTED_MIGRATION",
+
+
+
+SOPHIX BSS Design Documents                                                                                                           Page 10
+              "targetHomepassId":      "hp_01HZ_LAVI_073",
+              "targetPackageRef":      "pkg_01HX_INET_VOIP_IPTV_RES",
+              "equipmentPath":         null,
+              "disconnectMode":        null,
+              "cycleAnchorPolicy":     "PRESERVE",
+              "effectiveTiming":       "SCHEDULED_AT",
+              "scheduledAt":           "2026-06-01T09:00:00+03:00",
+              "notes":                 "Customer moving + upgrading to triple-play",
+              "initiatingActorUserId": "cc-agent-wik-007",
+              "initiatingActorRole":   "CALL_CENTER",
+              "initiatingWorkflowKind":"BO_UI",
+              "initiatingWorkflowRef": "cc-ticket-2026-05-15-3201"
+          }
+
+          → 202 Accepted
+          {
+            "operationId":              "subop_01HZ_OTIENO_MIGRATE",
+            "operatorCode":             "WIK",
+            "subscriptionId":           "sub_01HZ_OTIENO_FIBER",
+            "operationKind":            "MIGRATION",
+            "migrationTrigger":         "CUSTOMER_REQUESTED_MIGRATION",
+            "resolvedEquipmentPath":    "NEW_INSTALL",
+            "resolvedDisconnectMode":   "TECH_DISPATCH",
+            "resolvedCycleAnchorPolicy":"PRESERVE",
+            "resolvedEffectiveTiming": "SCHEDULED_AT",
+            "equipmentDelta":           {"addedEquipmentKinds": ["STB_IPTV"], "obsoleteEquipmentKinds": []},
+            "scheduledCommitAt":        "2026-06-01T09:00:00+03:00",
+            "bpmnProcessKey":           "sub-migrate-wik",
+            "bpmnProcessInstanceId":    "pi_01HZ_OTIENO_MIGRATE",
+            "currentState":             "SCHEDULED",
+            "startedAt":                "2026-05-15T14:00:00+03:00"
+          }
+
+ (equipmentPath auto-inferred NEW_INSTALL because target Package adds IPTV — requires STB not present on source.
+ disconnectMode forced to TECH_DISPATCH because NEW_INSTALL.)
+
+ 5.2 Trigger migration — ADMIN_TECH_MIGRATION
+          POST /api/subscriptions/{subscription_id}/migrate HTTP/1.1
+          {
+            "operatorCode":          "WIK",
+            "migrationTrigger":      "ADMIN_TECH_MIGRATION",
+            "targetHomepassId":      "hp_01HZ_<target>",
+            "targetPackageRef":      "pkg_<target>",
+            "cycleAnchorPolicy":     "PRESERVE",
+            "effectiveTiming":       "SCHEDULED_AT",
+            "scheduledAt":           "2026-07-01T09:00:00+03:00",
+            "initiatingActorRole":   "SUBSCRIPTION_ADMIN"
+          }
+
+          → 202 Accepted
+          {
+            "operationId": "op_migration_01J...",
+            "status": "SCHEDULED",
+            "technicalFulfillmentOwner": "FUL-10",
+            "guidance": "Track operation status on SUB-WF; FUL-10 owns technical execution when the scheduled time arrives."
+          }
+
+
+ 5.3 Errors
+          → 400 Bad Request
+          {
+            "code":                            "TARGET_PACKAGE_NOT_AVAILABLE_AT_TARGET_HOMEPASS",
+            "targetPackageRef":                "pkg_01HX_INET_VOIP_IPTV_RES",
+            "targetHomepassId":                "hp_01HZ_KIBE_010",
+            "missingServiceManagementKeys":    ["iptv_multicast"],
+            "guidance":                        "Target HomePass does not support target Package's required service families. Select a
+          }
+
+          → 400 Bad Request
+          {
+            "code":                  "EQUIPMENT_INCOMPATIBLE_WITH_TARGET",
+            "sourceNetworkRootType": "<source-tech>",
+            "targetNetworkRootType": "<target-tech>",
+            "requestedEquipmentPath":"KEEP_EXISTING",
+            "guidance":              "Cross-tech migration requires NEW_INSTALL. Existing equipment cannot be re-homed on target net
+          }
+
+          → 400 Bad Request
+          {
+            "code":    "CROSS_TECH_CUSTOMER_REQUEST_NOT_ALLOWED",
+
+
+
+SOPHIX BSS Design Documents                                                                                          Page 11
+              "guidance": "Cross-tech customer-requested migration is not enabled for this operator. Use ADMIN_TECH_MIGRATION through
+          }
+
+          → 400 Bad Request
+          {
+            "code":     "INCOMPATIBLE_CYCLE_ANCHOR_AND_EFFECTIVE_TIMING",
+            "guidance": "RESET_TO_OPERATION_DATE + END_OF_CURRENT_CYCLE is redundant. Use either PRESERVE + END_OF_CURRENT_CYCLE or
+          }
+
+
+ 5.4 Cancel pending-future migration
+          DELETE /api/subscriptions/{subscription_id}/pending-migration/{operation_id} HTTP/1.1
+          {
+            "operatorCode":          "WIK",
+            "cancellationReasonCode":"CUSTOMER_CHANGED_MIND",
+            "initiatingActorUserId": "cc-agent-wik-007",
+            "initiatingActorRole":   "CALL_CENTER"
+          }
+
+          → 200 OK
+          {
+            "operationId":           "subop_01HZ_OTIENO_MIGRATE",
+            "cancellationReasonCode":"CUSTOMER_CHANGED_MIND",
+            "cancelledAt":           "2026-05-20T16:00:00+03:00",
+            "subscriptionStaysOn":   {"homepassId":"hp_01HZ_KAREN_017", "packageRef":"pkg_01HX_INET_100M_VOIP_RES"},
+            "finalState":            "CANCELLED"
+          }
+
+ In-commit-window cancel:
+          → 409 Conflict
+          {
+            "code":         "OPERATION_IN_COMMIT_WINDOW",
+            "currentState": "AWAITING_WO_FINALIZED",
+            "guidance":     "Migration is in the atomic-switch commit window. Dispatcher may force-cancel the SHIFTING WO via WO-01'
+          }
+
+
+
+
+ 6. Kafka events emitted
+  Event                            Topic                          Fires on                      Consumers
+
+  SubscriptionMigrationSchedul     sophix.subscription.subscrip   Acceptance of non-IMMEDIATE   NOT-01, CVM, EM-04
+  ed                               tion.migrationscheduled
+
+  SubscriptionMigrated             sophix.subscription.subscrip   Successful commit             NOT-01, BIL-02 (cycle accrual at new
+                                   tion.migrated                                                HomePass + new Package), CVM
+                                                                                                (move + tier-change analytics), EM-04
+
+  SubscriptionMigrationCancell     sophix.subscription.subscrip   Pending-future cancelled      NOT-01, CVM, EM-04
+  ed                               tion.migrationcancelled
+
+  SubscriptionMigrationRejecte     sophix.subscription.subscrip   Workflow failure              NOT-01, ICN-01 ops alert, EM-04
+  d                                tion.migrationrejected
+
+
+ Sample SubscriptionMigrationScheduled:
+          {
+              "eventType":    "SubscriptionMigrationScheduled",
+              "aggregateId": "sub_01HZ_OTIENO_FIBER",
+              "timestamp":    "2026-05-15T14:00:01+03:00",
+              "payload": {
+                "operatorCode":               "WIK",
+                "subscriptionId":             "sub_01HZ_OTIENO_FIBER",
+                "customerId":                 "cust_01HZ_OTIENO",
+                "operationId":                "subop_01HZ_OTIENO_MIGRATE",
+                "migrationTrigger":           "CUSTOMER_REQUESTED_MIGRATION",
+                "sourceHomepassId":           "hp_01HZ_KAREN_017",
+                "sourceFranchiseId":          "frn_NRB_KAREN_RES",
+                "sourceNetworkRootType":      "<source-root-type>",
+                "sourcePackageRef":           "pkg_01HX_INET_100M_VOIP_RES",
+                "sourcePackageVersionId":     "pkv_01HX_INET_100M_V3",
+                "targetHomepassId":           "hp_01HZ_LAVI_073",
+                "targetFranchiseId":          "frn_NRB_LAVI_RES",
+                "targetNetworkRootType":      "<target-root-type>",
+                "sameFranchise":              false,
+                "targetPackageRef":           "pkg_01HX_INET_VOIP_IPTV_RES",
+                "targetPackageVersionId":     "pkv_01HX_INET_VOIP_IPTV_V1",
+                "resolvedEquipmentPath":      "NEW_INSTALL",
+                "resolvedDisconnectMode":     "TECH_DISPATCH",
+                "resolvedCycleAnchorPolicy": "PRESERVE",
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 12
+                     "resolvedEffectiveTiming":   "SCHEDULED_AT",
+                     "equipmentDelta":            {"addedEquipmentKinds": ["STB_IPTV"], "obsoleteEquipmentKinds": []},
+                     "scheduledCommitAt":         "2026-06-01T09:00:00+03:00",
+                     "initiatingActorUserId":     "cc-agent-wik-007",
+                     "initiatingActorRole":       "CALL_CENTER"
+                 }
+             }
+
+ Sample SubscriptionMigrated:
+             {
+                 "eventType":     "SubscriptionMigrated",
+                 "aggregateId": "sub_01HZ_OTIENO_FIBER",
+                 "timestamp":     "2026-06-01T10:55:42+03:00",
+                 "payload": {
+                   "operatorCode":                "WIK",
+                   "subscriptionId":              "sub_01HZ_OTIENO_FIBER",
+                   "operationId":                 "subop_01HZ_OTIENO_MIGRATE",
+                   "migrationTrigger":            "CUSTOMER_REQUESTED_MIGRATION",
+                   "sourceHomepassId":            "hp_01HZ_KAREN_017",
+                   "targetHomepassId":            "hp_01HZ_LAVI_073",
+                   "sameFranchise":               false,
+                   "sourcePackageRef":            "pkg_01HX_INET_100M_VOIP_RES",
+                   "targetPackageRef":            "pkg_01HX_INET_VOIP_IPTV_RES",
+                   "resolvedEquipmentPath":       "NEW_INSTALL",
+                   "resolvedDisconnectMode":      "TECH_DISPATCH",
+                   "resolvedCycleAnchorPolicy": "PRESERVE",
+                   "resolvedEffectiveTiming":     "SCHEDULED_AT",
+                   "scheduledCommitAt":           "2026-06-01T09:00:00+03:00",
+                   "actualCommitAt":              "2026-06-01T10:55:42+03:00",
+                   "shiftingWoId":                "wo_01HZ_OTIENO_SHIFT_5501",
+                   "migrationFeesNet":            6500.00,
+                   "currency":                    "KES",
+                   "billingDetails": {
+                      "lineItems": [
+                         {"code":"MIGRATION_FEE","amount":1500.00},
+                         {"code":"MIGRATION_PRORATE_DELTA","amount":5000.00,"sign":"POSITIVE"}
+                      ],
+                      "totalsNet":7540.00
+                   },
+                   "initiatingActorUserId":       "cc-agent-wik-007",
+                   "initiatingActorRole":         "CALL_CENTER"
+                 }
+             }
+
+
+
+
+ 7. Cross-DD coordination
+ 7.1 Upstream callers
+  Caller                                          migrationTrigger                                  Role
+
+  Customer portal                                 CUSTOMER_REQUESTED_MIGRATION                      CUSTOMER_SELF_SERVICE (subject to config)
+
+  Call Center                                     CUSTOMER_REQUESTED_MIGRATION                      CALL_CENTER
+
+  BO admin                                        ADMIN_TECH_MIGRATION                              SUBSCRIPTION_ADMIN
+
+
+
+ 7.2 Sibling modules
+  Module                                          Direction                                         Contract
+
+  SUB-WF-FRAMEWORK-01 (parent)                    This DD composes framework primitives             subscription_operation row + BPMN start
+
+  SUB-WF-FRAMEWORK-01-WORKERS                     This DD's BPMNs reference workers by topic        Standard framework workers +
+                                                                                                    wo-create-shifting + wo-cancel
+
+  SUB-LM-01                                       Workers write status + master fields atomically   homepass_id, previous_homepass_id,
+                                                                                                    package_ref, package_version_id,
+                                                                                                    previous_package_ref,
+                                                                                                    previous_package_version_id,
+                                                                                                    last_migrated_at
+
+  RLM-CFG-01                                      Workers read source + target HomePass             service_management_endpoints,
+                                                                                                    status_code, network_path root node type,
+                                                                                                    franchise
+
+  SIP-01                                          Workers read source + target Packages             Package composition, version, currency, billing
+                                                                                                    mode
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 13
+  Module                                     Direction                                   Contract
+
+  PLM-CFG-01 v1.0                            Workers read service definitions            service_management_key, equipment
+                                                                                         requirements,
+                                                                                         RestrictionCapableProvisioner interface
+
+  BIL-01 v1.1                                bil01-emit-intent worker                    MIGRATION_INTENT — fee + signed proration
+                                                                                         delta + cycle-anchor RESET pair
+
+  BIL-CFG-01 v1.0                            BillableEvent catalog                       MIGRATION_FEE, MIGRATION_PRORATE_DELTA
+                                                                                         (SIGNED), OLD_CYCLE_CREDIT,
+                                                                                         FIRST_CYCLE_CHARGE,
+                                                                                         EQUIPMENT_REPLACEMENT_FEE
+
+  FUL-04 v1.1                                ful-call-suspend worker                     SUSPEND_SERVICE at source HomePass with
+                                                                                         reasonCategory=SOURCE_DECOMMISSION
+
+  FUL-03 v1.1                                ful-call-activate +                         ACTIVATE_SERVICE + MODIFY_SERVICE at target
+                                             ful-call-modify-service workers             HomePass
+
+  FUL-07 v1.0                                ful-call-release-homepass +                 HomePass bookkeeping
+                                             ful-call-claim-homepass
+
+  WO-01 (FRAMEWORK + FLOW-SHIFTING)          wo-create-shifting worker (when same-tech   Per DD_WO-01-CONTRACT-FOR-SUB-WF —
+                                             disconnectMode=TECH_DISPATCH)               POST /api/work-orders with kind=SHIFTING
+
+  FUL-10 Technology Migration Fulfillment    ful10-start-technology-migration worker     Owns technical cross-tech sequence and calls
+                                             (when cross-tech ADMIN_TECH_MIGRATION is    WO/OSR/PROV-INT as needed.
+                                             enabled)
+
+  NOT-01                                     notification-send worker                    Customer notification
+
+  BIL-02 / CVM / EM-04                       Consume Kafka events                        Downstream reporting
+
+
+
+ 7.3 Build order
+ This DD deploys after:
+
+   1. SUB-WF-FRAMEWORK-01 v1.0
+
+   2. SUB-LM-01 v1.0
+
+   3. SIP-01 v1.0, PLM-CFG-01 v1.0, RLM-CFG-01 v1.0
+
+   4. FUL-03 v1.1, FUL-04 v1.1, FUL-07 v1.0
+
+   5. BIL-01 v1.1, BIL-CFG-01 v1.0
+
+   6. WO-01 framework + FLOW-SHIFTING v1.0
+
+   7. DD_WO-01-CONTRACT-FOR-SUB-WF v1.0
+
+   8. SUB-WF-RELOCATION-01 v1.1 (sister workflow; shares many integration patterns)
+
+   9. At least one FLOW satellite per operator (FLOW-WIK v1.1 ships alongside this parent)
+
+ 7.4 Stub debt + open coordination items
+   - FUL-10 operator enablement — ADMIN_TECH_MIGRATION is available only for operators with FUL-10 configuration, test
+     data, and rollback procedures approved.
+
+   - WUG / WTZ / YASSN FLOW satellites — pending operator deep dives.
+
+   - Operator-specific job-type code mapping — operator's WO-01 Drools KJAR handles (kind=SHIFTING,
+     sourceNetworkRootType, equipmentPath, equipmentDelta) → operator job-type code.
+
+
+
+ B — Current TZ
+ Status: To be filled in after codebase cartography review.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                       Page 14
+

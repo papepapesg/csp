@@ -1,0 +1,673 @@
+ DD_SUB-WF-PAUSE-01-FLOW-WIK - WIK Pause BPMN
+ Developer implementation guide: DD_SUB-WF-PAUSE-01-FLOW-WIK-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This DD defines the WIK operator BPMN for voluntary subscription pause.
+
+ Process key:
+          sub-pause-wik
+
+ This BPMN implements the parent pause contract from DD_SUB-WF-PAUSE-01-Subscription_Pause-v1.0.md for
+ WIK.
+
+ The WIK pause flow is normally no-fee in v1.0:
+          validate -> PENDING_PAUSE -> compute billing window -> emit billing intent -> optional fee payment -> suspend service -> c
+
+ The optional pay-first gate exists in the BPMN, but it is dormant for the seeded WIK v1.0 pause reasons because no seeded
+ reason has a pause fee.
+
+
+ 2. Ownership
+ This DD owns:
+
+   - WIK-specific pause BPMN process key.
+
+   - WIK happy-path BPMN sequence.
+
+   - WIK reason catalog seed values.
+
+   - WIK duration behavior.
+
+   - WIK optional payment gate behavior.
+
+   - WIK fulfillment suspension behavior.
+
+   - WIK worker-topic composition.
+
+   - WIK message catches.
+
+   - WIK use of rules.subscription.pause.wik.
+
+   - WIK pause examples.
+
+ This DD does not own:
+
+   - Generic pause API contract and schemas. See parent pause DD.
+
+   - Shared operation framework. See SUB-WF-FRAMEWORK-01.
+
+   - Worker contracts. See DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+   - Worker implementation code.
+
+   - SUB-LM, BIL, FUL, NOT, scheduler internals.
+
+   - Resume implementation. See SUB-WF-RESUME-01.
+
+
+ 3. Required Runtime Configuration
+ 3.1 Framework Operation Config
+ What this table is for:
+
+ subscription_operation_config tells the subscription workflow framework which BPMN process to start for an
+ operator and operation kind.
+
+ When to use it:
+
+ Use it when the API receives a PAUSE request and needs to resolve the WIK BPMN process key.
+
+ Required row:
+
+
+SOPHIX BSS Design Documents                                                                                            Page 1
+            INSERT INTO subscription_operation_config (
+               operator_code,
+               operation_kind,
+               default_bpmn_process_key,
+               operation_timeout_seconds,
+               feature_flags,
+               enabled,
+               updated_by
+            )
+            VALUES (
+               'WIK',
+               'PAUSE',
+               'sub-pause-wik',
+               120,
+               '{}',
+               TRUE,
+               'migration'
+            );
+
+ Column meaning:
+
+  Column                          Purpose                              Sample                Meaning
+
+  operator_code                   Operator scope.                      WIK                   This row applies to WIK.
+
+  operation_kind                  Subscription operation.              PAUSE                 This row is used for pause requests.
+
+  default_bpmn_process_key        Camunda process key to start.        sub-pause-wik         Start the WIK pause BPMN.
+
+  operation_timeout_seconds       Framework operation timeout.         120                   Pause should normally finish quickly
+                                                                                             unless waiting on payment or
+                                                                                             fulfillment.
+
+  feature_flags                   Operator-specific flags.             {}                    No WIK pause flow flags in v1.0.
+
+  enabled                         Runtime enablement.                  TRUE                  API may start WIK pause.
+
+  updated_by                      Audit actor.                         migration             Seeded by migration.
+
+
+
+ 3.2 WIK Pause Config
+ What this table is for:
+
+ subscription_pause_config stores operator-level pause policy, such as whether self-service pause is allowed and how
+ far in the future a resume can be scheduled.
+
+ When to use it:
+
+ Load it before Drools validation and pass it as a fact into rules.subscription.pause.wik.
+
+ Required row:
+            INSERT INTO subscription_pause_config (
+               operator_code,
+               customer_self_service_enabled,
+               scheduled_pause_enabled,
+               max_future_scheduled_resume_days,
+               min_pause_hours,
+               customer_notification_enabled,
+               updated_by
+            )
+            VALUES (
+               'WIK',
+               TRUE,
+               TRUE,
+               90,
+               24,
+               TRUE,
+               'migration'
+            );
+
+ Column meaning:
+
+  Column                          Purpose                              Sample                Meaning
+
+  operator_code                   Operator scope.                      WIK                   Policy applies to WIK.
+
+  customer_self_service_enable    Allows customer portal pause.        TRUE                  Customers may request eligible pause
+  d                                                                                          reasons themselves.
+
+  scheduled_pause_enabled         Allows scheduled or fixed-duration   TRUE                  WIK supports fixed days and
+                                  pause.                                                     scheduled resume.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 2
+  Column                           Purpose                                     Sample                             Meaning
+
+  max_future_scheduled_resume_     Maximum future resume horizon.              90                                 Resume cannot be scheduled more
+  days                                                                                                            than 90 days out.
+
+  min_pause_hours                  Minimum pause duration.                     24                                 Pause must last at least one day.
+
+  customer_notification_enable     Enables NOT-01 pause notifications.         TRUE                               Send customer notification after
+  d                                                                                                               success.
+
+  updated_by                       Audit actor.                                migration                          Seeded by migration.
+
+
+
+ 3.3 WIK Pause Reasons
+ What this table is for:
+
+ pause_reason is the pause reason catalog. It defines which reasons customers can use, which reasons are admin-only,
+ duration bounds, billing impact, and whether network service must be suspended.
+
+ When to use it:
+
+ Load the requested reason before Drools validation, snapshot it into the operation variables, and store the snapshot in
+ subscription_pause_history after the pause succeeds.
+
+ Required seed data:
+
+  code                customer_self_s    admin_only               max_duration_da       open_ended_allo    pauses_bill_cyc         suspends_fulfil
+                      ervice_eligible                             ys                    wed                le                      lment
+
+  CUSTOMER_VACATI     TRUE               FALSE                    90                    FALSE              TRUE                    TRUE
+  ON
+
+  CUSTOMER_TEMPOR     TRUE               FALSE                    30                    FALSE              TRUE                    TRUE
+  ARY_AWAY
+
+  CUSTOMER_FINANC     FALSE              FALSE                    60                    FALSE              TRUE                    TRUE
+  IAL_HARDSHIP
+
+  ADMIN_MAINTENAN     FALSE              TRUE                     NULL                  TRUE               FALSE                   TRUE
+  CE
+
+  ADMIN_COMPLIANC     FALSE              TRUE                     NULL                  TRUE               FALSE                   TRUE
+  E_HOLD
+
+
+ Sample row meaning:
+
+ CUSTOMER_VACATION means a customer, call-center agent, or subscription operator can pause an active subscription for up
+ to 90 days. The pause stops bill-cycle accrual and suspends network service.
+
+
+ 4. BPMN Start Variables
+ The shared framework starts Camunda with these variables.
+
+  Variable                                        Purpose                                          Example
+
+  operationId                                     Links BPMN to subscription_operation.            subop_01HZ_KAMAU_PAUSE
+
+  operatorCode                                    Operator scope.                                  WIK
+
+  subscriptionId                                  Subscription being paused.                       sub_01HZ_KAMAU_FIBER
+
+  operationKind                                   Always PAUSE.                                    PAUSE
+
+  customerId                                      Customer reference from SUB-LM.                  cust_01HZ_KAMAU
+
+  pauseTrigger                                    Why pause was requested.                         CUSTOMER_REQUESTED_PAUSE
+
+  pauseReasonCode                                 Requested pause reason.                          CUSTOMER_VACATION
+
+  durationMode                                    Resolved duration mode.                          FIXED_DAYS
+
+  durationDays                                    Fixed duration days, if supplied.                31
+
+  resumeScheduledAt                               Resolved resume timestamp, if scheduled.         2026-04-15T10:00:00Z
+
+  reasonCatalogSnapshot                           Snapshot of the pause reason row.                {"pauses_bill_cycle":true}
+
+  pauseFeeApplicable                              Whether payment gate should run.                 false
+
+  initiatingActorUserId                           Actor user/service.                              cc-agent-wik-007
+
+  initiatingActorRole                             Actor role.                                      CALL_CENTER
+
+  initiatingWorkflowKind                          Upstream workflow.                               BO_UI
+
+
+
+SOPHIX BSS Design Documents                                                                                                                      Page 3
+  Variable                                     Purpose                                           Example
+
+  initiatingWorkflowRef                        Upstream reference.                               cc-ticket-2026-03-15-3301
+
+
+
+
+ 5. Worker Topics Used
+ These are logical Camunda external-task topics, not separate deployments. One worker app may subscribe to many topics,
+ but logs, retries, metrics, and contracts must remain visible per topic.
+
+  Worker topic                                                       Why WIK pause uses it
+
+  drools-decide                                                      Re-check pause policy, reason, role, active status, and duration.
+
+  sub-lm-put-pending-status                                          Move subscription to PENDING_PAUSE.
+
+  sub-lm-compute-cycle-window                                        Compute billing-cycle context for BIL-01.
+
+  bil01-emit-intent                                                  Ask BIL-01 to evaluate PAUSE_INTENT.
+
+  bil01-charge-pre-authorize                                         Optional payment gate when pause fee applies.
+
+  bil01-confirm-charge                                               Optional confirmation after payment message.
+
+  ful-call-restrict                                                  Ask FUL-04 to suspend service using SUSPEND_SERVICE.
+
+  sub-lm-put-active-restrictions                                     Clear active restrictions after service suspension.
+
+  sub-lm-put-master-fields                                           Write status audit fields and pause-history row.
+
+  sub-lm-commit-state                                                Commit subscription to SUSPENDED.
+
+  kafka-emit                                                         Write pause success/failure event to outbox.
+
+  notification-send                                                  Send pause notification without failing BPMN on notification failure.
+
+  subscription-operation-finalize                                    Set operation terminal state.
+
+  bil01-revert-pending-charge                                        Compensation for pending pause fee charge.
+
+  sub-lm-revert-to-prior                                             Compensation to return subscription to ACTIVE.
+
+
+
+
+ 6. Happy Path BPMN
+             Start
+               -> update operation state VALIDATING
+               -> drools-decide
+               -> gateway: eligible and duration valid?
+                   no -> pause rejected path
+                   yes
+               -> update operation state PENDING_STATE_FLIP
+               -> sub-lm-put-pending-status
+               -> sub-lm-compute-cycle-window
+               -> update operation state BILLING_CALL
+               -> bil01-emit-intent
+               -> gateway: pauseFeeApplicable?
+                   yes -> bil01-charge-pre-authorize -> wait payment-confirmed -> bil01-confirm-charge
+                   no -> continue
+               -> update operation state FULFILLMENT_CALL
+               -> ful-call-restrict
+               -> update operation state AWAITING_FULFILLMENT_RESPONSE
+               -> wait fulfillment-completed
+               -> sub-lm-put-active-restrictions CLEAR_ALL
+               -> update operation state COMMITTING_FINAL_STATE
+               -> sub-lm-put-master-fields
+               -> sub-lm-commit-state
+               -> update operation state EMITTING_EVENT
+               -> kafka-emit SubscriptionPaused
+               -> notification-send
+               -> subscription-operation-finalize COMPLETED
+               -> End
+
+
+
+ 7. Step Details
+ 7.1 drools-decide
+ Inputs:
+             {
+                 "kjarPackage": "rules.subscription.pause.wik",
+                 "requestedDecisions": [
+                   "validate-preconditions",
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 4
+                 "resolve-duration-mode",
+                 "compute-pause-fee-applicability"
+               ],
+               "factsJson": "{...pause facts...}"
+           }
+
+ Expected output for WIK vacation pause:
+           {
+               "decisionsJson": {
+                 "eligible": true,
+                 "durationMode": "FIXED_DAYS",
+                 "durationDays": 31,
+                 "resumeScheduledAt": "2026-04-15T10:00:00Z",
+                 "durationValid": true,
+                 "pauseFeeApplicable": false,
+                 "reasonCatalogSnapshot": {
+                   "code": "CUSTOMER_VACATION",
+                   "pauses_bill_cycle": true,
+                   "suspends_fulfillment": true,
+                   "max_duration_days": 90
+                 }
+               }
+           }
+
+ If eligible = false or durationValid = false, route to pause rejection.
+
+ 7.2 sub-lm-put-pending-status
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "toStatus": "PENDING_PAUSE",
+               "currentTransitionType": "PAUSE",
+               "currentTransitionReasonCode": "CUSTOMER_VACATION"
+           }
+
+ Output consumed later:
+           {
+               "priorStatusSnapshot": {
+                 "statusCode": "ACTIVE",
+                 "currentTransitionType": null,
+                 "currentTransitionReasonCode": null
+               }
+           }
+
+
+ 7.3 bil01-emit-intent
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "intentKind": "PAUSE_INTENT",
+               "intentContext": {
+                  "pauseReasonCode": "CUSTOMER_VACATION",
+                  "durationMode": "FIXED_DAYS",
+                  "durationDays": 31,
+                  "resumeScheduledAt": "2026-04-15T10:00:00Z",
+                  "pausesBillCycle": true,
+                  "suspendsFulfillment": true,
+                  "originIntent": "CUSTOMER_REQUESTED_PAUSE"
+               },
+               "cycleWindow": {
+                  "cycleStart": "2026-03-01",
+                  "cycleEnd": "2026-03-31"
+               }
+           }
+
+ Expected WIK v1.0 result for seeded vacation reason:
+           {
+               "intentDecisionId": "bidec_01HZ_KAMAU_PAUSE",
+               "lineItems": [],
+               "totals": {
+                 "net": 0,
+                 "currency": "KES"
+               }
+           }
+
+
+ 7.4 Optional Payment Gate
+
+SOPHIX BSS Design Documents                                                Page 5
+ The payment gate runs only if Drools returns:
+           {
+               "pauseFeeApplicable": true
+           }
+
+ For WIK seeded v1.0 reasons this is normally false, so BPMN skips:
+           bil01-charge-pre-authorize -> payment-confirmed -> bil01-confirm-charge
+
+ Keep the gateway in the BPMN because future WIK pause reasons may carry a pause fee.
+
+ 7.5 ful-call-restrict
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "intent": "SUSPEND_SERVICE",
+               "reasonCategory": "CUSTOMER_VACATION",
+               "suspendsFulfillment": true,
+               "fulfillmentCorrelationId": "subop_01HZ_KAMAU_PAUSE:pause"
+           }
+
+ FUL-04 suspends the customer service, for example voice profile and broadband authentication. The BPMN waits for
+ fulfillment-completed or fulfillment-failed correlated by fulfillmentCorrelationId.
+
+ 7.6 sub-lm-put-master-fields
+ This step writes final pause metadata before the state is committed.
+
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "fieldsJson": {
+                  "last_status_changed_at": "2026-03-15T10:00:05Z"
+               },
+               "pauseHistoryRow": {
+                  "origin_intent": "CUSTOMER_REQUESTED_PAUSE",
+                  "system_managed": false,
+                  "pause_reason_code": "CUSTOMER_VACATION",
+                  "pause_reason_snapshot": {
+                     "code": "CUSTOMER_VACATION",
+                     "pauses_bill_cycle": true,
+                     "suspends_fulfillment": true,
+                     "max_duration_days": 90
+                  },
+                  "duration_mode": "FIXED_DAYS",
+                  "duration_days": 31,
+                  "resume_scheduled_at": "2026-04-15T10:00:00Z",
+                  "pause_fee_billable_event_id": null,
+                  "suspended_at": "2026-03-15T10:00:05Z",
+                  "actual_resume_at": null,
+                  "pause_correlation_id": "subop_01HZ_KAMAU_PAUSE",
+                  "pause_actor_user_id": "cc-agent-wik-007",
+                  "pause_actor_role": "CALL_CENTER",
+                  "notes": "Customer travelling to Mombasa for holiday season"
+               }
+           }
+
+ The worker implementation may call SUB-LM and pause workflow persistence behind one topic. Do not write this row with ad
+ hoc SQL inside the BPMN worker if the project has a dedicated repository/service for pause history.
+
+ 7.7 sub-lm-commit-state
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "expectedFromStatus": "PENDING_PAUSE",
+               "toStatus": "SUSPENDED"
+           }
+
+ Emit success only after this commit succeeds.
+
+
+ 8. Message Catches
+
+
+SOPHIX BSS Design Documents                                                                                          Page 6
+  Message                                      Correlation key                                 Used when
+
+  payment-confirmed                            billableEventId                                 Only if a pause fee was pre-authorized.
+
+  fulfillment-completed                        fulfillmentCorrelationId                        FUL-04 successfully suspended service.
+
+  fulfillment-failed                           fulfillmentCorrelationId                        FUL-04 failed or rejected suspension.
+
+
+ Payment wait has a 7-day boundary timer. On timeout, BPMN compensates and finalizes the operation as FAILED.
+
+
+ 9. Drools Package
+ Required package:
+              rules.subscription.pause.wik
+
+ Required decisions:
+
+  Decision                                                         Purpose
+
+  validate-preconditions                                           Checks subscription status, open pause, trigger, role, and reason eligibility.
+
+  resolve-duration-mode                                            Resolves fixed-day, scheduled-time, or open-ended pause and validates
+                                                                   bounds.
+
+  compute-pause-fee-applicability                                  Decides whether the optional payment gate runs.
+
+
+ Example rule intent:
+              rule "WIK pause requires active subscription"
+              when
+                $req: PauseRequestFact()
+                $sub: SubscriptionStateFact(subscriptionId == $req.subscriptionId, statusCode != "ACTIVE")
+              then
+                modify($req) {
+                   setEligible(false);
+                   setEligibilityReasonCode("INVALID_STATE_FOR_PAUSE")
+                }
+              end
+
+              rule "WIK customer self-service cannot use admin-only reason"
+              when
+                $req: PauseRequestFact(initiatingActorRole == "CUSTOMER_SELF_SERVICE", eligible == null)
+                $reason: PauseReasonFact(code == $req.pauseReasonCode, adminOnly == true)
+              then
+                modify($req) {
+                   setEligible(false);
+                   setEligibilityReasonCode("ADMIN_ONLY_PAUSE_REASON")
+                }
+              end
+
+              rule "WIK fixed days duration within bounds"
+              when
+                $req: PauseRequestFact(durationDays != null, durationValid == null)
+                $reason: PauseReasonFact(code == $req.pauseReasonCode)
+                $cfg: OperatorConfigFact()
+                eval($req.getDurationDays() * 24 >= $cfg.getMinPauseHours()
+                      && ($reason.getMaxDurationDays() == null || $req.getDurationDays() <= $reason.getMaxDurationDays())
+                      && $req.getDurationDays() <= $cfg.getMaxFutureScheduledResumeDays())
+              then
+                java.time.Instant resumeAt = java.time.Instant.now().plusSeconds($req.getDurationDays() * 86400L);
+                modify($req) {
+                   setDurationMode("FIXED_DAYS");
+                   setResumeScheduledAt(resumeAt.toString());
+                   setDurationValid(true)
+                }
+              end
+
+
+
+ 10. Compensation Paths
+  Failure point                                                    BPMN compensation
+
+  Drools rejects request                                           Emit SubscriptionPauseRejected; finalize FAILED.
+
+  Pending status update fails                                      No committed mutation expected; emit rejected; finalize FAILED.
+
+  Billing intent fails                                             Run sub-lm-revert-to-prior; emit rejected; finalize FAILED.
+
+  Payment timeout                                                  Run bil01-revert-pending-charge; run sub-lm-revert-to-prior;
+                                                                   emit rejected; finalize FAILED.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 7
+  Failure point                                                      BPMN compensation
+
+  Fulfillment fails                                                  Revert pending charge if any; run sub-lm-revert-to-prior; emit rejected;
+                                                                     finalize FAILED.
+
+  Clear restrictions fails                                           Route to manual recovery; network may already be suspended.
+
+  Pause-history write or state commit fails                          Route to manual recovery.
+
+  Kafka emit fails                                                   Outbox retries. BPMN should not mark success event delivered synchronously.
+
+  Notification fails                                                 Log and continue. Notification is reliability-isolated.
+
+
+
+
+ 11. Worked Example
+ Kamau calls the WIK call center and asks to pause fiber service for 31 days while travelling.
+
+ Request:
+             POST /api/subscriptions/sub_01HZ_KAMAU_FIBER/pause
+             Idempotency-Key: pause-sub_01HZ_KAMAU-vacation-20260315
+             Content-Type: application/json
+
+             {
+                  "operatorCode": "WIK",
+                  "pauseTrigger": "CUSTOMER_REQUESTED_PAUSE",
+                  "pauseReasonCode": "CUSTOMER_VACATION",
+                  "durationDays": 31,
+                  "notes": "Customer travelling to Mombasa for holiday season",
+                  "initiatingWorkflowKind": "BO_UI",
+                  "initiatingWorkflowRef": "cc-ticket-2026-03-15-3301"
+             }
+
+ Runtime result:
+             API validates request
+               -> loads SUB-LM subscription summary: ACTIVE
+               -> loads WIK pause config and CUSTOMER_VACATION reason
+               -> Drools resolves FIXED_DAYS and resumeScheduledAt
+               -> framework creates operation subop_01HZ_KAMAU_PAUSE
+               -> Camunda starts sub-pause-wik
+               -> subscription moves ACTIVE -> PENDING_PAUSE
+               -> billing receives PAUSE_INTENT and returns no fee
+               -> FUL-04 suspends service
+               -> pause history row is inserted
+               -> subscription moves PENDING_PAUSE -> SUSPENDED
+               -> SubscriptionPaused event is emitted
+               -> notification is sent
+               -> operation is COMPLETED
+
+ After success:
+
+   - Subscription status is SUSPENDED.
+
+   - Customer service is suspended.
+
+   - subscription_pause_history.actual_resume_at remains NULL.
+
+   - Scheduler can later call RESUME with SCHEDULED_AUTO_RESUME when resume_scheduled_at arrives.
+
+
+ 12. Cross-DD Dependencies
+  Dependency                                                         Why it matters
+
+  DD_SUB-WF-PAUSE-01-Subscription_Pause-v1.0.md                      Owns generic pause API, tables, events, and invariants.
+
+  DD_SUB-WF-FRAMEWORK-01-Subscription_Workflow_Framework-v1.         Owns operation creation and process start.
+  0.md
+
+  DD_SUB-WF-FRAMEWORK-01-WORKERS-v1.0.md                             Owns worker-topic contracts.
+
+  DD_SUB-LM-01-Subscription_Lifecycle_Management-v1.0.md             Owns subscription status source of truth.
+
+  BIL-01 and BIL-CFG-01                                              Own pause billing intent and any future pause fee.
+
+  FUL-04                                                             Owns network suspension.
+
+  NOT-01                                                             Owns customer notification.
+
+  SUB-WF-RESUME-01                                                   Must close pause-history rows during manual or scheduled resume.
+
+  FOUNDATION_SCHEDULER                                               Must trigger scheduled auto-resume when configured.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                              Page 8
+ 13. Open Items
+   - WUG, WTZ, and YASSN pause flow satellites still require operator-specific deep dives.
+
+   - SCHEDULED_AUTO_RESUME must be supported by RESUME before fixed-duration pauses can resume automatically.
+     Without it, operations can create scheduled pauses but operations staff must resume manually.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                     Page 9
+

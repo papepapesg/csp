@@ -1,0 +1,962 @@
+ DD_ASR-03 - Complaint
+ Version: 1.0 Status: Draft for review Bundle: 10_other Audience: customer care developers, ticketing developers, billing
+ developers, work-order developers, frontend developers, QA Related DDs:
+
+   - DD_TCK-01 - Ticketing and Case Management
+
+   - DD_ASR-01 - Technical Trouble
+
+   - DD_ASR-02 - Information Request
+
+   - DD_ASR-04 - Service Request
+
+   - DD_BIL-02-ADJ-01 - Invoice Adjustments
+
+   - DD_WO-01 - Work Order Module
+
+   - DD_CUST-INT-01 - Customer Interaction Timeline
+
+   - DD_NOT-01 - Notification Service
+
+   - FE-APP-01 - BSS Backoffice Web App
+
+   - FE-APP-04 - Customer Self Care Frontoffice App
+
+ MVP simplification baseline: ASR-03 is implemented as TCK-01 complaint ticket categories, investigation workflow,
+ escalation rules, and optional approval/credit hooks. It is not a separate complaint service, database, or deployment in the
+ first release.
+
+
+
+ 1. Purpose
+ ASR-03 defines how SOPHIX handles customer complaints.
+
+ A complaint is a customer expression of dissatisfaction that needs investigation, accountability, response, and sometimes
+ corrective action. It is more than an information request because the customer says something is wrong, unfair, delayed,
+ repeated, badly handled, or unacceptable.
+
+ Examples:
+
+   - customer says an invoice charge is wrong;
+
+   - customer says the same technical fault keeps returning;
+
+   - customer says installation was delayed without explanation;
+
+   - customer complains about technician or franchise behavior;
+
+   - customer disputes a rejected KYC or order decision;
+
+   - customer says the service quality is consistently poor;
+
+   - customer asks for compensation or escalation;
+
+   - customer reports that support promised an action but it was not done.
+
+ This DD does not create a new ticketing engine. Complaints are implemented as configured TCK-01 ticket types/categories
+ with ASR-specific investigation, escalation, resolution-action, and compensation recommendation tables.
+
+
+
+ 2. Ownership Boundary
+  Concern                                                                     Owner
+
+  Ticket lifecycle, comments, assignment, SLA, attachments                    TCK-01
+
+  Complaint category behavior, investigation, root cause, resolution policy   ASR-03 config inside TCK/ASR
+
+  Technical diagnosis and repair                                              ASR-01 / WO-01
+
+  Billing correction, credit note, debit note                                 BIL-02-ADJ-01
+
+  Invoice read data                                                           BIL-02-READ-01
+
+  Payment read/reconciliation data                                            PAY-GW-01, BIL-05
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 1
+  Concern                                                                               Owner
+
+  Subscription action                                                                   SUB-LM / SUB-WF owning workflow
+
+  Order and installation status                                                         FUL / WO
+
+  Customer timeline projection                                                          CUST-INT-01
+
+  Customer notifications                                                                NOT-01
+
+
+ Rule: ASR-03 can recommend or request corrective action, but it must not silently mutate subscription, billing, wallet, order, or
+ work-order records. The owning module performs the actual business action through its own API and audit rules.
+
+
+
+ 3. When To Use This Flow
+ Use ASR-03 when the expected outcome is investigation plus formal response, not only an answer or operational task.
+
+  Scenario                                                                              Use
+
+  Customer asks a neutral question                                                      ASR-02 Information Request
+
+  Customer reports service down or degraded now                                         ASR-01 Technical Trouble
+
+  Customer requests an operational action without dissatisfaction                       ASR-04 Service Request
+
+  Customer says a bill, support action, field visit, staff action, delay, or repeated   ASR-03 Complaint
+  issue is unacceptable
+
+  Customer requests money correction or compensation                                    ASR-03 plus BIL-02-ADJ-01 request if justified
+
+  Customer needs repair work                                                            ASR-03 may link/create ASR-01/WO, but WO owns field execution
+
+
+
+
+ 4. High Level Flow
+             flowchart TD
+               A["Customer raises complaint"]
+               B["Create TCK complaint ticket"]
+               C["Resolve complaint category config"]
+               D["Assign complaint owner/queue"]
+               E["Start investigation"]
+               F["Collect evidence from source modules"]
+               G{"Needs field or technical action?"}
+               H["Create/link ASR-01 or WO"]
+               I{"Needs billing correction or compensation?"}
+               J["Create ASR compensation recommendation"]
+               K["Request BIL adjustment"]
+               L["Record root cause and resolution action"]
+               M{"Supervisor review required?"}
+               N["Escalate / supervisor review"]
+               O["Send customer-visible response"]
+               P["Resolve TCK ticket"]
+
+               A --> B --> C --> D --> E --> F --> G
+               G -->|Yes| H --> I
+               G -->|No| I
+               I -->|Yes| J --> K --> L
+               I -->|No| L
+               L --> M
+               M -->|Yes| N --> O
+               M -->|No| O
+               O --> P
+
+
+
+
+ 5. Complaint Types And Categories
+ ASR-03 primarily uses these TCK ticket types:
+
+  TCK type                                                                              Use
+
+  BILLING_COMPLAINT                                                                     Invoice, tax, wallet, payment allocation, discount, or charge dispute.
+
+  TECHNICAL_SUPPORT                                                                     Repeated or unresolved technical issue where the customer is complaining
+                                                                                        about handling/quality.
+
+  INSTALLATION_FOLLOWUP                                                                 Complaint about delayed/missed/poor installation or contractor behavior.
+
+  EQUIPMENT_ISSUE                                                                       Complaint related to equipment replacement, device quality, recovery, or swap.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                                      Page 2
+  TCK type                                                                Use
+
+  KYC_SUPPORT                                                             Complaint about rejected, delayed, or mishandled KYC.
+
+  GENERAL_INQUIRY                                                         General complaint not fitting a more specific type.
+
+  INTERNAL_ESCALATION                                                     Complaint escalated by management or internal control team.
+
+
+ Recommended complaint categories:
+
+  Category code                  Meaning                                  Primary source APIs                       Default priority
+
+  BILLING_DISPUTE                Customer disputes invoice amount,        BIL-02-READ, BIL-02-ADJ, SIP/DIS if       P2
+                                 tax, charge, discount, or correction.    discount related
+
+  PAYMENT_DISPUTE                Customer paid but                        PAY-GW, BIL-05, BIL-01-PAY                P2
+                                 balance/invoice/wallet did not reflect
+                                 correctly.
+
+  REPEATED_TECHNICAL_FAULT       Customer reports repeated unresolved     ASR-01, WO, provisioning, network         P2
+                                 technical problem.                       tools
+
+  SERVICE_QUALITY_COMPLAINT      Customer complains about poor            ASR-01, provisioning, usage/network       P2
+                                 speed, stability, or experience over     summaries
+                                 time.
+
+  INSTALLATION_DELAY_COMPLAINT   Customer complains installation took     FUL, WO                                   P2
+                                 too long or appointments were
+                                 missed.
+
+  CONTRACTOR_OR_STAFF_CONDUCT    Customer complains about agent,          EM-01/02, WO, SALES                       P1
+                                 contractor, technician, or franchise
+                                 behavior.
+
+  ORDER_OR_KYC_COMPLAINT         Customer disputes order rejection,       FUL, ILM/KYC                              P3
+                                 KYC rejection, or document handling.
+
+  EQUIPMENT_COMPLAINT            Customer complains about faulty,         OSR, WO, ASR-04                           P2
+                                 reused, missing, or charged
+                                 equipment.
+
+  UNFULFILLED_PROMISE            Customer says SOPHIX promised            TCK, CUST-INT, NOT                        P3
+                                 action/credit/callback but did not
+                                 complete it.
+
+  GENERAL_COMPLAINT              Other complaint requiring formal         Depends on context                        P3
+                                 response.
+
+
+
+
+ 6. ASR-Specific Tables
+ 6.1 asr_complaint_category_config
+ Stores behavior for each complaint category.
+
+ Use this table when the system needs to know the complaint queue, SLA, whether supervisor review is mandatory, which
+ source modules to inspect, and whether compensation may be recommended.
+
+  Column                         Type                                     Purpose                                   Sample
+
+  config_id                      UUID PK                                  Config id.                                acc-001
+
+  operator_code                  TEXT                                     Operator/tenant.                          WIK
+
+  category_code                  TEXT                                     TCK category code.                        BILLING_DISPUTE
+
+  default_type_code              TEXT                                     TCK type code.                            BILLING_COMPLAINT
+
+  default_priority               TEXT                                     Initial priority.                         P2
+
+  default_queue_code             TEXT                                     Queue that owns first triage.             BILLING_CARE
+
+  investigation_required         BOOLEAN                                  Complaint must have investigation         true
+                                                                          record before closure.
+
+  supervisor_review_required     BOOLEAN                                  Supervisor must review resolution         true
+                                                                          before closure.
+
+  customer_response_required     BOOLEAN                                  Customer-visible response required        true
+                                                                          before resolution.
+
+  compensation_allowed           BOOLEAN                                  Complaint may recommend BIL               true
+                                                                          adjustment.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 3
+  Column                           Type                            Purpose                          Sample
+
+  source_modules_json              JSONB                           Source modules to inspect.       ["BIL-02-READ-01","BIL-02-AD
+                                                                                                    J-01"]
+
+  allowed_resolution_codes_jso     JSONB                           Allowed closure codes.           ["VALID_COMPLAINT_CORRECTED"
+  n                                                                                                 ,"NOT_VALID_EXPLAINED"]
+
+  status                           TEXT                            ACTIVE, RETIRED.                 ACTIVE
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, category_code).
+
+   - (operator_code, default_queue_code, status).
+
+ 6.2 asr_complaint_investigation
+ Stores the investigation work and facts for a complaint ticket.
+
+ Use this table when a care user starts complaint analysis. It keeps the root-cause assessment separate from TCK comments
+ so reporting can answer why complaints happen.
+
+  Column                           Type                            Purpose                          Sample
+
+  investigation_id                 UUID PK                         Investigation id.                aci-001
+
+  ticket_id                        TEXT                            TCK ticket id.                   tck-20260604-000011
+
+  operator_code                    TEXT                            Operator/tenant.                 WIK
+
+  category_code                    TEXT                            Complaint category.              BILLING_DISPUTE
+
+  investigation_status             TEXT                            OPEN, WAITING_SOURCE,            OPEN
+                                                                   COMPLETED, CANCELLED.
+
+  assigned_queue_code              TEXT                            Queue owning investigation.      BILLING_CARE
+
+  assigned_user_id                 TEXT NULL                       Investigator.                    usr-billing-014
+
+  source_refs_json                 JSONB                           Source records reviewed.         [{"module":"BIL-02-READ-01",
+                                                                                                    "ref":"INV-2026-06-000045"}]
+
+  customer_claim                   TEXT                            What the customer is alleging.   Customer says discount was
+                                                                                                    not applied.
+
+  findings_summary                 TEXT NULL                       Internal factual finding.        Discount assignment expired
+                                                                                                    before cycle run.
+
+  root_cause_code                  TEXT NULL                       Root cause taxonomy.             CONFIG_EXPIRED
+
+  validity_code                    TEXT NULL                       VALID, PARTIALLY_VALID,          VALID
+                                                                   NOT_VALID, INCONCLUSIVE.
+
+  created_by_user_id               TEXT                            User/system that opened          usr-care-001
+                                                                   investigation.
+
+  created_at                       TIMESTAMP                       Creation timestamp.              2026-06-04T09:00:00Z
+
+  completed_at                     TIMESTAMP NULL                  Completion timestamp.            2026-06-04T11:20:00Z
+
+
+ Recommended indexes:
+
+   - Unique (ticket_id).
+
+   - (operator_code, category_code, investigation_status).
+
+   - (root_cause_code, completed_at DESC).
+
+ 6.3 asr_complaint_resolution_action
+ Stores corrective or non-corrective actions decided for the complaint.
+
+ Use this table after the investigation determines what SOPHIX should do. A resolution action may be an explanation, apology,
+ work-order follow-up, billing adjustment request, process correction, callback, or no-action decision.
+
+  Column                           Type                            Purpose                          Sample
+
+  resolution_action_id             UUID PK                         Resolution action id.            acra-001
+
+  ticket_id                        TEXT                            TCK ticket id.                   tck-20260604-000011
+
+  investigation_id                 UUID                            Investigation id.                aci-001
+
+  operator_code                    TEXT                            Operator/tenant.                 WIK
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 4
+  Column                          Type                          Purpose                            Sample
+
+  action_type                     TEXT                          EXPLANATION, APOLOGY,              BIL_ADJUSTMENT_REQUEST
+                                                                BIL_ADJUSTMENT_REQUEST,
+                                                                WO_FOLLOWUP,
+                                                                PROCESS_CORRECTION, CALLBACK,
+                                                                NO_ACTION.
+
+  action_status                   TEXT                          PLANNED, REQUESTED, COMPLETED,     REQUESTED
+                                                                REJECTED, CANCELLED.
+
+  owning_module                   TEXT NULL                     Module that executes action.       BIL-02-ADJ-01
+
+  owning_ref_id                   TEXT NULL                     External action reference.         adj-20260604-000007
+
+  customer_visible                BOOLEAN                       Can be shown to customer.          true
+
+  action_summary                  TEXT                          Human-readable action.             Requested credit note for
+                                                                                                   incorrect discount charge.
+
+  created_by_user_id              TEXT                          User/system that created action.   usr-billing-014
+
+  created_at                      TIMESTAMP                     Creation timestamp.                2026-06-04T11:25:00Z
+
+  completed_at                    TIMESTAMP NULL                Completion timestamp.              2026-06-04T13:05:00Z
+
+
+ Recommended indexes:
+
+   - (ticket_id, action_status).
+
+   - (owning_module, owning_ref_id).
+
+ 6.4 asr_complaint_escalation
+ Stores formal escalation of a complaint.
+
+ Use this table when the complaint requires supervisor, manager, legal/privacy, finance, NOC, contractor-management, or
+ franchise-management review.
+
+  Column                          Type                          Purpose                            Sample
+
+  escalation_id                   UUID PK                       Escalation id.                     ace-001
+
+  ticket_id                       TEXT                          TCK ticket id.                     tck-20260604-000011
+
+  operator_code                   TEXT                          Operator/tenant.                   WIK
+
+  escalation_level                TEXT                          L2, SUPERVISOR, MANAGER,           SUPERVISOR
+                                                                EXECUTIVE, LEGAL_PRIVACY.
+
+  reason_code                     TEXT                          Why escalation is needed.          COMPENSATION_REVIEW
+
+  assigned_queue_code             TEXT                          Queue receiving escalation.        CARE_SUPERVISOR
+
+  assigned_user_id                TEXT NULL                     Specific reviewer.                 usr-supervisor-002
+
+  status                          TEXT                          OPEN, APPROVED, REJECTED,          OPEN
+                                                                CANCELLED.
+
+  decision_summary                TEXT NULL                     Review decision.                   Approved customer response
+                                                                                                   and credit request.
+
+  created_by_user_id              TEXT                          User/system that escalated.        usr-care-001
+
+  created_at                      TIMESTAMP                     Creation timestamp.                2026-06-04T11:30:00Z
+
+  decided_at                      TIMESTAMP NULL                Decision timestamp.                2026-06-04T12:00:00Z
+
+
+ Recommended indexes:
+
+   - (operator_code, status, assigned_queue_code).
+
+   - (ticket_id, created_at DESC).
+
+ 6.5 asr_complaint_compensation_recommendation
+ Stores a complaint-side recommendation for compensation.
+
+ Use this table only when ASR believes a credit/debit adjustment should be proposed. BIL-02-ADJ-01 owns approval and
+ application. ASR does not create credit notes directly.
+
+  Column                          Type                          Purpose                            Sample
+
+  recommendation_id               UUID PK                       Recommendation id.                 accr-001
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 5
+  Column                         Type                            Purpose                             Sample
+
+  ticket_id                      TEXT                            TCK ticket id.                      tck-20260604-000011
+
+  operator_code                  TEXT                            Operator/tenant.                    WIK
+
+  reason_code                    TEXT                            Compensation reason.                WRONG_DISCOUNT_APPLICATION
+
+  recommended_direction          TEXT                            CREDIT, DEBIT.                      CREDIT
+
+  recommended_scope              TEXT                            BIL adjustment scope: FULL, LINE,   LINE
+                                                                 AMOUNT.
+
+  recommended_amount             DECIMAL(18,2) NULL              Suggested amount if known.          500.00
+
+  currency_code                  TEXT                            Currency.                           KES
+
+  source_invoice_id              TEXT NULL                       Invoice being corrected.            INV-2026-06-000045
+
+  source_line_refs_json          JSONB NULL                      Invoice line refs for LINE scope.   [{"lineId":"INVLINE-001","am
+                                                                                                     ountOverride":500}]
+
+  justification                  TEXT                            Why compensation is recommended.    Discount assignment was
+                                                                                                     active but not applied in
+                                                                                                     cycle run.
+
+  status                         TEXT                            DRAFT, REQUESTED,                   REQUESTED
+                                                                 APPROVED_BY_BIL,
+                                                                 REJECTED_BY_BIL, CANCELLED.
+
+  adjustment_request_id          TEXT NULL                       BIL adjustment request id.          adj-20260604-000007
+
+  created_by_user_id             TEXT                            User/system.                        usr-billing-014
+
+  created_at                     TIMESTAMP                       Creation timestamp.                 2026-06-04T11:25:00Z
+
+
+ Recommended indexes:
+
+   - (ticket_id, status).
+
+   - (adjustment_request_id).
+
+ 6.6 asr_complaint_customer_response
+ Stores the final response communicated to the customer.
+
+ Use this table to preserve the exact customer-visible answer, apology, outcome, and next steps. It complements TCK
+ comments and supports quality review.
+
+  Column                         Type                            Purpose                             Sample
+
+  response_id                    UUID PK                         Response id.                        acr-001
+
+  ticket_id                      TEXT                            TCK ticket id.                      tck-20260604-000011
+
+  operator_code                  TEXT                            Operator/tenant.                    WIK
+
+  language_code                  TEXT                            Response language.                  en
+
+  response_body                  TEXT                            Customer-visible response.          We found that your discount
+                                                                                                     was not applied correctly. A
+                                                                                                     credit request has been
+                                                                                                     submitted.
+
+  response_channel               TEXT                            BACKOFFICE, SMS, EMAIL,             BACKOFFICE
+                                                                 SELF_CARE, PHONE_SUMMARY.
+
+  resolution_code                TEXT                            Final resolution code.              VALID_COMPLAINT_CORRECTED
+
+  sent_by_user_id                TEXT                            User/system.                        usr-care-001
+
+  sent_at                        TIMESTAMP                       Response timestamp.                 2026-06-04T13:10:00Z
+
+
+ Recommended indexes:
+
+   - (ticket_id, sent_at DESC).
+
+
+
+ 7. APIs
+ ASR-03 APIs run inside the TCK/ASR service. TCK remains source of truth for ticket lifecycle.
+
+ 7.1 Create Complaint Ticket
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 6
+ Complaints are created through TCK:
+          POST /api/tickets
+          Idempotency-Key: complaint-20260604-000011
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "typeCode": "BILLING_COMPLAINT",
+              "categoryCode": "BILLING_DISPUTE",
+              "sourceChannel": "BACKOFFICE",
+              "customerId": "CUS-100045",
+              "accountId": "ACC-900045",
+              "subscriptionId": "SUB-700045",
+              "subject": "Customer disputes invoice discount",
+              "description": "Customer says June invoice did not include the approved retention discount.",
+              "linkedEntities": [
+                {"entityType": "INVOICE", "entityId": "INV-2026-06-000045"}
+              ]
+          }
+
+ TCK validates type/category, creates the ticket, assigns queue/SLA, and emits generic ticket events.
+
+ 7.2 Get Complaint Guidance
+          GET /api/asr/complaints/{ticket_id}/guidance
+
+ Response:
+          {
+              "ticketId": "tck-20260604-000011",
+              "categoryCode": "BILLING_DISPUTE",
+              "defaultQueueCode": "BILLING_CARE",
+              "investigationRequired": true,
+              "supervisorReviewRequired": true,
+              "customerResponseRequired": true,
+              "compensationAllowed": true,
+              "sourceModules": ["BIL-02-READ-01", "BIL-02-ADJ-01", "SIP-03"],
+              "allowedActions": [
+                "START_INVESTIGATION",
+                "ADD_FINDINGS",
+                "CREATE_RESOLUTION_ACTION",
+                "RECOMMEND_COMPENSATION",
+                "ESCALATE",
+                "SEND_CUSTOMER_RESPONSE",
+                "RESOLVE"
+              ]
+          }
+
+ Frontend must use this API to show available actions. Do not hardcode complaint behavior per screen.
+
+ 7.3 Start Investigation
+          POST /api/asr/complaints/{ticket_id}/investigation
+          Content-Type: application/json
+
+          {
+              "customerClaim": "Customer says discount was promised but not applied.",
+              "assignedQueueCode": "BILLING_CARE",
+              "sourceRefs": [
+                {"module": "BIL-02-READ-01", "ref": "INV-2026-06-000045"},
+                {"module": "SIP-03", "ref": "discount-assignment-8891"}
+              ]
+          }
+
+ Creates asr_complaint_investigation and moves the TCK ticket to ASSIGNED or WAITING_INTERNAL depending on
+ source availability.
+
+ 7.4 Complete Investigation
+          POST /api/asr/complaints/investigations/{investigation_id}/complete
+          Content-Type: application/json
+
+          {
+              "findingsSummary": "Discount assignment was active during invoice generation but not included in the billable event cont
+              "rootCauseCode": "BILLING_DISCOUNT_RUNTIME_ERROR",
+              "validityCode": "VALID",
+              "sourceRefs": [
+                {"module": "BIL-02-READ-01", "ref": "INV-2026-06-000045"},
+                {"module": "DIS-OP-01", "ref": "discount-runtime-log-7712"}
+              ]
+
+
+
+SOPHIX BSS Design Documents                                                                                           Page 7
+          }
+
+ The API records findings. It must not resolve the ticket yet if a required resolution action or customer response is still missing.
+
+ 7.5 Create Resolution Action
+          POST /api/asr/complaints/{ticket_id}/resolution-actions
+          Content-Type: application/json
+
+          {
+              "investigationId": "aci-001",
+              "actionType": "BIL_ADJUSTMENT_REQUEST",
+              "owningModule": "BIL-02-ADJ-01",
+              "customerVisible": true,
+              "actionSummary": "Request a credit note for the missing discount amount."
+          }
+
+ The action record states what must happen. The owning module still performs the actual action.
+
+ 7.6 Recommend Compensation
+          POST /api/asr/complaints/{ticket_id}/compensation-recommendations
+          Content-Type: application/json
+
+          {
+              "reasonCode": "WRONG_DISCOUNT_APPLICATION",
+              "recommendedDirection": "CREDIT",
+              "recommendedScope": "LINE",
+              "recommendedAmount": 500.00,
+              "currencyCode": "KES",
+              "sourceInvoiceId": "INV-2026-06-000045",
+              "sourceLineRefs": [
+                 {"lineId": "INVLINE-001", "amountOverride": 500.00}
+              ],
+              "justification": "Customer had an active approved discount when invoice was generated."
+          }
+
+ If approved by the complaint owner/supervisor, ASR creates a BIL adjustment request:
+          POST /api/adjustments
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "customerId": "CUS-100045",
+              "accountId": "ACC-900045",
+              "direction": "CREDIT",
+              "scope": "LINE",
+              "originalInvoiceId": "INV-2026-06-000045",
+              "proposedLineItems": [
+                 {"parentLineItemId": "INVLINE-001", "amountOverride": 500.00}
+              ],
+              "reasonCode": "WRONG_DISCOUNT_APPLICATION",
+              "externalCaseRef": "tck-20260604-000011",
+              "description": "Credit requested from ASR-03 billing complaint."
+          }
+
+ BIL-02-ADJ-01 owns approval, credit/debit generation, wallet/outstanding-balance impact, and financial reporting.
+
+ 7.7 Escalate Complaint
+          POST /api/asr/complaints/{ticket_id}/escalations
+          Content-Type: application/json
+
+          {
+              "escalationLevel": "SUPERVISOR",
+              "reasonCode": "COMPENSATION_REVIEW",
+              "assignedQueueCode": "CARE_SUPERVISOR",
+              "summary": "Supervisor approval required before customer response."
+          }
+
+ Escalation moves the ticket to UNDER_REVIEW or keeps it assigned to the escalation queue based on TCK policy.
+
+ 7.8 Send Customer Response
+          POST /api/asr/complaints/{ticket_id}/customer-response
+          Content-Type: application/json
+
+          {
+              "languageCode": "en",
+              "responseChannel": "BACKOFFICE",
+
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 8
+                "resolutionCode": "VALID_COMPLAINT_CORRECTED",
+                "responseBody": "We reviewed your invoice and found that your discount was not applied correctly. A credit request has b
+            }
+
+ The API:
+
+   1. stores asr_complaint_customer_response;
+
+   2. adds a customer-visible TCK comment;
+
+   3. optionally calls NOT-01 if a notification must be sent;
+
+   4. emits ComplaintCustomerResponseSent.
+
+ 7.9 Resolve Complaint
+            POST /api/tickets/{ticket_id}/resolve
+            Content-Type: application/json
+
+            {
+                "resolutionCode": "VALID_COMPLAINT_CORRECTED",
+                "resolutionSummary": "Billing complaint validated. Credit request submitted to BIL adjustment workflow."
+            }
+
+ TCK resolution must be blocked when required ASR-03 closure conditions are missing.
+
+
+
+ 8. Events
+  Event                                        Topic                                                 When emitted
+
+  ComplaintCreated                             sophix.asr.complaint.created                          Complaint ticket is created.
+
+  ComplaintInvestigationStarted                sophix.asr.complaint.investigationstar                Investigation record created.
+                                               ted
+
+  ComplaintInvestigationCompleted              sophix.asr.complaint.investigationcomp                Investigation findings completed.
+                                               leted
+
+  ComplaintResolutionActionCreated             sophix.asr.complaint.resolutionactionc                Corrective/non-corrective action created.
+                                               reated
+
+  ComplaintCompensationRecommended             sophix.asr.complaint.compensationrecom                ASR recommends BIL adjustment.
+                                               mended
+
+  ComplaintEscalated                           sophix.asr.complaint.escalated                        Complaint escalated for review.
+
+  ComplaintCustomerResponseSent                sophix.asr.complaint.customerresponses                Customer-visible response stored/sent.
+                                               ent
+
+  ComplaintResolved                            sophix.asr.complaint.resolved                         Ticket resolved through TCK.
+
+
+ TCK still emits generic ticket events. ASR-03 emits business-specific events for reporting, customer timeline, quality
+ monitoring, and complaint trend analysis.
+
+
+
+ 9. Business Rules
+  Rule                                         Description                                           Reason
+
+  R-ASR-COMP-01                                Complaint must use configured TCK category.           Avoid unrouteable cases.
+
+  R-ASR-COMP-02                                Complaint closure requires customer-visible           Customer must receive formal answer.
+                                               response when category config says so.
+
+  R-ASR-COMP-03                                Complaint closure requires completed investigation    Prevent unexplained closure.
+                                               when investigation_required = true.
+
+  R-ASR-COMP-04                                Supervisor review is required when category config    Governance.
+                                               says so, priority is P1, compensation exceeds local
+                                               threshold, or staff conduct is involved.
+
+  R-ASR-COMP-05                                ASR may recommend compensation but                    Financial control.
+                                               BIL-02-ADJ-01 owns adjustment approval and
+                                               application.
+
+  R-ASR-COMP-06                                Customer response must not expose internal staff      Privacy and professionalism.
+                                               notes, raw diagnostics, credentials, or blame
+                                               language.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                      Page 9
+  Rule                                         Description                                            Reason
+
+  R-ASR-COMP-07                                Complaint cannot be resolved while required linked     Avoid false closure.
+                                               WO, BIL adjustment request, or escalation is still
+                                               open unless resolution policy allows pending
+                                               follow-up.
+
+  R-ASR-COMP-08                                Same customer/category/source reference duplicate      Prevent duplicate work.
+                                               within configured window must be linked, not treated
+                                               as unrelated.
+
+  R-ASR-COMP-09                                Complaint validity must be recorded as VALID,          Reporting and root-cause analytics.
+                                               PARTIALLY_VALID, NOT_VALID, or
+                                               INCONCLUSIVE.
+
+  R-ASR-COMP-10                                Ticket resolution must use TCK status APIs.            TCK remains lifecycle source of truth.
+
+
+
+
+ 10. Common Source APIs
+ The complaint service gathers facts from owning modules. It must not query another module's database directly.
+
+  Complaint category                                                      Source module APIs
+
+  Billing dispute                                                         GET /api/invoices/{invoice_id}, GET
+                                                                          /api/invoices/{invoice_id}/lines, GET
+                                                                          /api/adjustments?externalCaseRef=...
+
+  Payment dispute                                                         PAY-GW provider transaction lookup, BIL-01-PAY application lookup, BIL-05
+                                                                          wallet ledger lookup
+
+  Repeated technical fault                                                ASR-01 diagnostic history, TCK linked tickets, WO support history, provisioning
+                                                                          observed state
+
+  Installation delay complaint                                            FUL order status, WO installation appointments, contractor assignment from
+                                                                          EM-02
+
+  Staff/contractor conduct                                                EM-01/EM-02 actor profile, WO visit records, TCK comments/attachments
+
+  KYC/order complaint                                                     FUL KYC step state, ILM customer profile, document metadata from file storage
+
+  Equipment complaint                                                     OSR instance registry, RMA/swap history, WO installation/support result
+
+  Unfulfilled promise                                                     TCK comments, CUST-INT timeline, NOT delivery records
+
+
+
+
+ 11. Frontend Usage
+ 11.1 FE-APP-01 Backoffice
+ Backoffice must support:
+
+   - complaint creation from customer 360, invoice page, payment page, order page, WO page, and ticket page;
+
+   - complaint queue with SLA, priority, category, owner, and escalation state;
+
+   - investigation panel with source data links;
+
+   - root-cause and validity capture;
+
+   - resolution action capture;
+
+   - compensation recommendation flow;
+
+   - supervisor escalation/review;
+
+   - customer-visible response drafting;
+
+   - resolve/close through TCK status APIs.
+
+ The UI must show which module API each data panel comes from. Example: invoice facts from BIL read API, payment facts
+ from PAY-GW/BIL-05, WO facts from WO-01.
+
+ 11.2 FE-APP-04 Customer Self-Care
+ Self-care may allow customers to:
+
+   - create selected complaint categories configured with selfcare_allowed in TCK/category policy if added later;
+
+
+
+SOPHIX BSS Design Documents                                                                                                                     Page 10
+   - view complaint ticket status;
+
+   - add customer-visible comments or requested documents;
+
+   - view final response;
+
+   - see linked credit request status only at a customer-safe level.
+
+ Self-care must not show internal investigation notes, staff conduct details, source diagnostics, or approval comments.
+
+
+
+ 12. Infra Recommendation
+ ASR-03 should run inside the TCK service/module for a medium budget deployment. No separate ASR complaint pod is
+ required at the start.
+
+  Component                                                            Recommendation
+
+  API                                                                  Existing TCK API pods expose /api/asr/complaints/....
+
+  DB                                                                   Existing TCK schema/database with ASR complaint tables.
+
+  Workers                                                              Existing TCK worker pool runs complaint SLA, duplicate scan, escalation
+                                                                       reminder, and notification retry jobs.
+
+  Events                                                               Existing Kafka/MSK topics with ASR complaint topic namespace.
+
+  Cache                                                                Optional cache for category guidance only. Do not cache investigation facts as
+                                                                       source of truth.
+
+
+ For AWS deployment, use the same ECS/EKS service, RDS PostgreSQL instance/schema, MSK/Kafka cluster, CloudWatch
+ logs/metrics, and IAM policies as TCK. Add CloudWatch alarms for:
+
+   - P1 complaint SLA breach;
+
+   - open complaints older than configured SLA;
+
+   - supervisor review backlog;
+
+   - compensation recommendations not linked to BIL adjustment after threshold;
+
+   - complaint category spike by operator/region/franchise/contractor.
+
+
+
+ 13. Testing Requirements
+ 13.1 Unit Tests
+   - Complaint guidance resolves category config.
+
+   - Investigation required blocks closure.
+
+   - Customer response required blocks closure.
+
+   - Supervisor review rule triggers correctly.
+
+   - Compensation recommendation maps to BIL adjustment request payload.
+
+   - Customer-visible response redaction blocks internal-only terms.
+
+   - Duplicate complaint detection links related cases.
+
+ 13.2 Integration Tests
+   - Create complaint through TCK and load ASR guidance.
+
+   - Start/complete investigation using BIL invoice source refs.
+
+   - Create compensation recommendation and BIL adjustment request.
+
+   - Escalate to supervisor and approve/reject escalation.
+
+   - Send customer response through TCK comment and NOT event.
+
+   - Resolve ticket only after closure conditions pass.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 11
+ 13.3 End To End Tests
+   - Billing dispute validated, credit request created, customer response sent, complaint resolved.
+
+   - Complaint not valid, explanation sent, complaint resolved with NOT_VALID_EXPLAINED.
+
+   - Staff conduct complaint requires supervisor review before closure.
+
+   - Repeated technical fault complaint links ASR-01/WO support history.
+
+   - Customer self-care only sees customer-safe complaint status and response.
+
+
+
+ 14. Definition Of Done
+   - Complaint categories are seeded in TCK.
+
+   - ASR complaint config exists per operator/category.
+
+   - Complaint APIs support guidance, investigation, resolution action, escalation, compensation recommendation, customer
+     response, and closure validation.
+
+   - Closure rules block premature resolution.
+
+   - BIL adjustment integration is request-only from ASR and approval/application remains in BIL.
+
+   - Backoffice can process the complaint lifecycle end to end.
+
+   - Self-care can show customer-safe complaint status and response if enabled.
+
+   - Events are emitted for reporting and customer timeline.
+
+   - Tests cover billing, technical, staff conduct, and invalid complaint paths.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                           Page 12
+

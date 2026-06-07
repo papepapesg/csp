@@ -1,0 +1,1313 @@
+ DD: FUL-05 — Termination Fulfillment (Orchestration)
+ Developer implementation guide: DD_FUL-05-Termination_Fulfillment-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract
+ DD_FUL-05-Termination_Fulfillment-v1.0.md.
+
+ Verdict: ■ New | Wave: 1 | Group III: Fulfillment | Version: v1.0 Orchestrates the technical revocation of a customer's
+ services at the end of the termination flow. Called synchronously by SUB-WF-TERMINATE-01 (per its callFulfillment
+ step, R-SUB-WF-TERMINATE-01-WF-1) after billing has accepted the termination intent. FUL-05 loads the Package's
+ constituent Services (per SIP-01), iterates each Service, resolves the target network node + port via the customer's
+ HomePass service_management_endpoints map (per RLM-CFG-01), and dispatches to the Provisioner adapter
+ registered for the Service's provisionerKey (per PLM-CFG-01) using the revokeService interface method. Aggregates
+ outcomes, supports compensation on partial failure, and returns a structured termination outcome. Aligned design: this DD
+ mirrors the orchestration model already specified in FUL-03 v1.0 and FUL-04 v1.0. Same Service-loading +
+ Provisioner-dispatch + ledger + compensation pattern, applied to the termination verb. The Provisioner interface method
+ invoked (revokeService) is a companion to FUL-03's activate / deactivate and FUL-04's applyRestriction /
+ liftRestriction / suspendService / resumeService; the interface extension is captured as an open coordination
+ item with the PLM team for PLM-CFG-01 v0.9.
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    6_fulfillment/DD_FUL-05-Termination_Fulfillment-v1.0.md
+
+  Version                                                           v1.0
+
+  DD type                                                           module contract
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   Not explicitly defined
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+   - GET /api/termination-fulfillment/tfl_01HZ_KAMAU_MOVED
+
+   - GET
+     /api/termination-fulfillment?operator=WIK&callerWorkflowRefId=terminate_01HZ_KAMAU_MOVED
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+   - GET /api/termination-fulfillment?operator=WIK&reasonCategory=DUNNING_TERMINATION&equipment
+     Disposition=WRITTEN_OFF&since=2026-05-01
+
+   - GET /api/termination-fulfillment?operator=WIK&subscriptionId=sub_01HZ_KAMAU_FIBER
+
+   - GET /api/termination-fulfillment?operator=WIK&terminalState=FAILED_AND_ROLLED_BACK&since=2
+     026-05-01
+
+   - POST /api/termination-fulfillment/execute
+
+ 4.2 Tables
+   - No CREATE TABLE block is explicitly declared in this DD.
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - noc-team
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - SubscriptionTerminated
+
+   - SubscriptionTerminationRejected
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+SOPHIX BSS Design Documents                                                                                              Page 2
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                            Recommendation
+
+  API/runtime                                                        Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                            Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                           Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                              Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                            Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                             Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                            Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                     Store with IRSA.
+
+  Observability                                                      Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                     dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ New | Wave: 1 | Group III: Fulfillment | Version: v1.0
+
+ Orchestrates the technical revocation of a customer's services at the end of the termination flow. Called synchronously by
+ SUB-WF-TERMINATE-01 (per its callFulfillment step, R-SUB-WF-TERMINATE-01-WF-1) after billing has accepted
+ the termination intent. FUL-05 loads the Package's constituent Services (per SIP-01), iterates each Service, resolves the
+ target network node + port via the customer's HomePass service_management_endpoints map (per RLM-CFG-01), and
+ dispatches to the Provisioner adapter registered for the Service's provisionerKey (per PLM-CFG-01) using the
+ revokeService interface method. Aggregates outcomes, supports compensation on partial failure, and returns a structured
+ termination outcome.
+
+ Aligned design: this DD mirrors the orchestration model already specified in FUL-03 v1.0 and FUL-04 v1.0. Same
+ Service-loading + Provisioner-dispatch + ledger + compensation pattern, applied to the termination verb. The Provisioner
+ interface method invoked (revokeService) is a companion to FUL-03's activate / deactivate and FUL-04's
+ applyRestriction / liftRestriction / suspendService / resumeService; the interface extension is captured as
+ an open coordination item with the PLM team for PLM-CFG-01 v0.9.
+
+
+ Glossary
+  Term                                                               Meaning
+
+  Termination                                                        The permanent end of a customer's service relationship. SUB-LM-01 transitions
+                                                                     the subscription's status_code to TERMINATED (terminal). FUL-05 owns the
+                                                                     network-plane revoke side of that transition.
+
+  Network-plane revoke                                               The set of operations that turn the customer's network access off: AAA profile
+                                                                     disable / delete, OLT port deprovision, vendor profile deletion (Verimatrix
+                                                                     shutdown, VoipSwitch revoke). Equipment retrieval is a separate concern
+                                                                     owned by OSR-RMA-01 EQP satellite.
+
+  equipmentDisposition                                               A discriminator carried in the FUL-05 request envelope, set by
+                                                                     SUB-WF-TERMINATE-01 based on the termination context. One of
+                                                                     CUSTOMER_RETAINS / PENDING_COLLECTION / WRITTEN_OFF. FUL-05 uses
+                                                                     this to decide whether to delete the vendor profile (PENDING_COLLECTION,
+                                                                     WRITTEN_OFF — equipment will not be reused on this customer) or
+                                                                     disable-only the profile leaving the auth record in place
+                                                                     (CUSTOMER_RETAINS — rare; only when operator policy keeps the AAA
+                                                                     record around for legal-retention reasons). FUL-05 does NOT dispatch a pickup
+                                                                     tech — that is OSR-RMA-01.
+
+  reasonCategory                                                     The high-level termination reason group, set by SUB-WF-TERMINATE-01 from
+                                                                     its termination_trigger: CUSTOMER_REQUESTED / ADMIN_DECISION /
+                                                                     DUNNING_TERMINATION / CONTRACT_EXPIRED. FUL-05 carries this in the
+                                                                     ledger and may pass to the Provisioner for vendor-specific behavior (e.g., a
+                                                                     fraud termination may be flagged in AAA logs differently from a
+                                                                     customer-requested one).
+
+  Service                                                            A row in PLM-CFG-01's Service catalog. Same definition as FUL-03 / FUL-04.
+                                                                     FUL-05 operates only on CONTINUOUS + is_addressable = true Services.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 3
+  Term                                                           Meaning
+
+  Provisioner adapter                                            The Java bean implementing the Provisioner interface (defined in
+                                                                 PLM-CFG-01). Same adapters as FUL-03 / FUL-04. FUL-05 calls the
+                                                                 revokeService method (new in v0.9 of the interface); compensation uses
+                                                                 restoreService (inverse, used only for rollback within the termination
+                                                                 attempt).
+
+  Target node code + port                                        The pair (nodeCode, port) resolved from homepass.service_manageme
+                                                                 nt_endpoints[service.serviceManagementKey]. Same resolution as
+                                                                 FUL-03 / FUL-04.
+
+  Fulfillment attempt                                            One end-to-end execution of FUL-05 for a given (subscriptionId,
+                                                                 fulfillmentCorrelationId). Idempotency-scoped on this tuple.
+                                                                 Recorded in termination_fulfillment_ledger.
+
+  Service outcome                                                The result of revoking one Service during one attempt: SUCCESS / FAILURE /
+                                                                 SKIPPED / SUCCESS_THEN_COMPENSATED. Recorded in
+                                                                 termination_fulfillment_service_outcome.
+
+
+
+
+ A — Target
+ 1. What this process is about
+ SUB-WF-TERMINATE-01 reaches the callFulfillment step in its saga, after billing has applied the termination intent
+ (any final charges or refund credits posted). The saga calls FUL-05 synchronously with the canonical envelope. FUL-05 then:
+
+ Load:
+
+   - The Package (SIP-01) via the subscription's packageRef. Read service_refs[].
+
+   - For each Service ref, load the Service def (PLM-CFG-01). Read networkProfileShape.provisionerKey,
+     serviceManagementKey, consumption_model, is_addressable.
+
+   - The HomePass (RLM-CFG-01) via the subscription's homepassId. Read service_management_endpoints.
+
+ Filter: skip Services where is_addressable = false (no network state to revoke). Skip Services where
+ consumption_model != CONTINUOUS (defensive).
+
+ For each remaining Service, in order:
+
+   1. Resolve target via homepass.service_management_endpoints[service.serviceManagementKey] →
+     {nodeCode, port}. If serviceManagementKey is null (partner-fulfilled), pass (null, null); the adapter sources
+     target from its own config. Missing endpoint key → NO_HOMEPASS_ENDPOINT_FOR_KEY. Null port →
+     HOMEPASS_PORT_NOT_CAPTURED.
+
+   2. Look up the Provisioner adapter by service.networkProfileShape.provisionerKey. Missing adapter →
+     UNKNOWN_PROVISIONER_KEY.
+
+   3. Invoke Provisioner.revokeService(reasonCategory, equipmentDisposition, params, customer,
+     targetNodeCode, targetPort). The adapter performs the vendor-specific termination: AAA profile delete/disable,
+     OLT port deprovision, vendor profile shutdown. Returns a structured ProvisionerOutcome with success,
+     adapterRefs, failureReason, failureDetail.
+
+   4. Record the Service outcome in termination_fulfillment_service_outcome.
+
+ Aggregate: After all Services have a recorded outcome (or after the first FAILURE if partialAllowed = false), compute
+ the terminal state. Apply compensation if needed.
+
+ Audit: Write termination_fulfillment_ledger and termination_fulfillment_service_outcome rows. Emit
+ TerminationFulfillmentCompleted / TerminationFulfillmentFailed Kafka events.
+
+ Return to caller: Hand control back to SUB-WF-TERMINATE-01. The saga decides what to do with the outcome — on
+ success, the saga commits the subscription to TERMINATED; on failure, the saga reverts to the prior status and emits
+ SubscriptionTerminationRejected.
+
+ #### Flow overview — customer-requested termination of a triple-play subscription
+           SUB-WF-TERMINATE-01 reaches callFulfillment after billing intent OK
+                   ■
+                   ▼
+           POST /api/termination-fulfillment/execute
+           { subscriptionId, customerId, operatorCode, packageRef,
+             homepassId, reasonCategory: "CUSTOMER_REQUESTED",
+             equipmentDisposition: "PENDING_COLLECTION",
+
+
+SOPHIX BSS Design Documents                                                                                                           Page 4
+            equipmentBindings: [{equipmentRequirement:"GPON_ONT", equipmentRef:"ont_01HZ..."},
+                                {equipmentRequirement:"ATA",      equipmentRef:"ata_01HZ..."}],
+            fulfillmentCorrelationId, policy? }
+                  ■
+                  ▼
+          FUL-05 loads Package, Services, HomePass, resolves targets,
+          dispatches Provisioner.revokeService() per Service in order
+                  ■
+                  ▼
+          Aggregate outcomes → write ledger → emit Kafka event → return
+          { fulfillmentId, terminalState, services[] }
+                  ■
+                  ▼
+          SUB-WF-TERMINATE-01 commits → subscription TERMINATED, emits SubscriptionTerminated
+                  ■
+                  ▼
+          OSR-RMA-01 EQP satellite picks up the equipment collection (separate flow)
+
+
+ Out of scope
+   - Physical equipment retrieval / pickup WO dispatch — owned by OSR-RMA-01 EQP satellite, triggered separately by
+     SUB-WF-TERMINATE-01 or downstream consumers reacting to the SubscriptionTerminated event. FUL-05 carries
+     equipmentDisposition for the Provisioner's vendor-side behavior (delete vs disable-only) but does NOT call any
+     pickup or work-order system.
+
+   - Equipment instance lifecycle transitions (e.g., IN_FIELD_ACTIVE → RECOVERED_BY_CONTRACTOR) — owned by
+     OSR-INSTANCE-01, driven by OSR-RMA-01 workflow events.
+
+   - Subscription state transition to TERMINATED — owned by SUB-LM-01 via SUB-WF-TERMINATE-01. FUL-05 returns
+     outcome; the saga transitions state.
+
+   - Final invoice / pro-rata refund / Early Termination Fee — owned by BIL-01 + BIL-02 via the calling workflow's
+     callBilling step BEFORE callFulfillment. FUL-05 does not call BIL-01.
+
+   - Customer notification of termination — owned by NOT-01 reacting to the SubscriptionTerminated event emitted
+     by SUB-WF-TERMINATE-01 after FUL-05 returns success.
+
+   - Activation / restriction / suspension verbs — owned by FUL-03 (activate, deactivate) and FUL-04
+     (applyRestriction, liftRestriction, suspendService, resumeService). FUL-05 only owns
+     revokeService.
+
+   - Per-vendor protocol details — wrapped inside the Provisioner adapter / Gateway code beans (NMSGateway,
+     AAAGateway, VoiceGateway, VerimatrixGateway). FUL-05 only invokes the typed interface.
+
+   - Reversal of a committed termination — irreversible by design. Once SUB-LM-01 reaches TERMINATED, reinstatement
+     requires a new subscription. The restoreService Provisioner method is used ONLY for in-attempt compensation when
+     FUL-05's own chain fails mid-way; it is NOT exposed as a public termination-rollback path.
+
+ 2. Business rules
+ Rules grouped: EN (entry / envelope), LO (loading / resolution), OR (ordering), DI (dispatch), AG (aggregation), CO
+ (compensation), LE (ledger), EV (event emission).
+
+ #### Rule group EN — Entry and envelope
+
+  ID                                         Rule                                           Triggered on
+
+  R-FUL-05-EN-1                              FUL-05 has ONE entry point: POST               Every invocation
+                                             /api/termination-fulfillment/execute.
+                                             Called synchronously by
+                                             SUB-WF-TERMINATE-01's callFulfillment
+                                             step.
+
+  R-FUL-05-EN-2                              The envelope MUST carry: subscriptionId,       Request validation
+                                             customerId, operatorCode, packageRef,
+                                             homepassId, reasonCategory
+                                             (CUSTOMER_REQUESTED / ADMIN_DECISION /
+                                             DUNNING_TERMINATION / CONTRACT_EXPIRED),
+                                             equipmentDisposition (CUSTOMER_RETAINS /
+                                             PENDING_COLLECTION / WRITTEN_OFF),
+                                             equipmentBindings[] (informational — for the
+                                             Provisioner's vendor-side context),
+                                             fulfillmentCorrelationId,
+                                             callerWorkflowKind, callerWorkflowRefId.
+                                             Missing any required field → 400
+                                             MISSING_REQUIRED_FIELD.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                            Page 5
+  ID                                     Rule                                                   Triggered on
+
+  R-FUL-05-EN-3                          reasonCategory values are exactly the four             Request validation
+                                         termination triggers defined by
+                                         SUB-WF-TERMINATE-01 R-WF-R-1. Any other
+                                         value → 400 INVALID_REASON_CATEGORY.
+
+  R-FUL-05-EN-4                          equipmentDisposition values are exactly the            Request validation
+                                         three states defined by SUB-WF-TERMINATE-01
+                                         R-WF-3: CUSTOMER_RETAINS /
+                                         PENDING_COLLECTION / WRITTEN_OFF. Any other
+                                         value → 400
+                                         INVALID_EQUIPMENT_DISPOSITION.
+
+  R-FUL-05-EN-5                          Idempotency on (subscriptionId,                        Idempotency
+                                         fulfillmentCorrelationId). If a fulfillment
+                                         with the same tuple has already terminated, return
+                                         the prior outcome unchanged. If a tuple is currently
+                                         IN_PROGRESS, return 409
+                                         FULFILLMENT_IN_PROGRESS.
+
+  R-FUL-05-EN-6                          fulfillmentCorrelationId is the saga's                 Provided by caller
+                                         framework-supplied operation ID (per
+                                         SUB-WF-FRAMEWORK-01). Same value is reused
+                                         on saga retries.
+
+  R-FUL-05-EN-7                          The optional policy envelope defines:                  Policy resolution
+                                         partialAllowed (default false — any Service
+                                         failure aborts and triggers compensation),
+                                         serviceOrder (default — services processed in
+                                         the order declared in Package.serviceRefs[]),
+                                         perServiceTimeoutMs, overallTimeoutMs.
+
+  R-FUL-05-EN-8                          Total time budget from request to response: 60         Overall time budget
+                                         seconds (matching SUB-WF-TERMINATE-01's
+                                         FULFILLMENT_TIMEOUT of 60s per R-WF-4).
+                                         FUL-05 monitors elapsed time; if
+                                         overallTimeoutMs is reached mid-orchestration,
+                                         the in-flight Service completes (its own timeout
+                                         governs) but no further Services are dispatched.
+                                         Treated as partial failure subject to compensation
+                                         per policy.
+
+
+ #### Rule group LO — Loading and resolution
+
+  ID                                     Rule                                                   Triggered on
+
+  R-FUL-05-LO-1                          Loads the Package via SIP-01 (read-only) using         Package load
+                                         packageRef. Reads service_refs[]. If the
+                                         Package does not exist, the fulfillment fails with
+                                         PACKAGE_NOT_FOUND — without invoking any
+                                         Provisioner. Note: Package status (Active vs
+                                         Retired) is NOT a precondition for FUL-05 —
+                                         terminations can happen on Subscriptions whose
+                                         Package has since been retired.
+
+  R-FUL-05-LO-2                          For each Service ref, loads the Service def via        Service load
+                                         PLM-CFG-01. Reads consumption_model,
+                                         is_addressable, network_profile_shape,
+                                         service_management_key. Services with
+                                         consumption_model != CONTINUOUS are
+                                         skipped (outcome =
+                                         SKIPPED_NOT_ADDRESSABLE). Services with
+                                         is_addressable = false are skipped
+                                         (outcome = SKIPPED_NOT_ADDRESSABLE).
+
+  R-FUL-05-LO-3                          Loads the HomePass via RLM-CFG-01 (read-only)          HomePass load
+                                         using homepassId. Reads
+                                         service_management_endpoints. HomePass
+                                         state does NOT block termination — a HomePass in
+                                         any state can have services revoked from it (the
+                                         customer is leaving; we want the network state
+                                         cleaned up regardless of HomePass-level
+                                         conditions). The chain proceeds; per-Service
+                                         endpoint resolution may still fail per R-LO-4.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                           Page 6
+  ID                             Rule                                                   Triggered on
+
+  R-FUL-05-LO-4                  For each Service with non-null                         Endpoint resolution
+                                 service_management_key, resolves the target
+                                 via homepass.service_management_endpoin
+                                 ts[service.service_management_key].
+                                 Missing key →
+                                 NO_HOMEPASS_ENDPOINT_FOR_KEY (Service-level
+                                 failure). Null port →
+                                 HOMEPASS_PORT_NOT_CAPTURED (Service-level
+                                 failure).
+
+  R-FUL-05-LO-5                  For each Service with null                             Partner-fulfilled lookup
+                                 service_management_key (partner-fulfilled),
+                                 passes (null, null) to the Provisioner. The
+                                 adapter sources target from its own config.
+
+  R-FUL-05-LO-6                  Resolves the Provisioner adapter by service.net        Provisioner lookup
+                                 work_profile_shape.provisionerKey
+                                 against the in-memory adapter registry. Missing
+                                 bean → UNKNOWN_PROVISIONER_KEY
+                                 (Service-level failure).
+
+
+ #### Rule group OR — Ordering
+
+  ID                             Rule                                                   Triggered on
+
+  R-FUL-05-OR-1                  Services dispatched in the order specified in          Service dispatch
+                                 policy.serviceOrder, or — if not provided — in
+                                 the reverse of the order declared by
+                                 Package.serviceRefs[]. Reverse ordering is
+                                 the recommended default for termination (revoke
+                                 voice and TV before data so the customer doesn't
+                                 get a brief window of voice-without-data or
+                                 TV-without-internet that could surface as a support
+                                 call). FUL-05 reverses automatically when no
+                                 explicit policy is supplied.
+
+  R-FUL-05-OR-2                  policy.serviceOrder entries referencing a              Defensive
+                                 Service NOT in the Package are silently skipped.
+                                 Services present in the Package but absent from the
+                                 policy are appended at the end (defensive).
+
+  R-FUL-05-OR-3                  Services dispatched SEQUENTIALLY                       Behavior
+                                 (synchronously) for v1.0. Future v1.x may
+                                 parallelize.
+
+
+ #### Rule group DI — Dispatch
+
+  ID                             Rule                                                   Triggered on
+
+  R-FUL-05-DI-1                  Invokes Provisioner.revokeService(reason               Per Service
+                                 Category, equipmentDisposition,
+                                 params, customer, targetNodeCode,
+                                 targetPort). params is
+                                 service.networkProfileShape.params. The
+                                 adapter performs vendor-specific termination based
+                                 on equipmentDisposition:
+                                 CUSTOMER_RETAINS → disable AAA profile
+                                 (preserve record); PENDING_COLLECTION /
+                                 WRITTEN_OFF → delete AAA profile + deprovision
+                                 OLT port + shutdown vendor service (full clean-out).
+                                 Returns ProvisionerOutcome with success,
+                                 adapterRefs, failureReason,
+                                 failureDetail.
+
+  R-FUL-05-DI-2                  Per-Service timeout from                               Adapter call
+                                 policy.perServiceTimeoutMs (default from
+                                 ful_05_config, typically 25 seconds). On
+                                 timeout, Service outcome is FAILURE /
+                                 ADAPTER_TIMEOUT.
+
+  R-FUL-05-DI-3                  If the adapter throws (Java exception), Service        Adapter error
+                                 outcome is FAILURE / ADAPTER_ERROR with
+                                 failure_detail = exception message.
+
+  R-FUL-05-DI-4                  The full ProvisionerOutcome payload is stored          Per outcome
+                                 in termination_fulfillment_service_outc
+                                 ome.provisioner_outcome as JSONB.
+                                 Persistent record of vendor-specific identifiers
+                                 needed for later compensation or troubleshooting.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                        Page 7
+ #### Rule group AG — Aggregation
+
+  ID                                 Rule                                                     Triggered on
+
+  R-FUL-05-AG-1                      If policy.partialAllowed = false (default):              First failure
+                                     chain aborts on first FAILURE. Subsequent Services
+                                     get outcome = SKIPPED_ABORTED_CHAIN.
+                                     Terminal state is FAILED_AND_ROLLED_BACK if
+                                     any prior Service succeeded (triggers
+                                     compensation) or FAILED_AT_FIRST_SERVICE if
+                                     no prior Service succeeded.
+
+  R-FUL-05-AG-2                      If policy.partialAllowed = true: chain                   All Services attempted
+                                     continues through all Services. Terminal state is
+                                     FULLY_REVOKED / PARTIALLY_REVOKED /
+                                     FAILED_AT_FIRST_SERVICE. Compensation is
+                                     NOT invoked — the saga sees the partial outcome
+                                     and decides. NOTE: for DUNNING_TERMINATION
+                                     operators may prefer partialAllowed = true
+                                     since partial revocation is still progress toward debt
+                                     protection.
+
+  R-FUL-05-AG-3                      If the Package contained zero is_addressable             Empty Service set
+                                     Services after the filter, terminal state is
+                                     NOTHING_TO_REVOKE (no adapter calls, immediate
+                                     return). Logged for operator review.
+
+
+ #### Rule group CO — Compensation
+
+  ID                                 Rule                                                     Triggered on
+
+  R-FUL-05-CO-1                      Compensation is invoked when terminal state is           Compensation trigger
+                                     FAILED_AND_ROLLED_BACK. For each
+                                     previously-successful Service, FUL-05 calls Provi
+                                     sioner.restoreService(reasonCategory,
+                                     equipmentDisposition, params,
+                                     customer, targetNodeCode, targetPort)
+                                     to undo the revoke. Order: reverse of original
+                                     dispatch (so the last-revoked is first-restored).
+
+  R-FUL-05-CO-2                      The Provisioner.restoreService method is                 Interface extension
+                                     the revokeService inverse for compensation
+                                     only. It is NOT the path for legitimate reactivation —
+                                     that is FUL-03 activate(). The two are separate
+                                     to keep the compensation contract clean. The
+                                     interface extension is captured as an open
+                                     coordination item for PLM-CFG-01 v0.9 (alongside
+                                     FUL-04's interface additions).
+
+  R-FUL-05-CO-3                      Compensation results recorded in termination_f           Per compensation result
+                                     ulfillment_service_outcome.compensatio
+                                     n_status: COMPENSATED /
+                                     COMPENSATION_FAILED / NOT_APPLICABLE. A
+                                     failed compensation does NOT abort the overall flow
+                                     — FUL-05 logs, emits CompensationFailed for
+                                     NOC alerting, continues.
+
+  R-FUL-05-CO-4                      After all compensations attempted, FUL-05 writes         Final emission
+                                     the final ledger row and emits
+                                     TerminationFulfillmentFailed. Terminal
+                                     state remains FAILED_AND_ROLLED_BACK even if
+                                     some compensations failed — the operator (NOC)
+                                     handles cleanup. Subscription stays in its prior
+                                     status (NOT TERMINATED).
+
+  R-FUL-05-CO-5                      Compensation is NOT invoked for                          Skip cases
+                                     FAILED_AT_FIRST_SERVICE (nothing succeeded)
+                                     or PARTIALLY_REVOKED (operator policy says
+                                     partial is OK).
+
+
+ #### Rule group LE — Ledger
+
+  ID                                 Rule                                                     Triggered on
+
+  R-FUL-05-LE-1                      One ledger row per fulfillment attempt in                Every attempt
+                                     termination_fulfillment_ledger. Unique on
+                                     (subscription_id,
+                                     fulfillment_correlation_id). Carries the
+                                     envelope fields, the terminal state, timestamps, and
+                                     aggregated counts.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                             Page 8
+  ID                                   Rule                                                     Triggered on
+
+  R-FUL-05-LE-2                        One service-outcome row per Service in the               Every dispatched Service
+                                       Package per attempt in termination_fulfillm
+                                       ent_service_outcome. Carries the Service ref,
+                                       dispatch order, the (targetNodeCode,
+                                       targetPort) resolved, the outcome, failure
+                                       reason if any, the full provisioner_outcome
+                                       JSONB, and the compensation status if applicable.
+
+  R-FUL-05-LE-3                        Both tables are append-only at the application layer.    Append-only
+                                       Updates only happen during the same fulfillment
+                                       attempt (e.g., flipping a Service outcome to
+                                       SUCCESS_THEN_COMPENSATED when
+                                       compensation runs). After the ledger row reaches a
+                                       terminal state, no further updates.
+
+  R-FUL-05-LE-4                        Retention: indefinite. Termination is the irreversible   Retention
+                                       end of a customer relationship; the ledger is the
+                                       permanent record of what happened on the network
+                                       plane at the moment of revoke. Workshop sources
+                                       flagged daily BSS↔NMS reconciliation; this ledger
+                                       participates in that reconciliation.
+
+
+ #### Rule group EV — Event emission
+
+  ID                                   Rule                                                     Triggered on
+
+  R-FUL-05-EV-1                        On any terminal state, emit one Kafka event with the     Terminal state reached
+                                       full ledger contents:
+                                       TerminationFulfillmentCompleted (terminal
+                                       FULLY_REVOKED),
+                                       TerminationFulfillmentPartial (terminal
+                                       PARTIALLY_REVOKED),
+                                       TerminationFulfillmentFailed (terminal
+                                       FAILED_AND_ROLLED_BACK /
+                                       FAILED_AT_FIRST_SERVICE /
+                                       NOTHING_TO_REVOKE).
+
+  R-FUL-05-EV-2                        On compensation failure, emit                            Compensation failure
+                                       CompensationFailed (one per failed
+                                       compensation) in addition to the terminal event.
+                                       NOC subscribes to CompensationFailed for
+                                       manual cleanup alerting.
+
+  R-FUL-05-EV-3                        All Kafka events carry fulfillmentId,                    Event payload
+                                       subscriptionId, customerId, operatorCode,
+                                       reasonCategory, equipmentDisposition,
+                                       plus the per-service summary. The saga's
+                                       fulfillmentCorrelationId is also carried for
+                                       cross-system correlation with billing / SUB-LM
+                                       events.
+
+
+
+ 3. Schemas
+ #### termination_fulfillment_ledger
+
+  Column                               Type                                                     Notes
+
+  id                                   TEXT PK                                                  ULID. Example:
+                                                                                                tfl_01HZX3K9M2P7Q4R8T6W1Y3Z5N7
+
+  operator_code                        TEXT NOT NULL                                            Values: WIK / WUG / WTZ / YASSN
+
+  subscription_id                      TEXT NOT NULL                                            FK to subscription. Example:
+                                                                                                sub_01HX5M2K9P3Q7R4T6W8Y0Z2N4
+
+  customer_id                          TEXT NOT NULL                                            Denormalized for fast lookup. Example:
+                                                                                                cust_01HX3K9M2P5Q8R1T4W7Y0Z3N6
+
+  fulfillment_correlation_id           TEXT NOT NULL                                            Saga's operation ID. Example: saga-terminate-
+                                                                                                sub_01HX-20260518T103000
+
+  caller_workflow_kind                 TEXT NOT NULL                                            SUB_WF_TERMINATE (v1.0 only caller). Example:
+                                                                                                SUB_WF_TERMINATE
+
+  caller_workflow_ref_id               TEXT NOT NULL                                            Calling workflow's saga ID. Example:
+                                                                                                terminate_01HZ_KAMAU_MOVED
+
+  package_ref                          TEXT NOT NULL                                            Resolved from subscription at fulfillment time.
+                                                                                                Example: pkg_INET_VOIP_RES
+
+  homepass_id                          TEXT NOT NULL                                            Resolved from subscription at fulfillment time.
+                                                                                                Example: hp_01HX5M2K9P3Q7R4T6W8Y0Z2N4P
+
+
+
+SOPHIX BSS Design Documents                                                                                                                   Page 9
+  Column                                         Type                                             Notes
+
+  reason_category                                TEXT NOT NULL                                    CUSTOMER_REQUESTED / ADMIN_DECISION /
+                                                                                                  DUNNING_TERMINATION / CONTRACT_EXPIRED
+
+  equipment_disposition                          TEXT NOT NULL                                    CUSTOMER_RETAINS / PENDING_COLLECTION /
+                                                                                                  WRITTEN_OFF
+
+  equipment_bindings                             JSONB NOT NULL                                   Array passed from caller — informational for the
+                                                                                                  Provisioner. Example: [{"equipmentRequireme
+                                                                                                  nt":"GPON_ONT","equipmentRef":"ont_01H
+                                                                                                  Z..."}]
+
+  policy_partial_allowed                         BOOLEAN NOT NULL                                 Effective policy. Example: false
+
+  policy_service_order                           JSONB NULL                                       Resolved order if explicit. Example:
+                                                                                                  ["svc_VOIP_LINE", "svc_INET_100M"]
+
+  terminal_state                                 TEXT NOT NULL                                    FULLY_REVOKED / PARTIALLY_REVOKED /
+                                                                                                  FAILED_AT_FIRST_SERVICE /
+                                                                                                  FAILED_AND_ROLLED_BACK /
+                                                                                                  NOTHING_TO_REVOKE / IN_PROGRESS
+
+  services_dispatched_count                      INTEGER NOT NULL                                 Number of Services for which a Provisioner method
+                                                                                                  was invoked. Example: 2
+
+  services_succeeded_count                       INTEGER NOT NULL                                 Example: 2
+
+  services_failed_count                          INTEGER NOT NULL                                 Example: 0
+
+  services_skipped_count                         INTEGER NOT NULL                                 Example: 0
+
+  services_compensated_count                     INTEGER NOT NULL                                 Example: 0
+
+  started_at                                     TIMESTAMP NOT NULL                               Example: 2026-05-18 10:30:00.123
+
+  completed_at                                   TIMESTAMP NULL                                   Null while IN_PROGRESS. Example: 2026-05-18
+                                                                                                  10:30:18.872
+
+  duration_ms                                    INTEGER NULL                                     Example: 18749
+
+
+ Indexes:
+
+   - UNIQUE on (subscription_id, fulfillment_correlation_id) — enforces R-EN-5 idempotency
+
+   - idx_tfl_subscription on (subscription_id, started_at DESC) — recent fulfillments per Subscription
+
+   - idx_tfl_terminal_state on (operator_code, terminal_state, started_at DESC) — ops dashboards
+
+   - idx_tfl_caller on (caller_workflow_kind, caller_workflow_ref_id) — trace back from workflow
+
+   - idx_tfl_reason_disposition on (operator_code, reason_category, equipment_disposition,
+     started_at DESC) — finance reporting (e.g., "all DUNNING_TERMINATION with WRITTEN_OFF equipment in May")
+
+ Sample data:
+
+  id                operator_code   subscription_id     reason_category   equipment_dispo   terminal_state     services_dispatch     services_succeed
+                                                                          sition                               ed_count              ed_count
+
+  tfl_01HZ_KAMA     WIK             sub_01HZ_KAMA       CUSTOMER_REQU     PENDING_COLLE     FULLY_REVOKED      2                     2
+  U_MOVED                           U_FIBER             ESTED             CTION
+
+  tfl_01HZ_OTIE     WIK             sub_01HZ_OTIE       DUNNING_TERMI     WRITTEN_OFF       FULLY_REVOKED      3                     3
+  NO_DUN_TERM                       NO_TRIPLEPLAY       NATION
+
+  tfl_01HZ_FRAU     WIK             sub_01HZ_FRAU       ADMIN_DECISIO     WRITTEN_OFF       FAILED_AND_RO      2                     1
+  D_TERM                            D_CASE              N                                   LLED_BACK
+
+
+ #### termination_fulfillment_service_outcome
+
+  Column                                         Type                                             Notes
+
+  id                                             TEXT PK                                          ULID. Example: tfso_01HZ...
+
+  fulfillment_id                                 TEXT NOT NULL                                    FK to termination_fulfillment_ledger.id
+
+  service_ref                                    TEXT NOT NULL                                    Example: svc_VOIP_LINE
+
+  dispatch_order                                 INTEGER NOT NULL                                 1-based position in the dispatch sequence.
+                                                                                                  Example: 1
+
+  provisioner_key                                TEXT NULL                                        Resolved provisionerKey. Null if dispatch never
+                                                                                                  reached Provisioner lookup. Example:
+                                                                                                  VOIP_SIP_PROFILE
+
+  service_management_key                         TEXT NULL                                        The key looked up in HomePass. Example: voice.
+                                                                                                  Null for partner-fulfilled.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 10
+  Column                                         Type                                             Notes
+
+  target_node_code                               TEXT NULL                                        Example: VOIPSWITCH-NRB-01
+
+  target_port                                    TEXT NULL                                        Example: EXT-5421
+
+  outcome                                        TEXT NOT NULL                                    SUCCESS / FAILURE /
+                                                                                                  SKIPPED_NOT_ADDRESSABLE /
+                                                                                                  SKIPPED_ABORTED_CHAIN /
+                                                                                                  SUCCESS_THEN_COMPENSATED
+
+  failure_reason                                 TEXT NULL                                        NO_HOMEPASS_ENDPOINT_FOR_KEY /
+                                                                                                  HOMEPASS_PORT_NOT_CAPTURED /
+                                                                                                  UNKNOWN_PROVISIONER_KEY /
+                                                                                                  ADAPTER_TIMEOUT / ADAPTER_ERROR. Example:
+                                                                                                  ADAPTER_TIMEOUT
+
+  failure_detail                                 TEXT NULL                                        Free-text detail. Example: "VoipSwitch SOAP
+                                                                                                  response timed out after 25000ms"
+
+  provisioner_outcome                            JSONB NULL                                       Full structured outcome returned by the Provisioner.
+                                                                                                  Example: {"success": true,
+                                                                                                  "adapterRefs": {"deletedProfileId":
+                                                                                                  "prof_voip_88421"}}
+
+  compensation_status                            TEXT NULL                                        NOT_APPLICABLE (default) / COMPENSATED /
+                                                                                                  COMPENSATION_FAILED
+
+  compensation_detail                            TEXT NULL                                        Free-text. Example: "restoreService
+                                                                                                  rollback succeeded in 1240ms"
+
+  started_at                                     TIMESTAMP NOT NULL                               Example: 2026-05-18 10:30:00.456
+
+  completed_at                                   TIMESTAMP NULL                                   Example: 2026-05-18 10:30:02.301
+
+  duration_ms                                    INTEGER NULL                                     Example: 1845
+
+
+ Indexes:
+
+   - idx_tfso_fulfillment on (fulfillment_id, dispatch_order) — read service outcomes per attempt in order
+
+   - idx_tfso_outcome on (outcome, completed_at DESC) — failure investigation
+
+ Sample data (for tfl_01HZ_OTIENO_DUN_TERM — triple-play dunning termination, fully revoked):
+
+  id              fulfillment_id   service_ref   order           provisioner_ke   service_mgmt_   target_node_co    target_port       outcome
+                                                                 y                key             de
+
+  tfso_01HZ_O     tfl_01HZ_OT      svc_VOIP_LI   1               VOIP_SIP_PR      voice           VOIPSWITCH-       EXT-5421          SUCCESS
+  TIENO_1         IENO_DUN_TE      NE                            OFILE                            NRB-01
+                  RM
+
+  tfso_01HZ_O     tfl_01HZ_OT      svc_IPTV_BA   2               VERIMATRIX_      iptv_multic     VERIMATRIX-       STB_67890         SUCCESS
+  TIENO_2         IENO_DUN_TE      SIC                           IPTV             ast             VMC-NRB
+                  RM
+
+  tfso_01HZ_O     tfl_01HZ_OT      svc_INET_50   3               HFC_DOCSIS_      data            CMTS-NRB-WT       1/2/8             SUCCESS
+  TIENO_3         IENO_DUN_TE      M                             PROFILE                          L-01
+                  RM
+
+
+ #### ful_05_config
+
+ Per-operator config. One row per operator deployment.
+
+  Column                                         Type                                             Notes
+
+  operator_code                                  TEXT PK                                          Values: WIK / WUG / WTZ / YASSN
+
+  default_partial_allowed                        BOOLEAN NOT NULL DEFAULT FALSE                   Default for partialAllowed. false =
+                                                                                                  abort-and-rollback on any Service failure. Example:
+                                                                                                  false
+
+  per_service_timeout_ms                         INTEGER NOT NULL DEFAULT 25000                   Timeout per Provisioner method call. Example:
+                                                                                                  25000
+
+  overall_timeout_ms                             INTEGER NOT NULL DEFAULT 55000                   Overall budget for one attempt including
+                                                                                                  compensation. Example: 55000
+
+  cache_ttl_seconds                              INTEGER NOT NULL DEFAULT 300                     TTL for Service / Package / HomePass read
+                                                                                                  caches. Example: 300
+
+  updated_at                                     TIMESTAMP NOT NULL                               Example: 2026-05-18 09:00:00
+
+  updated_by                                     TEXT NOT NULL                                    Example: admin_user_42
+
+
+ Sample data:
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 11
+  operator_code               partial_allowed         per_service_timeout_ms   overall_timeout_ms       cache_ttl_seconds
+
+  WIK                         false                   25000                    55000                    300
+
+  WUG                         false                   25000                    55000                    300
+
+  WTZ                         false                   25000                    55000                    300
+
+  YASSN                       false                   25000                    55000                    300
+
+
+
+ 4. API surface
+ #### Execute termination fulfillment
+           POST /api/termination-fulfillment/execute HTTP/1.1
+           Authorization: Bearer <internal-svc-JWT>
+           Content-Type: application/json
+
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "customerId": "cust_01HZ_KAMAU",
+               "operatorCode": "WIK",
+               "packageRef": "pkg_INET_VOIP_RES",
+               "homepassId": "hp_01HZ_KAREN_017",
+               "reasonCategory": "CUSTOMER_REQUESTED",
+               "equipmentDisposition": "PENDING_COLLECTION",
+               "equipmentBindings": [
+                  {"equipmentRequirement": "GPON_ONT", "equipmentRef": "ont_01HZ_KAMAU"},
+                  {"equipmentRequirement": "ATA",      "equipmentRef": "ata_01HZ_KAMAU"}
+               ],
+               "fulfillmentCorrelationId": "saga-terminate-sub_01HZ_KAMAU-20260518T103000",
+               "callerWorkflowKind": "SUB_WF_TERMINATE",
+               "callerWorkflowRefId": "terminate_01HZ_KAMAU_MOVED",
+               "policy": {
+                  "partialAllowed": false
+               }
+           }
+
+ Response 200 (fully revoked):
+           {
+               "fulfillmentId": "tfl_01HZ_KAMAU_MOVED",
+               "terminalState": "FULLY_REVOKED",
+               "reasonCategory": "CUSTOMER_REQUESTED",
+               "equipmentDisposition": "PENDING_COLLECTION",
+               "servicesDispatchedCount": 2,
+               "servicesSucceededCount": 2,
+               "services": [
+                  {
+                     "serviceRef": "svc_VOIP_LINE",
+                     "dispatchOrder": 1,
+                     "provisionerKey": "VOIP_SIP_PROFILE",
+                     "targetNodeCode": "VOIPSWITCH-NRB-01",
+                     "targetPort": "EXT-5421",
+                     "outcome": "SUCCESS",
+                     "provisionerOutcome": {"success": true, "adapterRefs": {"deletedProfileId": "prof_voip_88421"}}
+                  },
+                  {
+                     "serviceRef": "svc_INET_100M",
+                     "dispatchOrder": 2,
+                     "provisionerKey": "GPON_RES_PROFILE",
+                     "targetNodeCode": "OLT-NRB-WTL-01",
+                     "targetPort": "1/2/3",
+                     "outcome": "SUCCESS",
+                     "provisionerOutcome": {"success": true, "adapterRefs": {"deprovisionedPortAck": "OLT_PORT_FREE"}}
+                  }
+               ],
+               "completedAt": "2026-05-18T10:30:04.150Z",
+               "durationMs": 4150
+           }
+
+ Partial failure with compensation:
+           → 200 OK
+           {
+             "fulfillmentId": "tfl_01HZ_FRAUD_TERM",
+             "terminalState": "FAILED_AND_ROLLED_BACK",
+             "reasonCategory": "ADMIN_DECISION",
+             "services": [
+               {
+                 "serviceRef": "svc_VOIP_LINE",
+                 "outcome": "SUCCESS_THEN_COMPENSATED",
+                 "compensationStatus": "COMPENSATED",
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 12
+                      "compensationDetail": "restoreService rollback succeeded in 1240ms"
+                  },
+                  {
+                      "serviceRef": "svc_INET_100M",
+                      "outcome": "FAILURE",
+                      "failureReason": "ADAPTER_TIMEOUT",
+                      "failureDetail": "Huawei NCE response timeout after 25000ms"
+                  }
+              ]
+          }
+
+ Idempotency hit:
+          → 200 OK
+          {
+            "fulfillmentId": "tfl_01HZ_KAMAU_MOVED",
+            "terminalState": "FULLY_REVOKED",
+            "idempotentReturn": true
+          }
+
+ In-progress collision:
+          → 409 Conflict
+          {
+            "code": "FULFILLMENT_IN_PROGRESS",
+            "fulfillmentId": "tfl_01HZ_KAMAU_MOVED_PRIOR",
+            "startedAt": "2026-05-18T10:29:55Z"
+          }
+
+ Validation errors:
+          → 400 Bad Request
+          {
+            "code": "INVALID_EQUIPMENT_DISPOSITION",
+            "violations": [
+              {"field": "equipmentDisposition", "received": "RETURN_TO_VENDOR", "allowed": ["CUSTOMER_RETAINS","PENDING_COLLECTION",
+            ]
+          }
+
+ #### Read a fulfillment
+          GET /api/termination-fulfillment/tfl_01HZ_KAMAU_MOVED HTTP/1.1
+          Authorization: Bearer <bo-agent-jwt>
+
+          → 200 OK
+          { ledger row + service-outcome rows nested }
+
+ #### Query
+          GET /api/termination-fulfillment?operator=WIK&subscriptionId=sub_01HZ_KAMAU_FIBER
+          GET /api/termination-fulfillment?operator=WIK&terminalState=FAILED_AND_ROLLED_BACK&since=2026-05-01
+          GET /api/termination-fulfillment?operator=WIK&reasonCategory=DUNNING_TERMINATION&equipmentDisposition=WRITTEN_OFF&since=20
+          GET /api/termination-fulfillment?operator=WIK&callerWorkflowRefId=terminate_01HZ_KAMAU_MOVED
+
+
+ 5. Kafka events emitted
+ Topic prefix: sophix.fulfillment.termination.*
+
+  Event                               Topic                          Fires on                     Consumers
+
+  TerminationFulfillmentComple        sophix.fulfillment.terminati   Terminal FULLY_REVOKED       SUB-WF-TERMINATE-01 (via
+  ted                                 on.completed                                                Camunda message catch correlated
+                                                                                                  on fulfillmentCorrelationId); analytics;
+                                                                                                  OSR-RMA-01 EQP satellite trigger
+
+  TerminationFulfillmentPartia        sophix.fulfillment.terminati   Terminal PARTIALLY_REVOKED   SUB-WF-TERMINATE-01 + ICN-01
+  l                                   on.partial                                                  ops alerts
+
+  TerminationFulfillmentFailed        sophix.fulfillment.terminati   Terminal                     SUB-WF-TERMINATE-01 + ICN-01
+                                      on.failed                      FAILED_AND_ROLLED_BACK /     ops alerts to noc-team
+                                                                     FAILED_AT_FIRST_SERVICE /
+                                                                     NOTHING_TO_REVOKE
+
+  CompensationFailed                  sophix.fulfillment.terminati   A compensation step failed   ICN-01 ops alerts to noc-team for
+                                      on.compensation-failed                                      manual cleanup
+
+
+ Sample TerminationFulfillmentCompleted:
+          {
+              "eventType":   "TerminationFulfillmentCompleted",
+              "aggregateId": "tfl_01HZ_KAMAU_MOVED",
+              "timestamp":   "2026-05-18T10:30:04.150Z",
+              "payload": {
+                "operatorCode":             "WIK",
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 13
+                  "fulfillmentId":             "tfl_01HZ_KAMAU_MOVED",
+                  "subscriptionId":            "sub_01HZ_KAMAU_FIBER",
+                  "customerId":                "cust_01HZ_KAMAU",
+                  "reasonCategory":            "CUSTOMER_REQUESTED",
+                  "equipmentDisposition":      "PENDING_COLLECTION",
+                  "fulfillmentCorrelationId": "saga-terminate-sub_01HZ_KAMAU-20260518T103000",
+                  "callerWorkflowKind":        "SUB_WF_TERMINATE",
+                  "callerWorkflowRefId":       "terminate_01HZ_KAMAU_MOVED",
+                  "servicesDispatchedCount": 2,
+                  "servicesSucceededCount":    2,
+                  "services": [
+                     {"serviceRef":"svc_VOIP_LINE","provisionerKey":"VOIP_SIP_PROFILE","targetNodeCode":"VOIPSWITCH-NRB-01","targetPort":
+                     {"serviceRef":"svc_INET_100M","provisionerKey":"GPON_RES_PROFILE","targetNodeCode":"OLT-NRB-WTL-01","targetPort":"1/
+                  ],
+                  "completedAt": "2026-05-18T10:30:04.150Z",
+                  "durationMs": 4150
+              }
+          }
+
+
+ 6. Worked example — Kamau moves to a no-coverage area
+ Kamau calls the Call Center to terminate his Wananchi Kenya fiber + voice subscription because he's relocating to a
+ non-covered area. The CC agent verifies, captures terminationTrigger=CUSTOMER_REQUESTED +
+ terminationReasonCode=CUSTOMER_MOVED_NO_COVERAGE per SUB-WF-TERMINATE-01. The agent confirms with
+ Kamau that the ONT and ATA need to be returned (equipment disposition PENDING_COLLECTION).
+ SUB-WF-TERMINATE-01 starts: validates → cancels any in-flight saga → puts state PENDING_TERMINATION → calls
+ billing (TERMINATION_INTENT; computes final pro-rated invoice + closes wallet balance). Billing returns OK.
+ SUB-WF-TERMINATE-01 reaches callFulfillment.
+
+ 10:30:00: Worker calls:
+          POST /api/termination-fulfillment/execute
+          {"subscriptionId":"sub_01HZ_KAMAU_FIBER","customerId":"cust_01HZ_KAMAU","operatorCode":"WIK",
+           "packageRef":"pkg_INET_VOIP_RES","homepassId":"hp_01HZ_KAREN_017",
+           "reasonCategory":"CUSTOMER_REQUESTED","equipmentDisposition":"PENDING_COLLECTION",
+           "equipmentBindings":[{"equipmentRequirement":"GPON_ONT","equipmentRef":"ont_01HZ_KAMAU"},
+                                {"equipmentRequirement":"ATA","equipmentRef":"ata_01HZ_KAMAU"}],
+           "fulfillmentCorrelationId":"saga-terminate-sub_01HZ_KAMAU-20260518T103000",
+           "callerWorkflowKind":"SUB_WF_TERMINATE","callerWorkflowRefId":"terminate_01HZ_KAMAU_MOVED"}
+          → 200 fulfillmentId=tfl_01HZ_KAMAU_MOVED, terminalState=IN_PROGRESS
+
+ 10:30:00 (internal): FUL-05 inserts termination_fulfillment_ledger row. Loads Package pkg_INET_VOIP_RES →
+ Services [svc_INET_100M, svc_VOIP_LINE]. Both is_addressable=true and
+ consumption_model=CONTINUOUS. Loads HomePass hp_01HZ_KAREN_017, reads
+ service_management_endpoints = {"data": {"nodeCode":"OLT-NRB-WTL-01","port":"1/2/3"},
+ "voice": {"nodeCode":"VOIPSWITCH-NRB-01","port":"EXT-5421"}}. Applies reverse order per R-OR-1 (no
+ explicit policy): voice first, then data.
+
+ 10:30:00.250: Service 1 (reverse-ordered) svc_VOIP_LINE, key voice → target (VOIPSWITCH-NRB-01, EXT-5421).
+ Provisioner VoipSipProvisioner.revokeService("CUSTOMER_REQUESTED", "PENDING_COLLECTION", ...).
+ Adapter pushes a delete-profile command to VoipSwitch via side channel. Returns {success:true,
+ adapterRefs:{deletedProfileId:"prof_voip_88421"}}.
+
+ termination_fulfillment_service_outcome row 1: outcome=SUCCESS, dispatch_order=1, duration_ms=1200.
+
+ 10:30:01.450: Service 2 svc_INET_100M, key data → target (OLT-NRB-WTL-01, 1/2/3). Provisioner
+ GponResProvisioner.revokeService("CUSTOMER_REQUESTED", "PENDING_COLLECTION", ...). Adapter
+ sends an OLT-port deprovision command via Huawei NCE GLDS tunnel. Returns {success:true,
+ adapterRefs:{deprovisionedPortAck:"OLT_PORT_FREE"}}.
+
+ termination_fulfillment_service_outcome row 2: outcome=SUCCESS, dispatch_order=2, duration_ms=2700.
+
+ 10:30:04.150: FUL-05 aggregates: 2 SUCCESS / 0 FAILED → terminal FULLY_REVOKED. Ledger updated. Kafka emits
+ TerminationFulfillmentCompleted.
+
+ 10:30:05: SUB-WF-TERMINATE-01's Camunda message catch fires on the Kafka event. The saga commits: closes Kamau's
+ pause history if any active, puts master fields (terminated_at=2026-05-18T10:30:05Z,
+ termination_trigger=CUSTOMER_REQUESTED, termination_reason_code=CUSTOMER_MOVED_NO_COVERAGE,
+ prior_status_at_termination=ACTIVE), puts state TERMINATED, emits SubscriptionTerminated.
+
+ 10:30:06+: Downstream — OSR-RMA-01 EQP satellite subscribes to SubscriptionTerminated events with
+ equipmentBindings.length > 0 AND equipmentDisposition=PENDING_COLLECTION and creates a pickup work
+ order for the two equipment refs. NOT-01 sends Kamau a confirmation SMS + email with the pickup window. BIL-02 finalizes
+ any closing invoice line.
+
+SOPHIX BSS Design Documents                                                                                             Page 14
+ Kamau's network access is gone — his ONT can no longer authenticate to the OLT, his ATA can no longer register with
+ VoipSwitch. The physical equipment sits at his address until the contractor agent visits within the next 5 working days.
+
+ 7. Module ecosystem
+  Role                                            Module                                             What it does
+
+  Owner                                           fulfillment module (FUL-05 component)              Owns the orchestration logic, the ledger tables, the
+                                                                                                     Provisioner adapter dispatch, the Kafka emit
+
+  Upstream caller                                 SUB-WF-TERMINATE-01                                Synchronous REST to POST
+                                                                                                     /api/termination-fulfillment/execute
+
+  Read dependencies                               SIP-01 (Package), PLM-CFG-01 (Service),            Read-only catalog lookups
+                                                  RLM-CFG-01 (HomePass)
+
+  Adapter callees                                 Provisioner adapter beans                          In-module code beans; not separate DDs
+                                                  (GponResProvisioner,
+                                                  HfcDocsisProvisioner,
+                                                  VoipSipProvisioner,
+                                                  VerimatrixProvisioner, …)
+
+  Downstream consumers                            SUB-WF-TERMINATE-01 (via Camunda message           Consume Kafka events
+                                                  catch on Kafka), OSR-RMA-01 EQP satellite
+                                                  (subscribes to SubscriptionTerminated
+                                                  emitted downstream after FUL-05 success), ICN-01
+                                                  (ops alerting), EM-04 (reporting)
+
+
+
+ 8. Dependencies
+  Dependency                                      Owner                                              Status
+
+  SUB-WF-TERMINATE-01 (caller)                    subscription team                                  ✓ v0.9
+
+  SIP-01 Package Management                       plm team                                           ✓ v1.0
+
+  PLM-CFG-01 Service Catalog                      plm team                                           ✓ v0.8 (Provisioner interface defined here)
+
+  RLM-CFG-01 HomePass Configuration               network/plm team                                   ✓ v1.0 (service_management_endpoints structure
+                                                                                                     defined here)
+
+  SUB-LM-01 Subscription Lifecycle Management     subscription team                                  ✓ v1.0
+
+  FUL-03 Service Activation (sibling — shares     fulfillment team                                   ✓ v1.0
+  Provisioner registry)
+
+  FUL-04 Restriction & Non-Payment Suspension     fulfillment team                                   ✓ v1.0
+  Fulfillment (sibling)
+
+  OSR-RMA-01 EQP satellite (downstream consumer   inventory team                                     ✓ v1.0
+  for equipment pickup)
+
+  FOUNDATION_DB, FOUNDATION_KAFKA,                infra team                                         ✓
+  FOUNDATION_CACHE, FOUNDATION_AUTH
+
+  Provisioner adapter implementations — new       fulfillment team                                   ■ to be implemented as part of this module
+  methods revokeService + restoreService
+  (in-module code, not DD)
+
+  PLM-CFG-01 v0.9 — Provisioner interface         plm team                                           ■ captured as open coordination item below
+  extension to add revokeService /
+  restoreService methods (alongside FUL-04's
+  additions)
+
+
+
+
+ B — Current TZ
+ Status: To be filled in after codebase cartography review.
+
+ Workshop materials (Deep dive 05 Provisioning + Service Termination flow, 2026-04-30) note that the legacy termination
+ chain reaches AAA / NMS / Verimatrix / VoipSwitch via the Supercontroller, and that "service revoked end-to-end via
+ Supercontroller → NMS" is the legacy pattern. Specific table names, command sequences, and per-vendor termination
+ behavior in the existing codebase require source-code review to document accurately.
+
+ Until that cartography lands, this DD does not assert specific legacy structural claims about termination handling. The §C
+ section below describes V3 design intent without depending on unverified details.
+
+
+
+ C — V3 design intent
+SOPHIX BSS Design Documents                                                                                                                        Page 15
+ FUL-05 is new functionality in V3. The V3 model:
+
+   - Single inbound contract for service termination. SUB-WF-TERMINATE-01 calls one endpoint; FUL-05 fans out to
+     Services internally via the Provisioner registry.
+
+   - Provisioner adapter dispatch parity with FUL-03 / FUL-04. Same registry, same per-vendor adapter beans, same target
+     resolution from HomePass service_management_endpoints. The adapters gain a new interface method
+     (revokeService) plus a compensation companion (restoreService for in-attempt rollback only).
+
+   - Structured equipmentDisposition propagated to the Provisioner. Vendor adapters can implement different cleanup
+     behavior for CUSTOMER_RETAINS (preserve AAA record, disable only) vs PENDING_COLLECTION / WRITTEN_OFF (full
+     clean-out).
+
+   - Ledger + per-service-outcome audit. Every termination attempt produces a durable audit row plus one row per Service
+     revoked. Retention indefinite.
+
+   - Reverse-default ordering. When no explicit policy supplied, services are revoked in reverse of the Package's declared
+     order. Voice + TV before data — minimizes brief windows of "partial service" that could surface as support calls.
+
+   - Idempotency by (subscriptionId, fulfillmentCorrelationId) — saga retries are safe.
+
+   - Equipment retrieval cleanly delegated to OSR-RMA-01 EQP satellite via the SubscriptionTerminated event.
+     FUL-05 owns network state; OSR owns physical equipment.
+
+ Migration approach
+ Migration of any in-flight terminations from legacy source data to V3 is deferred to a dedicated migration design document
+ produced after codebase cartography. The V3 module deploys with empty ledger tables and begins recording from cutover.
+
+   1. Deploy fulfillment module with the termination_fulfillment_ledger +
+     termination_fulfillment_service_outcome tables empty.
+
+   2. Implement Provisioner adapter methods (revokeService, restoreService) on each existing adapter bean. Same
+     vendor wrappers as FUL-03 / FUL-04.
+
+   3. Per-operator seed of ful_05_config.
+
+   4. SUB-WF-TERMINATE-01 v0.9 expects FUL-05 as a saga step — switching from the placeholder "no-op" step to the real
+     FUL-05 endpoint is a saga configuration change.
+
+ Open coordination items
+   - PLM-CFG-01 v0.9 Provisioner interface extension: bundled with FUL-04's additions. The complete v0.9 interface adds
+     applyRestriction, liftRestriction, suspendService, resumeService (from FUL-04) plus revokeService
+     and restoreService (from this DD). Plus the targetPort parameter previously captured by FUL-03. PLM team owns
+     the formalization.
+
+   - Provisioner code components — GponResProvisioner, HfcDocsisProvisioner, VoipSipProvisioner,
+     VerimatrixProvisioner, plus any partner-fulfilled adapters — each gains two new methods (revokeService,
+     restoreService). The methods are in-module code, not DDs.
+
+   - equipmentDisposition semantic per vendor — each Provisioner adapter interprets the disposition value:
+
+   - CUSTOMER_RETAINS: disable AAA record but preserve it for legal-retention reasons; do not delete OLT port profile (rare;
+     operator-specific policy).
+
+   - PENDING_COLLECTION: delete AAA profile, deprovision OLT port, shutdown vendor service. Equipment is expected to
+     come back to the warehouse.
+
+   - WRITTEN_OFF: same as PENDING_COLLECTION from the network plane (equipment value is being accepted as a loss;
+     no special vendor behavior). Distinguishes for downstream finance / reporting.
+
+ Workshop deep-dive on per-vendor command sets remains pending; per-operator policy on CUSTOMER_RETAINS is captured
+ in the Provisioner adapter code, not in FUL-05 config.
+
+   - Downstream OSR-RMA-01 EQP satellite contract — OSR-RMA-01 EQP subscribes to SubscriptionTerminated
+     (emitted by SUB-WF-TERMINATE-01 after FUL-05 returns success). The subscription criterion:
+     equipmentBindings.length > 0 AND equipmentDisposition IN ('PENDING_COLLECTION').
+     WRITTEN_OFF bindings do NOT trigger a pickup WO; the equipment is logged as a write-off via the inventory system.
+     CUSTOMER_RETAINS bindings also skip pickup. This subscription contract is captured here for traceability and will land
+     formally in OSR-RMA-01 v1.1 when the EQP satellite incorporates the FUL-05 event source.
+
+
+SOPHIX BSS Design Documents                                                                                             Page 16
+

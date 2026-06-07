@@ -1,0 +1,620 @@
+ DD_ASR-02 - Information Request
+ Version: 1.0 Status: Draft for review Bundle: 10_other Audience: customer care developers, ticketing developers, frontend
+ developers, QA Related DDs:
+
+   - DD_TCK-01 - Ticketing and Case Management
+
+   - DD_CUST-INT-01 - Customer Interaction Timeline
+
+   - DD_ILM-CFG-01 - Customer Service
+
+   - DD_RLM-CFG-01 - HomePass Configuration
+
+   - DD_SIP-01 - Package Management
+
+   - DD_PLM-CFG-01 - Service Catalog
+
+   - DD_BIL-02-READ-01 - Invoice Read API
+
+   - FE-APP-01 - BSS Backoffice Web App
+
+   - FE-APP-04 - Customer Self Care Frontoffice App
+
+ MVP simplification baseline: ASR-02 is implemented as TCK-01 information-request ticket categories, templates, queues,
+ and closure rules. It is not a separate ticketing service, database, or deployment in the first release.
+
+
+
+ 1. Purpose
+ ASR-02 defines the information request flow for customer questions that require a trackable answer but do not start as a
+ technical fault, complaint, or operational service request.
+
+ Examples:
+
+   - customer asks which package they are subscribed to;
+
+   - customer asks whether an address is covered;
+
+   - customer asks why a package is not available at their HomePass;
+
+   - customer asks for an explanation of invoice lines;
+
+   - customer asks about payment channels;
+
+   - customer asks about KYC status;
+
+   - customer asks about installation/order status;
+
+   - customer asks for a document or reference already available in SOPHIX.
+
+ This DD does not create a new ticketing engine. Information requests are implemented as configured TCK ticket
+ types/categories, with ASR-specific answer templates, research tasks, and closure rules.
+
+
+
+ 2. Ownership Boundary
+  Concern                                                             Owner
+
+  Ticket lifecycle, comments, assignment, SLA, attachments            TCK-01
+
+  Information request categories, research checklist, answer policy   ASR-02 config inside TCK/ASR
+
+  Customer/account data                                               ILM-CFG-01
+
+  Coverage/HomePass information                                       RLM-CFG-01
+
+  Package/service explanations                                        SIP-01 / PLM-CFG-01
+
+  Invoice/payment read-only explanation                               BIL read APIs
+
+  Actual billing correction or adjustment                             BIL-02-ADJ-01, not ASR-02
+
+  Technical repair                                                    ASR-01 / WO
+
+  Complaint handling                                                  ASR-03
+
+  Customer timeline projection                                        CUST-INT-01
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 1
+ Rule: ASR-02 is read-only with respect to business records. It may create a ticket, comments, and timeline entries, but it must
+ not change subscription, billing, package, HomePass, or KYC records.
+
+
+
+ 3. When To Use This Flow
+ Use ASR-02 when the expected outcome is an answer, explanation, document/reference, or routing guidance.
+
+ Do not use ASR-02 when:
+
+  Scenario                                                                       Use
+
+  Customer reports service not working                                           ASR-01 Technical Trouble
+
+  Customer is unhappy and requests correction/escalation                         ASR-03 Complaint
+
+  Customer requests an action such as address change, SIP reset, equipment       ASR-04 Service Request or owning workflow
+  swap, or package change
+
+  Customer disputes an invoice and wants a correction                            TCK billing complaint plus BIL adjustment flow
+
+
+
+
+ 4. High Level Flow
+             flowchart TD
+               A["Customer asks question"]
+               B["Create TCK ticket<br/>GENERAL_INQUIRY or PACKAGE_OR_CATALOG_QUERY"]
+               C["Resolve category guidance"]
+               D{"Can answer immediately?"}
+               E["Add customer-visible answer"]
+               F["Resolve ticket"]
+               G["Assign research task/queue"]
+               H["Gather data from owning APIs"]
+               I{"Needs different process?"}
+               J["Convert/link to ASR-01/03/04 or BIL flow"]
+               K["Prepare answer"]
+
+               A --> B --> C --> D
+               D -->|Yes| E --> F
+               D -->|No| G --> H --> I
+               I -->|Yes| J
+               I -->|No| K --> E --> F
+
+
+
+
+ 5. Ticket Types And Categories
+ ASR-02 primarily uses these TCK ticket types:
+
+  TCK type                                                                       Use
+
+  GENERAL_INQUIRY                                                                Generic question not tied to a specific catalog/billing/KYC domain.
+
+  PACKAGE_OR_CATALOG_QUERY                                                       Package, product, speed, eligibility, price, or coverage explanation.
+
+  KYC_SUPPORT                                                                    KYC status/document explanation, if no correction is requested.
+
+  BILLING_COMPLAINT                                                              Use only when customer asks billing explanation. If correction is requested,
+                                                                                 route to complaint/adjustment.
+
+
+ Recommended categories:
+
+  Category code                          Meaning                                 Typical answer source                     Default priority
+
+  PACKAGE_EXPLANATION                    Explain current package or available    SIP/PLM                                   P4
+                                         packages.
+
+  COVERAGE_INFORMATION                   Explain coverage or HomePass            RLM                                       P4
+                                         availability.
+
+  ORDER_STATUS_INFORMATION               Explain current order/install status.   FUL/WO                                    P4
+
+  INVOICE_EXPLANATION                    Explain invoice lines or taxes.         BIL read APIs                             P3
+
+  PAYMENT_CHANNEL_INFORMATION            Explain payment channels.               PAY-GW/BIL-05                             P4
+
+  KYC_STATUS_INFORMATION                 Explain KYC state or missing            ILM/FUL KYC                               P4
+                                         documents.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                              Page 2
+  Category code                   Meaning                                Typical answer source                  Default priority
+
+  ACCOUNT_REFERENCE_INFORMATIO    Provide account/customer references.   ILM                                    P4
+  N
+
+  GENERAL_QUESTION                Other informational question.          Agent/research                         P4
+
+
+ WO creation is not allowed by default for ASR-02 categories.
+
+
+
+ 6. ASR-Specific Tables
+ 6.1 asr_info_category_config
+ Stores behavior for each information request category.
+
+ Use this table to decide answer source, default queue, whether research is required, and whether self-care can create this
+ request.
+
+  Column                          Type                                   Purpose                                Sample
+
+  config_id                       UUID PK                                Config id.                             airc-001
+
+  operator_code                   TEXT                                   Operator/tenant.                       WIK
+
+  category_code                   TEXT                                   TCK category.                          PACKAGE_EXPLANATION
+
+  default_type_code               TEXT                                   TCK type.                              PACKAGE_OR_CATALOG_QUERY
+
+  answer_source_module            TEXT                                   Primary source module.                 SIP-01
+
+  research_required               BOOLEAN                                Whether ticket needs research before   false
+                                                                         answer.
+
+  default_queue_code              TEXT                                   Queue if not immediate.                CARE_L1
+
+  selfcare_allowed                BOOLEAN                                Customer can create from self-care.    true
+
+  answer_template_code            TEXT NULL                              Suggested template.                    PACKAGE_EXPLANATION_BASIC
+
+  conversion_policy_json          JSONB                                  When to convert/escalate.              {"billingCorrection":"ASR-03
+                                                                                                                "}
+
+  status                          TEXT                                   ACTIVE, RETIRED.                       ACTIVE
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, category_code).
+
+ 6.2 asr_info_answer_template
+ Stores safe agent answer templates for common information requests.
+
+ This table is not a customer-notification template catalog. It contains canned-answer content shown to support agents inside
+ TCK/ASR screens so they can answer consistently. If an answer must be pushed to a customer through SMS, email,
+ WhatsApp, portal notification, or another delivery channel, ASR passes the selected answer text or event-kind hint to
+ NOT-01. NOT-01 still owns delivery template, channel, language, quiet hours, fallback, and retry policy.
+
+ Use this table to make answers consistent and customer-safe.
+
+  Column                          Type                                   Purpose                                Sample
+
+  template_id                     UUID PK                                Template id.                           ait-001
+
+  operator_code                   TEXT                                   Operator/tenant.                       WIK
+
+  template_code                   TEXT                                   Stable template code.                  PACKAGE_EXPLANATION_BASIC
+
+  language_code                   TEXT                                   Language.                              en
+
+  subject_template                TEXT                                   Suggested subject.                     Your current package
+                                                                                                                information
+
+  body_template                   TEXT                                   Answer body with variables.            Your current package is
+                                                                                                                {{packageName}}.
+
+  required_variables_json         JSONB                                  Variables required.                    ["packageName","monthlyPrice
+                                                                                                                "]
+
+  status                          TEXT                                   ACTIVE, RETIRED.                       ACTIVE
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 3
+ Recommended indexes:
+
+   - Unique (operator_code, template_code, language_code).
+
+ 6.3 asr_info_research_task
+ Stores research work attached to a ticket.
+
+ Use this table when the agent cannot answer immediately and must wait for another team or API result.
+
+  Column                          Type                          Purpose                         Sample
+
+  research_task_id                UUID PK                       Research task id.               airt-001
+
+  ticket_id                       TEXT                          TCK ticket id.                  tck-001
+
+  operator_code                   TEXT                          Operator/tenant.                WIK
+
+  research_type                   TEXT                          API_LOOKUP, TEAM_REVIEW,        API_LOOKUP
+                                                                DOCUMENT_RETRIEVAL.
+
+  source_module                   TEXT                          Module/team to consult.         RLM-CFG-01
+
+  status                          TEXT                          OPEN, IN_PROGRESS, COMPLETED,   OPEN
+                                                                FAILED, CANCELLED.
+
+  request_payload_json            JSONB                         Research request details.       {"homepassId":"HP-300045"}
+
+  result_payload_json             JSONB NULL                    Research result.                {"sellable":true}
+
+  assigned_queue_code             TEXT NULL                     Queue if manual review.         CARE_L2
+
+  created_at                      TIMESTAMP                     Creation timestamp.             2026-06-03T10:00:00Z
+
+  completed_at                    TIMESTAMP NULL                Completion timestamp.           NULL
+
+
+ Recommended indexes:
+
+   - (ticket_id, status).
+
+   - (operator_code, assigned_queue_code, status).
+
+ 6.4 asr_info_answer
+ Stores the final structured answer given to the customer.
+
+ Use this table to preserve what was answered and which source data supported it.
+
+  Column                          Type                          Purpose                         Sample
+
+  answer_id                       UUID PK                       Answer id.                      aia-001
+
+  ticket_id                       TEXT                          TCK ticket id.                  tck-001
+
+  operator_code                   TEXT                          Operator/tenant.                WIK
+
+  template_code                   TEXT NULL                     Template used.                  PACKAGE_EXPLANATION_BASIC
+
+  language_code                   TEXT                          Language.                       en
+
+  answer_body                     TEXT                          Customer-visible answer.        Your current package is
+                                                                                                Fiber 100M.
+
+  source_refs_json                JSONB                         Modules/entities used.          [{"module":"SIP-01","ref":"p
+                                                                                                kg-100m"}]
+
+  answered_by_user_id             TEXT                          Agent/system.                   usr-care-001
+
+  answered_at                     TIMESTAMP                     Answer timestamp.               2026-06-03T10:08:00Z
+
+
+ Recommended indexes:
+
+   - (ticket_id, answered_at).
+
+
+
+ 7. APIs
+ 7.1 Create Information Request Ticket
+ Uses TCK create ticket API.
+           POST /api/tickets
+           Idempotency-Key: selfcare-info-20260603-001
+
+
+
+SOPHIX BSS Design Documents                                                                                            Page 4
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "typeCode": "PACKAGE_OR_CATALOG_QUERY",
+              "categoryCode": "PACKAGE_EXPLANATION",
+              "sourceChannel": "SELF_CARE",
+              "customerId": "CUS-100045",
+              "accountId": "ACC-900045",
+              "subscriptionId": "SUB-700045",
+              "subject": "Package information request",
+              "description": "Customer wants to know current package and price.",
+              "customerVisible": true
+          }
+
+
+ 7.2 Get Guidance
+          GET /api/asr/information-requests/{ticket_id}/guidance
+
+ Response:
+          {
+              "ticketId": "tck-20260603-000020",
+              "categoryCode": "PACKAGE_EXPLANATION",
+              "answerSourceModule": "SIP-01",
+              "researchRequired": false,
+              "answerTemplateCode": "PACKAGE_EXPLANATION_BASIC",
+              "allowedActions": ["ANSWER_AND_RESOLVE", "CREATE_RESEARCH_TASK", "CONVERT_TO_COMPLAINT"]
+          }
+
+
+ 7.3 Create Research Task
+          POST /api/asr/information-requests/{ticket_id}/research-tasks
+          Content-Type: application/json
+
+          {
+              "researchType": "API_LOOKUP",
+              "sourceModule": "RLM-CFG-01",
+              "requestPayload": {
+                "homepassId": "HP-300045",
+                "question": "Why is package Fiber 1G not available?"
+              }
+          }
+
+
+ 7.4 Answer And Resolve
+          POST /api/asr/information-requests/{ticket_id}/answer-and-resolve
+          Content-Type: application/json
+
+          {
+              "templateCode": "PACKAGE_EXPLANATION_BASIC",
+              "languageCode": "en",
+              "answerBody": "Your current package is Fiber 100M. The monthly recurring charge is 4,500 KES before any active discounts
+              "sourceRefs": [
+                 {"module": "SIP-01", "ref": "pkg-fiber-100m"},
+                 {"module": "SUB-LM", "ref": "SUB-700045"}
+              ],
+              "resolutionCode": "ANSWER_PROVIDED"
+          }
+
+ This API:
+
+   1. Stores asr_info_answer.
+
+   2. Adds customer-visible TCK comment.
+
+   3. Resolves the TCK ticket.
+
+   4. Emits InformationRequestAnswered.
+
+ 7.5 Convert To Another Flow
+          POST /api/asr/information-requests/{ticket_id}/convert
+          Content-Type: application/json
+
+          {
+              "targetFlow": "ASR-03",
+              "targetCategoryCode": "BILLING_DISPUTE",
+              "reason": "Customer does not accept invoice explanation and requests correction."
+          }
+
+
+
+
+SOPHIX BSS Design Documents                                                                                           Page 5
+ Conversion should not delete the original ticket history. Preferred implementation:
+
+   - update current ticket category/type if TCK policy allows; or
+
+   - create a linked new ticket and close original as CONVERTED.
+
+
+
+ 8. Events
+  Event                                       Topic                                                 When emitted
+
+  InformationRequestCreated                   sophix.asr.info.created                               Information request ticket created.
+
+  InformationRequestResearchStarted           sophix.asr.info.researchstarted                       Research task created.
+
+  InformationRequestResearchCompleted         sophix.asr.info.researchcompleted                     Research task completed.
+
+  InformationRequestAnswered                  sophix.asr.info.answered                              Customer-visible answer provided.
+
+  InformationRequestConverted                 sophix.asr.info.converted                             Request converted/linked to another flow.
+
+
+ TCK still emits generic ticket events. ASR-02 events are business-specific for reporting and customer timeline.
+
+
+
+ 9. Business Rules
+  Rule ID                                     Rule                                                  Notes
+
+  R-ASR-INFO-01                               Information request must use a configured TCK         Avoid free-form routing.
+                                              category.
+
+  R-ASR-INFO-02                               ASR-02 is read-only against business modules.         No subscription/billing mutations.
+
+  R-ASR-INFO-03                               Customer-visible answers must not include internal    Safety.
+                                              diagnostics, staff notes, or raw system errors.
+
+  R-ASR-INFO-04                               If the customer requests correction/compensation,     Avoid hiding complaints as questions.
+                                              convert or link to complaint/adjustment flow.
+
+  R-ASR-INFO-05                               Research tasks must name the source module/team       Audit.
+                                              and preserve result payload.
+
+  R-ASR-INFO-06                               Self-care can create only categories with             Prevent unsupported public flows.
+                                              selfcare_allowed = true.
+
+  R-ASR-INFO-07                               Answer-and-resolve requires a customer-visible        Closure must be explainable.
+                                              answer body.
+
+  R-ASR-INFO-08                               Ticket resolution must use TCK status APIs.           TCK remains source of truth.
+
+
+
+
+ 10. Common Source APIs
+ ASR-02 does not own the data it explains. It calls owning module APIs.
+
+  Question                                                               Source module/API
+
+  Current package                                                        SUB-LM subscription detail, SIP-01 package detail.
+
+  Available packages                                                     SIP-01 package APIs, RLM coverage/sellability APIs.
+
+  Coverage/HomePass                                                      RLM-CFG-01 HomePass search/detail.
+
+  Invoice line explanation                                               BIL-02-READ-01 invoice detail/read APIs.
+
+  Payment channel explanation                                            PAY-GW-01 channel config, BIL-05 wallet topup channels.
+
+  KYC status                                                             ILM/FUL KYC status APIs.
+
+  Order/install status                                                   FUL-02 order APIs, WO status APIs where linked.
+
+
+
+
+ 11. Frontend Usage
+ 11.1 FE-APP-01 Backoffice
+ Backoffice uses ASR-02 for:
+
+
+
+SOPHIX BSS Design Documents                                                                                                                     Page 6
+   - Create information request from customer 360.
+
+   - Show category-specific answer guidance.
+
+   - Launch module lookups from the ticket.
+
+   - Create research task.
+
+   - Draft customer-visible answer.
+
+   - Answer and resolve.
+
+   - Convert to complaint, technical trouble, service request, or billing adjustment when needed.
+
+ 11.2 FE-APP-04 Customer Self-Care
+ Self-care may expose:
+
+   - Ask a question;
+
+   - select topic;
+
+   - attach optional screenshot/document;
+
+   - view answer and ticket status;
+
+   - add customer-visible follow-up comment.
+
+ Self-care must only display customer-visible comments and final answers.
+
+
+
+ 12. Infra Recommendation
+ ASR-02 should run inside the TCK service/module. No separate pod is required for a medium budget deployment.
+
+  Component                                                         Recommendation
+
+  API                                                               Existing TCK API pods.
+
+  DB                                                                Existing TCK schema with ASR info tables.
+
+  Workers                                                           Existing TCK worker pool.
+
+  Cache                                                             Optional cache for category/template config.
+
+
+ AWS deployment follows TCK deployment: same ECS/EKS service, RDS schema, Kafka/MSK, and CloudWatch monitoring.
+
+ Alarms:
+
+   - research task backlog above threshold;
+
+   - answer SLA breach count;
+
+   - repeated conversion from information request to complaint, indicating poor first-contact answer quality.
+
+
+
+ 13. Testing Requirements
+ 13.1 Unit Tests
+   - Category guidance resolves source module and template.
+
+   - Self-care blocked for category where selfcare_allowed = false.
+
+   - Answer-and-resolve requires answer body.
+
+   - Convert action preserves original ticket history.
+
+   - Customer-visible answer redaction validation blocks internal details.
+
+ 13.2 Integration Tests
+   - Create package information ticket.
+
+   - Fetch guidance.
+
+
+
+SOPHIX BSS Design Documents                                                                                        Page 7
+   - Answer and resolve with SIP/SUB source refs.
+
+   - Create research task and complete it.
+
+   - Convert invoice explanation to complaint flow.
+
+ 13.3 End To End Tests
+   - Customer asks package question in self-care, CSR answers, customer sees answer.
+
+   - CSR cannot close information request without customer-visible answer.
+
+   - Customer asks invoice explanation, then disputes invoice, ticket converts to complaint/adjustment path.
+
+
+
+ 14. Definition Of Done
+ ASR-02 is complete when:
+
+   - Information request categories are seeded in TCK.
+
+   - ASR info category config exists.
+
+   - Answer templates exist for common questions.
+
+   - Guidance API works.
+
+   - Research task flow works.
+
+   - Answer-and-resolve stores structured answer and resolves ticket through TCK.
+
+   - Conversion/linking to other ASR flows works.
+
+   - Customer timeline receives information request events.
+
+   - Backoffice and self-care can execute the intended flows.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                    Page 8
+

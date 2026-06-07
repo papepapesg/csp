@@ -1,0 +1,1027 @@
+ DD_PROV-INT-01 - Provisioning Broadcast and
+ Reconciliation
+ Version: 1.0 Status: Draft for review Bundle: 06_fulfillment Audience: fulfillment developers, provisioning integration
+ developers, NOC, QA, DevOps Related DDs:
+
+   - DD_FUL-03 - Service Activation
+
+   - DD_FUL-04 - Restriction Fulfillment
+
+   - DD_FUL-05 - Termination Fulfillment
+
+   - DD_FUL-07 - HomePass Lifecycle Fulfillment
+
+   - DD_PLM-CFG-01 - Service Catalog
+
+   - DD_RLM-CFG-01 - HomePass Configuration
+
+   - DD_WO-01 - Work Order Module
+
+   - DD_TCK-01 - Ticketing and Case Management
+
+   - FE-APP-01 - BSS Backoffice Web App
+
+
+
+ 1. Purpose
+ PROV-INT-01 defines the shared BSS provisioning integration layer used to send commands to network and service
+ platforms, track command execution, retry safely, reconcile actual network state with BSS desired state, and perform
+ controlled force-sync operations.
+
+ This DD closes a gap in the fulfillment design. Existing fulfillment DDs define when a service should be activated, restricted,
+ resumed, suspended, modified, or revoked. This DD defines how the low-level command dispatch and reconciliation are
+ tracked across all those flows.
+
+ Examples of provisioning targets:
+
+   - OLT / fiber access controller or NMS.
+
+   - HFC CMTS / DOCSIS platform.
+
+   - AAA / RADIUS / subscriber policy platform.
+
+   - VoIP switch.
+
+   - IPTV middleware.
+
+   - DHCP/IP address management system.
+
+   - Partner service activation API.
+
+
+
+ 2. What This DD Owns
+ PROV-INT-01 owns:
+
+   - Provisioning target registry.
+
+   - Adapter configuration for each external platform.
+
+   - Common provisioning command envelope.
+
+   - Idempotent command ledger.
+
+   - Command attempts, retries, timeout handling, and final status.
+
+   - Broadcast to multiple target systems where one service action needs more than one vendor command.
+
+   - Desired network state snapshot from BSS.
+
+   - Observed network state snapshot from external platforms.
+
+   - Reconciliation runs and discrepancy queues.
+
+
+SOPHIX BSS Design Documents                                                                                                  Page 1
+   - Manual force-sync requests with approval/audit.
+
+   - NOC-facing command and reconciliation APIs.
+
+
+
+ 3. What This DD Does Not Own
+  Concern                                                                         Owner
+
+  Deciding that a subscription should activate, restrict, resume, terminate, or   Subscription workflow DDs
+  migrate
+
+  Business fulfillment orchestration and per-service result aggregation           FUL-03, FUL-04, FUL-05, FUL-07
+
+  Service definitions, profile parameters, and provisioner_key                    PLM-CFG-01
+
+  HomePass endpoint resolution, node code, and port                               RLM-CFG-01
+
+  Work order execution in the field                                               WO-01
+
+  Equipment ownership and inventory                                               OSR docs
+
+  Vendor-specific command syntax                                                  Adapter implementation code behind PROV-INT
+
+
+ Rule: PROV-INT-01 does not decide which package, service, or subscription state is correct. It sends and reconciles
+ technical commands based on desired state supplied by the owning modules.
+
+
+
+ 4. Design Decision
+ FUL-03, FUL-04, and FUL-05 remain the business fulfillment orchestrators. PROV-INT-01 is the common provisioning
+ command and reconciliation layer behind them.
+
+ Recommended call pattern:
+            Subscription Workflow
+              -> FUL-03 / FUL-04 / FUL-05
+              -> PROV-INT command API
+              -> vendor adapter
+              -> network/service platform
+
+ The existing "Provisioner adapter" concept remains valid, but adapter implementations should write through the PROV-INT
+ command ledger instead of hiding command state inside the fulfillment module. This gives NOC and support one place to
+ inspect provisioning commands across activation, restriction, resume, termination, migration, and force-sync.
+
+
+
+ 5. High Level Architecture
+            flowchart LR
+              SWF["SUB-WF<br/>Activation, restriction, termination"]
+              FUL["FUL-03/04/05<br/>Business fulfillment"]
+              PI["PROV-INT-01<br/>Command ledger + dispatcher"]
+              AD["Provider adapters<br/>GPON, HFC, VOIP, IPTV"]
+              NET["Network/service platforms"]
+              REC["Reconciliation worker"]
+              NOC["Backoffice/NOC"]
+              EVT["Kafka events"]
+
+               SWF --> FUL
+               FUL --> PI
+               PI --> AD
+               AD --> NET
+               NET --> REC
+               REC --> PI
+               NOC --> PI
+               PI --> EVT
+
+
+
+
+ 6. Core Concepts
+ 6.1 Provisioning Target
+ A provisioning target is an external system to which SOPHIX sends network or service commands.
+
+
+
+SOPHIX BSS Design Documents                                                                                                     Page 2
+ Examples:
+
+  Target code                                                     Meaning
+
+  HUAWEI_NCE_GPON_KE                                              Huawei access controller for GPON provisioning.
+
+  VOIPSWITCH_NRB_01                                               VoIP switch serving Nairobi subscribers.
+
+  IPTV_MIDDLEWARE_KE                                              IPTV middleware or entitlement platform.
+
+  DOCSIS_CMTS_KE                                                  HFC/DOCSIS controller.
+
+
+
+ 6.2 Provisioning Command
+ A provisioning command is one technical instruction sent to one target.
+
+ Examples:
+
+   - Create ONT service profile.
+
+   - Set internet speed profile.
+
+   - Create SIP profile.
+
+   - Bar outgoing voice.
+
+   - Suspend subscriber access.
+
+   - Delete IPTV entitlement.
+
+ 6.3 Broadcast
+ Broadcast means one fulfillment action creates multiple provisioning commands.
+
+ Example: activating triple-play may create:
+
+   1. GPON internet profile command.
+
+   2. VoIP SIP profile command.
+
+   3. IPTV entitlement command.
+
+ 6.4 Desired State
+ Desired state is what BSS believes should exist on the network based on subscription/package/service state.
+
+ Example:
+           {
+                "subscriptionId": "SUB-700045",
+                "serviceRef": "svc_INET_100M_GPON",
+                "desiredStatus": "ACTIVE",
+                "speedDownMbps": 100,
+                "speedUpMbps": 20,
+                "targetNodeCode": "OLT-NRB-KAREN-02",
+                "targetPort": "0/4/07"
+           }
+
+
+ 6.5 Observed State
+ Observed state is what the network platform reports during reconciliation.
+
+ Example:
+           {
+                "targetCode": "HUAWEI_NCE_GPON_KE",
+                "subscriberKey": "SUB-700045:INET",
+                "observedStatus": "ACTIVE",
+                "speedDownMbps": 50,
+                "targetPort": "0/4/07"
+           }
+
+ If desired state says 100 Mbps but observed state says 50 Mbps, PROV-INT creates a reconciliation mismatch.
+
+
+
+ 7. Main Runtime Flows
+
+
+SOPHIX BSS Design Documents                                                                                         Page 3
+ 7.1 Service Activation Command Flow
+            sequenceDiagram
+              participant F as FUL-03
+              participant P as PROV-INT
+              participant A as GPON Adapter
+              participant N as Network Platform
+              participant E as Kafka
+
+              F->>P: POST /api/provisioning/commands
+              P->>P: Validate idempotency and store command
+              P->>A: Dispatch command
+              A->>N: Vendor API call
+              N-->>A: Vendor command accepted/succeeded
+              A-->>P: Adapter result
+              P-->>F: Command result
+              P->>E: ProvisioningCommandSucceeded
+
+
+ 7.2 Async Command Flow
+ Some vendor systems return only "accepted" and complete later.
+            sequenceDiagram
+              participant F as FUL
+              participant P as PROV-INT
+              participant A as Adapter
+              participant N as Vendor
+              participant W as Status Worker
+
+              F->>P: Command with executionMode=ASYNC_ACCEPTED
+              P->>A: Submit vendor command
+              A->>N: Submit
+              N-->>A: vendorCommandId
+              A-->>P: ACCEPTED
+              P-->>F: ACCEPTED
+              W->>N: Poll vendorCommandId
+              N-->>W: COMPLETE
+              W->>P: Mark SUCCEEDED
+
+
+ 7.3 Reconciliation Flow
+            flowchart TD
+              A["Start reconciliation run"]
+              B["Load BSS desired state"]
+              C["Fetch observed state from target"]
+              D["Normalize observed state"]
+              E["Compare desired vs observed"]
+              F{"Mismatch?"}
+              G["Create reconciliation item"]
+              H["Mark matched"]
+              I["NOC reviews / force-sync"]
+
+              A --> B --> C --> D --> E --> F
+              F -->|Yes| G --> I
+              F -->|No| H
+
+
+
+
+ 8. Business Rules
+  Rule ID                                      Rule                                                    Notes
+
+  R-PROV-01                                    Every provisioning command must be stored before        Enables retry and audit.
+                                               dispatch.
+
+  R-PROV-02                                    Command idempotency key must be unique per              Prevents duplicate network changes.
+                                               technical command.
+
+  R-PROV-03                                    PROV-INT must not change subscription, invoice,         It only reports command results.
+                                               wallet, or work-order state.
+
+  R-PROV-04                                    A fulfillment action may create multiple provisioning   Broadcast is expected.
+                                               commands.
+
+  R-PROV-05                                    Retryable failures are retried with exponential         Adapter decides retryable vs final where possible.
+                                               backoff.
+
+  R-PROV-06                                    Non-idempotent vendor commands require                  Avoid duplicate profiles.
+                                               adapter-level read-before-write or vendor
+                                               idempotency token.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                        Page 4
+  Rule ID                                     Rule                                                   Notes
+
+  R-PROV-07                                   Force-sync requires RBAC permission and usually        Example: deleting a live profile.
+                                              approval for destructive actions.
+
+  R-PROV-08                                   Reconciliation mismatches do not auto-fix by           They create review items.
+                                              default.
+
+  R-PROV-09                                   Auto-fix can be enabled only per target/command        Start disabled for medium deployment.
+                                              type and must be audited.
+
+  R-PROV-10                                   Desired state is sourced from BSS owner modules.       PROV-INT does not invent desired state.
+
+  R-PROV-11                                   Observed state snapshots must store the source         Needed for NOC trust.
+                                              target and collection timestamp.
+
+  R-PROV-12                                   Adapter credentials are stored in secret manager,      Security baseline.
+                                              not database rows.
+
+
+
+
+ 9. Command Status Model
+  Status                                                                 Meaning
+
+  RECEIVED                                                               Command stored but not yet dispatched.
+
+  DISPATCHING                                                            Dispatcher is sending the command.
+
+  ACCEPTED                                                               Vendor accepted command but final result is not known.
+
+  SUCCEEDED                                                              Command completed successfully.
+
+  FAILED_RETRYABLE                                                       Command failed but can be retried.
+
+  FAILED_FINAL                                                           Command failed and should not retry without human action.
+
+  TIMED_OUT                                                              Vendor did not respond within configured timeout.
+
+  CANCELLED                                                              Command cancelled before dispatch.
+
+  SUPERSEDED                                                             A newer command replaced this one before dispatch.
+
+
+
+
+ 10. Data Model
+ 10.1 provisioning_target
+ Stores external provisioning systems available to an operator.
+
+ Use this table when onboarding a network/service platform.
+
+  Column                          Type                                   Purpose                                   Sample
+
+  target_id                       UUID PK                                Internal target id.                       tgt-001
+
+  operator_code                   TEXT                                   Operator/tenant.                          WIK
+
+  target_code                     TEXT                                   Stable target code.                       HUAWEI_NCE_GPON_KE
+
+  target_type                     TEXT                                   GPON_NMS, HFC_CMTS, AAA,                  GPON_NMS
+                                                                         VOIP_SWITCH, IPTV_MIDDLEWARE,
+                                                                         PARTNER_API.
+
+  region_code                     TEXT NULL                              Region or technical area.                 NRB
+
+  status                          TEXT                                   ACTIVE, SUSPENDED, RETIRED.               ACTIVE
+
+  base_url_ref                    TEXT NULL                              Non-secret endpoint reference or          cfg/huawei-nce-ke/base-url
+                                                                         config key.
+
+  secret_ref                      TEXT                                   Secret manager reference.                 secret/prov/huawei-nce-ke
+
+  capabilities_json               JSONB                                  Supported command types.                  {"commands":["ACTIVATE_INET"
+                                                                                                                   ,"SUSPEND_INET"]}
+
+  created_at                      TIMESTAMP                              Creation timestamp.                       2026-05-31T09:00:00Z
+
+  updated_at                      TIMESTAMP                              Last update timestamp.                    2026-05-31T09:00:00Z
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, target_code).
+
+   - (operator_code, status, target_type).
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 5
+ 10.2 provisioning_adapter_config
+ Stores adapter behavior for a target and provisioner key.
+
+ Use this table when mapping PLM provisioner_key values to actual platform adapters.
+
+  Column                           Type                             Purpose                           Sample
+
+  adapter_config_id                UUID PK                          Internal config id.               pac-001
+
+  operator_code                    TEXT                             Operator/tenant.                  WIK
+
+  provisioner_key                  TEXT                             PLM service provisioner key.      gpon-res
+
+  target_id                        UUID FK                          Provisioning target.              tgt-001
+
+  adapter_class                    TEXT                             Code adapter implementation id.   HuaweiNceGponAdapter
+
+  execution_mode_default           TEXT                             SYNC_REQUIRED or                  SYNC_REQUIRED
+                                                                    ASYNC_ACCEPTED.
+
+  timeout_ms                       INTEGER                          Per-command timeout.              25000
+
+  max_retry_count                  INTEGER                          Max automatic retries.            5
+
+  retry_policy_json                JSONB                            Backoff policy.                   {"baseSeconds":30,"factor":2
+                                                                                                      }
+
+  status                           TEXT                             ACTIVE, SUSPENDED.                ACTIVE
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, provisioner_key, target_id).
+
+ 10.3 provisioning_command
+ Stores one BSS command to one provisioning target.
+
+ Use this table for operational tracking, idempotency, retry, and audit.
+
+  Column                           Type                             Purpose                           Sample
+
+  command_id                       UUID PK                          Internal command id.              pcmd-001
+
+  operator_code                    TEXT                             Operator/tenant.                  WIK
+
+  idempotency_key                  TEXT                             Unique command key.               FUL03:SUB-700045:svc_INET_10
+                                                                                                      0M:activate
+
+  source_module                    TEXT                             Caller module.                    FUL-03
+
+  source_ref_id                    TEXT                             Fulfillment id or workflow id.    flb-activate-001
+
+  subscription_id                  TEXT                             Subscription impacted.            SUB-700045
+
+  customer_id                      TEXT                             Customer impacted.                CUS-100045
+
+  homepass_id                      TEXT NULL                        HomePass target.                  HP-300045
+
+  service_ref                      TEXT                             PLM service ref.                  svc_INET_100M_GPON
+
+  command_type                     TEXT                             Technical command type.           ACTIVATE_SERVICE
+
+  target_id                        UUID FK                          Target platform.                  tgt-001
+
+  target_node_code                 TEXT NULL                        Network node.                     OLT-NRB-KAREN-02
+
+  target_port                      TEXT NULL                        Port or logical endpoint.         0/4/07
+
+  payload_json                     JSONB                            Normalized command payload.       {"speedDownMbps":100}
+
+  execution_mode                   TEXT                             SYNC_REQUIRED, ASYNC_ACCEPTED.    SYNC_REQUIRED
+
+  status                           TEXT                             Command status.                   SUCCEEDED
+
+  vendor_command_id                TEXT NULL                        External command id.              NCE-CMD-8801
+
+  last_error_code                  TEXT NULL                        Last error.                       TARGET_TIMEOUT
+
+  created_at                       TIMESTAMP                        Creation timestamp.               2026-05-31T09:42:00Z
+
+  updated_at                       TIMESTAMP                        Last update timestamp.            2026-05-31T09:42:02Z
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, idempotency_key).
+
+   - (operator_code, status, created_at).
+
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 6
+   - (subscription_id, created_at).
+
+   - (target_id, status).
+
+ 10.4 provisioning_command_attempt
+ Stores each dispatch attempt for a command.
+
+ Use this table when debugging timeouts, retries, and vendor errors.
+
+  Column                          Type                           Purpose                                 Sample
+
+  attempt_id                      UUID PK                        Internal attempt id.                    pcma-001
+
+  command_id                      UUID FK                        Parent command.                         pcmd-001
+
+  attempt_no                      INTEGER                        Attempt number.                         1
+
+  adapter_class                   TEXT                           Adapter used.                           HuaweiNceGponAdapter
+
+  status                          TEXT                           SUCCESS, FAILED_RETRYABLE,              SUCCESS
+                                                                 FAILED_FINAL, TIMEOUT.
+
+  request_payload_redacted        JSONB                          Redacted outbound payload.              {"speedDownMbps":100}
+
+  response_payload_redacted       JSONB NULL                     Redacted vendor response.               {"commandId":"NCE-CMD-8801"}
+
+  vendor_status_code              TEXT NULL                      Vendor status/code.                     OK
+
+  duration_ms                     INTEGER                        Attempt duration.                       1200
+
+  error_code                      TEXT NULL                      Stable SOPHIX error.                    PROV_TARGET_TIMEOUT
+
+  created_at                      TIMESTAMP                      Attempt timestamp.                      2026-05-31T09:42:01Z
+
+
+ Recommended indexes:
+
+   - (command_id, attempt_no).
+
+   - (status, created_at).
+
+ 10.5 provisioning_desired_state
+ Stores BSS desired technical state per subscription service.
+
+ Use this table as the comparison base for reconciliation.
+
+  Column                          Type                           Purpose                                 Sample
+
+  desired_state_id                UUID PK                        Internal id.                            pds-001
+
+  operator_code                   TEXT                           Operator/tenant.                        WIK
+
+  subscription_id                 TEXT                           Subscription.                           SUB-700045
+
+  customer_id                     TEXT                           Customer.                               CUS-100045
+
+  homepass_id                     TEXT                           HomePass.                               HP-300045
+
+  service_ref                     TEXT                           PLM service.                            svc_INET_100M_GPON
+
+  target_id                       UUID FK                        Target system expected to hold state.   tgt-001
+
+  subscriber_key                  TEXT                           Target lookup key.                      SUB-700045:INET
+
+  desired_status                  TEXT                           ACTIVE, SUSPENDED, RESTRICTED,          ACTIVE
+                                                                 TERMINATED, NOT_PRESENT.
+
+  desired_profile_json            JSONB                          Expected profile fields.                {"speedDownMbps":100}
+
+  source_module                   TEXT                           Module that last wrote desired state.   FUL-03
+
+  source_ref_id                   TEXT                           Fulfillment id.                         flb-activate-001
+
+  effective_from                  TIMESTAMP                      Desired state effective time.           2026-05-31T09:42:02Z
+
+  updated_at                      TIMESTAMP                      Last update timestamp.                  2026-05-31T09:42:02Z
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, subscription_id, service_ref, target_id).
+
+   - (target_id, desired_status).
+
+ 10.6 provisioning_observed_state
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 7
+ Stores latest observed state fetched from a provisioning target.
+
+ Use this table to know what the network says right now or at last reconciliation.
+
+  Column                           Type                              Purpose                                    Sample
+
+  observed_state_id                UUID PK                           Internal id.                               pos-001
+
+  operator_code                    TEXT                              Operator/tenant.                           WIK
+
+  target_id                        UUID FK                           Target queried.                            tgt-001
+
+  subscriber_key                   TEXT                              Target subscriber key.                     SUB-700045:INET
+
+  observed_status                  TEXT                              Observed platform status.                  ACTIVE
+
+  observed_profile_json            JSONB                             Observed profile fields.                   {"speedDownMbps":50}
+
+  raw_payload_redacted             JSONB                             Redacted raw target response.              {"profile":"50M"}
+
+  collected_at                     TIMESTAMP                         When data was fetched.                     2026-05-31T23:00:00Z
+
+  source_run_id                    UUID NULL                         Reconciliation run id.                     prr-001
+
+
+ Recommended indexes:
+
+   - Unique (target_id, subscriber_key).
+
+   - (target_id, collected_at).
+
+ 10.7 provisioning_reconciliation_run
+ Stores one reconciliation run against one target or target group.
+
+ Use this table for NOC and operational reporting.
+
+  Column                           Type                              Purpose                                    Sample
+
+  run_id                           UUID PK                           Run id.                                    prr-001
+
+  operator_code                    TEXT                              Operator/tenant.                           WIK
+
+  target_id                        UUID NULL                         Target reconciled, null for all targets.   tgt-001
+
+  scope_type                       TEXT                              FULL_TARGET, REGION,                       FULL_TARGET
+                                                                     SUBSCRIPTION, SERVICE_CLASS.
+
+  scope_value                      TEXT NULL                         Scope value.                               NRB
+
+  status                           TEXT                              RUNNING, COMPLETED, FAILED,                COMPLETED
+                                                                     PARTIAL.
+
+  desired_count                    INTEGER                           Desired rows compared.                     10000
+
+  observed_count                   INTEGER                           Observed rows fetched.                     9980
+
+  mismatch_count                   INTEGER                           Open mismatch count.                       25
+
+  started_at                       TIMESTAMP                         Run start.                                 2026-05-31T23:00:00Z
+
+  completed_at                     TIMESTAMP NULL                    Run completion.                            2026-05-31T23:15:00Z
+
+
+ Recommended indexes:
+
+   - (operator_code, status, started_at).
+
+   - (target_id, started_at).
+
+ 10.8 provisioning_reconciliation_item
+ Stores one desired-vs-observed mismatch.
+
+ Use this table for NOC review, force-sync, or ticket creation.
+
+  Column                           Type                              Purpose                                    Sample
+
+  item_id                          UUID PK                           Item id.                                   pri-001
+
+  run_id                           UUID FK                           Reconciliation run.                        prr-001
+
+  target_id                        UUID FK                           Target system.                             tgt-001
+
+  subscription_id                  TEXT NULL                         Subscription if known.                     SUB-700045
+
+  service_ref                      TEXT NULL                         Service if known.                          svc_INET_100M_GPON
+
+  subscriber_key                   TEXT                              Target subscriber key.                     SUB-700045:INET
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 8
+  Column                         Type                           Purpose                                  Sample
+
+  mismatch_type                  TEXT                           MISSING_ON_NETWORK,                      PROFILE_MISMATCH
+                                                                EXTRA_ON_NETWORK,
+                                                                STATUS_MISMATCH,
+                                                                PROFILE_MISMATCH,
+                                                                PORT_MISMATCH.
+
+  severity                       TEXT                           LOW, MEDIUM, HIGH, CRITICAL.             HIGH
+
+  desired_snapshot_json          JSONB                          Desired state.                           {"speedDownMbps":100}
+
+  observed_snapshot_json         JSONB                          Observed state.                          {"speedDownMbps":50}
+
+  status                         TEXT                           OPEN, IN_REVIEW, RESOLVED,               OPEN
+                                                                IGNORED, TICKET_CREATED.
+
+  resolution_notes               TEXT NULL                      NOC notes.                               Force-sync approved
+
+  created_at                     TIMESTAMP                      Creation timestamp.                      2026-05-31T23:15:00Z
+
+  resolved_at                    TIMESTAMP NULL                 Resolution timestamp.                    NULL
+
+
+ Recommended indexes:
+
+   - (status, severity, created_at).
+
+   - (subscription_id, status).
+
+   - (target_id, mismatch_type, status).
+
+ 10.9 provisioning_force_sync_request
+ Stores manual or approved corrective action requests.
+
+ Use this table when NOC decides to push BSS desired state to the network or align BSS to confirmed network state.
+
+  Column                         Type                           Purpose                                  Sample
+
+  force_sync_id                  UUID PK                        Force-sync request id.                   pfs-001
+
+  operator_code                  TEXT                           Operator/tenant.                         WIK
+
+  source_item_id                 UUID NULL                      Reconciliation item that triggered it.   pri-001
+
+  subscription_id                TEXT                           Subscription.                            SUB-700045
+
+  service_ref                    TEXT                           Service.                                 svc_INET_100M_GPON
+
+  target_id                      UUID FK                        Target system.                           tgt-001
+
+  sync_direction                 TEXT                           BSS_TO_NETWORK,                          BSS_TO_NETWORK
+                                                                NETWORK_TO_BSS, MARK_IGNORE.
+
+  requested_action               TEXT                           Corrective command.                      REAPPLY_PROFILE
+
+  status                         TEXT                           PENDING_APPROVAL, APPROVED,              PENDING_APPROVAL
+                                                                RUNNING, COMPLETED, FAILED,
+                                                                CANCELLED.
+
+  requested_by_user_id           TEXT                           Requesting user.                         usr-noc-001
+
+  approved_by_user_id            TEXT NULL                      Approver user.                           usr-noc-lead
+
+  command_id                     UUID NULL                      Corrective provisioning command.         pcmd-999
+
+  reason                         TEXT                           Why action is needed.                    Customer on wrong speed
+                                                                                                         profile
+
+  created_at                     TIMESTAMP                      Creation timestamp.                      2026-05-31T23:20:00Z
+
+  updated_at                     TIMESTAMP                      Last update timestamp.                   2026-05-31T23:21:00Z
+
+
+ Recommended indexes:
+
+   - (status, created_at).
+
+   - (subscription_id, status).
+
+
+
+ 11. API Contract
+ 11.1 Create Provisioning Command
+ Called by FUL modules or approved force-sync logic.
+
+SOPHIX BSS Design Documents                                                                                                      Page 9
+          POST /api/provisioning/commands
+          Idempotency-Key: FUL03:SUB-700045:svc_INET_100M:activate
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "sourceModule": "FUL-03",
+              "sourceRefId": "flb-activate-001",
+              "subscriptionId": "SUB-700045",
+              "customerId": "CUS-100045",
+              "homepassId": "HP-300045",
+              "serviceRef": "svc_INET_100M_GPON",
+              "provisionerKey": "gpon-res",
+              "commandType": "ACTIVATE_SERVICE",
+              "targetNodeCode": "OLT-NRB-KAREN-02",
+              "targetPort": "0/4/07",
+              "executionMode": "SYNC_REQUIRED",
+              "payload": {
+                "equipmentId": "EQP-ONT-42",
+                "speedDownMbps": 100,
+                "speedUpMbps": 20,
+                "subscriberKey": "SUB-700045:INET"
+              }
+          }
+
+ Success response:
+          {
+              "commandId": "pcmd-001",
+              "status": "SUCCEEDED",
+              "vendorCommandId": "NCE-CMD-8801",
+              "adapterRefs": {
+                "provisioningProfileId": "prf-100m-v3"
+              }
+          }
+
+
+ 11.2 Read Command
+          GET /api/provisioning/commands/{command_id}
+
+
+ 11.3 Retry Command
+          POST /api/provisioning/commands/{command_id}/retry
+
+ Only allowed for FAILED_RETRYABLE, TIMED_OUT, or approved NOC override.
+
+ 11.4 Reconciliation APIs
+          POST /api/provisioning/reconciliation-runs
+          GET /api/provisioning/reconciliation-runs
+          GET /api/provisioning/reconciliation-runs/{run_id}
+          GET /api/provisioning/reconciliation-items?status=OPEN
+          POST /api/provisioning/reconciliation-items/{item_id}/resolve
+
+
+ 11.5 Force-Sync APIs
+          POST /api/provisioning/force-sync-requests
+          POST /api/provisioning/force-sync-requests/{force_sync_id}/approve
+          POST /api/provisioning/force-sync-requests/{force_sync_id}/execute
+          POST /api/provisioning/force-sync-requests/{force_sync_id}/cancel
+
+ Force-sync APIs require RBAC permission and audit. Destructive actions should use EM-CFG-04 approval.
+
+
+
+ 12. Events
+  Event                                     Topic                                    When emitted
+
+  ProvisioningCommandReceived               sophix.provisioning.command.received     Command stored.
+
+  ProvisioningCommandSucceeded              sophix.provisioning.command.succeeded    Command succeeded.
+
+  ProvisioningCommandFailed                 sophix.provisioning.command.failed       Command failed final or retryable.
+
+  ProvisioningCommandTimedOut               sophix.provisioning.command.timedout     Timeout reached.
+
+  ProvisioningReconciliationCompleted       sophix.provisioning.reconciliation.com   Reconciliation run completed.
+                                            pleted
+
+  ProvisioningMismatchDetected              sophix.provisioning.mismatch.detected    Mismatch item created.
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 10
+  Event                                        Topic                                          When emitted
+
+  ProvisioningForceSyncRequested               sophix.provisioning.forcesync.requeste         Force-sync request created.
+                                               d
+
+  ProvisioningForceSyncCompleted               sophix.provisioning.forcesync.complete         Force-sync completed.
+                                               d
+
+
+ Sample ProvisioningMismatchDetected:
+             {
+                 "eventType": "ProvisioningMismatchDetected",
+                 "operatorCode": "WIK",
+                 "itemId": "pri-001",
+                 "subscriptionId": "SUB-700045",
+                 "serviceRef": "svc_INET_100M_GPON",
+                 "targetCode": "HUAWEI_NCE_GPON_KE",
+                 "mismatchType": "PROFILE_MISMATCH",
+                 "severity": "HIGH"
+             }
+
+
+
+
+ 13. Frontend Usage
+ 13.1 FE-APP-01 Backoffice
+ Backoffice uses PROV-INT-01 for:
+
+   - Provisioning command search.
+
+   - Command detail with attempts and vendor references.
+
+   - Retry command action.
+
+   - Reconciliation run dashboard.
+
+   - Open mismatch queue.
+
+   - Force-sync request creation and approval.
+
+   - Deep links from customer 360, subscription detail, ticket detail, and NOC screens.
+
+ 13.2 FE-APP-03 Contractor Mobile App
+ The contractor app normally does not call PROV-INT directly.
+
+ It completes work orders in WO-01. The subscription workflow or fulfillment module then triggers provisioning. The mobile app
+ may show provisioning result read-only if the WO completion response includes it.
+
+ 13.3 FE-APP-04 Customer Self Care
+ Self-care does not call PROV-INT directly.
+
+ If activation is delayed due to provisioning, self-care reads customer-friendly status from subscription/order/ticket APIs, not
+ raw provisioning command errors.
+
+
+
+ 14. Infra Recommendation
+ 14.1 Medium Budget Deployment
+ Recommended starting point:
+
+  Component                                                         Recommendation
+
+  API pods                                                          2 pods, 1 vCPU, 1.5-2 GB RAM each.
+
+  Dispatcher worker                                                 1-2 pods, 1 vCPU, 2 GB RAM each.
+
+  Reconciliation worker                                             1 pod, 2 vCPU, 4 GB RAM for nightly/batch runs.
+
+  DB                                                                Shared fulfillment PostgreSQL schema prov_int; partition command/attempt
+                                                                    tables monthly.
+
+  Kafka                                                             Shared Kafka for events and optional command queue.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                         Page 11
+  Component                                                            Recommendation
+
+  Redis                                                                Optional short-lived locks only. DB remains source of truth.
+
+
+
+ 14.2 Recommended Partitions
+ Partition by month:
+
+   - provisioning_command
+
+   - provisioning_command_attempt
+
+   - provisioning_observed_state if storing historical snapshots
+
+   - provisioning_reconciliation_item
+
+ Keep provisioning_desired_state as current-state table with history in audit or event log.
+
+ 14.3 OS Recommendation
+ Use Ubuntu Server 24.04 LTS for VPS deployments or hardened Debian/Ubuntu slim base images for containers.
+
+ Provisioning workers should run on private subnets only. They need outbound access to network management systems, but
+ they should not be internet-facing.
+
+
+
+ 15. AWS Deployment Recommendation
+  AWS component                                                        Usage
+
+  ECS/EKS                                                              Run PROV-INT API, dispatcher, and reconciliation workers.
+
+  RDS PostgreSQL                                                       Command ledger and reconciliation tables.
+
+  MSK or managed Kafka equivalent                                      Events and async dispatch jobs.
+
+  Secrets Manager                                                      Vendor API credentials and certificates.
+
+  VPC private subnets                                                  Workers and network connectivity to target systems.
+
+  Site-to-Site VPN or Direct Connect                                   Connectivity to NMS/OSS platforms if outside AWS.
+
+  CloudWatch                                                           Logs, metrics, alarms.
+
+
+ Required alarms:
+
+   - Command failure rate above threshold.
+
+   - Retry backlog growing.
+
+   - No reconciliation run completed for a target within expected window.
+
+   - Critical mismatch count above threshold.
+
+   - Force-sync failures.
+
+   - Target unavailable for more than configured duration.
+
+
+
+ 16. Implementation Notes
+   1. Start with command ledger and synchronous dispatch before building auto-repair.
+
+   2. Use idempotency keys from FUL correlation ids and service refs.
+
+   3. Keep adapter classes thin and testable.
+
+   4. Normalize vendor responses into stable SOPHIX statuses.
+
+   5. Do not expose vendor errors directly to customers.
+
+   6. Store redacted request/response payloads for support.
+
+   7. Reconciliation should initially create review items, not auto-fix.
+
+   8. Force-sync actions should create normal provisioning_command rows so audit is consistent.
+
+
+
+SOPHIX BSS Design Documents                                                                                                           Page 12
+ 17. Definition Of Done
+ PROV-INT-01 is complete when:
+
+   - Provisioning target and adapter config are implemented.
+
+   - FUL-03 can create commands through PROV-INT for activation.
+
+   - FUL-04 can create commands through PROV-INT for restriction/suspension.
+
+   - FUL-05 can create commands through PROV-INT for termination.
+
+   - Command idempotency prevents duplicate vendor actions.
+
+   - Retry and timeout handling are tested.
+
+   - Command detail and attempt logs are available to Backoffice.
+
+   - Reconciliation can compare at least one target's observed state to BSS desired state.
+
+   - Mismatches create actionable items.
+
+   - Force-sync is implemented with RBAC and audit.
+
+
+
+
+SOPHIX BSS Design Documents                                                                  Page 13
+

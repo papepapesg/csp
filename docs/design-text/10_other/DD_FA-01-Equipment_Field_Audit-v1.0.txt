@@ -1,0 +1,702 @@
+ DD_FA-01 - Equipment Field Audit
+ Version: v1.0 Bundle: 10_other Status: Draft for review Primary owner: Field audit / operations quality team Related DDs:
+ DD_WO-01, DD_OSR-01, DD_OSR-INSTANCE-01, DD_OSR-05, DD_OSR-RMA-01, DD_EM-02, DD_EM-CFG-03,
+ DD_EM-CFG-04, DD_TCK-01, DD_REP-01, FOUNDATION_DROOLS
+
+ MVP simplification baseline: FA-01, FA-02, and FA-03 must be implemented as one field-audit capability in the first release,
+ with audit_type driving type-specific rules, checklists, and routing. Do not create three services or three independent
+ databases.
+
+
+
+ 1. Purpose
+ FA-01 defines a controlled equipment field audit process for verifying that equipment recorded in SOPHIX exists in the
+ expected field/customer location, has the expected serial identity, and is in an acceptable condition.
+
+ Use FA-01 when:
+
+   - operations wants to verify equipment installed at a customer premises;
+
+   - a contractor or field team must prove custody of assigned customer equipment;
+
+   - support suspects serial mismatch, damaged CPE, missing ONT/modem/STB, or wrong equipment location;
+
+   - internal audit needs evidence that equipment state in OSR-INSTANCE matches real-world field state;
+
+   - a discrepancy must be routed to support, recovery, RMA, write-off, or manual correction.
+
+ FA-01 is not the same as OSR-05 inventory audit. OSR-05 audits stock locations such as warehouse and contractor vans.
+ FA-01 audits equipment in the field/customer context and uses technician/mobile evidence.
+
+ FA-01 is also not a replacement for normal WO completion evidence. Normal installation, shifting, support, and swap WOs
+ already capture equipment bindings/photos in their own flows. FA-01 is used when the business needs a standalone audit
+ campaign or an exception-driven verification after the normal job has already completed.
+
+
+
+ 2. Scope And Boundaries
+  Capability                                                                 Owner
+
+  Audit campaign, audit task, expected vs observed comparison, discrepancy   FA-01
+  routing
+
+  Field task assignment and technician execution when audit is WO-backed     WO-01
+
+  Current equipment instance state and customer/location binding             OSR-INSTANCE-01
+
+  Stock balances and location inventory                                      OSR-01
+
+  Warehouse/van inventory audit and stock adjustment/write-off governance    OSR-05
+
+  Equipment recovery, swap, RMA flow                                         OSR-RMA-01
+
+  Field user/contractor/team identity                                        EM-02
+
+  Permissions                                                                EM-CFG-03
+
+  Approval for risky state correction/write-off                              EM-CFG-04
+
+  Customer/service issue ticket                                              TCK-01
+
+  Audit reporting                                                            REP-01
+
+  Configurable severity/routing rules                                        Drools
+
+
+ Boundary rules:
+
+   - FA-01 does not directly update OSR stock balances or equipment instance lifecycle.
+
+   - FA-01 routes approved corrections to OSR-INSTANCE, OSR-05, or OSR-RMA.
+
+   - FA-01 does not create purchase orders and does not call OSR-02 procurement.
+
+   - FA-01 can create a WO with kind=FIELD_AUDIT when technician scheduling/evidence is needed.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 1
+   - If the audit is simple and internal, FA-01 may use lightweight audit tasks without WO, but mobile execution should still
+      follow the same evidence standards.
+
+   - EM-CFG-04 is used for risky actions such as forced location correction, write-off, or marking unrecoverable equipment.
+     Camunda is involved only when the approval policy mode is BPMN.
+
+
+
+ 3. Process Overview
+            flowchart LR
+              A["Backoffice creates audit campaign/task"] --> B["FA-01 loads expected equipment from OSR-INSTANCE"]
+              B --> C["WO or audit task assigned to field user"]
+              C --> D["Mobile app scans serial and captures evidence"]
+              D --> E["FA-01 compares expected vs observed"]
+              E --> F{"Discrepancy?"}
+              F -- "No" --> G["Close audit task"]
+              F -- "Yes" --> H["Open discrepancy"]
+              H --> I["Drools selects severity and route"]
+              I --> J["Create ticket, RMA/recovery, OSR correction, or approval"]
+
+
+
+
+ 4. Status Models
+ 4.1 Campaign Status
+  Status                                                            Meaning
+
+  DRAFT                                                             Campaign being prepared.
+
+  SCHEDULED                                                         Campaign approved/scheduled.
+
+  IN_PROGRESS                                                       Audit tasks are being executed.
+
+  RECONCILING                                                       Submitted observations are being reviewed.
+
+  CLOSED                                                            Campaign completed.
+
+  CANCELLED                                                         Campaign cancelled.
+
+
+
+ 4.2 Audit Task Status
+  Status                                                            Meaning
+
+  CREATED                                                           Task created but not assigned.
+
+  ASSIGNED                                                          Task assigned to user/team or WO.
+
+  IN_PROGRESS                                                       Field user started audit.
+
+  SUBMITTED                                                         Field observations submitted.
+
+  DISCREPANCY_OPEN                                                  One or more discrepancies exist.
+
+  CLOSED                                                            Audit task completed with no open action.
+
+  CANCELLED                                                         Task cancelled before completion.
+
+
+
+ 4.3 Discrepancy Status
+  Status                                                            Meaning
+
+  OPEN                                                              Difference detected.
+
+  ROUTED                                                            Route/action selected.
+
+  PENDING_APPROVAL                                                  Approval required before correction.
+
+  ACTION_CREATED                                                    Ticket, RMA, WO, or OSR action created.
+
+  RESOLVED                                                          Discrepancy resolved.
+
+  REJECTED                                                          Proposed discrepancy was invalid or rejected.
+
+  CLOSED                                                            Fully closed.
+
+
+
+
+ 5. Data Model
+
+SOPHIX BSS Design Documents                                                                                                     Page 2
+ 5.1 equipment_field_audit_campaign
+ What it is for: stores a planned group of field equipment audit tasks.
+
+ When to use it: create a campaign for a planned customer equipment verification, contractor quality audit, post-swap audit,
+ area audit, or investigation batch.
+
+ Sample meaning: efac-001 is a Nairobi GPON customer equipment audit campaign covering 150 customers in August
+ 2026.
+
+  Column                           Type                             Purpose                               Sample
+
+  campaign_id                      TEXT PK                          Campaign id.                          efac-001
+
+  operator_code                    TEXT                             Tenant/operator.                      WIK
+
+  campaign_type                    TEXT                             CUSTOMER_EQUIPMENT_VERIFY,            CUSTOMER_EQUIPMENT_VERIFY
+                                                                    POST_SWAP_VERIFY,
+                                                                    CONTRACTOR_QUALITY,
+                                                                    AREA_INVESTIGATION.
+
+  area_code                        TEXT NULL                        Area/region scope.                    NRB-WEST
+
+  technology_family                TEXT NULL                        Technology scope.                     GPON
+
+  status                           TEXT                             Campaign status.                      IN_PROGRESS
+
+  scheduled_start_at               TIMESTAMP NULL                   Planned start.                        2026-08-10T08:00:00Z
+
+  scheduled_end_at                 TIMESTAMP NULL                   Planned end.                          2026-08-20T17:00:00Z
+
+  created_by_user_id               TEXT                             Creator.                              usr-audit-manager
+
+  created_at                       TIMESTAMP                        Creation timestamp.                   2026-08-01T09:00:00Z
+
+  closed_at                        TIMESTAMP NULL                   Close timestamp.                      null
+
+
+ Recommended indexes:
+
+   - (operator_code, status).
+
+   - (operator_code, area_code, status).
+
+   - (scheduled_start_at).
+
+ 5.2 equipment_field_audit_task
+ What it is for: stores one field audit assignment for a customer, subscription, HomePass, site, or equipment set.
+
+ When to use it: create one task per customer premises/site/field location that must be verified by a field user or technician.
+
+ Sample meaning: efat-001 asks contractor user usr-tech-010 to verify equipment for subscription SUB-700045.
+
+  Column                           Type                             Purpose                               Sample
+
+  audit_task_id                    TEXT PK                          Audit task id.                        efat-001
+
+  campaign_id                      TEXT NULL                        Parent campaign.                      efac-001
+
+  operator_code                    TEXT                             Tenant/operator.                      WIK
+
+  task_type                        TEXT                             CUSTOMER_PREMISES, FIELD_SITE,        CUSTOMER_PREMISES
+                                                                    POST_SWAP, INVESTIGATION.
+
+  customer_id                      TEXT NULL                        Customer id.                          CUS-100045
+
+  account_id                       TEXT NULL                        Account id.                           ACC-900045
+
+  subscription_id                  TEXT NULL                        Subscription id.                      SUB-700045
+
+  homepass_id                      TEXT NULL                        Expected HomePass/site.               HP-GPON-0440
+
+  wo_id                            TEXT NULL                        WO if field execution is WO-backed.   wo-fa-001
+
+  assigned_to_user_id              TEXT NULL                        Field user.                           usr-tech-010
+
+  assigned_team_id                 TEXT NULL                        Contractor/team.                      team-nrb-west
+
+  status                           TEXT                             Audit task status.                    ASSIGNED
+
+  due_at                           TIMESTAMP NULL                   Due date/time.                        2026-08-12T17:00:00Z
+
+  created_at                       TIMESTAMP                        Creation timestamp.                   2026-08-10T08:00:00Z
+
+  submitted_at                     TIMESTAMP NULL                   Submission time.                      null
+
+  closed_at                        TIMESTAMP NULL                   Close time.                           null
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 3
+ Recommended indexes:
+
+   - (operator_code, status).
+
+   - (assigned_to_user_id, status).
+
+   - (customer_id, status).
+
+   - (subscription_id, status).
+
+   - (wo_id).
+
+ 5.3 equipment_field_audit_expected_item
+ What it is for: stores the equipment FA-01 expects the field user to find.
+
+ When to use it: create rows from OSR-INSTANCE bindings before the task is sent to the mobile app, so the audit compares
+ against a frozen expected state.
+
+ Sample meaning: efae-001 says the field user should find ONT instance inst-gpon-001 with serial ONT123456 at the
+ customer site.
+
+  Column                            Type                            Purpose                               Sample
+
+  expected_item_id                  TEXT PK                         Expected item row id.                 efae-001
+
+  audit_task_id                     TEXT                            Parent audit task.                    efat-001
+
+  equipment_instance_id             TEXT                            OSR-INSTANCE id expected.             inst-gpon-001
+
+  sku_id                            TEXT                            SKU expected.                         WIK-ONT-HUAWEI-EG8145V5
+
+  serial_number                     TEXT NULL                       Expected serial.                      ONT123456
+
+  expected_location_type            TEXT                            CUSTOMER_PREMISES, HOMEPASS,          CUSTOMER_PREMISES
+                                                                    FIELD_SITE.
+
+  expected_location_ref             TEXT                            Location/customer/homepass            CUS-100045
+                                                                    reference.
+
+  expected_condition                TEXT                            Expected condition.                   INSTALLED_WORKING
+
+  source_snapshot_json              JSONB                           OSR-INSTANCE snapshot used by         {"state":"INSTALLED","bindin
+                                                                    the audit.                            g":"SUB-700045"}
+
+  created_at                        TIMESTAMP                       Creation timestamp.                   2026-08-10T08:01:00Z
+
+
+ Recommended indexes:
+
+   - (audit_task_id).
+
+   - (equipment_instance_id).
+
+   - (serial_number).
+
+ 5.4 equipment_field_audit_observation
+ What it is for: stores what the field user actually found.
+
+ When to use it: create one row for each scanned/found/missing equipment item submitted by the mobile app or backoffice
+ reviewer.
+
+ Sample meaning: efao-001 says the technician scanned serial ONT123456, confirmed it is present and working, and
+ attached photo/GPS evidence.
+
+  Column                            Type                            Purpose                               Sample
+
+  observation_id                    TEXT PK                         Observation id.                       efao-001
+
+  operator_code                     TEXT                            Tenant/operator, used for mobile      WIK
+                                                                    idempotency and partitioned search.
+
+  audit_task_id                     TEXT                            Parent audit task.                    efat-001
+
+  expected_item_id                  TEXT NULL                       Expected item matched, if any.        efae-001
+
+  observed_equipment_instance_      TEXT NULL                       Observed instance if known.           inst-gpon-001
+  id
+
+  observed_sku_id                   TEXT NULL                       Observed SKU.                         WIK-ONT-HUAWEI-EG8145V5
+
+  observed_serial_number            TEXT NULL                       Scanned/entered serial.               ONT123456
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 4
+  Column                         Type                            Purpose                                Sample
+
+  presence_status                TEXT                            PRESENT, MISSING, FOUND_EXTRA,         PRESENT
+                                                                 NOT_ACCESSIBLE.
+
+  condition_status               TEXT                            WORKING, DAMAGED, TAMPERED,            WORKING
+                                                                 UNKNOWN.
+
+  photo_file_ids_json            JSONB                           Evidence file ids from file storage.   ["file-001","file-002"]
+
+  gps_latitude                   DECIMAL NULL                    Latitude captured by app.              -1.2921
+
+  gps_longitude                  DECIMAL NULL                    Longitude captured by app.             36.8219
+
+  notes                          TEXT NULL                       Field note.                            ONT installed beside router.
+
+  captured_by_user_id            TEXT                            Field user.                            usr-tech-010
+
+  captured_at                    TIMESTAMP                       Capture timestamp.                     2026-08-12T10:15:00Z
+
+  offline_client_ref             TEXT NULL                       Mobile offline idempotency ref.        mob-obs-7788
+
+
+ Recommended indexes:
+
+   - (audit_task_id).
+
+   - (observed_serial_number).
+
+   - unique (operator_code, offline_client_ref).
+
+ 5.5 equipment_field_audit_discrepancy
+ What it is for: stores mismatches between expected equipment state and field observation.
+
+ When to use it: create one row for missing equipment, wrong serial, found extra equipment, damaged equipment, wrong
+ location, inaccessible site, or conflicting OSR state.
+
+ Sample meaning: efad-001 says the expected ONT serial was not found and must be routed to equipment recovery.
+
+  Column                         Type                            Purpose                                Sample
+
+  discrepancy_id                 TEXT PK                         Discrepancy id.                        efad-001
+
+  audit_task_id                  TEXT                            Parent audit task.                     efat-001
+
+  expected_item_id               TEXT NULL                       Expected item involved.                efae-001
+
+  observation_id                 TEXT NULL                       Observation involved.                  efao-002
+
+  discrepancy_type               TEXT                            MISSING, WRONG_SERIAL,                 MISSING
+                                                                 FOUND_EXTRA, DAMAGED,
+                                                                 WRONG_LOCATION,
+                                                                 NOT_ACCESSIBLE.
+
+  severity                       TEXT                            LOW, MEDIUM, HIGH, CRITICAL.           HIGH
+
+  status                         TEXT                            Discrepancy status.                    ROUTED
+
+  route_action                   TEXT NULL                       CREATE_TICKET,                         CREATE_RMA_RECOVERY
+                                                                 CREATE_RMA_RECOVERY,
+                                                                 REQUEST_OSR_CORRECTION,
+                                                                 REQUEST_WRITE_OFF, NO_ACTION.
+
+  routed_ref_type                TEXT NULL                       Created target type.                   OSR_RMA
+
+  routed_ref_id                  TEXT NULL                       Created target id.                     rma-001
+
+  approval_request_id            TEXT NULL                       EM-CFG-04 approval request.            apr-fa-001
+
+  created_at                     TIMESTAMP                       Creation timestamp.                    2026-08-12T10:20:00Z
+
+  resolved_at                    TIMESTAMP NULL                  Resolution timestamp.                  null
+
+
+ Recommended indexes:
+
+   - (audit_task_id, status).
+
+   - (discrepancy_type, status).
+
+   - (approval_request_id).
+
+
+
+ 6. APIs
+
+SOPHIX BSS Design Documents                                                                                                    Page 5
+ 6.1 Create Campaign
+          POST /api/equipment-field-audits/campaigns
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "campaignType": "CUSTOMER_EQUIPMENT_VERIFY",
+              "areaCode": "NRB-WEST",
+              "technologyFamily": "GPON",
+              "scheduledStartAt": "2026-08-10T08:00:00Z",
+              "scheduledEndAt": "2026-08-20T17:00:00Z"
+          }
+
+
+ 6.2 Create Audit Task
+          POST /api/equipment-field-audits/tasks
+          Idempotency-Key: efat-CUS-100045-202608
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "campaignId": "efac-001",
+              "taskType": "CUSTOMER_PREMISES",
+              "customerId": "CUS-100045",
+              "accountId": "ACC-900045",
+              "subscriptionId": "SUB-700045",
+              "homepassId": "HP-GPON-0440",
+              "assignedToUserId": "usr-tech-010",
+              "dueAt": "2026-08-12T17:00:00Z",
+              "createWorkOrder": true
+          }
+
+ If createWorkOrder=true, FA-01 calls WO-01 with kind=FIELD_AUDIT and stores wo_id.
+
+ 6.3 Get My Audit Tasks
+          GET /api/equipment-field-audits/tasks?assignedToUserId=usr-tech-010&status=ASSIGNED
+
+ Used by the contractor technical mobile app.
+
+ 6.4 Submit Observation
+          POST /api/equipment-field-audits/tasks/efat-001/observations
+          Idempotency-Key: mob-obs-7788
+          Content-Type: application/json
+
+          {
+              "observedSerialNumber": "ONT123456",
+              "observedSkuId": "WIK-ONT-HUAWEI-EG8145V5",
+              "presenceStatus": "PRESENT",
+              "conditionStatus": "WORKING",
+              "photoFileIds": ["file-001", "file-002"],
+              "gpsLatitude": -1.2921,
+              "gpsLongitude": 36.8219,
+              "notes": "ONT installed beside router.",
+              "capturedAt": "2026-08-12T10:15:00Z",
+              "offlineClientRef": "mob-obs-7788"
+          }
+
+
+ 6.5 Submit Task
+          POST /api/equipment-field-audits/tasks/efat-001/submit
+          Content-Type: application/json
+
+          {
+              "submittedByUserId": "usr-tech-010",
+              "submittedAt": "2026-08-12T10:30:00Z"
+          }
+
+ FA-01 compares expected items and observations, creates discrepancies if needed, and updates the task status.
+
+ 6.6 Route Discrepancy
+          POST /api/equipment-field-audit-discrepancies/efad-001/route
+          Content-Type: application/json
+
+          {
+              "requestedByUserId": "usr-audit-manager",
+              "routeAction": "CREATE_RMA_RECOVERY"
+
+
+
+SOPHIX BSS Design Documents                                                                                      Page 6
+          }
+
+
+
+
+ 7. Rules And Drools
+ Use Drools for operator-variable scope, severity, and routing.
+
+ Recommended packages:
+
+   - rules.field_audit.equipment.scope
+
+   - rules.field_audit.equipment.severity
+
+   - rules.field_audit.equipment.routing
+
+   - rules.field_audit.equipment.approval
+
+ Examples:
+          package rules.field_audit.equipment.severity
+
+          rule "Missing installed customer equipment is high severity"
+          when
+            $f : EquipmentFieldAuditFact(discrepancyType == "MISSING",
+                                         expectedLocationType == "CUSTOMER_PREMISES")
+            $d : EquipmentFieldAuditDecision()
+          then
+            $d.setSeverity("HIGH");
+          end
+
+          package rules.field_audit.equipment.routing
+
+          rule "Missing equipment creates recovery RMA"
+          when
+            $f : EquipmentFieldAuditFact(discrepancyType == "MISSING",
+                                         equipmentRecoverable == true)
+            $d : EquipmentFieldAuditDecision()
+          then
+            $d.route("CREATE_RMA_RECOVERY");
+          end
+
+          rule "Damaged customer equipment creates support ticket"
+          when
+            $f : EquipmentFieldAuditFact(discrepancyType == "DAMAGED")
+            $d : EquipmentFieldAuditDecision()
+          then
+            $d.route("CREATE_TICKET");
+          end
+
+          package rules.field_audit.equipment.approval
+
+          rule "Write-off requires approval"
+          when
+            $f : EquipmentFieldAuditFact(routeAction == "REQUEST_WRITE_OFF")
+            $d : EquipmentFieldAuditDecision()
+          then
+            $d.requireApproval("EQUIPMENT_FIELD_AUDIT_WRITE_OFF");
+          end
+
+ Fixed validation such as allowed enum values, required evidence files, and duplicate offline references belongs in application
+ code.
+
+
+
+ 8. Events
+ Publish events through the transactional outbox.
+
+  Event                                      When emitted                               Key fields
+
+  EquipmentFieldAuditCampaignCreated         Campaign created.                          campaignId, campaignType
+
+  EquipmentFieldAuditTaskCreated             Task created.                              auditTaskId, customerId, subscriptionId
+
+  EquipmentFieldAuditTaskAssigned            Task assigned or WO created.               auditTaskId, assignedToUserId, woId
+
+  EquipmentFieldAuditSubmitted               Field user submits observations.           auditTaskId, observationCount
+
+  EquipmentFieldAuditDiscrepancyOpened       Discrepancy detected.                      discrepancyId, discrepancyType, severity
+
+  EquipmentFieldAuditDiscrepancyRouted       Route action selected/created.             routeAction, routedRefType, routedRefId
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 7
+  Event                                        When emitted                                       Key fields
+
+  EquipmentFieldAuditTaskClosed                Task closed.                                       auditTaskId, closedAt
+
+
+
+
+ 9. Frontend And Module Consumers
+  Consumer                                                             What it uses
+
+  Backoffice audit console                                             Campaign/task/discrepancy APIs, OSR expected state, approval status
+
+  Contractor technical mobile app                                      Assigned task API, observation submission, file upload, offline sync
+
+  Support/CRM                                                          Discrepancy route to ticket or customer issue view
+
+  OSR operations                                                       Discrepancy route to recovery, RMA, write-off, or correction
+
+  Reporting                                                            Audit coverage, discrepancy rate, contractor quality, missing equipment value
+
+
+ Frontend must show expected source clearly:
+
+   - expected serial and binding come from OSR-INSTANCE snapshot stored in FA-01;
+
+   - WO state comes from WO-01 if the task is WO-backed;
+
+   - discrepancy route action comes from FA-01 and target module references.
+
+
+
+ 10. Infrastructure Recommendations
+ For a medium deployment:
+
+   - Run FA-01 APIs in the operations/field service API deployment or a shared operations module.
+
+   - Run logical handlers in an existing operations worker deployment.
+
+   - Store evidence files in the foundation file storage service and reference only file ids in FA-01 tables.
+
+   - Support mobile offline idempotency because field technicians may submit after connectivity returns.
+
+   - Use PostgreSQL for audit/task/discrepancy state.
+
+   - Use Kafka/outbox for audit events and reporting feed.
+
+ Recommended logical worker handlers:
+
+  Handler                                                              Purpose
+
+  fa01-generate-expected-items                                         Reads OSR-INSTANCE and freezes expected item snapshot.
+
+  fa01-create-wo                                                       Creates WO-01 field audit work order when needed.
+
+  fa01-compare-observations                                            Compares expected items and submitted observations.
+
+  fa01-route-discrepancy                                               Runs Drools and creates ticket/RMA/approval actions.
+
+  fa01-close-task                                                      Closes tasks after discrepancies are resolved or no discrepancy exists.
+
+
+ These are logical handlers. One worker process may implement multiple handlers.
+
+
+
+ 11. Test Scenarios
+ Minimum tests:
+
+   1. Create audit task and freeze expected OSR-INSTANCE items.
+
+   2. Create WO when createWorkOrder=true.
+
+   3. Mobile observation submit is idempotent by offline client ref.
+
+   4. Matching serial and condition closes task with no discrepancy.
+
+   5. Missing expected serial creates MISSING discrepancy.
+
+   6. Found extra serial creates FOUND_EXTRA discrepancy.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                      Page 8
+   7. Damaged equipment routes to ticket.
+
+   8. Missing recoverable equipment routes to OSR-RMA recovery.
+
+   9. Write-off route calls EM-CFG-04 approval.
+
+   10. FA-01 does not call OSR-02 procurement.
+
+
+
+ 12. Implementation Notes
+   - Use FA-01 only for standalone audit campaigns or exception-driven verification. Do not force every normal WO completion
+     through FA-01.
+
+   - Keep OSR-INSTANCE as the authoritative source of expected customer equipment.
+
+   - Keep WO-01 as the owner of technician assignment and field execution when the audit requires dispatch.
+
+   - Do not directly mutate equipment state from FA-01. Route corrections through the owning module.
+
+   - Design mobile APIs for offline use: deterministic client refs, duplicate-safe uploads, and resumable task submission.
+
+   - Preserve evidence and snapshots because audit findings may be reviewed weeks later.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                  Page 9
+

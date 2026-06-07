@@ -1,0 +1,875 @@
+ DD_SUB-WF-PAUSE-01 - Subscription Pause
+ Developer implementation guide: DD_SUB-WF-PAUSE-01-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ SUB-WF-PAUSE-01 defines voluntary subscription pause.
+
+ Pause moves a subscription from:
+          ACTIVE -> SUSPENDED
+
+ It is used when the customer or an admin wants to temporarily stop service without terminating the subscription.
+
+ Examples:
+
+   - Customer vacation.
+
+   - Customer temporarily away.
+
+   - Financial hardship pause handled by call center.
+
+   - Admin maintenance pause.
+
+   - Admin compliance hold.
+
+ Pause is different from non-payment suspension:
+          PAUSE = voluntary/admin business pause
+          SUSPEND_NP = billing/dunning-driven non-payment suspension
+
+ Both may end in SUSPENDED, but they write different origin_intent values in subscription_pause_history.
+
+
+ 2. Ownership
+ This DD owns:
+
+   - Pause trigger API: POST /api/subscriptions/{subscription_id}/pause.
+
+   - Pause reason catalog.
+
+   - Pause history table.
+
+   - Pause operator config.
+
+   - Pause duration model.
+
+   - Pause business rules.
+
+   - Pause domain events.
+
+   - Pause worker usage.
+
+ This DD does not own:
+
+   - WIK-specific BPMN. See DD_SUB-WF-PAUSE-01-FLOW-WIK.
+
+   - Subscription master state. See SUB-LM-01.
+
+   - Operation orchestration framework. See SUB-WF-FRAMEWORK-01.
+
+   - Worker topic contracts. See DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+   - Network suspension implementation. See FUL-04.
+
+   - Billing fee calculation. See BIL DDs.
+
+   - Resume operation. See SUB-WF-RESUME-01.
+
+   - Non-payment suspension. See SUB-WF-SUSPEND-NP-01.
+
+   - Notification template/channel delivery. See NOT-01.
+
+   - Scheduled resume scanner. See scheduler/foundation scheduling module.
+
+
+ 3. Mental Model
+
+SOPHIX BSS Design Documents                                                                                         Page 1
+ Pause is a saga:
+            flowchart LR
+                API[Pause endpoint] --> FW[SUB-WF framework]
+                FW --> BPMN[Pause BPMN]
+                BPMN --> RULES[Drools validation]
+                BPMN --> LM1[SUB-LM PENDING_PAUSE]
+                BPMN --> BIL[Billing pause intent/fee]
+                BPMN --> FUL[FUL-04 suspend service]
+                BPMN --> HIST[Pause history row]
+                BPMN --> LM2[SUB-LM SUSPENDED]
+                BPMN --> EVT[Kafka event]
+                BPMN --> NOTIF[Notification]
+
+ The pause history row is the important business record. RESUME later reads it to decide which resume triggers are allowed.
+
+
+ 4. Deployment Unit Clarification
+ Pause is not a standalone service.
+
+ It is deployed as part of the subscription workflow capability:
+
+   - Pause route/controller in SUB-WF API.
+
+   - Pause config/catalog/history migrations.
+
+   - Pause BPMN, such as sub-pause-wik.
+
+   - Pause Drools package, such as rules.subscription.pause.wik.
+
+   - Shared workers from the worker catalog.
+
+
+ 5. Triggers
+  Trigger                                       Meaning                                               Allowed roles
+
+  CUSTOMER_REQUESTED_PAUSE                      Customer requested pause through self-service, call   CUSTOMER_SELF_SERVICE, CALL_CENTER,
+                                                center, or operator.                                  SUBSCRIPTION_OPERATOR
+
+  ADMIN_PAUSE                                   Operator/admin pauses for maintenance,                SUBSCRIPTION_ADMIN,
+                                                compliance, or operational reason.                    SUBSCRIPTION_OPERATOR
+
+
+ CUSTOMER_SELF_SERVICE also requires:
+
+   - subscription_pause_config.customer_self_service_enabled = true
+
+   - pause_reason.customer_self_service_eligible = true
+
+   - pause_reason.admin_only = false
+
+
+ 6. Duration Model
+ Pause request must resolve to exactly one duration mode.
+
+  Mode                                          Request shape                                         Meaning
+
+  OPEN_ENDED                                    openEnded=true                                        No scheduled resume. Human/customer/admin
+                                                                                                      resumes later.
+
+  FIXED_DAYS                                    durationDays=N                                        System computes resume_scheduled_at = now
+                                                                                                      + N days.
+
+  SCHEDULED_RESUME_TIME                         resumeScheduledAt=<timestamp>                         Resume should be triggered at the supplied time.
+
+
+ Rules:
+
+   - Multiple duration fields are invalid.
+
+   - No duration defaults to open-ended only if the reason allows open-ended.
+
+   - Scheduled resume values must respect operator and reason limits.
+
+
+ 7. Data Model
+ 7.1 pause_reason
+
+SOPHIX BSS Design Documents                                                                                                                      Page 2
+ What this table is for:
+
+ pause_reason is the admin-managed catalog of allowed pause reasons. It controls who may use a reason, how long the
+ pause may last, whether billing cycle accrual pauses, whether fulfillment suspension is required, and whether a pause fee
+ may apply.
+
+ Use this table when:
+
+   - Validating pauseReasonCode.
+
+   - Deciding if customer self-service can use a reason.
+
+   - Deciding whether open-ended pause is allowed.
+
+   - Enforcing max duration.
+
+   - Building the pause history snapshot.
+
+   - Passing reason policy to billing and fulfillment.
+
+ Do not use this table for:
+
+   - Per-customer approval decisions.
+
+   - Resume state.
+
+   - Non-payment suspension reason details.
+
+   - Billing amount calculation.
+           CREATE TABLE pause_reason (
+              code                                     TEXT PRIMARY KEY,
+              description                              TEXT NOT NULL,
+              customer_self_service_eligible           BOOLEAN NOT NULL DEFAULT FALSE,
+              admin_only                               BOOLEAN NOT NULL DEFAULT FALSE,
+              default_fee_billable_event_code          TEXT NULL,
+              max_duration_days                        INTEGER NULL,
+              open_ended_allowed                       BOOLEAN NOT NULL DEFAULT FALSE,
+              pauses_bill_cycle                        BOOLEAN NOT NULL DEFAULT TRUE,
+              suspends_fulfillment                     BOOLEAN NOT NULL DEFAULT TRUE,
+              is_active                                BOOLEAN NOT NULL DEFAULT TRUE,
+              created_at                               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_at                               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_by                               TEXT NOT NULL
+           );
+
+ Column descriptions:
+
+  Column                                                                Purpose
+
+  code                                                                  Stable reason code used in requests and history.
+
+  description                                                           Human-readable reason explanation.
+
+  customer_self_service_eligible                                        Whether customer portal/app may use this reason.
+
+  admin_only                                                            Whether only admin/operator roles may use this reason.
+
+  default_fee_billable_event_code                                       Optional BIL-CFG event code used when pause fee applies.
+
+  max_duration_days                                                     Max allowed pause length for this reason. Null means no reason-level max.
+
+  open_ended_allowed                                                    Whether open-ended pause is allowed for this reason.
+
+  pauses_bill_cycle                                                     Whether billing cycle accrual should pause during suspension.
+
+  suspends_fulfillment                                                  Whether network/service suspension should happen through FUL-04.
+
+  is_active                                                             Whether reason can be used for new pauses.
+
+  created_at                                                            Creation timestamp.
+
+  updated_at                                                            Last update timestamp.
+
+  updated_by                                                            User/service that last changed the row.
+
+
+ Sample data:
+
+  code             description      customer_self_se     admin_only     max_duration_da       open_ended_allo     pauses_bill_cycle   suspends_fulfillm
+                                    rvice_eligible                      ys                    wed                                     ent
+
+  CUSTOMER_VACA    Customer         true                 false          90                    false               true                true
+  TION             travelling /
+                   vacation
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                     Page 3
+  code             description          customer_self_se   admin_only   max_duration_da   open_ended_allo   pauses_bill_cycle   suspends_fulfillm
+                                        rvice_eligible                  ys                wed                                   ent
+
+  CUSTOMER_TEMP    Customer             true               false        30                false             true                true
+  ORARY_AWAY       temporarily away
+                   from home
+
+  CUSTOMER_FINA    Customer             false              false        60                false             true                true
+  NCIAL_HARDSHI    financial hardship
+  P
+
+  ADMIN_MAINTEN    Operator             false              true         NULL              true              false               true
+  ANCE             maintenance
+                   window
+
+  ADMIN_COMPLIA    Compliance or        false              true         NULL              true              false               true
+  NCE_HOLD         regulatory hold
+
+
+ Sample meaning:
+
+   - CUSTOMER_VACATION can be used by self-service and must have a scheduled/fixed duration up to 90 days.
+
+   - ADMIN_COMPLIANCE_HOLD is admin-only and may be open-ended.
+
+   - Admin reasons do not pause billing cycle in WIK seed policy.
+
+ 7.2 subscription_pause_history
+ What this table is for:
+
+ subscription_pause_history records every suspension-like period that RESUME must understand. PAUSE writes
+ voluntary/admin rows. SUSPEND-NP writes non-payment rows. RESUME closes rows.
+
+ Use this table when:
+
+   - Creating a pause record after pause succeeds.
+
+   - Checking whether a subscription already has an open pause/suspension row.
+
+   - Showing pause history to support.
+
+   - Letting RESUME decide whether a resume trigger is allowed.
+
+   - Letting scheduler find rows with resume_scheduled_at.
+
+ Do not use this table to replace subscription.status_code. Current status remains in SUB-LM.
+          CREATE TABLE subscription_pause_history (
+            pause_id                           TEXT PRIMARY KEY,
+            operator_code                      TEXT NOT NULL,
+            subscription_id                    TEXT NOT NULL REFERENCES subscription(subscription_id),
+            customer_id                        TEXT NOT NULL,
+            origin_intent                      TEXT NOT NULL,
+            system_managed                     BOOLEAN NOT NULL,
+            pause_reason_code                  TEXT NULL REFERENCES pause_reason(code),
+            pause_reason_snapshot              JSONB NULL,
+            duration_mode                      TEXT NULL,
+            duration_days                      INTEGER NULL,
+            resume_scheduled_at                TIMESTAMPTZ NULL,
+            pause_fee_billable_event_id        TEXT NULL,
+            reconnection_fee_billable_event_id TEXT NULL,
+            suspended_at                       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            actual_resume_at                   TIMESTAMPTZ NULL,
+            resume_reason_code                 TEXT NULL,
+            resume_actor_user_id               TEXT NULL,
+            resume_actor_role                  TEXT NULL,
+            admin_force_resume                 BOOLEAN NOT NULL DEFAULT FALSE,
+            admin_force_resume_reason          TEXT NULL,
+            dunning_reason_code                TEXT NULL,
+            dunning_cycle_reference            TEXT NULL,
+            dunning_escalation_level           INTEGER NULL,
+            outstanding_debt_amount            NUMERIC(18,2) NULL,
+            outstanding_debt_currency          TEXT NULL,
+            dunning_cycle_reference_at_resume TEXT NULL,
+            pause_correlation_id               TEXT NOT NULL,
+            pause_actor_user_id                TEXT NOT NULL,
+            pause_actor_role                   TEXT NOT NULL,
+            notes                              TEXT NULL,
+
+             CHECK (origin_intent IN ('CUSTOMER_REQUESTED_PAUSE', 'ADMIN_PAUSE', 'SUSPEND_NP')),
+             CHECK ((origin_intent = 'SUSPEND_NP') = system_managed),
+             CHECK (duration_mode IS NULL OR duration_mode IN ('OPEN_ENDED', 'FIXED_DAYS', 'SCHEDULED_RESUME_TIME'))
+
+
+SOPHIX BSS Design Documents                                                                                                               Page 4
+             );
+
+             CREATE UNIQUE INDEX uq_open_pause_per_subscription
+               ON subscription_pause_history (subscription_id)
+               WHERE actual_resume_at IS NULL;
+
+             CREATE INDEX idx_pause_history_subscription
+               ON subscription_pause_history (subscription_id, suspended_at DESC);
+
+             CREATE INDEX idx_pause_history_open_scheduled
+               ON subscription_pause_history (operator_code, resume_scheduled_at)
+               WHERE actual_resume_at IS NULL AND resume_scheduled_at IS NOT NULL;
+
+ Column descriptions:
+
+  Column                                                                 Purpose
+
+  pause_id                                                               Unique pause/suspension history ID.
+
+  operator_code                                                          Operator scope.
+
+  subscription_id                                                        Subscription being paused/suspended.
+
+  customer_id                                                            Customer reference for reporting/support.
+
+  origin_intent                                                          Why this suspension exists: voluntary pause, admin pause, or non-payment.
+
+  system_managed                                                         True only for SUSPEND_NP.
+
+  pause_reason_code                                                      Pause reason for voluntary/admin pauses. Null for SUSPEND_NP.
+
+  pause_reason_snapshot                                                  Full reason policy copied at pause time.
+
+  duration_mode                                                          Open-ended, fixed-days, scheduled-resume-time. Null for SUSPEND_NP.
+
+  duration_days                                                          Number of days when fixed-days mode is used.
+
+  resume_scheduled_at                                                    When scheduler should trigger resume, if set.
+
+  pause_fee_billable_event_id                                            BIL event ID for pause fee, if charged.
+
+  reconnection_fee_billable_event_id                                     BIL event ID for resume/reconnection fee, set by RESUME.
+
+  suspended_at                                                           When suspension period started.
+
+  actual_resume_at                                                       When RESUME closed the row. Null means open.
+
+  resume_reason_code                                                     Resume reason set by RESUME.
+
+  resume_actor_user_id                                                   Actor that resumed.
+
+  resume_actor_role                                                      Role that resumed.
+
+  admin_force_resume                                                     Whether admin override was used.
+
+  admin_force_resume_reason                                              Admin reason for forced resume.
+
+  dunning_* fields                                                       Populated only by SUSPEND-NP.
+
+  pause_correlation_id                                                   Operation ID that created the row.
+
+  pause_actor_user_id                                                    Actor that initiated pause/suspension.
+
+  pause_actor_role                                                       Actor role at pause time.
+
+  notes                                                                  Optional support note.
+
+
+ Sample data:
+
+  pause_id           subscription_id   origin_intent   pause_reason_co   duration_mode         resume_schedule      suspended_at    actual_resume_at
+                                                       de                                      d_at
+
+  pause_01HZ_KA      sub_01HZ_KAMA     CUSTOMER_REQU   CUSTOMER_VACA     FIXED_DAYS            2026-04-15T00        2026-03-15T10   2026-04-15T00
+  MAU_VAC            U_FIBER           ESTED_PAUSE     TION                                    :00:00Z              :00:00Z         :00:18Z
+
+  pause_01HZ_KA      sub_01HZ_KAMA     SUSPEND_NP      NULL              NULL                  NULL                 2026-06-15T02   2026-06-22T10
+  MAU_SUSPNP         U_FIBER                                                                                        :00:18Z         :00:06Z
+
+  pause_01HZ_OT      sub_01HZ_OTIE     ADMIN_PAUSE     ADMIN_COMPLIA     OPEN_ENDED            NULL                 2026-05-22T14   NULL
+  IENO_CMPL          NO_FIBER                          NCE_HOLD                                                     :00:00Z
+
+
+ Sample meaning:
+
+   - First row is a customer vacation pause that was later auto-resumed.
+
+   - Second row is a non-payment suspension written by SUSPEND-NP, not PAUSE.
+
+   - Third row is an open admin compliance hold.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 5
+ 7.3 subscription_pause_config
+ What this table is for:
+
+ subscription_pause_config stores operator-level switches and duration limits for pause.
+
+ Use this table when:
+
+   - Checking if self-service pause is enabled.
+
+   - Checking if scheduled/fixed-duration pause is enabled.
+
+   - Applying max future scheduled resume window.
+
+   - Applying minimum pause duration.
+
+   - Deciding whether to send customer notification.
+           CREATE TABLE subscription_pause_config (
+              operator_code                    TEXT PRIMARY KEY,
+              customer_self_service_enabled    BOOLEAN NOT NULL DEFAULT FALSE,
+              scheduled_pause_enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+              max_future_scheduled_resume_days INTEGER NOT NULL DEFAULT 90,
+              min_pause_hours                  INTEGER NOT NULL DEFAULT 24,
+              customer_notification_enabled    BOOLEAN NOT NULL DEFAULT TRUE,
+              updated_at                       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_by                       TEXT NOT NULL
+           );
+
+ Column descriptions:
+
+  Column                                                                    Purpose
+
+  operator_code                                                             Operator this config applies to.
+
+  customer_self_service_enabled                                             Master switch for customer self-service pause.
+
+  scheduled_pause_enabled                                                   Allows FIXED_DAYS and SCHEDULED_RESUME_TIME.
+
+  max_future_scheduled_resume_days                                          Upper bound for scheduled resume time.
+
+  min_pause_hours                                                           Prevents very short pauses.
+
+  customer_notification_enabled                                             Whether BPMN should call notification worker on success.
+
+  updated_at                                                                Last update timestamp.
+
+  updated_by                                                                User/service that updated row.
+
+
+ Sample data:
+
+  operator_code            customer_self_service_   scheduled_pause_enabl   max_future_scheduled_r      min_pause_hours         customer_notification_e
+                           enabled                  ed                      esume_days                                          nabled
+
+  WIK                      true                     true                    90                          24                      true
+
+  WUG                      false                    true                    90                          24                      true
+
+  WTZ                      false                    true                    90                          24                      true
+
+  YASSN                    false                    true                    90                          24                      true
+
+
+ Sample meaning:
+
+   - WIK allows customer self-service pause.
+
+   - Other operators are conservative placeholders.
+
+   - All sample operators require at least 24 hours and allow scheduled pause up to 90 days.
+
+
+ 8. Business Rules
+  Rule                                                                      Description
+
+  R-PAUSE-S-1                                                               Pause requires subscription status ACTIVE.
+
+  R-PAUSE-S-2                                                               Transition is ACTIVE -> PENDING_PAUSE -> SUSPENDED.
+
+  R-PAUSE-S-3                                                               At most one open pause/suspension history row per subscription.
+
+  R-PAUSE-T-1                                                               Trigger must be CUSTOMER_REQUESTED_PAUSE or ADMIN_PAUSE.
+
+  R-PAUSE-T-2                                                               Trigger role must match allowed role set.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                     Page 6
+  Rule                                                              Description
+
+  R-PAUSE-T-3                                                       Customer self-service requires operator config enabled.
+
+  R-PAUSE-T-4                                                       Customer self-service requires reason eligibility.
+
+  R-PAUSE-R-1                                                       Pause reason must be active.
+
+  R-PAUSE-R-2                                                       Reason row must be snapshotted into history.
+
+  R-PAUSE-D-1                                                       Exactly one duration mode must be resolved.
+
+  R-PAUSE-D-2                                                       Open-ended requires reason support.
+
+  R-PAUSE-D-3                                                       Duration must respect min/max bounds.
+
+  R-PAUSE-D-4                                                       Fixed days computes resume_scheduled_at.
+
+  R-PAUSE-D-5                                                       Scheduler/RESUME handles actual scheduled resume.
+
+  R-PAUSE-B-1                                                       BPMN sends PAUSE_INTENT to billing.
+
+  R-PAUSE-B-2                                                       If fee applies and pay-first is required, BPMN waits for payment.
+
+  R-PAUSE-F-1                                                       FUL-04 is called with intent=SUSPEND_SERVICE when fulfillment suspension
+                                                                    is required.
+
+  R-PAUSE-H-1                                                       Successful pause inserts open subscription_pause_history row.
+
+  R-PAUSE-H-2                                                       Active restrictions are cleared when subscription becomes SUSPENDED.
+
+
+
+
+ 9. REST APIs
+ 9.1 Trigger Pause
+          POST /api/subscriptions/{subscription_id}/pause HTTP/1.1
+          Authorization: Bearer <jwt-or-service-token>
+          Idempotency-Key: pause-sub_01HZ_KAMAU-vacation-20260315
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "pauseTrigger": "CUSTOMER_REQUESTED_PAUSE",
+              "pauseReasonCode": "CUSTOMER_VACATION",
+              "durationDays": 31,
+              "notes": "Customer travelling to Mombasa for holiday season",
+              "initiatingWorkflowKind": "BO_UI",
+              "initiatingWorkflowRef": "cc-ticket-2026-03-15-3301"
+          }
+
+ Success:
+          202 Accepted
+
+          {
+              "operationId": "subop_01HZ_KAMAU_PAUSE",
+              "operatorCode": "WIK",
+              "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+              "operationKind": "PAUSE",
+              "pauseTrigger": "CUSTOMER_REQUESTED_PAUSE",
+              "bpmnProcessKey": "sub-pause-wik",
+              "currentState": "INITIATED",
+              "finalState": null,
+              "resolvedResumeScheduledAt": "2026-04-15T10:00:00Z"
+          }
+
+ Common errors:
+
+  HTTP                                      Code                                                Meaning
+
+  400                                       UNKNOWN_OR_INACTIVE_PAUSE_REASON                    Reason does not exist or is inactive.
+
+  400                                       MULTIPLE_DURATION_MODES                             More than one duration mode supplied.
+
+  400                                       DURATION_REQUIRED                                   Reason requires a duration but none was supplied.
+
+  400                                       OPEN_ENDED_NOT_ALLOWED_FOR_REASON                   Open-ended requested for reason that disallows it.
+
+  400                                       DURATION_EXCEEDS_REASON_MAX                         Requested pause exceeds reason max.
+
+  400                                       SCHEDULED_PAUSE_NOT_ENABLED                         Operator disabled scheduled/fixed pause.
+
+  403                                       ROLE_NOT_AUTHORIZED_FOR_TRIGGER                     Actor role cannot use trigger.
+
+  403                                       PAUSE_REASON_NOT_CUSTOMER_SELF_SERVICE              Self-service actor used non-self-service reason.
+
+  409                                       INVALID_STATE_FOR_PAUSE                             Subscription is not ACTIVE.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 7
+  HTTP                                         Code                                                 Meaning
+
+  409                                          ALREADY_PAUSED                                       Open pause/suspension row already exists.
+
+  409                                          OPERATION_IN_PROGRESS                                Another state-changing operation is in-flight.
+
+
+
+ 9.2 Pause History
+           GET /api/subscriptions/{subscription_id}/pause-history HTTP/1.1
+           Authorization: Bearer <jwt>
+
+ Response:
+           {
+                 "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+                 "pauses": [
+                   {
+                     "pauseId": "pause_01HZ_KAMAU_VAC",
+                     "originIntent": "CUSTOMER_REQUESTED_PAUSE",
+                     "pauseReasonCode": "CUSTOMER_VACATION",
+                     "durationMode": "FIXED_DAYS",
+                     "durationDays": 31,
+                     "suspendedAt": "2026-03-15T10:00:18Z",
+                     "resumeScheduledAt": "2026-04-15T10:00:00Z",
+                     "actualResumeAt": "2026-04-15T00:00:18Z",
+                     "resumeReasonCode": "SCHEDULED_AUTO_RESUME"
+                   }
+                 ]
+           }
+
+
+
+ 10. Worker Usage In This Operation
+ The worker list is a logical BPMN task list, not a deployment list.
+
+  Worker topic                                                         Why pause uses it
+
+  drools-decide                                                        Validate status, reason, trigger, role, duration, fee applicability.
+
+  sub-lm-put-pending-status                                            Move to PENDING_PAUSE.
+
+  sub-lm-compute-cycle-window                                          Build billing context.
+
+  bil01-emit-intent                                                    Ask billing to decide pause fee/cycle impact.
+
+  bil01-charge-pre-authorize                                           Pay-first pause fee if applicable.
+
+  bil01-confirm-charge                                                 Confirm pause fee after payment.
+
+  bil01-revert-pending-charge                                          Compensation for fee payment timeout/failure.
+
+  ful-call-restrict                                                    Call FUL-04 with SUSPEND_SERVICE.
+
+  sub-lm-put-active-restrictions                                       Clear active restrictions after suspension.
+
+  sub-lm-put-master-fields                                             Insert pause history row and update status timestamp.
+
+  sub-lm-commit-state                                                  Commit subscription to SUSPENDED.
+
+  sub-lm-revert-to-prior                                               Revert to ACTIVE during compensation.
+
+  kafka-emit                                                           Emit pause success/rejected event.
+
+  notification-send                                                    Notify customer/admin, reliability-isolated.
+
+  subscription-operation-finalize                                      Mark operation terminal.
+
+
+
+
+ 11. Kafka Events
+ 11.1 SubscriptionPaused
+ Topic:
+           sophix.subscription.subscription.paused
+
+ Emitted after:
+
+   - FUL-04 suspension succeeds or is skipped by reason policy.
+
+   - Pause history row is inserted.
+
+   - SUB-LM commits status to SUSPENDED.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                          Page 8
+ Sample:
+             {
+                 "eventType": "SubscriptionPaused",
+                 "aggregateId": "sub_01HZ_KAMAU_FIBER",
+                 "timestamp": "2026-03-15T10:00:18Z",
+                 "payload": {
+                   "operatorCode": "WIK",
+                   "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+                   "customerId": "cust_01HZ_KAMAU",
+                   "operationId": "subop_01HZ_KAMAU_PAUSE",
+                   "pauseId": "pause_01HZ_KAMAU_VAC",
+                   "priorStatus": "ACTIVE",
+                   "newStatus": "SUSPENDED",
+                   "originIntent": "CUSTOMER_REQUESTED_PAUSE",
+                   "pauseReasonCode": "CUSTOMER_VACATION",
+                   "durationMode": "FIXED_DAYS",
+                   "durationDays": 31,
+                   "resumeScheduledAt": "2026-04-15T10:00:00Z",
+                   "pauseFeeBillableEventId": null,
+                   "clearedRestrictions": [],
+                   "initiatingActorUserId": "cc-agent-wik-007",
+                   "initiatingActorRole": "CALL_CENTER"
+                 }
+             }
+
+
+ 11.2 SubscriptionPauseRejected
+ Topic:
+             sophix.subscription.subscription.pauserejected
+
+ Emitted after rejection or compensation failure path finalizes.
+
+
+ 12. Drools Package
+ Package pattern:
+             rules.subscription.pause.<operator>
+
+ For WIK:
+             rules.subscription.pause.wik
+
+ Required decisions:
+
+  Decision                                                          Purpose
+
+  validate-preconditions                                            Status active, no open pause, reason active, role/trigger allowed.
+
+  resolve-duration-mode                                             Resolves open-ended/fixed-days/scheduled-resume-time.
+
+  compute-pause-fee-applicability                                   Decides whether pay-first fee path is needed.
+
+
+
+
+ 13. Auth
+ Rules:
+
+   - Resolve actor from token, not request body.
+
+   - Customer self-service requires operator config and reason eligibility.
+
+   - Admin reasons require admin/operator roles.
+
+   - Service-to-service callers must use service accounts.
+
+
+ 14. Infrastructure Recommendations
+ Pause does not need separate infrastructure from SUB-WF.
+
+ Deploy:
+
+  Artifact                                                          Where
+
+  Pause endpoint/controller                                         SUB-WF API pods.
+
+  Pause migrations                                                  Application DB migration pipeline.
+
+  Pause BPMN files                                                  Camunda deployment pipeline.
+
+
+
+SOPHIX BSS Design Documents                                                                                                              Page 9
+  Artifact                                              Where
+
+  Pause Drools packages                                 Drools/KIE deployment pipeline.
+
+  Pause worker usage                                    Worker pods/apps from worker DD.
+
+
+ Monitor:
+
+   - Pause request count.
+
+   - Pause failure count.
+
+   - Payment timeout count.
+
+   - FUL-04 failure count.
+
+   - Open pauses with scheduled resume in the past.
+
+   - Operations stuck in PENDING_PAUSE.
+
+
+ 15. Cross-DD Dependencies
+  DD/module                                             Relationship
+
+  SUB-WF-FRAMEWORK-01                                   Operation rows, idempotency, concurrency, Camunda start.
+
+  DD_SUB-WF-FRAMEWORK-01-WORKERS                        Worker topic contracts.
+
+  DD_SUB-WF-PAUSE-01-FLOW-WIK                           WIK BPMN implementation.
+
+  SUB-LM-01                                             Subscription state and active restrictions.
+
+  SUB-WF-RESUME-01                                      Reads/closes pause history rows.
+
+  SUB-WF-SUSPEND-NP-01                                  Also writes subscription_pause_history with SUSPEND_NP.
+
+  BIL-01                                                Pause intent and fee handling.
+
+  FUL-04                                                Network/service suspension.
+
+  NOT-01                                                Notifications.
+
+  Scheduler                                             Fires scheduled auto-resume.
+
+
+
+
+ 16. Build Order
+ Detailed flow is in DD_SUB-WF-PAUSE-01-DEV_IMPL_GUIDE-v1.0.md.
+
+ Recommended order:
+
+   1. Add pause tables and indexes.
+
+   2. Seed pause reasons and config.
+
+   3. Add framework operation config for PAUSE.
+
+   4. Implement pause API and history API.
+
+   5. Implement Drools facts/decisions.
+
+   6. Deploy first BPMN, normally WIK.
+
+   7. Wire workers and message catches.
+
+   8. Add compensation paths.
+
+   9. Add scheduler integration for scheduled resume.
+
+
+ 17. Test Checklist
+   - [ ] Pause rejects non-ACTIVE subscriptions.
+
+   - [ ] Pause rejects unknown/inactive reason.
+
+   - [ ] Customer self-service reason gating works.
+
+   - [ ] Admin-only reason gating works.
+
+   - [ ] Duration modes are mutually exclusive.
+
+
+SOPHIX BSS Design Documents                                                                                        Page 10
+   - [ ] Duration min/max bounds are enforced.
+
+   - [ ] Open pause uniqueness is enforced.
+
+   - [ ] Success inserts pause history row.
+
+   - [ ] Success commits subscription to SUSPENDED.
+
+   - [ ] Success clears active restrictions.
+
+   - [ ] Success emits SubscriptionPaused.
+
+   - [ ] Failure emits SubscriptionPauseRejected.
+
+   - [ ] Payment timeout compensation reverts to ACTIVE.
+
+   - [ ] Fulfillment failure compensation reverts to ACTIVE.
+
+
+
+
+SOPHIX BSS Design Documents                                    Page 11
+

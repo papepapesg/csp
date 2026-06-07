@@ -1,0 +1,813 @@
+ DD_SUB-WF-RESUME-01 - Subscription Resume
+ Developer implementation guide: DD_SUB-WF-RESUME-01-DEV_IMPL_GUIDE-v1.2.md.
+
+
+ 1. Purpose
+ SUB-WF-RESUME-01 defines how a suspended subscription is restored to active service.
+
+ Resume moves a subscription from:
+           SUSPENDED -> ACTIVE
+
+ The technical saga uses a transient status:
+           SUSPENDED -> PENDING_RESUME -> ACTIVE
+
+ Use this operation when:
+
+   - A customer asks to resume a voluntary pause.
+
+   - A call-center user resumes a customer pause.
+
+   - A BO admin force-resumes any suspension.
+
+   - BIL-04 resumes after non-payment debt is cleared.
+
+   - The scheduler auto-resumes a fixed-duration or scheduled pause.
+
+
+ 2. What Resume Closes
+ Resume closes an open row in subscription_pause_history.
+
+ An open row is:
+           actual_resume_at IS NULL
+
+ Resume updates the row with:
+
+   - actual_resume_at
+
+   - resume_reason_code
+
+   - resume_actor_user_id
+
+   - resume_actor_role
+
+   - reconnection_fee_billable_event_id, when a reconnection fee applies
+
+   - admin-force audit fields, when ADMIN_FORCE_RESUME is used
+
+ The open row tells resume why the subscription is suspended. That value is called origin_intent.
+
+
+ 3. Ownership
+ This DD owns:
+
+   - Resume trigger API: POST /api/subscriptions/{subscription_id}/resume.
+
+   - Resume trigger taxonomy.
+
+   - Origin-intent gating rules.
+
+   - subscription_resume_config table.
+
+   - Pause-history close-out contract.
+
+   - Resume business rules.
+
+   - Resume domain events.
+
+   - Resume worker usage.
+
+ This DD does not own:
+
+   - WIK-specific BPMN. See DD_SUB-WF-RESUME-01-FLOW-WIK.
+
+
+
+SOPHIX BSS Design Documents                                                                         Page 1
+   - Subscription master state. See SUB-LM-01.
+
+   - Operation orchestration framework. See SUB-WF-FRAMEWORK-01.
+
+   - Worker topic contracts. See DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+   - Pause history table creation. See SUB-WF-PAUSE-01 / shared lifecycle persistence.
+
+   - Non-payment suspension creation. See SUB-WF-SUSPEND-NP-01.
+
+   - Network reactivation implementation. See FUL-03.
+
+   - Billing debt-cleared decision. See BIL-04.
+
+   - Billing fee definitions. See BIL-CFG-01.
+
+   - Notification templates and channel delivery. See NOT-01.
+
+   - Scheduled scan ownership. See foundation scheduler.
+
+
+ 4. Deployment Unit Clarification
+ Resume is not a standalone service.
+
+ It is deployed as part of the subscription workflow capability:
+
+   - Resume route/controller in SUB-WF API.
+
+   - Resume config migration.
+
+   - Resume BPMN, such as sub-resume-wik.
+
+   - Resume Drools package, such as rules.subscription.resume.wik.
+
+   - Shared worker apps from the worker catalog.
+
+ The same worker app can execute multiple resume, pause, and activation topics. Keep metrics, logs, retries, and alerts
+ visible by topic.
+
+
+ 5. Resume Triggers
+  Trigger                                       Meaning                                            Allowed roles
+
+  CUSTOMER_REQUESTED_RESUME                     Customer or support resumes a voluntary customer   CUSTOMER_SELF_SERVICE, CALL_CENTER,
+                                                pause.                                             SUBSCRIPTION_OPERATOR
+
+  ADMIN_FORCE_RESUME                            Admin/operator override resumes any supported      SUBSCRIPTION_ADMIN,
+                                                suspension type.                                   SUBSCRIPTION_OPERATOR
+
+  DUNNING_RESUME                                Billing resumes a non-payment suspension after     BILLING_INTERNAL
+                                                debt is cleared.
+
+  SCHEDULED_AUTO_RESUME                         Scheduler resumes a pause when                     SCHEDULER_INTERNAL
+                                                resume_scheduled_at arrives.
+
+
+ CUSTOMER_SELF_SERVICE also requires:
+
+   - subscription_resume_config.customer_self_service_enabled = true
+
+   - open pause row has origin_intent = CUSTOMER_REQUESTED_PAUSE
+
+
+ 6. Origin-Intent Gating
+ Resume must read the open subscription_pause_history row before starting the BPMN.
+
+  origin_intent                                                           Meaning
+
+  CUSTOMER_REQUESTED_PAUSE                                                Voluntary customer pause created by PAUSE.
+
+  ADMIN_PAUSE                                                             Admin pause created by PAUSE.
+
+  SUSPEND_NP                                                              Non-payment suspension created by SUSPEND-NP.
+
+
+ Allowed matrix:
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                          Page 2
+  Resume trigger                         CUSTOMER_REQUESTED_PAUSE            ADMIN_PAUSE                               SUSPEND_NP
+
+  CUSTOMER_REQUESTED_RESUME              Allowed                             Blocked: ADMIN_PAUSE_BLOCKS_CU            Blocked:
+                                                                             STOMER_RESUME                             SYSTEM_MANAGED_SUSPENSION
+
+  ADMIN_FORCE_RESUME                     Allowed                             Allowed                                   Allowed
+
+  DUNNING_RESUME                         Blocked:                            Blocked:                                  Allowed
+                                         NOT_A_DUNNING_SUSPENSION            NOT_A_DUNNING_SUSPENSION
+
+  SCHEDULED_AUTO_RESUME                  Allowed only when                   Allowed only when                         Blocked:
+                                         resume_scheduled_at is set          resume_scheduled_at is set                NOT_A_SCHEDULED_RESUME
+
+
+
+
+ 7. Data Model
+ 7.1 subscription_resume_config
+ What this table is for:
+
+ subscription_resume_config stores operator-level resume behavior. It controls customer self-service, whether
+ customer resumes require a reconnection fee, whether dunning resume re-checks debt with billing, and whether success
+ notification is enabled.
+
+ Use this table when:
+
+   - Validating CUSTOMER_SELF_SERVICE resume.
+
+   - Deciding whether CUSTOMER_REQUESTED_RESUME may charge reconnection fee.
+
+   - Deciding whether DUNNING_RESUME should ask BIL-01 to re-check debt.
+
+   - Deciding whether BPMN should call notification-send.
+
+ Do not use this table for:
+
+   - Per-customer debt balance.
+
+   - Current subscription state.
+
+   - Pause reason eligibility.
+
+   - Network provisioning decisions.
+           CREATE TABLE subscription_resume_config (
+              operator_code                        TEXT PRIMARY KEY,
+              customer_self_service_enabled        BOOLEAN NOT NULL DEFAULT FALSE,
+              reconnection_fee_on_customer_resume  BOOLEAN NOT NULL DEFAULT FALSE,
+              dunning_resume_verify_debt_cleared   BOOLEAN NOT NULL DEFAULT TRUE,
+              customer_notification_enabled        BOOLEAN NOT NULL DEFAULT TRUE,
+              updated_at                           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_by                           TEXT NOT NULL
+           );
+
+ Column descriptions:
+
+  Column                                                                     Purpose
+
+  operator_code                                                              Operator this config applies to.
+
+  customer_self_service_enabled                                              Allows customer portal/app to start CUSTOMER_REQUESTED_RESUME.
+
+  reconnection_fee_on_customer_resume                                        Enables pay-first reconnection fee for customer-triggered resume.
+
+  dunning_resume_verify_debt_cleared                                         Adds BIL-01 debt-cleared verification for DUNNING_RESUME.
+
+  customer_notification_enabled                                              Enables customer notification after successful resume.
+
+  updated_at                                                                 Last update timestamp.
+
+  updated_by                                                                 User/service that last updated the row.
+
+
+ Sample data:
+
+  operator_code                  customer_self_service_enabl   reconnection_fee_on_custom     dunning_resume_verify_debt         customer_notification_enable
+                                 ed                            er_resume                      _cleared                           d
+
+  WIK                            true                          false                          true                               true
+
+  WUG                            false                         false                          true                               true
+
+  WTZ                            false                         false                          true                               true
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                           Page 3
+  operator_code                customer_self_service_enabl    reconnection_fee_on_custom       dunning_resume_verify_debt   customer_notification_enable
+                               ed                             er_resume                        _cleared                     d
+
+  YASSN                        false                          false                            true                         true
+
+
+ Sample meaning:
+
+   - WIK allows self-service resume.
+
+   - WIK does not charge reconnection fee by default in v1.2.
+
+   - WIK still asks billing to verify dunning debt is cleared.
+
+   - Other operators are conservative placeholders until their flow satellites are defined.
+
+ 7.2 subscription_pause_history Close-Out Fields
+ What this data is for:
+
+ Resume uses the open pause-history row as the business source for why the subscription is suspended. Resume then closes
+ that row after network reactivation and state commit succeed.
+
+ Use this data when:
+
+   - Validating origin-intent gating.
+
+   - Showing support why a resume is blocked.
+
+   - Closing the suspension period.
+
+   - Auditing admin force resume.
+
+   - Letting BIL-02 compute cycle accrual after resume.
+
+ Resume reads these fields before starting:
+
+  Column                                           Purpose                                              Sample
+
+  pause_id                                         Row to close.                                        pause_01HZ_KAMAU_SUSPNP
+
+  subscription_id                                  Suspended subscription.                              sub_01HZ_KAMAU_FIBER
+
+  origin_intent                                    Why suspension exists.                               SUSPEND_NP
+
+  system_managed                                   Whether suspension was system-managed.               true
+
+  resume_scheduled_at                              Scheduler resume time, if any.                       2026-04-15T10:00:00Z
+
+  suspended_at                                     When suspension started.                             2026-06-15T02:00:18Z
+
+  actual_resume_at                                 Must be NULL before resume.                          NULL
+
+  dunning_cycle_reference                          Billing dunning reference, if non-payment            bil04-dunning-wave-2026-06-15-L3
+                                                   suspension.
+
+  outstanding_debt_amount                          Debt snapshot at suspension time.                    3500.00
+
+
+ Resume writes these fields after success:
+
+  Column                                           Purpose                                              Sample
+
+  actual_resume_at                                 Actual resume timestamp.                             2026-06-22T10:00:18Z
+
+  resume_reason_code                               Resume reason supplied by caller or system.          DEBT_CLEARED_VIA_MPESA
+
+  resume_actor_user_id                             User/service that resumed.                           bil04-svc-account
+
+  resume_actor_role                                Role that resumed.                                   BILLING_INTERNAL
+
+  reconnection_fee_billable_event_id               BIL event for reconnection fee, if any.              bill_evt_01HZ_RECONN
+
+  admin_force_resume                               Whether admin override was used.                     false
+
+  admin_force_resume_reason                        Admin reason, if forced.                             Customer emergency override
+
+  dunning_cycle_reference_at_resume                Dunning reference that triggered resume.             bil04-resume-2026-06-22
+
+
+ Example before resume:
+
+  pause_id                subscription_id          origin_intent                suspended_at            actual_resume_at           resume_scheduled_at
+
+  pause_01HZ_KAMAU_S      sub_01HZ_KAMAU_FIB       SUSPEND_NP                   2026-06-15T02:00:1      NULL                       NULL
+  USPNP                   ER                                                    8Z
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                      Page 4
+ Example after resume:
+
+  pause_id              subscription_id      origin_intent   actual_resume_at            resume_reason_code         resume_actor_role
+
+  pause_01HZ_KAMAU_S    sub_01HZ_KAMAU_FIB   SUSPEND_NP      2026-06-22T10:00:1          DEBT_CLEARED_VIA_M         BILLING_INTERNAL
+  USPNP                 ER                                   8Z                          PESA
+
+
+
+
+ 8. Business Rules
+ 8.1 State Rules
+  Rule                                                       Description
+
+  R-RESUME-S-1                                               Resume requires subscription status SUSPENDED. Other statuses return 409
+                                                             INVALID_STATE_FOR_RESUME.
+
+  R-RESUME-S-2                                               Transition is SUSPENDED -> PENDING_RESUME -> ACTIVE.
+
+  R-RESUME-S-3                                               Resume is mutually exclusive with other state-changing operations on the same
+                                                             subscription.
+
+  R-RESUME-S-4                                               During PENDING_RESUME, current_transition_type = RESUME and
+                                                             current_transition_reason_code = resumeTrigger.
+
+
+
+ 8.2 Trigger Rules
+  Rule                                                       Description
+
+  R-RESUME-T-1                                               Trigger must be one of the four values in section 5.
+
+  R-RESUME-T-2                                               Actor role must match the trigger role set.
+
+  R-RESUME-T-3                                               CUSTOMER_SELF_SERVICE requires operator config enabled.
+
+  R-RESUME-T-4                                               SCHEDULED_AUTO_RESUME requires an open row with
+                                                             resume_scheduled_at IS NOT NULL.
+
+
+
+ 8.3 Origin-Intent Rules
+  Rule                                                       Description
+
+  R-RESUME-OI-1                                              Resume must read the open pause-history row before starting BPMN.
+
+  R-RESUME-OI-2                                              No open row returns 409 NO_OPEN_PAUSE_HISTORY.
+
+  R-RESUME-OI-3                                              Trigger and origin_intent must match the matrix in section 6.
+
+  R-RESUME-OI-4                                              ADMIN_FORCE_RESUME on SUSPEND_NP preserves origin_intent =
+                                                             SUSPEND_NP and writes admin-force audit fields.
+
+
+
+ 8.4 Billing Rules
+  Rule                                                       Description
+
+  R-RESUME-B-1                                               BPMN sends RESUME_INTENT for customer/admin resume and
+                                                             RESUME_NP_INTENT for dunning resume.
+
+  R-RESUME-B-2                                               If reconnection_fee_on_customer_resume = true and trigger is
+                                                             CUSTOMER_REQUESTED_RESUME, BPMN waits for reconnection fee payment.
+
+  R-RESUME-B-3                                               If dunning_resume_verify_debt_cleared = true, DUNNING_RESUME
+                                                             asks BIL-01 to confirm debt is cleared.
+
+  R-RESUME-B-4                                               ADMIN_FORCE_RESUME normally has no fee, but still sends billing intent for
+                                                             audit and cycle handling.
+
+
+
+ 8.5 Restrictions And Cycle Rules
+  Rule                                                       Description
+
+  R-RESUME-RC-1                                              Restrictions are not automatically reapplied on resume. If needed, call
+                                                             RESTRICT after resume.
+
+  R-RESUME-RC-2                                              Cycle anchor and cycle model are unchanged by resume.
+
+  R-RESUME-RC-3                                              BIL-02 resumes cycle accrual from the SubscriptionResumed event.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 5
+ 9. REST API
+ 9.1 Trigger Resume
+           POST /api/subscriptions/{subscription_id}/resume HTTP/1.1
+           Authorization: Bearer <jwt-or-service-token>
+           Idempotency-Key: resume-sub_01HZ_KAMAU-bil04-payment-cleared-20260622
+           Content-Type: application/json
+
+           {
+                 "operatorCode": "WIK",
+                 "resumeTrigger": "DUNNING_RESUME",
+                 "resumeReasonCode": "DEBT_CLEARED_VIA_MPESA",
+                 "dunningCycleReference": "bil04-resume-2026-06-22",
+                 "notes": "Customer paid INV_01HZ KES 3,500 via M-Pesa",
+                 "initiatingWorkflowKind": "BIL_04_DUNNING",
+                 "initiatingWorkflowRef": "bil04-resume-2026-06-22"
+           }
+
+ Actor user and role come from the token, not the public request body.
+
+ Success:
+           202 Accepted
+
+           {
+                 "operationId": "subop_01HZ_KAMAU_RESUME",
+                 "operatorCode": "WIK",
+                 "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+                 "operationKind": "RESUME",
+                 "resumeTrigger": "DUNNING_RESUME",
+                 "bpmnProcessKey": "sub-resume-wik",
+                 "currentState": "INITIATED",
+                 "finalState": null
+           }
+
+ Common errors:
+
+  HTTP                                         Code                                                  Meaning
+
+  400                                          UNKNOWN_RESUME_TRIGGER                                Trigger is not recognized.
+
+  400                                          NO_SCHEDULED_RESUME_TIME                              Scheduler tried to resume an open-ended pause.
+
+  403                                          ROLE_NOT_AUTHORIZED_FOR_TRIGGER                       Actor role cannot use this trigger.
+
+  403                                          ADMIN_PAUSE_BLOCKS_CUSTOMER_RESUME                    Customer tried to resume admin pause.
+
+  403                                          SYSTEM_MANAGED_SUSPENSION                             Customer tried to resume dunning suspension.
+
+  403                                          NOT_A_DUNNING_SUSPENSION                              BIL-04 tried to resume a voluntary/admin pause.
+
+  403                                          NOT_A_SCHEDULED_RESUME                                Scheduler tried to resume a non-scheduled row.
+
+  409                                          INVALID_STATE_FOR_RESUME                              Subscription is not SUSPENDED.
+
+  409                                          NO_OPEN_PAUSE_HISTORY                                 Subscription has no open pause-history row.
+
+  409                                          OPERATION_IN_PROGRESS                                 Another state-changing operation is in-flight.
+
+  409                                          IDEMPOTENCY_KEY_REUSED                                Same key was reused with different request hash.
+
+  422                                          DEBT_NOT_CLEARED                                      Dunning resume requested but billing says debt
+                                                                                                     remains.
+
+
+
+ 9.2 Example Customer Blocked From Dunning Resume
+           403 Forbidden
+
+           {
+                 "code": "SYSTEM_MANAGED_SUSPENSION",
+                 "openPauseOriginIntent": "SUSPEND_NP",
+                 "dunningCycleReference": "bil04-dunning-wave-2026-06-15-L3",
+                 "guidance": "This subscription is suspended for non-payment. Settle the outstanding balance to restore service."
+           }
+
+
+
+ 10. Worker Usage In This Operation
+ The worker list is a logical BPMN task list, not a deployment list.
+
+  Worker topic                                                         Why resume uses it
+
+  drools-decide                                                        Validate status, trigger, role, origin-intent, fee, and debt rules.
+
+
+SOPHIX BSS Design Documents                                                                                                                           Page 6
+  Worker topic                                                         Why resume uses it
+
+  sub-lm-put-pending-status                                            Move to PENDING_RESUME.
+
+  sub-lm-compute-cycle-window                                          Build billing context.
+
+  bil01-emit-intent                                                    Ask billing to decide resume intent, fee, and debt-cleared validation.
+
+  bil01-charge-pre-authorize                                           Optional pay-first reconnection fee.
+
+  bil01-confirm-charge                                                 Optional fee confirmation after payment.
+
+  bil01-revert-pending-charge                                          Compensation for reconnection fee timeout/failure.
+
+  ful-call-activate                                                    Call FUL-03 to reactivate network service.
+
+  sub-lm-put-master-fields                                             Close pause-history row and update audit fields.
+
+  sub-lm-commit-state                                                  Commit subscription to ACTIVE.
+
+  sub-lm-revert-to-prior                                               Revert to SUSPENDED during compensation.
+
+  kafka-emit                                                           Emit resume success/rejected event.
+
+  notification-send                                                    Notify customer/admin, reliability-isolated.
+
+  subscription-operation-finalize                                      Mark operation terminal.
+
+
+
+
+ 11. Kafka Events
+ 11.1 SubscriptionResumed
+ Topic:
+           sophix.subscription.subscription.resumed
+
+ Emitted after:
+
+   - FUL-03 reactivation succeeds.
+
+   - Pause-history row is closed.
+
+   - SUB-LM commits status to ACTIVE.
+
+ Sample:
+           {
+                 "eventType": "SubscriptionResumed",
+                 "aggregateId": "sub_01HZ_KAMAU_FIBER",
+                 "timestamp": "2026-06-22T10:00:18Z",
+                 "payload": {
+                   "operatorCode": "WIK",
+                   "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+                   "customerId": "cust_01HZ_KAMAU",
+                   "operationId": "subop_01HZ_KAMAU_RESUME",
+                   "priorStatus": "SUSPENDED",
+                   "newStatus": "ACTIVE",
+                   "resumedAt": "2026-06-22T10:00:18Z",
+                   "resumeTrigger": "DUNNING_RESUME",
+                   "resumeReasonCode": "DEBT_CLEARED_VIA_MPESA",
+                   "pauseHistoryRowId": "pause_01HZ_KAMAU_SUSPNP",
+                   "closedPauseOriginIntent": "SUSPEND_NP",
+                   "pauseDurationDays": 7,
+                   "pauseStartedAt": "2026-06-15T02:00:18Z",
+                   "reconnectionFee": null,
+                   "adminForceResume": false,
+                   "initiatingActorUserId": "bil04-svc-account",
+                   "initiatingActorRole": "BILLING_INTERNAL"
+                 }
+           }
+
+
+ 11.2 SubscriptionResumeRejected
+ Topic:
+           sophix.subscription.subscription.resumerejected
+
+ Emitted after validation, billing, payment, or fulfillment failure.
+
+ Sample:
+           {
+                 "eventType": "SubscriptionResumeRejected",
+                 "aggregateId": "sub_01HZ_KAMAU_FIBER",
+
+
+SOPHIX BSS Design Documents                                                                                                                     Page 7
+                 "timestamp": "2026-06-22T10:00:18Z",
+                 "payload": {
+                   "operatorCode": "WIK",
+                   "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+                   "operationId": "subop_01HZ_KAMAU_RESUME",
+                   "resumeTrigger": "DUNNING_RESUME",
+                   "rejectionCode": "DEBT_NOT_CLEARED",
+                   "openPauseOriginIntent": "SUSPEND_NP"
+                 }
+             }
+
+
+
+ 12. Drools Package
+ Package pattern:
+             rules.subscription.resume.<operator>
+
+ For WIK:
+             rules.subscription.resume.wik
+
+ Required decisions:
+
+  Decision                                                         Purpose
+
+  validate-preconditions                                           Status suspended, open pause row exists, no in-flight operation.
+
+  validate-trigger-role                                            Trigger and actor role are compatible.
+
+  validate-origin-intent                                           Trigger is allowed for the open pause row's origin_intent.
+
+  compute-resume-billing-intent                                    Chooses RESUME_INTENT or RESUME_NP_INTENT and fee/debt checks.
+
+
+
+
+ 13. Auth
+ Rules:
+
+   - Resolve actor from token, not request body.
+
+   - Customer self-service requires operator config enabled.
+
+   - Dunning resume requires a BIL-04 service account.
+
+   - Scheduled auto-resume requires a scheduler service account.
+
+   - Admin force resume requires admin/operator role and a reason note.
+
+
+ 14. Infrastructure Recommendations
+ Resume does not need separate infrastructure from SUB-WF.
+
+ Deploy:
+
+  Artifact                                                         Where
+
+  Resume endpoint/controller                                       SUB-WF API pods.
+
+  Resume config migration                                          Application DB migration pipeline.
+
+  Resume BPMN files                                                Camunda deployment pipeline.
+
+  Resume Drools packages                                           Drools/KIE deployment pipeline.
+
+  Resume worker usage                                              Worker pods/apps from worker DD.
+
+
+ Monitor:
+
+   - Resume request count by trigger.
+
+   - Resume failure count by rejection code.
+
+   - Dunning resume DEBT_NOT_CLEARED count.
+
+   - Scheduled resumes missed or delayed.
+
+   - FUL-03 reactivation failure count.
+
+   - Operations stuck in PENDING_RESUME.
+
+
+
+SOPHIX BSS Design Documents                                                                                                           Page 8
+   - Open pause-history rows with resume_scheduled_at < now.
+
+ Medium budget deployment recommendation:
+
+   - Run resume API inside existing SUB-WF API pods.
+
+   - Run resume workers inside the shared subscription worker deployment.
+
+   - Do not create a dedicated resume worker pod unless volume or isolation requires it.
+
+   - Keep Camunda, DB, Kafka, and Drools sizing from the foundation/framework recommendations.
+
+
+ 15. AWS Deployment Recommendations
+ For AWS, deploy resume as part of the same subscription workflow stack:
+
+  Component                                                       AWS recommendation
+
+  SUB-WF API                                                      EKS deployment behind internal ALB/API gateway.
+
+  Worker apps                                                     EKS deployment with HPA based on Camunda external task lag and CPU.
+
+  Camunda                                                         EKS service using the approved foundation Camunda topology.
+
+  PostgreSQL                                                      RDS PostgreSQL or Aurora PostgreSQL with Multi-AZ.
+
+  Kafka                                                           MSK or approved Kafka platform.
+
+  Drools/KIE                                                      EKS service or artifact-driven rule executor, same as foundation rule setup.
+
+  Secrets                                                         AWS Secrets Manager or Parameter Store with IRSA.
+
+  Observability                                                   CloudWatch Container Insights plus application metrics for operation states and
+                                                                  worker topics.
+
+
+ AWS alarms:
+
+   - PENDING_RESUME older than configured SLA.
+
+   - Scheduled resume lag above SLA.
+
+   - SubscriptionResumeRejected spike.
+
+   - FUL-03 failure spike.
+
+   - Outbox backlog for subscription.resumed.
+
+
+ 16. Cross-DD Dependencies
+  DD/module                                                       Relationship
+
+  SUB-WF-FRAMEWORK-01                                             Operation rows, idempotency, concurrency, Camunda start.
+
+  DD_SUB-WF-FRAMEWORK-01-WORKERS                                  Worker topic contracts.
+
+  DD_SUB-WF-RESUME-01-FLOW-WIK                                    WIK BPMN implementation.
+
+  SUB-LM-01                                                       Subscription state and active restrictions.
+
+  SUB-WF-PAUSE-01                                                 Creates voluntary/admin pause-history rows that resume closes.
+
+  SUB-WF-SUSPEND-NP-01                                            Creates dunning suspension rows that dunning resume closes.
+
+  BIL-01                                                          Resume intent, fee handling, and debt validation.
+
+  BIL-02                                                          Consumes SubscriptionResumed to resume cycle accrual.
+
+  BIL-04                                                          Calls DUNNING_RESUME after debt settlement.
+
+  FUL-03                                                          Network/service reactivation.
+
+  NOT-01                                                          Notifications.
+
+  Scheduler                                                       Calls SCHEDULED_AUTO_RESUME for due pause rows.
+
+
+
+
+ 17. Build Order
+ Detailed flow is in DD_SUB-WF-RESUME-01-DEV_IMPL_GUIDE-v1.2.md.
+
+ Recommended order:
+
+   1. Add subscription_resume_config migration and seed rows.
+
+
+SOPHIX BSS Design Documents                                                                                                               Page 9
+   2. Ensure subscription_pause_history has resume close-out fields.
+
+   3. Add framework operation config for RESUME.
+
+   4. Implement resume API.
+
+   5. Implement Drools facts/decisions.
+
+   6. Deploy first BPMN, normally WIK.
+
+   7. Wire workers and message catches.
+
+   8. Add compensation paths.
+
+   9. Wire BIL-04 DUNNING_RESUME.
+
+   10. Wire scheduler SCHEDULED_AUTO_RESUME.
+
+
+ 18. Test Checklist
+   - [ ] Resume rejects non-SUSPENDED subscriptions.
+
+   - [ ] Resume rejects missing open pause-history row.
+
+   - [ ] Trigger role gating works for all four triggers.
+
+   - [ ] Customer cannot self-resume admin pause.
+
+   - [ ] Customer cannot self-resume non-payment suspension.
+
+   - [ ] BIL-04 cannot dunning-resume voluntary pause.
+
+   - [ ] Scheduler cannot resume open-ended pause.
+
+   - [ ] Dunning resume validates debt when config requires it.
+
+   - [ ] Optional reconnection fee path waits for payment.
+
+   - [ ] Success closes pause-history row.
+
+   - [ ] Success commits subscription to ACTIVE.
+
+   - [ ] Success emits SubscriptionResumed.
+
+   - [ ] Failure emits SubscriptionResumeRejected.
+
+   - [ ] Notification failure does not roll back successful resume.
+
+
+
+
+SOPHIX BSS Design Documents                                            Page 10
+

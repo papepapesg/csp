@@ -1,0 +1,1339 @@
+ DD: FUL-03 v1.1 — Service Activation Fulfillment
+ Developer implementation guide: DD_FUL-03-Service_Activation-DEV_IMPL_GUIDE-v1.1.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract DD_FUL-03-Service_Activation-v1.1.md.
+
+ Verdict: ■ Updated | Wave: 1 | Group I: Fulfillment | Version: v1.1 Orchestrates the technical fulfillment of "make service
+ live" intents against a customer's services. Called synchronously by subscription workflows (ACTIVATE-01, RESUME-01,
+ UPGRADE-01, DOWNGRADE-01, RELOCATION-01, MIGRATION-01) via the framework's ful-call-activate worker
+ (for ACTIVATE_SERVICE / RESUME_SERVICE) or ful-call-modify worker (for MODIFY_SERVICE). FUL-03 loads the
+ Package's constituent Services (per SIP-01), iterates each Service, resolves the target network node + port via the
+ customer's HomePass service_management_endpoints map (per RLM-CFG-01), and dispatches to the Provisioner
+ adapter registered for the Service's provisionerKey (per PLM-CFG-01). For MODIFY_SERVICE, FUL-03 also performs the
+ per-service-class diff (source composition vs target composition) and dispatches activate/deactivate/modify verbs per class.
+ Aggregates outcomes, supports compensation on partial failure, returns a structured outcome. What changed from v1.0:
+ v1.0 supported one intent (ACTIVATE) with one endpoint (POST /api/activation/execute). v1.1 adopts the
+ FUL-04-style multi-intent envelope: a unified endpoint POST /api/service-fulfillment/execute accepting intent
+ ∈ {ACTIVATE_SERVICE, MODIFY_SERVICE, RESUME_SERVICE}. The v1.0 endpoint remains as a
+ backwards-compatible alias for ACTIVATE_SERVICE (deprecated; callers migrate to the new endpoint in their next minor).
+ Companion DDs: FUL-04 (Restriction Fulfillment — owns SUSPEND_SERVICE / APPLY_RESTRICTION /
+ LIFT_RESTRICTION), FUL-05 (Termination Fulfillment — owns network revocation), FUL-07 (HomePass Lifecycle
+ Fulfillment — owns CLAIM / RELEASE bookkeeping). FUL-03 stays in its "make service live" lane.
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    6_fulfillment/DD_FUL-03-Service_Activation-v1.1.md
+
+  Version                                                           v1.1
+
+  DD type                                                           module contract
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   Not explicitly defined
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+   - GET /homepasses/hp_01HZ_KAREN_017
+
+   - GET /homepasses/hp_01HZ_KARN_022
+
+   - GET /packages/pkg_01HX_INET_100M_VOIP_RES/versions/pkv_01HX_INET_100M_V3
+
+   - GET /services/svc_INET_100M
+
+   - POST /api/activation/execute
+
+   - POST /api/service-fulfillment/execute
+
+   - POST /external-task/{taskId}/complete
+
+ 4.2 Tables
+   - fulfillment_ledger
+
+   - fulfillment_service_outcome
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - ful-call-activate
+
+   - ful-call-claim-homepass
+
+   - ful-call-modify
+
+   - osr-equipment-bind
+
+   - osr-equipment-unbind
+
+   - sub-lm-revert-to-prior
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - SubscriptionUpgradeRejected
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+SOPHIX BSS Design Documents                                                                                              Page 2
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                         Recommendation
+
+  API/runtime                                                     Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                         Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                        Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                           Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                         Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                          Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                         Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                  Store with IRSA.
+
+  Observability                                                   Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                  dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ Updated | Wave: 1 | Group I: Fulfillment | Version: v1.1
+
+ Orchestrates the technical fulfillment of "make service live" intents against a customer's services. Called synchronously by
+ subscription workflows (ACTIVATE-01, RESUME-01, UPGRADE-01, DOWNGRADE-01, RELOCATION-01, MIGRATION-01)
+ via the framework's ful-call-activate worker (for ACTIVATE_SERVICE / RESUME_SERVICE) or ful-call-modify
+ worker (for MODIFY_SERVICE). FUL-03 loads the Package's constituent Services (per SIP-01), iterates each Service,
+ resolves the target network node + port via the customer's HomePass service_management_endpoints map (per
+ RLM-CFG-01), and dispatches to the Provisioner adapter registered for the Service's provisionerKey (per PLM-CFG-01).
+ For MODIFY_SERVICE, FUL-03 also performs the per-service-class diff (source composition vs target composition) and
+ dispatches activate/deactivate/modify verbs per class. Aggregates outcomes, supports compensation on partial failure,
+ returns a structured outcome.
+
+ What changed from v1.0: v1.0 supported one intent (ACTIVATE) with one endpoint (POST /api/activation/execute).
+ v1.1 adopts the FUL-04-style multi-intent envelope: a unified endpoint POST /api/service-fulfillment/execute
+ accepting intent ∈ {ACTIVATE_SERVICE, MODIFY_SERVICE, RESUME_SERVICE}. The v1.0 endpoint remains as a
+ backwards-compatible alias for ACTIVATE_SERVICE (deprecated; callers migrate to the new endpoint in their next minor).
+
+ Companion DDs: FUL-04 (Restriction Fulfillment — owns SUSPEND_SERVICE / APPLY_RESTRICTION /
+ LIFT_RESTRICTION), FUL-05 (Termination Fulfillment — owns network revocation), FUL-07 (HomePass Lifecycle
+ Fulfillment — owns CLAIM / RELEASE bookkeeping). FUL-03 stays in its "make service live" lane.
+
+
+ Glossary
+  Term                                                            Meaning
+
+  Intent                                                          The verb FUL-03 is executing: ACTIVATE_SERVICE / MODIFY_SERVICE /
+                                                                  RESUME_SERVICE. Carried in the request envelope; drives which Provisioner
+                                                                  interface method is invoked per Service.
+
+  ACTIVATE_SERVICE                                                Bring a previously inactive Package's Services live at the given HomePass.
+                                                                  Used by: ACTIVATE-01 (fresh activation), RELOCATION-01 (activate at target),
+                                                                  MIGRATION-01 (activate at target with target Package).
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 3
+  Term                                                          Meaning
+
+  MODIFY_SERVICE                                                Change a subscription's active Service composition. Used by: UPGRADE-01 +
+                                                                DOWNGRADE-01. FUL-03 diffs source composition vs target composition and
+                                                                dispatches per-class verbs (activate new classes, deactivate dropped classes,
+                                                                modify changed classes).
+
+  RESUME_SERVICE                                                Re-activate Services that were previously suspended by FUL-04
+                                                                (customer-initiated PAUSE or non-payment SUSPEND_NP). Distinct from
+                                                                ACTIVATE_SERVICE: RESUME assumes the network-side state still exists
+                                                                (port still provisioned, ONT still on the OLT) and lifts only the suspension flag.
+                                                                ACTIVATE_SERVICE assumes the service is being newly stood up at the
+                                                                HomePass.
+
+  HomePass                                                      A row in RLM-CFG-01's HomePass catalog. Represents the customer's
+                                                                physical install location. Carries the network_path (upstream nodes) and the
+                                                                derived service_management_endpoints map.
+
+  service_management_endpoints                                  A pre-computed JSONB map on the HomePass: { serviceManagementKey
+                                                                → { nodeCode, port } }. Service families (KE seed): data, voice,
+                                                                iptv_multicast, monitoring. Per RLM-CFG-01, derived from
+                                                                network_path at save time.
+
+  serviceManagementKey                                          A field on each Service (PLM-CFG-01). Tells FUL-03 which key to look up in the
+                                                                HomePass's service_management_endpoints map.
+
+  Source composition / Target composition                       For MODIFY_SERVICE only. Source = the Package composition before the
+                                                                change. Target = the Package composition after. FUL-03 computes the diff
+                                                                (addedServiceClasses, droppedServiceClasses,
+                                                                modifiedServiceClasses) and dispatches per-class.
+
+  Per-service-class fan-out                                     For Packages with multiple service classes (e.g., {INET, VOIP, IPTV}),
+                                                                FUL-03 dispatches one Provisioner call per class, each resolving its own
+                                                                (nodeCode, port) via the Service's serviceManagementKey.
+
+  Target node code + port                                       The pair (nodeCode, port) resolved from homepass.service_manageme
+                                                                nt_endpoints[service.serviceManagementKey]. Passed to the
+                                                                Provisioner adapter at fulfillment time.
+
+  Provisioner adapter                                           A code module that translates a FUL-03 verb into vendor commands (e.g.,
+                                                                GponResProvisioner.activateService(...) calls Huawei NCE).
+                                                                Registered per provisionerKey per PLM-CFG-01.
+
+  Fulfillment correlation ID                                    Caller-supplied ID used for idempotency and saga correlation. FUL-03 returns
+                                                                the same outcome row on retry with the same ID.
+
+
+
+
+ A — Target
+ 1. What this process is about
+ A subscription workflow (ACTIVATE, RESUME, UPGRADE, DOWNGRADE, RELOCATION, MIGRATION) reaches its
+ fulfillment step. The workflow's BPMN dispatches a worker (ful-call-activate or ful-call-modify) which calls
+ FUL-03's REST endpoint synchronously. FUL-03 then:
+
+   1. Loads the subscription's current Package + the Package's Services from SIP-01 + PLM-CFG-01.
+
+   2. For MODIFY_SERVICE: also loads the target Package composition (carried in envelope).
+
+   3. Loads the HomePass + service_management_endpoints from RLM-CFG-01.
+
+   4. For each Service to dispatch:
+
+   - Resolves target via homepass.service_management_endpoints[service.serviceManagementKey] →
+     {nodeCode, port}.
+
+   - If serviceManagementKey is null (partner-fulfilled service), passes (null, null) to the adapter.
+
+   - Looks up Provisioner adapter by service.provisionerKey.
+
+   - Invokes the verb matching intent:
+
+   - ACTIVATE_SERVICE → Provisioner.activateService(...)
+
+   - MODIFY_SERVICE for an added class → Provisioner.activateService(...)
+
+   - MODIFY_SERVICE for a dropped class → Provisioner.deactivateService(...)
+
+   - MODIFY_SERVICE for a modified class (same class, different profile params) →
+     Provisioner.modifyService(oldParams, newParams, ...)
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 4
+   - RESUME_SERVICE → Provisioner.resumeService(...)
+
+   - For ACTIVATE_SERVICE calls, also runs per-customer network-side setup specific to the service class — e.g., for IPTV:
+     provision IGMP-snooping on the port, join the customer's chosen multicast groups, register STB serial in IPTV middleware
+     AAA.
+
+   5. Aggregates per-Service outcomes into a terminal state (FULLY_PROVISIONED / PARTIALLY_PROVISIONED /
+     FAILED_AT_FIRST_SERVICE / FAILED_AND_ROLLED_BACK).
+
+   6. On PARTIALLY_PROVISIONED or FAILED_AND_ROLLED_BACK: runs compensation by invoking the inverse Provisioner
+     verb on each previously-succeeded Service.
+
+   7. Returns to the caller synchronously within the 60-second time budget.
+
+ The HomePass is not mutated by FUL-03. RLM-CFG-01 is read-only. HomePass-side bookkeeping (counter + binding row) is
+ owned by FUL-07, called by the workflow separately.
+
+ 2. Business rules
+ #### 2.1 Entry points
+
+  Rule                                                            Description
+
+  R-FUL-03-EN-1                                                   FUL-03 v1.1 exposes ONE primary endpoint: POST
+                                                                  /api/service-fulfillment/execute. The request envelope carries
+                                                                  intent ∈ {ACTIVATE_SERVICE, MODIFY_SERVICE,
+                                                                  RESUME_SERVICE}, dispatched per §2.4.
+
+  R-FUL-03-EN-2                                                   The envelope MUST carry: operatorCode, subscriptionId, customerId,
+                                                                  packageRef, packageVersionId, homepassId, intent,
+                                                                  fulfillmentCorrelationId, callerWorkflowKind,
+                                                                  callerWorkflowRefId. Missing any required field → 400
+                                                                  MISSING_REQUIRED_FIELD.
+
+  R-FUL-03-EN-3                                                   For intent = MODIFY_SERVICE: envelope MUST additionally carry
+                                                                  targetPackageRef, targetPackageVersionId, and an
+                                                                  equipmentBindings[] array reflecting the post-modification equipment
+                                                                  state. Missing → 400.
+
+  R-FUL-03-EN-4                                                   For intent = ACTIVATE_SERVICE: envelope MUST carry
+                                                                  equipmentBindings[] (passed by the caller from the install WO). Missing →
+                                                                  400.
+
+  R-FUL-03-EN-5                                                   For intent = RESUME_SERVICE: no additional fields. The Provisioner is
+                                                                  expected to find existing network-side state for the subscription's services.
+
+  R-FUL-03-EN-6                                                   Idempotency: same fulfillmentCorrelationId re-submitted within 24h
+                                                                  returns the prior ledger row's outcome with HTTP 200. Different
+                                                                  fulfillmentCorrelationId for the same subscription within 24h returns
+                                                                  409 CONCURRENT_FULFILLMENT_IN_PROGRESS if a prior fulfillment is still in
+                                                                  flight.
+
+  R-FUL-03-EN-7                                                   The total time budget for FUL-03 from request to response is 60 seconds.
+                                                                  FUL-03 monitors elapsed time; if overall_timeout_ms is reached
+                                                                  mid-orchestration, the in-flight Service is allowed to complete (its timeout
+                                                                  governs) but no further Services are dispatched. The chain is treated as a
+                                                                  partial failure subject to compensation per policy.
+
+  R-FUL-03-EN-8                                                   Backwards-compat: the v1.0 endpoint POST /api/activation/execute
+                                                                  remains as an alias for intent = ACTIVATE_SERVICE. Marked
+                                                                  Deprecated: use /api/service-fulfillment/execute in HTTP
+                                                                  headers. Removal planned for v2.0. Existing ACTIVATE-01 callers continue to
+                                                                  work without code change.
+
+
+ #### 2.2 Load + resolve
+
+  Rule                                                            Description
+
+  R-FUL-03-LO-1                                                   FUL-03 loads the current Package via SIP-01 using packageRef +
+                                                                  packageVersionId. Pinned version (the caller's snapshot at request time).
+                                                                  Reads serviceRefs[]. If the Package is not found → PACKAGE_NOT_FOUND.
+
+  R-FUL-03-LO-2                                                   For each Service ref, loads the Service def via PLM-CFG-01. Reads
+                                                                  consumption_model, is_addressable, network_profile_shape,
+                                                                  service_management_key, provisioner_key,
+                                                                  equipment_requirement. Services with consumption_model !=
+                                                                  CONTINUOUS are skipped (outcome = SKIPPED_NOT_ADDRESSABLE).
+                                                                  Services with is_addressable = false are skipped (outcome =
+                                                                  SKIPPED_NOT_ADDRESSABLE).
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 5
+  Rule                                      Description
+
+  R-FUL-03-LO-3                             For intent = MODIFY_SERVICE: FUL-03 also loads the target Package via
+                                            SIP-01 using targetPackageRef + targetPackageVersionId. Reads its
+                                            serviceRefs[] for diff computation.
+
+  R-FUL-03-LO-4                             FUL-03 loads the HomePass via RLM-CFG-01 (read-only) using homepassId.
+                                            Reads service_management_endpoints + status_code. If the
+                                            HomePass does not exist → HOMEPASS_NOT_FOUND. If the HomePass is in a
+                                            status blocking activation per RLM-CFG-01's catalog rules (NPL, NSV, NSR for
+                                            ACTIVATE_SERVICE / MODIFY_SERVICE) → HOMEPASS_NOT_READY. For
+                                            RESUME_SERVICE on a non-ready HomePass, the chain proceeds (Service
+                                            outcomes will record what the adapters report).
+
+  R-FUL-03-LO-5                             For each Service whose service_management_key is non-null, FUL-03
+                                            resolves the target via homepass.service_management_endpoints[serv
+                                            ice.service_management_key] → {nodeCode, port}. Missing key →
+                                            NO_HOMEPASS_ENDPOINT_FOR_KEY (Service-level failure). Null port →
+                                            HOMEPASS_PORT_NOT_CAPTURED (Service-level failure).
+
+  R-FUL-03-LO-6                             For each Service with null service_management_key (partner-fulfilled),
+                                            passes (null, null) to the Provisioner. The adapter sources its target from
+                                            its own config.
+
+
+ #### 2.3 MODIFY_SERVICE diff computation
+
+  Rule                                      Description
+
+  R-FUL-03-MO-1                             For intent = MODIFY_SERVICE, FUL-03 computes three sets by comparing
+                                            source Package composition (serviceRefs[]) to target Package composition
+                                            (targetPackageRef.serviceRefs[]): (a) addedServices[] — Services
+                                            in target but not in source; (b) droppedServices[] — Services in source but
+                                            not in target; (c) modifiedServices[] — Services in both, BUT with different
+                                            network_profile_shape.params (e.g., same INET class, different speed
+                                            tier).
+
+  R-FUL-03-MO-2                             Dispatch per class: (a) addedServices[] →
+                                            Provisioner.activateService(...) per Service; (b)
+                                            droppedServices[] → Provisioner.deactivateService(...) per
+                                            Service; (c) modifiedServices[] →
+                                            Provisioner.modifyService(oldParams, newParams, ...) per
+                                            Service.
+
+  R-FUL-03-MO-3                             Equipment-binding deltas are NOT handled by FUL-03. The caller
+                                            (UPGRADE-01 / DOWNGRADE-01) is responsible for: (a) ensuring required
+                                            equipment is bound BEFORE calling FUL-03 (osr-equipment-bind worker),
+                                            and (b) unbinding obsolete equipment AFTER FUL-03 succeeds
+                                            (osr-equipment-unbind worker). The envelope's equipmentBindings[]
+                                            carries the post-modification bindings, which FUL-03 passes to Provisioners but
+                                            does not validate.
+
+  R-FUL-03-MO-4                             Dispatch order for MODIFY_SERVICE: (a) added classes first (so customer sees
+                                            new functionality during the change window even if a dropped class is still up);
+                                            (b) modified classes next; (c) dropped classes last. The Package owner may
+                                            declare a different order in Package.modificationOrder; FUL-03 honors it.
+
+  R-FUL-03-MO-5                             If both source and target Service lists are identical (no diff), FUL-03 returns
+                                            terminal_state = NO_CHANGE immediately with serviceOutcomes =
+                                            []. The caller treats this as success. (Edge case; should not normally occur —
+                                            UPGRADE-01 / DOWNGRADE-01's own validation rejects same-Package
+                                            requests upstream.)
+
+
+ #### 2.4 Per-service dispatch
+
+  Rule                                      Description
+
+  R-FUL-03-DI-1                             For intent = ACTIVATE_SERVICE: invokes Provisioner.activateSer
+                                            vice(equipmentBindings[serviceClass], params, customer,
+                                            targetNodeCode, targetPort). params is
+                                            service.networkProfileShape.params. Returns
+                                            ProvisionerOutcome with success, adapterRefs, failureReason,
+                                            failureDetail.
+
+  R-FUL-03-DI-2                             For intent = MODIFY_SERVICE: per §2.3, dispatches activateService /
+                                            deactivateService / modifyService per the diff result. Per-call returns
+                                            aggregated into one outcome.
+
+  R-FUL-03-DI-3                             For intent = RESUME_SERVICE: invokes
+                                            Provisioner.resumeService(params, customer,
+                                            targetNodeCode, targetPort). The adapter restores the AAA /
+                                            network-side state suspended by FUL-04. Returns ProvisionerOutcome.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                         Page 6
+  Rule                          Description
+
+  R-FUL-03-DI-4                 The Provisioner interface (per PLM-CFG-01 v1.0 — pending) declares five
+                                methods: activateService, modifyService, deactivateService,
+                                resumeService, suspendService. FUL-03 uses the first four; FUL-04 owns
+                                suspendService (and applyRestriction / liftRestriction which are
+                                FUL-04-only). PLM-CFG-01 v1.0 must declare this full interface before FUL-03
+                                v1.1 + FUL-04 v1.1 ship.
+
+  R-FUL-03-DI-5                 Per-customer network-side setup specific to a service class is the Provisioner
+                                adapter's responsibility, dispatched during activateService or
+                                modifyService. Examples: for IPTV multicast → IGMP-snooping enablement
+                                on the port + multicast group joins + STB AAA registration in middleware.
+                                FUL-03 does not handle these specifics; it dispatches the verb and the adapter
+                                knows what to do.
+
+
+ #### 2.5 Compensation
+
+  Rule                          Description
+
+  R-FUL-03-CO-1                 Compensation invoked when terminal state is FAILED_AND_ROLLED_BACK.
+                                For each previously-successful Service, FUL-03 calls the inverse Provisioner
+                                verb: activateService → deactivateService; modifyService →
+                                modifyService(oldParams = newParams, newParams = oldParams)
+                                (reverse-direction modify); deactivateService → activateService;
+                                resumeService → suspendService. Order: reverse of original dispatch.
+
+  R-FUL-03-CO-2                 If compensation itself fails for any Service: terminal compensation state
+                                recorded as COMPENSATION_FAILED in the ledger; emit
+                                CompensationFailed Kafka event; manual NOC recovery required. The
+                                fulfillment ledger row is the audit anchor.
+
+  R-FUL-03-CO-3                 A failed MODIFY_SERVICE rollback returns the subscription's network state to
+                                its pre-modification configuration. The caller (UPGRADE-01 /
+                                DOWNGRADE-01) is responsible for reverting its own state changes
+                                (package_ref, equipment bindings, billing).
+
+
+ #### 2.6 Outcome aggregation
+
+  Rule                          Description
+
+  R-FUL-03-OA-1                 Terminal state = FULLY_PROVISIONED when all dispatched Services succeed.
+
+  R-FUL-03-OA-2                 Terminal state = PARTIALLY_PROVISIONED when some Services succeed
+                                and some fail BUT the failure mode is policy = TOLERATE_PARTIAL. The
+                                caller decides whether to accept partial or revert.
+
+  R-FUL-03-OA-3                 Terminal state = FAILED_AT_FIRST_SERVICE when the first Service fails
+                                AND policy = ABORT_ON_FIRST_FAIL (the default). No compensation
+                                needed (no prior successes).
+
+  R-FUL-03-OA-4                 Terminal state = FAILED_AND_ROLLED_BACK when a Service fails AFTER
+                                prior successes AND policy requires rollback. Compensation runs per §2.5.
+
+  R-FUL-03-OA-5                 Per-Service outcomes are recorded in fulfillment_service_outcome
+                                (one row per Service per fulfillment). Carries service_ref, outcome
+                                (SUCCEEDED / FAILED / SKIPPED_NOT_ADDRESSABLE / COMPENSATED /
+                                COMPENSATION_FAILED), adapter_refs (vendor-system IDs),
+                                failure_reason, failure_detail, target_node_code, target_port,
+                                duration_ms.
+
+
+ #### 2.7 Events
+
+  Rule                          Description
+
+  R-FUL-03-EV-1                 On dispatch start, emit ServiceFulfillmentStarted to
+                                sophix.fulfillment.service.started. Carries fulfillmentId,
+                                subscriptionId, customerId, operatorCode, intent, packageRef,
+                                homepassId, startedAt.
+
+  R-FUL-03-EV-2                 On successful terminal state (FULLY_PROVISIONED /
+                                PARTIALLY_PROVISIONED / NO_CHANGE), emit
+                                ServiceFulfillmentCompleted to
+                                sophix.fulfillment.service.completed. Carries fulfillmentId,
+                                subscriptionId, customerId, operatorCode, intent,
+                                terminalState, serviceOutcomes[], completedAt.
+
+  R-FUL-03-EV-3                 On failed terminal state, emit ServiceFulfillmentFailed to
+                                sophix.fulfillment.service.failed. Carries fulfillmentId,
+                                subscriptionId, customerId, operatorCode, intent, terminalState
+                                (FAILED_AT_FIRST_SERVICE / FAILED_AND_ROLLED_BACK),
+                                serviceOutcomes[], failureReason, failedAt.
+
+
+
+
+SOPHIX BSS Design Documents                                                                           Page 7
+  Rule                                                                  Description
+
+  R-FUL-03-EV-4                                                         On compensation failure, emit CompensationFailed to
+                                                                        sophix.fulfillment.service.compensationfailed. Carries
+                                                                        fulfillmentId, subscriptionId, failedServiceRefs[],
+                                                                        failureReason. NOC alerting consumer.
+
+  R-FUL-03-EV-5                                                         All events carry fulfillmentCorrelationId for cross-system correlation
+                                                                        with billing / SUB-LM events.
+
+
+
+
+ 3. Schemas
+ 3.1 fulfillment_ledger
+ One row per fulfillment attempt. Append-only.
+           CREATE TABLE fulfillment_ledger (
+              id                              TEXT PRIMARY KEY,
+              operator_code                   TEXT NOT NULL,
+              subscription_id                 TEXT NOT NULL,
+              customer_id                     TEXT NOT NULL,
+              package_ref                     TEXT NOT NULL,
+              package_version_id              TEXT NOT NULL,
+              homepass_id                     TEXT NOT NULL,
+              intent                          TEXT NOT NULL,
+              target_package_ref              TEXT NULL,
+              target_package_version_id       TEXT NULL,
+              fulfillment_correlation_id      TEXT NOT NULL,
+              caller_workflow_kind            TEXT NOT NULL,
+              caller_workflow_ref_id          TEXT NOT NULL,
+              terminal_state                  TEXT NULL,
+              services_dispatched_count       INTEGER NOT NULL DEFAULT 0,
+              services_succeeded_count        INTEGER NOT NULL DEFAULT 0,
+              services_failed_count           INTEGER NOT NULL DEFAULT 0,
+              services_skipped_count          INTEGER NOT NULL DEFAULT 0,
+              failure_reason                  TEXT NULL,
+              duration_ms                     INTEGER NULL,
+              started_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              completed_at                    TIMESTAMPTZ NULL,
+              UNIQUE (subscription_id, fulfillment_correlation_id),
+              CHECK (intent IN ('ACTIVATE_SERVICE','MODIFY_SERVICE','RESUME_SERVICE')),
+              CHECK (terminal_state IN ('FULLY_PROVISIONED','PARTIALLY_PROVISIONED','FAILED_AT_FIRST_SERVICE','FAILED_AND_ROLLED_BACK'
+           );
+
+  Column                                                                Notes
+
+  id                                                                    ULID. Example: flb_01HZ_KAMAU_ACTIVATE
+
+  operator_code                                                         WIK / WUG / WTZ / YASSN
+
+  intent                                                                ACTIVATE_SERVICE for fresh activate at HomePass; MODIFY_SERVICE for
+                                                                        upgrade/downgrade composition diff; RESUME_SERVICE for post-pause resume
+
+  target_package_ref                                                    Set only for intent = MODIFY_SERVICE. Otherwise NULL.
+
+  caller_workflow_kind                                                  SUB_WF_ACTIVATE / SUB_WF_RESUME / SUB_WF_UPGRADE /
+                                                                        SUB_WF_DOWNGRADE / SUB_WF_RELOCATION / SUB_WF_MIGRATION
+
+  terminal_state                                                        NULL while in-flight. Set on completion. NO_CHANGE only valid for
+                                                                        MODIFY_SERVICE with empty diff.
+
+  failure_reason                                                        Free text. Examples: ADAPTER_TIMEOUT, MISSING_REQUIRED_EQUIPMENT,
+                                                                        NO_HOMEPASS_ENDPOINT_FOR_KEY, HOMEPASS_PORT_NOT_CAPTURED,
+                                                                        PACKAGE_NOT_FOUND, HOMEPASS_NOT_FOUND, HOMEPASS_NOT_READY
+
+
+ Sample data:
+
+  id              subscription_id   intent        package_ref   target_package   terminal_state    services_dispat   services_succe    duration_ms
+                                                                _ref                               ched_count        eded_count
+
+  flb_01HZ_KA     sub_01HZ_KA       ACTIVATE_SE   pkg_01HX_IN   NULL             FULLY_PROVI       2                 2                 4250
+  MAU_ACTIVAT     MAU_FIBER         RVICE         ET_100M_VOI                    SIONED
+  E                                               P_RES
+
+  flb_01HZ_OT     sub_01HZ_OT       ACTIVATE_SE   pkg_01HX_IN   NULL             FULLY_PROVI       3                 3                 7180
+  IENO_MIGRAT     IENO_FIBER        RVICE         ET_VOIP_IPT                    SIONED
+  E                                               V_RES
+
+  flb_01HZ_NJ     sub_01HZ_NJ       MODIFY_SERV   pkg_01HX_IN   pkg_01HX_IN      FULLY_PROVI       1                 1                 3500
+  ERI_UPGRADE     ERI_FIBER         ICE           ET_100M_VOI   ET_VOIP_IPT      SIONED
+                                                  P_RES         V_RES
+
+
+
+SOPHIX BSS Design Documents                                                                                                                   Page 8
+  id             subscription_id   intent        package_ref     target_package   terminal_state   services_dispat   services_succe   duration_ms
+                                                                 _ref                              ched_count        eded_count
+
+  flb_01HZ_KI    sub_01HZ_KI       RESUME_SERV   pkg_01HX_IN     NULL             FULLY_PROVI      1                 1                1800
+  BE_RESUME      BE_FIBER          ICE           ET_50M                           SIONED
+
+  flb_01HZ_WA    sub_01HZ_WA       MODIFY_SERV   pkg_01HX_IN     pkg_01HX_IN      FULLY_PROVI      1                 1                2900
+  NGARI_DOWNG    NGARI_FIBER       ICE           ET_VOIP_IPT     ET_100M_VOI      SIONED
+  RADE                                           V_RES           P_RES
+
+
+ (Row 3: Njeri's upgrade from double-play to triple-play — added IPTV class. Row 5: Wangari's downgrade from triple to
+ double-play — dropped IPTV class.)
+
+ 3.2 fulfillment_service_outcome
+ One row per Service per fulfillment. Append-only.
+            CREATE TABLE fulfillment_service_outcome (
+               id                          TEXT PRIMARY KEY,
+               fulfillment_id              TEXT NOT NULL REFERENCES fulfillment_ledger(id),
+               service_ref                 TEXT NOT NULL,
+               service_management_key      TEXT NULL,
+               provisioner_key             TEXT NOT NULL,
+               target_node_code            TEXT NULL,
+               target_port                 TEXT NULL,
+               dispatched_verb             TEXT NOT NULL,
+               outcome                     TEXT NOT NULL,
+               adapter_refs                JSONB NULL,
+               failure_reason              TEXT NULL,
+               failure_detail              TEXT NULL,
+               compensation_status         TEXT NULL,
+               compensation_failure_reason TEXT NULL,
+               duration_ms                 INTEGER NULL,
+               dispatched_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+               completed_at                TIMESTAMPTZ NULL,
+               CHECK (dispatched_verb IN ('activateService','modifyService','deactivateService','resumeService')),
+               CHECK (outcome IN ('SUCCEEDED','FAILED','SKIPPED_NOT_ADDRESSABLE','COMPENSATED','COMPENSATION_FAILED')),
+               CHECK (compensation_status IN ('NOT_NEEDED','COMPENSATED','COMPENSATION_FAILED',NULL))
+            );
+
+  Column                                                                 Notes
+
+  dispatched_verb                                                        The Provisioner method actually invoked: activateService /
+                                                                         modifyService / deactivateService / resumeService. May differ from
+                                                                         envelope intent (e.g., MODIFY_SERVICE with dropped class dispatches
+                                                                         deactivateService).
+
+  target_node_code                                                       Resolved from homepass.service_management_endpoints[key].
+                                                                         Example: OLT-NRB-WTL-01 for a Nairobi OLT. NULL for partner-fulfilled.
+
+  adapter_refs                                                           JSONB carrying vendor-system IDs returned by the adapter. Example: {"huaw
+                                                                         eiCommandId":"cmd_123","provisioningProfileId":"prf_456"}.
+
+  outcome                                                                SUCCEEDED / FAILED / SKIPPED_NOT_ADDRESSABLE (non-addressable
+                                                                         Service per PLM-CFG-01) / COMPENSATED (was succeeded, then rolled back) /
+                                                                         COMPENSATION_FAILED
+
+
+ Sample (for flb_01HZ_NJERI_UPGRADE — upgrade from double-play to triple-play, only IPTV added):
+
+  id             fulfillment_id    service_ref   service_manag   dispatched_ver   outcome          target_node_co    target_port      duration_ms
+                                                 ement_key       b                                 de
+
+  fso_01HZ_NJ    flb_01HZ_NJ       svc_IPTV_BA   iptv_multic     activateSer      SUCCEEDED        OLT-NRB-WTL       0/2/03           3500
+  ERI_IPTV       ERI_UPGRADE       SIC           ast             vice                              -01
+
+
+ (Only one outcome row — the diff produced one added Service, IPTV. INET and VOIP were unchanged and not dispatched.)
+
+
+
+ 4. Worked examples
+ Four concrete timelines covering each intent and one failure path with compensation.
+
+ 4.1 ACTIVATE_SERVICE — fresh activation at install completion
+ Context: Kamau just completed his install at Karen. His install WO wo_01HZ_KAREN_017_INSTALL finished at 14:32:18
+ with equipmentBindings=[{eqp_ONT_42, INET}, {eqp_ATA_19, VOIP}]. SUB-WF-ACTIVATE-01's BPMN
+ advances to its callFulfillment step. Kamau's Package is pkg_INET_100M_VOIP_RES (double-play); HomePass
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 9
+ hp_01HZ_KAREN_017 is GPON, service_management_endpoints = {data: {OLT-NRB-KAREN-02, 0/4/07},
+ voice: {VOIPSWITCH-NRB-01, 5012}}.
+
+ 14:32:20 — ful-call-activate worker invokes FUL-03. Worker fetches and locks the next external task on topic
+ ful-call-activate, then POSTs to /api/service-fulfillment/execute:
+          POST /api/service-fulfillment/execute
+          {
+            "operatorCode":               "WIK",
+            "subscriptionId":             "sub_01HZ_KAMAU_FIBER",
+            "customerId":                 "cust_01HZ_KAMAU",
+            "packageRef":                 "pkg_01HX_INET_100M_VOIP_RES",
+            "packageVersionId":           "pkv_01HX_INET_100M_V3",
+            "homepassId":                 "hp_01HZ_KAREN_017",
+            "intent":                     "ACTIVATE_SERVICE",
+            "equipmentBindings":          [
+               {"equipmentId":"eqp_ONT_42","serviceClassId":"INET"},
+               {"equipmentId":"eqp_ATA_19","serviceClassId":"VOIP"}
+            ],
+            "fulfillmentCorrelationId": "subop_01HZ_KAMAU_ACTIVATE:activate",
+            "callerWorkflowKind":         "SUB_WF_ACTIVATE",
+            "callerWorkflowRefId":        "subop_01HZ_KAMAU_ACTIVATE"
+          }
+
+ 14:32:20.1 — Idempotency + ledger init. FUL-03 checks fulfillment_ledger for (subscription_id,
+ fulfillment_correlation_id) = (sub_01HZ_KAMAU_FIBER, subop_01HZ_KAMAU_ACTIVATE:activate). No
+ prior row — inserts a new row flb_01HZ_KAMAU_ACTIVATE with terminal_state = NULL, started_at = NOW.
+
+ 14:32:20.2 — Load. FUL-03 calls SIP-01 GET
+ /packages/pkg_01HX_INET_100M_VOIP_RES/versions/pkv_01HX_INET_100M_V3. Returns serviceRefs =
+ [svc_INET_100M, svc_VOIP_STD]. FUL-03 calls PLM-CFG-01 GET /services/svc_INET_100M →
+ {service_management_key: "data", provisioner_key: "gpon-res", network_profile_shape:
+ {speedDownMbps: 100, speedUpMbps: 20, ...}, is_addressable: true, consumption_model:
+ "CONTINUOUS"}. Same for svc_VOIP_STD → {service_management_key: "voice", provisioner_key:
+ "voip-sip", network_profile_shape: {codec: "G.711a", ...}}.
+
+ 14:32:20.3 — HomePass load. FUL-03 calls RLM-CFG-01 GET /homepasses/hp_01HZ_KAREN_017. Returns
+ service_management_endpoints = {data: {nodeCode: "OLT-NRB-KAREN-02", port: "0/4/07"}, voice:
+ {nodeCode: "VOIPSWITCH-NRB-01", port: "5012"}}, status_code = "RFS". Status check: RFS is sellable +
+ active → proceed.
+
+ 14:32:20.4 — Dispatch INET. FUL-03 resolves target via service_management_endpoints["data"] →
+ (OLT-NRB-KAREN-02, 0/4/07). Looks up Provisioner adapter for provisioner_key = "gpon-res" →
+ GponResProvisioner bean. Invokes:
+          gponResProvisioner.activateService(
+            equipmentBinding: {eqp_ONT_42, INET},
+            params: {speedDownMbps: 100, speedUpMbps: 20, ...},
+            customer: {customerId: cust_01HZ_KAMAU, ...},
+            targetNodeCode: "OLT-NRB-KAREN-02",
+            targetPort: "0/4/07"
+          )
+
+ The adapter calls Huawei NCE: provisions ONT serial eqp_ONT_42 on port 0/4/07, pushes the 100Mbps profile, marks port
+ IN_SERVICE. Returns ProvisionerOutcome{success: true, adapterRefs: {huaweiCommandId:
+ "cmd_8801", provisioningProfileId: "prf_100m_v3"}} after 1.2 seconds.
+
+ FUL-03 inserts row fso_01HZ_KAMAU_INET into fulfillment_service_outcome with outcome=SUCCEEDED,
+ duration_ms=1200.
+
+ 14:32:21.7 — Dispatch VOIP. Resolves target via service_management_endpoints["voice"] →
+ (VOIPSWITCH-NRB-01, 5012). Invokes voipSipProvisioner.activateService(...). Adapter calls the SIP
+ switch: registers the ATA eqp_ATA_19 at port 5012, provisions Kamau's DID, applies codec policy. Returns {success:
+ true, adapterRefs: {sipRegistrationId: "sip_4421"}} after 1.5 seconds.
+
+ FUL-03 inserts row fso_01HZ_KAMAU_VOIP into fulfillment_service_outcome.
+
+ 14:32:23.2 — Outcome aggregation. All 2 services succeeded. Terminal state FULLY_PROVISIONED. FUL-03 updates
+ ledger row: terminal_state=FULLY_PROVISIONED, services_dispatched_count=2,
+ services_succeeded_count=2, completed_at=NOW, duration_ms=2200.
+
+ 14:32:23.3 — Emit Kafka. FUL-03 publishes ServiceFulfillmentCompleted to
+ sophix.fulfillment.service.completed via outbox. Returns 200 to caller with the structured response (per §5.1).
+
+
+
+SOPHIX BSS Design Documents                                                                                       Page 10
+ 14:32:23.4 — Worker completes task. External task worker calls Camunda POST
+ /external-task/{taskId}/complete with the FUL-03 response. BPMN advances; the saga's next step is
+ ful-call-claim-homepass (FUL-07 CLAIM at the same HomePass).
+
+ Total elapsed time: 3.4 seconds. Clean happy path.
+
+
+
+ 4.2 MODIFY_SERVICE — upgrade adding a service class
+ Context: Njeri is on pkg_INET_100M_VOIP_RES (double-play) at HomePass hp_01HZ_KARN_022 and upgrading to
+ pkg_INET_VOIP_IPTV_RES (triple-play). SUB-WF-UPGRADE-01 has already: (a) validated the upgrade, (b) called BIL-01
+ with UPGRADE_INTENT and got back proration delta, (c) collected payment, (d) called OSR-INSTANCE-01 to bind the new
+ STB eqp_STB_NEW_88 for the IPTV class (a tech delivered it earlier that morning). The BPMN now reaches the
+ ful-call-modify step.
+
+ 10:35:38 — ful-call-modify worker invokes FUL-03.
+          POST /api/service-fulfillment/execute
+          {
+            "operatorCode":               "WIK",
+            "subscriptionId":             "sub_01HZ_NJERI_FIBER",
+            "customerId":                 "cust_01HZ_NJERI",
+            "packageRef":                 "pkg_01HX_INET_100M_VOIP_RES",
+            "packageVersionId":           "pkv_01HX_INET_100M_V3",
+            "targetPackageRef":           "pkg_01HX_INET_VOIP_IPTV_RES",
+            "targetPackageVersionId":     "pkv_01HX_INET_VOIP_IPTV_V1",
+            "homepassId":                 "hp_01HZ_KARN_022",
+            "intent":                     "MODIFY_SERVICE",
+            "equipmentBindings":          [
+               {"equipmentId":"eqp_ONT_99","serviceClassId":"INET"},
+               {"equipmentId":"eqp_ATA_44","serviceClassId":"VOIP"},
+               {"equipmentId":"eqp_STB_NEW_88","serviceClassId":"IPTV"}
+            ],
+            "fulfillmentCorrelationId": "subop_01HZ_NJERI_UPGRADE:modify",
+            "callerWorkflowKind":         "SUB_WF_UPGRADE",
+            "callerWorkflowRefId":        "subop_01HZ_NJERI_UPGRADE"
+          }
+
+ 10:35:38.1 — Load source + target. FUL-03 loads pkg_01HX_INET_100M_VOIP_RES →
+ serviceRefs=[svc_INET_100M, svc_VOIP_STD]. Loads pkg_01HX_INET_VOIP_IPTV_RES →
+ serviceRefs=[svc_INET_100M, svc_VOIP_STD, svc_IPTV_BASIC].
+
+ 10:35:38.2 — Diff computation. FUL-03 compares:
+
+   - addedServices = target − source = [svc_IPTV_BASIC]
+
+   - droppedServices = source − target = []
+
+   - modifiedServices = [] (svc_INET_100M and svc_VOIP_STD are in both, same
+     network_profile_shape.params)
+
+ Single-Service diff. The INET speed didn't change (still 100Mbps), the VOIP codec didn't change — those services keep
+ running untouched. Only IPTV needs adding.
+
+ 10:35:38.3 — HomePass load. FUL-03 calls RLM-CFG-01 GET /homepasses/hp_01HZ_KARN_022. Returns
+ service_management_endpoints = {data: {OLT-NRB-WTL-01, 0/2/03}, voice: {VOIPSWITCH-NRB-01,
+ 5099}, iptv_multicast: {OLT-NRB-WTL-01, 0/2/03}}. (Note: IPTV multicast resolves to the SAME OLT port as
+ data — multicast traffic flows over the same fiber as the customer's data, distinguished by IGMP-snooping enabled on the
+ port.)
+
+ 10:35:38.4 — Dispatch added: IPTV activate. Looks up svc_IPTV_BASIC → {service_management_key:
+ "iptv_multicast", provisioner_key: "gpon-res", network_profile_shape: {multicastGroups:
+ ["epg_zuku_basic"], stbAaaProfile: "basic-tier", ...}}. Resolves target via
+ service_management_endpoints["iptv_multicast"] → (OLT-NRB-WTL-01, 0/2/03).
+
+ Invokes gponResProvisioner.activateService(equipmentBinding: {eqp_STB_NEW_88, IPTV}, params:
+ {multicastGroups: ["epg_zuku_basic"], stbAaaProfile: "basic-tier"}, ...). The adapter:
+
+   1. Configures IGMP-snooping on OLT port 0/2/03 (already enabled? a flag check on the port — if already enabled, no-op;
+     else enable and reconfigure).
+
+   2. Joins the customer's chosen multicast group(s) for the basic tier.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 11
+   3. Registers the STB serial eqp_STB_NEW_88 in the IPTV middleware AAA (call to Verimatrix middleware via HTTPS):
+     grants the STB access to the channel package, pushes EPG entitlements.
+
+   4. Returns {success: true, adapterRefs: {middlewareAaaId: "aaa_661",
+     multicastGroupSubscriptionId: "mc_sub_770"}} after 3.5 seconds.
+
+ FUL-03 inserts fso_01HZ_NJERI_IPTV with dispatched_verb=activateService, outcome=SUCCEEDED,
+ duration_ms=3500.
+
+ 10:35:42.1 — No more diff entries. No dropped services, no modified services. The remaining INET and VOIP services
+ keep running on the existing provisioning — FUL-03 explicitly does NOT touch them. The customer's broadband stays up
+ throughout the upgrade.
+
+ 10:35:42.2 — Outcome aggregation. 1 service dispatched, 1 succeeded. Terminal state FULLY_PROVISIONED. Ledger
+ updated. ServiceFulfillmentCompleted emitted.
+
+ Response to caller (per §5.2): terminalState: FULLY_PROVISIONED, diffSummary: {addedServices:
+ [svc_IPTV_BASIC], droppedServices: [], modifiedServices: []}, serviceOutcomes: [...].
+ UPGRADE-01's BPMN advances to commit master fields (writes package_ref = pkg_01HX_INET_VOIP_IPTV_RES).
+
+ Total elapsed time: 4.1 seconds. Existing INET + VOIP untouched.
+
+
+
+ 4.3 RESUME_SERVICE — post-pause restoration
+ Context: Kibe paused his service on May 1 because he was traveling. FUL-04 had run SUSPEND_SERVICE at that time —
+ the AAA disabled his SIP registration and rate-limited his OLT port. On May 15 he returns and calls CC to resume.
+ SUB-WF-RESUME-01 validates (subscription in SUSPENDED, not non-payment) and reaches ful-call-activate with
+ intent=RESUME_SERVICE.
+
+ 16:42:10 — ful-call-activate worker invokes FUL-03 with RESUME_SERVICE intent.
+          POST /api/service-fulfillment/execute
+          {
+            "operatorCode":              "WIK",
+            "subscriptionId":            "sub_01HZ_KIBE_FIBER",
+            "customerId":                "cust_01HZ_KIBE",
+            "packageRef":                "pkg_01HX_INET_50M",
+            "packageVersionId":          "pkv_01HX_INET_50M_V2",
+            "homepassId":                "hp_01HZ_NGNG_044",
+            "intent":                    "RESUME_SERVICE",
+            "fulfillmentCorrelationId": "subop_01HZ_KIBE_RESUME:resume",
+            "callerWorkflowKind":        "SUB_WF_RESUME",
+            "callerWorkflowRefId":       "subop_01HZ_KIBE_RESUME"
+          }
+
+ (No equipmentBindings[] needed — equipment is already bound from before the pause. RESUME assumes network
+ state still exists.)
+
+ 16:42:10.1 — Load + HomePass. Same pattern as §4.1. Package pkg_INET_50M has one Service svc_INET_50M.
+ HomePass hp_01HZ_NGNG_044 is GPON, port 0/4/12 on OLT-NRB-NGNG-02. Status ACT (active subscriber on the
+ HomePass — Kibe is the active subscriber even though paused).
+
+ 16:42:10.2 — Dispatch: resumeService. Resolves service_management_endpoints["data"] →
+ (OLT-NRB-NGNG-02, 0/4/12). Looks up GponResProvisioner bean. Invokes:
+          gponResProvisioner.resumeService(
+            params: {speedDownMbps: 50, speedUpMbps: 10, ...},
+            customer: {customerId: cust_01HZ_KIBE, ...},
+            targetNodeCode: "OLT-NRB-NGNG-02",
+            targetPort: "0/4/12"
+          )
+
+ The adapter: lifts the AAA suspension flag (re-enables Kibe's subscriber profile in the RADIUS server), removes the rate-zero
+ policy on OLT port 0/4/12. The ONT was never deauthenticated during pause (per pause policy) so it doesn't need to
+ re-register. Customer's connection resumes within ~30 seconds. Adapter returns {success: true, adapterRefs:
+ {huaweiCommandId: "cmd_2207", aaaSessionId: "aaa_sess_8809"}} after 1.8 seconds.
+
+ FUL-03 inserts fso_01HZ_KIBE_INET with dispatched_verb=resumeService, outcome=SUCCEEDED,
+ duration_ms=1800.
+
+ 16:42:11.9 — Outcome aggregation. Terminal state FULLY_PROVISIONED. RESUME-01's BPMN advances to commit
+ state ACTIVE.
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 12
+ Distinction from ACTIVATE_SERVICE: ACTIVATE_SERVICE assumes the network-side state needs to be stood up from
+ scratch (provision the ONT, push the speed profile, register the SIP endpoint). For a resume, that state already exists — the
+ pause only suspended access flags at the AAA layer + applied a rate-zero policy at the OLT. RESUME_SERVICE tells the
+ adapter "lift the suspension and rate-zero; the rest of the configuration is already in place." Distinct verbs let the adapter make
+ this distinction without FUL-03 needing to know the network-side state.
+
+
+
+ 4.4 Failure with compensation — adapter timeout mid-flow
+ Context: Same setup as §4.2 (Njeri upgrade to triple-play), but the Verimatrix middleware is unreachable today. The IPTV
+ adapter call times out at 25 seconds.
+
+ 10:35:38 — ful-call-modify worker invokes FUL-03 (same request body as §4.2).
+
+ 10:35:38.1 — Load + diff. Same as §4.2: 1 added service (svc_IPTV_BASIC), 0 dropped, 0 modified.
+
+ 10:35:38.4 — Dispatch IPTV activate. gponResProvisioner.activateService(...) — the adapter:
+
+   1. IGMP-snooping enable on port 0/2/03 → success (1.2s).
+
+   2. Multicast group join → success (0.8s).
+
+   3. STB AAA registration in Verimatrix → HTTP request hangs. After 25 seconds, the adapter's HTTP client times out.
+
+ Adapter returns {success: false, failureReason: "ADAPTER_TIMEOUT", failureDetail: "Verimatrix
+ middleware timeout after 25s — connection to
+ https://verimatrix.wananchi-internal/api/aaa/register hung at TCP handshake"} after 27 seconds
+ total.
+
+ FUL-03 inserts fso_01HZ_NJERI_IPTV_FAIL with outcome=FAILED, dispatched_verb=activateService,
+ failure_reason=ADAPTER_TIMEOUT, duration_ms=27000.
+
+ 10:36:05.5 — Outcome aggregation: failure. First service dispatched, first service failed. Per
+ policy=ABORT_ON_FIRST_FAIL, terminal state = FAILED_AT_FIRST_SERVICE (not FAILED_AND_ROLLED_BACK — no
+ prior successes to roll back).
+
+ But wait: the adapter DID partially apply state — IGMP-snooping is enabled on the port and the multicast group is joined.
+ Even though the AAA registration failed, the network plane has partial state. The adapter's contract requires it to self-roll-back
+ its own intermediate state on failure (the adapter should call its own teardown on the IGMP enable + multicast join when it
+ knows the AAA registration won't complete). The adapter does this internally; FUL-03 doesn't see it.
+
+ If for some reason the adapter cannot self-roll-back (e.g., the OLT is also unreachable now), the adapter returns
+ failure_reason=ADAPTER_ERROR with compensationState=ADAPTER_INTERNAL_ROLLBACK_FAILED. FUL-03
+ records this and emits CompensationFailed to NOC.
+
+ 10:36:05.6 — Emit Kafka. ServiceFulfillmentFailed payload includes
+ terminalState=FAILED_AT_FIRST_SERVICE, failureReason=ADAPTER_TIMEOUT,
+ serviceOutcomes=[{serviceRef: svc_IPTV_BASIC, outcome: FAILED, ...}]. Returns 200 to caller (FUL-03
+ doesn't return non-200 — the BPMN catches the failure via the response body's terminalState).
+
+ 10:36:05.7 — UPGRADE-01 BPMN compensation. SUB-WF-UPGRADE-01's BPMN sees terminalState !=
+ FULLY_PROVISIONED and enters its own compensation: (a) osr-equipment-unbind for the STB (it's no longer in use);
+ (b) sub-lm-revert-to-prior flips back to ACTIVE on the source Package; (c) BIL-01
+ UPGRADE_FAILED_REVERSAL_INTENT to refund the proration delta; (d) emit SubscriptionUpgradeRejected with
+ rejectionReason=FULFILLMENT_FAILED, rejectionDetail=ADAPTER_TIMEOUT (IPTV middleware).
+
+ Failure with prior successes — alternative path: Imagine a more complex case where Njeri's upgrade also changed her
+ INET speed (50Mbps → 100Mbps) AND added IPTV. The diff would be modifiedServices=[svc_INET_100M],
+ addedServices=[svc_IPTV_BASIC]. Per dispatch order (§2.3 R-MO-4), added classes first → IPTV first. If IPTV failed,
+ no rollback needed (no prior successes). But if the order were modified first: INET modify succeeds (1.5s), then IPTV fails
+ (27s). FUL-03 enters compensation: invokes gponResProvisioner.modifyService(oldParams=newINET,
+ newParams=oldINET, ...) to reverse the INET speed change. If that succeeds, INET back to 50Mbps and terminal state
+ = FAILED_AND_ROLLED_BACK. If the rollback also fails, terminal state = COMPENSATION_FAILED and NOC alert fires.
+
+ This is why FUL-03's dispatch order matters: added-classes-first (the default) minimizes the rollback surface area in failure
+ cases.
+
+
+
+ 5. REST API
+SOPHIX BSS Design Documents                                                                                                   Page 13
+ 5.1 Activate service at HomePass
+ POST /api/service-fulfillment/execute
+
+ Called by ACTIVATE-01's ful-call-activate worker. Also by RELOCATION-01 + MIGRATION-01 at-target step.
+          POST /api/service-fulfillment/execute HTTP/1.1
+          Content-Type: application/json
+
+          {
+              "operatorCode":               "WIK",
+              "subscriptionId":             "sub_01HZ_OTIENO_FIBER",
+              "customerId":                 "cust_01HZ_OTIENO",
+              "packageRef":                 "pkg_01HX_INET_VOIP_IPTV_RES",
+              "packageVersionId":           "pkv_01HX_INET_VOIP_IPTV_V1",
+              "homepassId":                 "hp_01HZ_LAVI_073",
+              "intent":                     "ACTIVATE_SERVICE",
+              "equipmentBindings": [
+                 {"equipmentId":"eqp_GPON_ONT_900","serviceClassId":"INET"},
+                 {"equipmentId":"eqp_GPON_ATA_510","serviceClassId":"VOIP"},
+                 {"equipmentId":"eqp_STB_NEW_77","serviceClassId":"IPTV"}
+              ],
+              "fulfillmentCorrelationId": "subop_01HZ_OTIENO_MIGRATE:activate-target",
+              "callerWorkflowKind":         "SUB_WF_MIGRATION",
+              "callerWorkflowRefId":        "subop_01HZ_OTIENO_MIGRATE"
+          }
+
+          → 200 OK
+          {
+            "fulfillmentId":          "flb_01HZ_OTIENO_MIGRATE_ACTIVATE",
+            "terminalState":          "FULLY_PROVISIONED",
+            "serviceOutcomes": [
+               {"serviceRef":"svc_INET_100M","outcome":"SUCCEEDED","targetNodeCode":"OLT-NRB-LAV-01","targetPort":"0/2/03","adapterRe
+               {"serviceRef":"svc_VOIP_STD","outcome":"SUCCEEDED","targetNodeCode":"VOIPSWITCH-NRB-01","targetPort":"5103","adapterRe
+               {"serviceRef":"svc_IPTV_BASIC","outcome":"SUCCEEDED","targetNodeCode":"OLT-NRB-LAV-01","targetPort":"0/2/03","adapterR
+            ],
+            "durationMs":             4800,
+            "completedAt":            "2026-06-01T11:08:10+03:00"
+          }
+
+
+ 5.2 Modify service (composition change)
+ Called by UPGRADE-01 / DOWNGRADE-01's ful-call-modify worker.
+          POST /api/service-fulfillment/execute HTTP/1.1
+          Content-Type: application/json
+
+          {
+              "operatorCode":               "WIK",
+              "subscriptionId":             "sub_01HZ_NJERI_FIBER",
+              "customerId":                 "cust_01HZ_NJERI",
+              "packageRef":                 "pkg_01HX_INET_100M_VOIP_RES",
+              "packageVersionId":           "pkv_01HX_INET_100M_V3",
+              "targetPackageRef":           "pkg_01HX_INET_VOIP_IPTV_RES",
+              "targetPackageVersionId":     "pkv_01HX_INET_VOIP_IPTV_V1",
+              "homepassId":                 "hp_01HZ_KARN_022",
+              "intent":                     "MODIFY_SERVICE",
+              "equipmentBindings": [
+                 {"equipmentId":"eqp_ONT_99","serviceClassId":"INET"},
+                 {"equipmentId":"eqp_ATA_44","serviceClassId":"VOIP"},
+                 {"equipmentId":"eqp_STB_NEW_88","serviceClassId":"IPTV"}
+              ],
+              "fulfillmentCorrelationId": "subop_01HZ_NJERI_UPGRADE:modify",
+              "callerWorkflowKind":         "SUB_WF_UPGRADE",
+              "callerWorkflowRefId":        "subop_01HZ_NJERI_UPGRADE"
+          }
+
+          → 200 OK
+          {
+            "fulfillmentId":    "flb_01HZ_NJERI_UPGRADE",
+            "terminalState":    "FULLY_PROVISIONED",
+            "diffSummary": {
+               "addedServices":    ["svc_IPTV_BASIC"],
+               "droppedServices": [],
+               "modifiedServices": []
+            },
+            "serviceOutcomes": [
+               {"serviceRef":"svc_IPTV_BASIC","dispatchedVerb":"activateService","outcome":"SUCCEEDED","targetNodeCode":"OLT-NRB-WTL-
+            ],
+            "durationMs":       3500,
+            "completedAt":      "2026-05-20T10:35:42+03:00"
+          }
+
+
+SOPHIX BSS Design Documents                                                                                         Page 14
+ 5.3 Resume service (post-pause)
+ Called by RESUME-01's ful-call-activate worker (despite the activate name, the intent here is RESUME_SERVICE).
+          POST /api/service-fulfillment/execute HTTP/1.1
+
+          {
+              "operatorCode":               "WIK",
+              "subscriptionId":             "sub_01HZ_KIBE_FIBER",
+              "customerId":                 "cust_01HZ_KIBE",
+              "packageRef":                 "pkg_01HX_INET_50M",
+              "packageVersionId":           "pkv_01HX_INET_50M_V2",
+              "homepassId":                 "hp_01HZ_NGNG_044",
+              "intent":                     "RESUME_SERVICE",
+              "fulfillmentCorrelationId":   "subop_01HZ_KIBE_RESUME:resume",
+              "callerWorkflowKind":         "SUB_WF_RESUME",
+              "callerWorkflowRefId":        "subop_01HZ_KIBE_RESUME"
+          }
+
+          → 200 OK
+          {
+            "fulfillmentId":    "flb_01HZ_KIBE_RESUME",
+            "terminalState":    "FULLY_PROVISIONED",
+            "serviceOutcomes": [
+               {"serviceRef":"svc_INET_50M","dispatchedVerb":"resumeService","outcome":"SUCCEEDED","targetNodeCode":"OLT-NRB-NGNG-02"
+            ],
+            "durationMs":       1800
+          }
+
+
+ 5.4 Errors
+ Missing equipment:
+          → 200 OK
+          {
+            "terminalState":   "FAILED_AT_FIRST_SERVICE",
+            "failureReason":   "MISSING_REQUIRED_EQUIPMENT",
+            "serviceOutcomes": [{"serviceRef":"svc_INET_100M","outcome":"FAILED","failureDetail":"Required equipment for serviceClas
+          }
+
+ HomePass port not captured (AT_INSTALLATION mode without install completion):
+          → 200 OK
+          {
+            "terminalState":   "FAILED_AT_FIRST_SERVICE",
+            "failureReason":   "HOMEPASS_PORT_NOT_CAPTURED",
+            "serviceOutcomes": [{"serviceRef":"svc_VOIP_STD","outcome":"FAILED","failureDetail":"HomePass hp_01HX_... is in AT_INSTA
+          }
+
+ Partial provision with rollback:
+          → 200 OK
+          {
+            "terminalState":   "FAILED_AND_ROLLED_BACK",
+            "failureReason":   "ADAPTER_TIMEOUT",
+            "serviceOutcomes": [
+              {"serviceRef":"svc_INET_100M","outcome":"COMPENSATED","durationMs":1100},
+              {"serviceRef":"svc_IPTV_BASIC","outcome":"FAILED","failureDetail":"Verimatrix middleware timeout after 25s","durationM
+            ]
+          }
+
+ (INET succeeded, then IPTV failed; INET was rolled back via deactivateService.)
+
+
+
+ 6. Kafka events
+ Sample ServiceFulfillmentCompleted for Otieno's migration target activation:
+          {
+              "eventType":    "ServiceFulfillmentCompleted",
+              "aggregateId": "sub_01HZ_OTIENO_FIBER",
+              "timestamp":    "2026-06-01T11:08:10+03:00",
+              "payload": {
+                "fulfillmentId":              "flb_01HZ_OTIENO_MIGRATE_ACTIVATE",
+                "operatorCode":               "WIK",
+                "subscriptionId":             "sub_01HZ_OTIENO_FIBER",
+                "customerId":                 "cust_01HZ_OTIENO",
+                "intent":                     "ACTIVATE_SERVICE",
+                "packageRef":                 "pkg_01HX_INET_VOIP_IPTV_RES",
+                "homepassId":                 "hp_01HZ_LAVI_073",
+                "terminalState":              "FULLY_PROVISIONED",
+
+
+SOPHIX BSS Design Documents                                                                                         Page 15
+                   "serviceOutcomes": [
+                      {"serviceRef":"svc_INET_100M","outcome":"SUCCEEDED"},
+                      {"serviceRef":"svc_VOIP_STD","outcome":"SUCCEEDED"},
+                      {"serviceRef":"svc_IPTV_BASIC","outcome":"SUCCEEDED"}
+                   ],
+                   "fulfillmentCorrelationId": "subop_01HZ_OTIENO_MIGRATE:activate-target",
+                   "callerWorkflowKind":         "SUB_WF_MIGRATION",
+                   "callerWorkflowRefId":        "subop_01HZ_OTIENO_MIGRATE",
+                   "completedAt":                "2026-06-01T11:08:10+03:00"
+               }
+           }
+
+ Sample ServiceFulfillmentFailed for an UPGRADE that hit IPTV adapter timeout:
+           {
+               "eventType":    "ServiceFulfillmentFailed",
+               "aggregateId": "sub_01HZ_NJERI_FIBER",
+               "timestamp":    "2026-05-20T10:35:35+03:00",
+               "payload": {
+                 "fulfillmentId":              "flb_01HZ_NJERI_UPGRADE_TIMEOUT",
+                 "operatorCode":               "WIK",
+                 "subscriptionId":             "sub_01HZ_NJERI_FIBER",
+                 "intent":                     "MODIFY_SERVICE",
+                 "packageRef":                 "pkg_01HX_INET_100M_VOIP_RES",
+                 "targetPackageRef":           "pkg_01HX_INET_VOIP_IPTV_RES",
+                 "homepassId":                 "hp_01HZ_KARN_022",
+                 "terminalState":              "FAILED_AT_FIRST_SERVICE",
+                 "failureReason":              "ADAPTER_TIMEOUT",
+                 "serviceOutcomes": [
+                    {"serviceRef":"svc_IPTV_BASIC","outcome":"FAILED","dispatchedVerb":"activateService","failureDetail":"Verimatrix mid
+                 ],
+                 "fulfillmentCorrelationId": "subop_01HZ_NJERI_UPGRADE:modify",
+                 "failedAt":                   "2026-05-20T10:35:35+03:00"
+               }
+           }
+
+
+
+
+ 7. Cross-DD coordination
+  Module                                       Direction                                           Contract
+
+  SUB-WF-ACTIVATE-01                           Caller                                              ful-call-activate worker;
+                                                                                                   intent=ACTIVATE_SERVICE
+
+  SUB-WF-RESUME-01                             Caller                                              ful-call-activate worker;
+                                                                                                   intent=RESUME_SERVICE
+
+  SUB-WF-UPGRADE-01 / DOWNGRADE-01             Caller                                              ful-call-modify worker;
+                                                                                                   intent=MODIFY_SERVICE with target Package
+
+  SUB-WF-RELOCATION-01                         Caller                                              ful-call-activate worker;
+                                                                                                   intent=ACTIVATE_SERVICE at target HomePass
+
+  SUB-WF-MIGRATION-01                          Caller                                              ful-call-activate worker;
+                                                                                                   intent=ACTIVATE_SERVICE at target HomePass
+                                                                                                   with target Package composition
+
+  SIP-01                                       Reads Package + Package Version                     Service composition, version pinning
+
+  PLM-CFG-01                                   Reads Service definitions + Provisioner interface   service_management_key, provisioner_key,
+                                                                                                   network_profile_shape, is_addressable,
+                                                                                                   consumption_model,
+                                                                                                   equipment_requirement
+
+  RLM-CFG-01                                   Reads HomePass                                      service_management_endpoints,
+                                                                                                   status_code
+
+  FUL-04                                       Sibling                                             Owns SUSPEND_SERVICE / APPLY_RESTRICTION
+                                                                                                   / LIFT_RESTRICTION. FUL-04's resumeService
+                                                                                                   is the compensation-only inverse of FUL-04's
+                                                                                                   suspendService. FUL-03's resumeService is
+                                                                                                   the legitimate post-pause restoration entry point.
+
+  FUL-05                                       Sibling                                             Owns network revocation on terminate.
+
+  FUL-07                                       Sibling                                             Owns HomePass-side bookkeeping (CLAIM /
+                                                                                                   RELEASE). FUL-03 does not call FUL-07; the
+                                                                                                   workflow calls both.
+
+  Provisioner adapters                         Implementer                                         Implement the Provisioner interface (5 methods:
+                                                                                                   activateService / modifyService /
+                                                                                                   deactivateService / resumeService /
+                                                                                                   suspendService). Registered per
+                                                                                                   provisionerKey per PLM-CFG-01.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 16
+  Module                                    Direction                                  Contract
+
+  NOT-01                                    Downstream consumer                        Customer notification on fulfillment outcome.
+
+  NOC alerting                              Downstream consumer                        Compensation failures + adapter persistent errors.
+
+
+
+ 7.1 Build order
+ This DD (v1.1) deploys after:
+
+   1. FUL-03 v1.0 (already deployed; v1.1 is a backwards-compatible extension)
+
+   2. PLM-CFG-01 v1.0 (declares the 5-method Provisioner interface; pending)
+
+   3. SIP-01 v1.0 (Package + Package Version pinning)
+
+   4. RLM-CFG-01 v1.0 (HomePass + service_management_endpoints)
+
+ Callers depending on v1.1 verbs:
+
+   - UPGRADE-01 / DOWNGRADE-01 (require MODIFY_SERVICE)
+
+   - RELOCATION-01 / MIGRATION-01 (use ACTIVATE_SERVICE against target HomePass — already in v1.0, no change
+     needed for them)
+
+   - RESUME-01 (requires RESUME_SERVICE)
+
+ 7.2 Stub debt + open coordination items
+   - PLM-CFG-01 v1.0 Provisioner interface declaration — pending. The 5-method interface (activateService /
+     modifyService / deactivateService / resumeService / suspendService) needs to be formally specified in
+     PLM-CFG-01 v1.0 before adapter implementations can target it.
+
+   - v1.0 endpoint deprecation — POST /api/activation/execute remains as an alias for
+     intent=ACTIVATE_SERVICE. Marked deprecated; removal planned for v2.0. Existing ACTIVATE-01 callers continue
+     without code change.
+
+   - Equipment-binding validation — FUL-03 does not validate that equipmentBindings[] covers all
+     equipment_requirement Services. The caller (UPGRADE-01 / DOWNGRADE-01 / ACTIVATE-01 / RELOCATION-01
+     / MIGRATION-01) is responsible. If FUL-03 needs to enforce this in a future version, it would require reading
+     PLM-CFG-01's equipment_requirement field per Service and rejecting on mismatch.
+
+
+
+ B — Current TZ
+ Status: To be filled in after codebase cartography review.
+
+ Legacy fulfillment-orchestration code exists in the TZ codebase (the v1.0 baseline was authored against partial TZ
+ observation). Specific implementation details — whether the existing code does per-service-class fan-out, how it handles
+ modify-service diff, whether it has separate methods for activate vs resume — require source-code review to document
+ accurately. Until cartography lands, this DD does not assert specific legacy structural claims.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                       Page 17
+

@@ -1,0 +1,243 @@
+ DEV_IMPL_GUIDE - SUB-WF-ACTIVATE-01-FLOW-WIK
+ 1. Purpose
+ This guide explains how the WIK activation BPMN is implemented and tested.
+
+ Use it with:
+
+   - DD_SUB-WF-ACTIVATE-01-FLOW-WIK-v1.0.md
+
+   - DD_SUB-WF-ACTIVATE-01-Subscription_Activation-v1.0.md
+
+   - DD_SUB-WF-ACTIVATE-01-DEV_IMPL_GUIDE-v1.0.md
+
+ This guide focuses on the BPMN process file sub-activate-wik.bpmn.
+
+
+ 2. Runtime Actors
+  Runtime component                                              Role
+
+  Camunda                                                        Runs process sub-activate-wik.
+
+  subscription-workflow-api                                      Starts process through framework.
+
+  Worker apps                                                    Execute external task topics.
+
+  Message correlators                                            Send payment and fulfillment messages to Camunda.
+
+
+
+
+ 3. Before BPMN Deployment
+ Confirm:
+
+   1. subscription_operation_config has WIK ACTIVATE -> sub-activate-wik.
+
+   2. subscription_activation_config has WIK row.
+
+   3. Drools package rules.subscription.activate.wik is deployed.
+
+   4. Worker apps subscribe to required topics.
+
+   5. Message correlators can send payment-confirmed, fulfillment-completed, fulfillment-failed.
+
+
+ 4. Step 1 - Create BPMN Process
+ Create:
+            sub-activate-wik.bpmn
+
+ Process key:
+            sub-activate-wik
+
+ Start event must expect variables from the framework:
+            {
+                "operationId": "subop_01HZ_KAMAU_ACT",
+                "operatorCode": "WIK",
+                "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+                "operationKind": "ACTIVATE",
+                "activationTrigger": "SALES_FIELD",
+                "resolvedActivatedAt": "2026-05-18T10:00:00Z",
+                "resolvedCycleAnchorDay": 18,
+                "equipmentBindings": [
+                  {
+                    "equipmentRequirement": "GPON_ONT",
+                    "equipmentRef": "ont_01HZ_KAMAU"
+                  }
+                ]
+            }
+
+
+
+ 5. Step 2 - Add Happy Path Service Tasks
+ Add service tasks in this order:
+
+
+
+SOPHIX BSS Design Documents                                                                                          Page 1
+  Order                                         BPMN element           Camunda topic/message
+
+  1                                             Service task           drools-decide
+
+  2                                             Exclusive gateway      eligible?
+
+  3                                             Service task           sub-lm-put-pending-status
+
+  4                                             Service task           sub-lm-compute-cycle-window
+
+  5                                             Service task           bil01-charge-pre-authorize
+
+  6                                             Intermediate catch     payment-confirmed
+
+  7                                             Service task           bil01-confirm-charge
+
+  8                                             Service task           ful-call-activate
+
+  9                                             Intermediate catch     fulfillment-completed
+
+  10                                            Service task           ful-call-claim-homepass
+
+  11                                            Service task           osr-equipment-bind
+
+  12                                            Service task           sub-lm-put-master-fields
+
+  13                                            Service task           sub-lm-commit-state
+
+  14                                            Service task           kafka-emit
+
+  15                                            Service task           notification-send
+
+  16                                            Service task           subscription-operation-finalize
+
+  17                                            End event              success
+
+
+
+
+ 6. Step 3 - Add Payment Timer
+ Attach boundary timer to payment-confirmed catch:
+          P7D
+
+ Timer route:
+          payment timeout
+            -> bil01-revert-pending-charge
+            -> sub-lm-revert-to-prior
+            -> kafka-emit SubscriptionActivationFailed
+            -> subscription-operation-finalize FAILED
+
+
+
+ 7. Step 4 - Add Fulfillment Failure Route
+ Add catch for:
+          fulfillment-failed
+
+ Route:
+          fulfillment failed
+            -> bil01-revert-pending-charge
+            -> sub-lm-revert-to-prior
+            -> kafka-emit SubscriptionActivationFailed
+            -> subscription-operation-finalize FAILED
+
+
+
+ 8. Step 5 - Add Equipment Bind Failure Route
+ If osr-equipment-bind fails after network activation:
+          equipment bind failed
+            -> fulfillment rollback topic if available
+            -> bil01-revert-pending-charge
+            -> sub-lm-revert-to-prior
+            -> kafka-emit SubscriptionActivationFailed
+            -> subscription-operation-finalize FAILED
+
+ If fulfillment rollback is not available, route to manual recovery.
+
+
+ 9. Step 6 - Add Manual Recovery
+ For repeated sub-lm-commit-state failure, open:
+          manual-recovery-decision
+
+
+
+SOPHIX BSS Design Documents                                                                              Page 2
+ Do not mark the operation COMPLETED until a human resolves the final state.
+
+
+ 10. Step 7 - Deploy BPMN
+ Deploy through CI/CD or Camunda deployment API:
+           POST /engine-rest/deployment/create
+           Content-Type: multipart/form-data
+
+ Verify:
+           GET /engine-rest/process-definition/key/sub-activate-wik
+
+ Expected:
+           {
+               "key": "sub-activate-wik",
+               "suspended": false
+           }
+
+
+
+ 11. Step 8 - Test Happy Path
+   1. Start activation through API.
+
+   2. Confirm process instance exists.
+
+   3. Let workers process to payment wait.
+
+   4. Correlate payment-confirmed.
+
+   5. Let billing confirm charge.
+
+   6. Let FUL worker submit activation.
+
+   7. Correlate fulfillment-completed.
+
+   8. Let workers complete HomePass, equipment, SUB-LM commit, event, notification, finalize.
+
+   9. Confirm operation is COMPLETED.
+
+   10. Confirm subscription is ACTIVE.
+
+
+ 12. Step 9 - Test Failure Paths
+ Test:
+
+   - Drools rejection.
+
+   - Payment timeout.
+
+   - Fulfillment failed.
+
+   - Equipment bind failed.
+
+   - Notification failed.
+
+   - SUB-LM commit failed.
+
+ Expected:
+
+   - Failure paths finalize operation as FAILED, except manual recovery path.
+
+   - Subscription returns to CREATED where compensation applies.
+
+   - Success event is not emitted on failure.
+
+
+ 13. Common Mistakes
+   - Forgetting the payment boundary timer.
+
+   - Emitting SubscriptionActivated before sub-lm-commit-state.
+
+   - Treating notification-send failure as fatal.
+
+   - Missing fulfillment-failed catch.
+
+   - Missing compensation event SubscriptionActivationFailed.
+
+SOPHIX BSS Design Documents                                                                     Page 3
+   - Using topic names as deployment names.
+
+
+
+
+SOPHIX BSS Design Documents                   Page 4
+

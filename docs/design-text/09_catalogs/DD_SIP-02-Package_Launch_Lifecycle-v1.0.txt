@@ -1,0 +1,890 @@
+ DD_SIP-02 - Package Launch Lifecycle
+ Version: v1.0 Bundle: 09_catalogs Status: Draft for review Primary owner: Catalog / commercial product team Related
+ DDs: DD_SIP-01, DD_SIP-04, DD_SIP-05, DD_PLM-CFG-01, DD_PLM-CFG-02, DD_PLM-CFG-03, DD_BIL-CFG-01,
+ DD_EM-CFG-04, FOUNDATION_DROOLS
+
+
+
+ 1. Purpose
+ SIP-02 defines how SOPHIX moves a package from draft definition to approved, sellable, region/franchise-available,
+ suspended, retired, or end-of-life state.
+
+ SIP-01 owns package definition:
+
+   - package code;
+
+   - service composition;
+
+   - base pricing/version records;
+
+   - wallet/tax bindings;
+
+   - target franchises and technical regions at definition/version level.
+
+ SIP-02 owns lifecycle control:
+
+   - validation before package can be launched;
+
+   - configurable approval before launch;
+
+   - activation date and version cutover;
+
+   - per-franchise and per-region availability;
+
+   - temporary suspension;
+
+   - retirement/end-of-life.
+
+ Use SIP-02 when:
+
+   - product team wants to submit a new package for commercial review;
+
+   - a package version must become the current sellable version;
+
+   - package availability differs by franchise or region;
+
+   - a package must be suspended due to commercial, technical, tax, or provisioning issue;
+
+   - a package must stop being sold while existing subscribers remain on it;
+
+   - Backoffice, sales app, order capture, or self-care needs the list of sellable packages.
+
+ Do not use SIP-02 to change package composition. Composition remains SIP-01 and is locked after activation rules defined
+ in SIP-01.
+
+
+
+ 2. Scope And Boundaries
+  Capability                                                          Owner
+
+  Package master definition and package version records               SIP-01
+
+  Package lifecycle transition and launch plan                        SIP-02
+
+  Service catalog and service active state                            PLM-CFG-01
+
+  Tax group validity                                                  PLM-CFG-02
+
+  Wallet configuration validity                                       PLM-CFG-03
+
+  Billable event compatibility                                        BIL-CFG-01
+
+  Bundle launch and bundle migration                                  SIP-04
+
+  Campaign launch and campaign targeting                              SIP-05
+
+  Configurable launch approval                                        EM-CFG-04
+
+
+
+SOPHIX BSS Design Documents                                                                                           Page 1
+  Capability                                                               Owner
+
+  Configurable launch/availability rules                                   Drools
+
+
+ Boundary rules:
+
+   - SIP-02 changes package/package_version lifecycle state through SIP-01 repository/service contracts or same-module
+     service boundary.
+
+   - SIP-02 must not directly modify customer subscriptions. Subscription migration or upgrade is handled by SUB/FUL
+     workflows.
+
+   - SIP-02 may make a package unavailable for new sales while existing subscribers remain on their current package version.
+
+   - Approval steps are not hardcoded in SIP-02. SIP-02 calls EM-CFG-04. Camunda is used only when the EM-CFG-04 policy
+     mode is BPMN.
+
+   - Drools is used for operator-variable launch, readiness, availability, and retirement decisions. Fixed validations remain
+     code/database checks.
+
+
+
+ 3. Lifecycle Overview
+               stateDiagram-v2
+                 [*] --> DRAFT
+                 DRAFT --> READY_FOR_REVIEW: validate ok
+                 READY_FOR_REVIEW --> PENDING_APPROVAL: approval required
+                 READY_FOR_REVIEW --> APPROVED: auto approved
+                 PENDING_APPROVAL --> APPROVED: EM-CFG-04 approved
+                 PENDING_APPROVAL --> REJECTED: EM-CFG-04 rejected
+                 REJECTED --> DRAFT: revise
+                 APPROVED --> SCHEDULED: launch date future
+                 APPROVED --> ACTIVE: launch now
+                 SCHEDULED --> ACTIVE: activation worker
+                 ACTIVE --> SUSPENDED: suspend sales
+                 SUSPENDED --> ACTIVE: resume sales
+                 ACTIVE --> END_OF_SALE: stop new sales
+                 END_OF_SALE --> END_OF_LIFE: no active dependency or approved migration plan
+                 END_OF_LIFE --> RETIRED: archival
+
+ Master package status in SIP-01 is the high-level state. SIP-02 also manages more granular per-version and per-availability
+ state.
+
+
+
+ 4. State Definitions
+  State                                        Meaning                                             Sellable?
+
+  DRAFT                                        Package exists in SIP-01 but is not validated for   No
+                                               launch.
+
+  READY_FOR_REVIEW                             Validation passed and package can enter approval.   No
+
+  PENDING_APPROVAL                             EM-CFG-04 approval is open.                         No
+
+  REJECTED                                     Launch approval rejected; product team must         No
+                                               revise.
+
+  APPROVED                                     Launch approved but not active yet.                 No
+
+  SCHEDULED                                    Launch scheduled for future activation.             No until date
+
+  ACTIVE                                       Package/version is sellable for configured          Yes
+                                               availability.
+
+  SUSPENDED                                    Temporarily blocked for new sales.                  No
+
+  END_OF_SALE                                  Not sellable to new customers; may remain active    No
+                                               for existing subscriptions.
+
+  END_OF_LIFE                                  Commercially closed; only legacy/historical         No
+                                               references remain.
+
+  RETIRED                                      Archived and not usable in new flows.               No
+
+
+
+
+ 5. Data Model
+
+SOPHIX BSS Design Documents                                                                                                     Page 2
+ 5.1 package_launch_plan
+ What it is for: stores the launch request for one package version.
+
+ When to use it: every time a package version should become sellable, including the first launch and later version
+ price/geo-scope cutover.
+
+ Sample meaning: plp-001 launches package pkg-fiber-100m, version pkv-100m-202607, for WIK Nairobi franchises
+ on 2026-07-01.
+
+  Column                           Type                               Purpose                              Sample
+
+  launch_plan_id                   UUID PK                            Launch plan id.                      plp-001
+
+  operator_code                    TEXT                               Tenant/operator.                     WIK
+
+  package_id                       TEXT                               SIP-01 package id.                   pkg_01HX_100M
+
+  package_code                     TEXT                               Human-readable package code.         FIBER_100M_RES
+
+  package_version_id               TEXT                               SIP-01 package_version id.           pkv-100m-202607
+
+  launch_type                      TEXT                               FIRST_LAUNCH, VERSION_CUTOVER,       FIRST_LAUNCH
+                                                                      REGION_EXPANSION, RESUME.
+
+  requested_launch_at              TIMESTAMP                          Desired launch timestamp.            2026-07-01T00:00:00+03:00
+
+  effective_timezone               TEXT                               Timezone for wall-clock launch.      Africa/Nairobi
+
+  status                           TEXT                               Lifecycle state.                     SCHEDULED
+
+  approval_policy_code             TEXT NULL                          EM-CFG-04 policy code if approval    PACKAGE_LAUNCH_APPROVAL
+                                                                      used.
+
+  approval_request_id              TEXT NULL                          EM-CFG-04 runtime approval request   apr-plp-001
+                                                                      id.
+
+  approval_mode                    TEXT NULL                          AUTO, SINGLE_STEP, MULTI_STEP,       MULTI_STEP
+                                                                      BPMN.
+
+  camunda_process_instance_id      TEXT NULL                          Camunda instance id if               cam-proc-plp-001
+                                                                      BPMN-backed.
+
+  requested_by_user_id             TEXT                               Requester user.                      usr-product-001
+
+  approved_by_user_id              TEXT NULL                          Final approver if directly known.    usr-commercial-head
+
+  created_at                       TIMESTAMP                          Creation timestamp.                  2026-06-10T09:00:00Z
+
+  activated_at                     TIMESTAMP NULL                     Activation timestamp.                2026-07-01T00:00:05+03:00
+
+
+ Recommended indexes:
+
+   - (operator_code, package_id, status).
+
+   - (operator_code, requested_launch_at, status).
+
+   - (approval_request_id).
+
+ 5.2 package_launch_check
+ What it is for: stores launch validation checks and their results.
+
+ When to use it: after validation runs, before review/approval, and again just before activation. It explains why launch is
+ blocked or allowed.
+
+ Sample meaning: plc-001 says all services inside the package are active in PLM-CFG-01.
+
+  Column                           Type                               Purpose                              Sample
+
+  check_id                         UUID PK                            Check id.                            plc-001
+
+  launch_plan_id                   UUID                               Launch plan id.                      plp-001
+
+  check_code                       TEXT                               Check identifier.                    SERVICE_ACTIVE
+
+  check_status                     TEXT                               PASS, WARN, FAIL.                    PASS
+
+  message                          TEXT                               Human-readable result.               All package services are
+                                                                                                           active.
+
+  source_module_code               TEXT                               Module checked.                      PLM-CFG-01
+
+  source_ref_json                  JSONB                              Supporting refs.                     {"serviceIds":["srv-fiber-10
+                                                                                                           0m"]}
+
+  checked_at                       TIMESTAMP                          Check timestamp.                     2026-06-10T09:05:00Z
+
+
+
+SOPHIX BSS Design Documents                                                                                                       Page 3
+ Recommended indexes:
+
+   - (launch_plan_id, check_status).
+
+   - (check_code, check_status).
+
+ 5.3 package_availability
+ What it is for: stores where and through which channels a package version is sellable.
+
+ When to use it: sales app, Backoffice order capture, self-care, and API consumers query sellable packages by franchise,
+ region, channel, and date.
+
+ Sample meaning: pav-001 makes FIBER_100M_RES available to franchise fr-019 in tech region NRB-WEST for
+ SALES_APP starting 2026-07-01.
+
+  Column                          Type                            Purpose                           Sample
+
+  availability_id                 UUID PK                         Availability id.                  pav-001
+
+  operator_code                   TEXT                            Tenant/operator.                  WIK
+
+  package_id                      TEXT                            Package id.                       pkg_01HX_100M
+
+  package_version_id              TEXT                            Version id.                       pkv-100m-202607
+
+  franchise_id                    TEXT NULL                       Franchise scope, null means all   fr-019
+                                                                  allowed.
+
+  tech_region_code                TEXT NULL                       Technical region scope.           NRB-WEST
+
+  channel_code                    TEXT                            BACKOFFICE, SALES_APP,            SALES_APP
+                                                                  SELF_CARE, API.
+
+  available_from                  TIMESTAMP                       Start of sellable availability.   2026-07-01T00:00:00+03:00
+
+  available_until                 TIMESTAMP NULL                  End of sellable availability.     null
+
+  status                          TEXT                            SCHEDULED, ACTIVE, SUSPENDED,     ACTIVE
+                                                                  ENDED.
+
+  reason_code                     TEXT NULL                       Reason for status.                INITIAL_LAUNCH
+
+  created_at                      TIMESTAMP                       Creation timestamp.               2026-06-10T09:10:00Z
+
+  updated_at                      TIMESTAMP                       Update timestamp.                 2026-07-01T00:00:05+03:00
+
+
+ Recommended indexes:
+
+   - (operator_code, package_id, status).
+
+   - (operator_code, franchise_id, tech_region_code, channel_code, status).
+
+   - (operator_code, available_from, available_until).
+
+ 5.4 package_version_cutover
+ What it is for: records current-version changes from one package version to another.
+
+ When to use it: price changes, geo-scope expansion, tax/wallet binding adjustment, or other SIP-01 version changes that
+ should affect new subscriptions from a date.
+
+ Sample meaning: pvc-001 changes new sales from version pkv-100m-202606 to pkv-100m-202607 on July 1. Existing
+ subscriptions stay on their referenced version until a subscription workflow changes them.
+
+  Column                          Type                            Purpose                           Sample
+
+  cutover_id                      UUID PK                         Cutover id.                       pvc-001
+
+  operator_code                   TEXT                            Tenant/operator.                  WIK
+
+  package_id                      TEXT                            Package id.                       pkg_01HX_100M
+
+  from_version_id                 TEXT NULL                       Previous active version.          pkv-100m-202606
+
+  to_version_id                   TEXT                            New active version.               pkv-100m-202607
+
+  cutover_at                      TIMESTAMP                       Effective timestamp.              2026-07-01T00:00:00+03:00
+
+  status                          TEXT                            SCHEDULED, COMPLETED, FAILED,     COMPLETED
+                                                                  CANCELLED.
+
+  launch_plan_id                  UUID                            Related launch plan.              plp-001
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 4
+  Column                            Type                               Purpose                         Sample
+
+  executed_by_worker_id             TEXT NULL                          Worker instance.                catalog-worker-01
+
+  created_at                        TIMESTAMP                          Creation timestamp.             2026-06-10T09:12:00Z
+
+  completed_at                      TIMESTAMP NULL                     Completion timestamp.           2026-07-01T00:00:05+03:00
+
+
+ Recommended indexes:
+
+   - (operator_code, package_id, cutover_at).
+
+   - (status, cutover_at).
+
+ 5.5 package_lifecycle_event
+ What it is for: immutable audit trail of package lifecycle changes.
+
+ When to use it: every status change, validation result, approval result, activation, suspension, resume, end-of-sale,
+ end-of-life, and retirement.
+
+ Sample meaning: ple-001 records that launch plan plp-001 moved package version pkv-100m-202607 to ACTIVE.
+
+  Column                            Type                               Purpose                         Sample
+
+  event_id                          UUID PK                            Lifecycle event id.             ple-001
+
+  operator_code                     TEXT                               Tenant/operator.                WIK
+
+  package_id                        TEXT                               Package id.                     pkg_01HX_100M
+
+  package_version_id                TEXT NULL                          Version id.                     pkv-100m-202607
+
+  launch_plan_id                    UUID NULL                          Related launch plan.            plp-001
+
+  old_status                        TEXT NULL                          Previous status.                SCHEDULED
+
+  new_status                        TEXT                               New status.                     ACTIVE
+
+  event_type                        TEXT                               Lifecycle event type.           PACKAGE_ACTIVATED
+
+  reason_code                       TEXT                               Reason.                         SCHEDULED_LAUNCH_REACHED
+
+  actor_user_id                     TEXT NULL                          User actor if manual.           usr-product-001
+
+  source_module_code                TEXT                               Source module.                  SIP-02
+
+  metadata_json                     JSONB                              Extra context.                  {"availabilityIds":["pav-001
+                                                                                                       "]}
+
+  created_at                        TIMESTAMP                          Event timestamp.                2026-07-01T00:00:05+03:00
+
+
+ Recommended indexes:
+
+   - (operator_code, package_id, created_at DESC).
+
+   - (launch_plan_id, created_at DESC).
+
+ 5.6 package_retirement_plan
+ What it is for: stores controlled end-of-sale/end-of-life plans.
+
+ When to use it: product team wants to stop selling a package, retire a package version, or remove a package after existing
+ subscribers have migrated.
+
+ Sample meaning: prp-001 stops new sales on 2026-09-01 but keeps existing customers active until migration completes.
+
+  Column                            Type                               Purpose                         Sample
+
+  retirement_plan_id                UUID PK                            Retirement plan id.             prp-001
+
+  operator_code                     TEXT                               Tenant/operator.                WIK
+
+  package_id                        TEXT                               Package id.                     pkg_01HX_OLD50
+
+  package_version_id                TEXT NULL                          Optional version id.            pkv-old50-202601
+
+  retirement_type                   TEXT                               END_OF_SALE, END_OF_LIFE,       END_OF_SALE
+                                                                       RETIRE_VERSION.
+
+  effective_at                      TIMESTAMP                          Effective timestamp.            2026-09-01T00:00:00+03:00
+
+  existing_subscriber_policy        TEXT                               KEEP_AS_IS, MIGRATE_REQUIRED,   KEEP_AS_IS
+                                                                       BLOCK_RENEWAL.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 5
+  Column                            Type                            Purpose                              Sample
+
+  migration_workflow_ref            TEXT NULL                       SUB/FUL workflow if migration        SUB-WF-MIGRATION-01
+                                                                    needed.
+
+  approval_request_id               TEXT NULL                       EM-CFG-04 approval id if required.   apr-prp-001
+
+  status                            TEXT                            DRAFT, PENDING_APPROVAL,             SCHEDULED
+                                                                    APPROVED, SCHEDULED, COMPLETED,
+                                                                    CANCELLED.
+
+  created_by_user_id                TEXT                            Requester.                           usr-product-001
+
+  created_at                        TIMESTAMP                       Creation timestamp.                  2026-08-15T09:00:00Z
+
+  completed_at                      TIMESTAMP NULL                  Completion timestamp.                2026-09-01T00:00:04+03:00
+
+
+ Recommended indexes:
+
+   - (operator_code, package_id, status).
+
+   - (status, effective_at).
+
+
+
+ 6. APIs
+ 6.1 Create Launch Plan
+           POST /api/package-launch-plans
+           Idempotency-Key: package-launch-FIBER_100M_RES-pkv-202607
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "packageId": "pkg_01HX_100M",
+               "packageCode": "FIBER_100M_RES",
+               "packageVersionId": "pkv-100m-202607",
+               "launchType": "FIRST_LAUNCH",
+               "requestedLaunchAt": "2026-07-01T00:00:00+03:00",
+               "effectiveTimezone": "Africa/Nairobi",
+               "availability": [
+                 {
+                    "franchiseId": "fr-019",
+                    "techRegionCode": "NRB-WEST",
+                    "channelCode": "SALES_APP"
+                 },
+                 {
+                    "franchiseId": "fr-019",
+                    "techRegionCode": "NRB-WEST",
+                    "channelCode": "BACKOFFICE"
+                 }
+               ]
+           }
+
+ Response:
+           {
+               "launchPlanId": "plp-001",
+               "status": "DRAFT"
+           }
+
+
+ 6.2 Validate Launch Plan
+           POST /api/package-launch-plans/{launch_plan_id}/validate
+
+ SIP-02 checks:
+
+   - SIP-01 package exists and version exists;
+
+   - package is in a launchable state;
+
+   - package composition services are active in PLM-CFG-01;
+
+   - tax group is valid in PLM-CFG-02;
+
+   - wallet configuration is valid in PLM-CFG-03;
+
+   - billing event compatibility exists in BIL-CFG-01;
+
+   - requested availability matches package target franchise/region restrictions;
+
+
+
+SOPHIX BSS Design Documents                                                                                                     Page 6
+   - Drools launch readiness rules pass or warn.
+
+ 6.3 Submit Launch Plan For Approval
+          POST /api/package-launch-plans/{launch_plan_id}/submit-review
+          Content-Type: application/json
+
+          {
+              "requesterUserId": "usr-product-001",
+              "comment": "Ready for Nairobi launch."
+          }
+
+ SIP-02 calls EM-CFG-04:
+          POST /api/approvals/evaluate
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "moduleCode": "SIP-02",
+              "actionCode": "PACKAGE_LAUNCH_APPROVAL",
+              "subjectType": "PACKAGE_LAUNCH_PLAN",
+              "subjectId": "plp-001",
+              "context": {
+                "launchType": "FIRST_LAUNCH",
+                "packageCode": "FIBER_100M_RES",
+                "requestedLaunchAt": "2026-07-01T00:00:00+03:00",
+                "channelCodes": ["SALES_APP", "BACKOFFICE"],
+                "franchiseCount": 1,
+                "techRegionCount": 1
+              }
+          }
+
+ If approval is required, SIP-02 starts an approval request through EM-CFG-04 and stores approval_request_id.
+ Approvers act through EM-CFG-04 task APIs.
+
+ 6.4 Approval Outcome Callback
+          POST /internal/package-launch-plans/{launch_plan_id}/approval-outcome
+          Content-Type: application/json
+
+          {
+              "approvalRequestId": "apr-plp-001",
+              "outcome": "APPROVED",
+              "decisionComment": "Approved for WIK Nairobi launch."
+          }
+
+ If approved, SIP-02 moves the plan to APPROVED or SCHEDULED. If rejected, status becomes REJECTED.
+
+ 6.5 Activate Launch Plan
+          POST /api/package-launch-plans/{launch_plan_id}/activate
+
+ Manual activation is allowed only if:
+
+   - launch is approved;
+
+   - requested launch time is now or past;
+
+   - final validation has no FAIL;
+
+   - package version has not been superseded or cancelled.
+
+ Scheduled activation should be performed by a worker.
+
+ 6.6 Get Available Packages
+ Used by Backoffice, sales app, order capture, self-care, and API consumers.
+          GET /api/packages/available?operatorCode=WIK&channelCode=SALES_APP&franchiseId=fr-019&techRegionCode=NRB-WEST&onDate=2026-
+
+ Response:
+          {
+              "packages": [
+                {
+                  "packageId": "pkg_01HX_100M",
+                  "packageCode": "FIBER_100M_RES",
+                  "packageVersionId": "pkv-100m-202607",
+                  "displayName": "Fiber 100M Residential",
+                  "price": 3000.00,
+
+
+SOPHIX BSS Design Documents                                                                                         Page 7
+                      "currency": "KES",
+                      "billingFrequencyDays": 30,
+                      "availableChannels": ["SALES_APP", "BACKOFFICE"]
+                  }
+              ]
+          }
+
+
+ 6.7 Suspend Package Availability
+          POST /api/packages/{package_id}/availability/suspend
+          Content-Type: application/json
+
+          {
+              "packageVersionId": "pkv-100m-202607",
+              "franchiseId": "fr-019",
+              "techRegionCode": "NRB-WEST",
+              "channelCode": "SALES_APP",
+              "reasonCode": "TEMPORARY_PROVISIONING_ISSUE",
+              "comment": "ONT stock shortage in Nairobi West."
+          }
+
+
+ 6.8 Resume Package Availability
+          POST /api/packages/{package_id}/availability/resume
+          Content-Type: application/json
+
+
+ 6.9 Create Retirement Plan
+          POST /api/package-retirement-plans
+          Idempotency-Key: package-retire-OLD50-20260901
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "packageId": "pkg_01HX_OLD50",
+              "retirementType": "END_OF_SALE",
+              "effectiveAt": "2026-09-01T00:00:00+03:00",
+              "existingSubscriberPolicy": "KEEP_AS_IS",
+              "reasonCode": "PRODUCT_REPLACED_BY_100M"
+          }
+
+
+
+
+ 7. Business Rules
+  Rule                                          Description                                           Reason
+
+  R-SIP-02-01                                   A package version can be launched only if package     Prevent orphan launch.
+                                                and version exist in SIP-01.
+
+  R-SIP-02-02                                   Package composition services must be active in        Prevent unsellable package.
+                                                PLM-CFG-01.
+
+  R-SIP-02-03                                   Wallet and tax configuration must be valid for        Billing correctness.
+                                                operator/currency/region.
+
+  R-SIP-02-04                                   Availability scope must be inside package version     Commercial control.
+                                                target franchises/regions.
+
+  R-SIP-02-05                                   Launch approval must be evaluated through             Shared approval governance.
+                                                EM-CFG-04.
+
+  R-SIP-02-06                                   Camunda is used only when EM-CFG-04 approval          Avoid unnecessary workflow complexity.
+                                                mode is BPMN.
+
+  R-SIP-02-07                                   Activation must run final validation immediately      Avoid stale launch checks.
+                                                before status changes.
+
+  R-SIP-02-08                                   Activating a new version updates package              Protect existing subscriptions.
+                                                current_version_id for new sales only.
+
+  R-SIP-02-09                                   END_OF_SALE blocks new sales but does not             Customer continuity.
+                                                terminate existing subscriptions.
+
+  R-SIP-02-10                                   Retirement requiring customer migration must          Avoid orphan customers.
+                                                reference SUB/FUL migration workflow.
+
+  R-SIP-02-11                                   Per-franchise/channel availability can be suspended   Localized operational control.
+                                                without changing master package status.
+
+  R-SIP-02-12                                   Package activation must publish events for            Prevent stale sales options.
+                                                frontend/API cache refresh.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 8
+ 8. Rule Engine Guidance
+ Use Drools for configurable launch and availability decisions:
+
+  Rule file                                                            Purpose
+
+  package-launch-readiness.drl                                         Adds operator-specific validation, warnings, and hard stops before approval.
+
+  package-launch-approval.drl                                          Decides approval policy code or auto-approval context before EM-CFG-04 call.
+
+  package-availability.drl                                             Controls channel/franchise/region availability where policy is not a simple DB
+                                                                       filter.
+
+  package-retirement-policy.drl                                        Decides whether end-of-sale/end-of-life requires approval or migration plan.
+
+
+ Example:
+              package com.sophix.catalog.package_lifecycle
+
+              rule "First launch to sales app requires commercial approval"
+              when
+                $p : PackageLaunchFact(launchType == "FIRST_LAUNCH", channelCodes contains "SALES_APP")
+                $d : PackageLaunchDecision()
+              then
+                $d.setApprovalRequired(true);
+                $d.setApprovalPolicyCode("PACKAGE_LAUNCH_COMMERCIAL");
+                $d.addReason("FIRST_LAUNCH_SALES_APP");
+              end
+
+ Fixed checks such as package existence, version existence, required fields, and idempotency remain normal application
+ validation.
+
+
+
+ 9. Events
+  Event                             Topic                              When emitted                              Consumers
+
+  PackageLaunchPlanCreated          sophix.catalog.package.launc       Launch plan created.                      Backoffice, REP.
+                                    h-plan-created
+
+  PackageLaunchValidated            sophix.catalog.package.launc       Validation completed.                     Backoffice.
+                                    h-validated
+
+  PackageLaunchApprovalRequire      sophix.catalog.package.launc       EM-CFG-04 request started.                Backoffice, ICN.
+  d                                 h-approval-required
+
+  PackageLaunchApproved             sophix.catalog.package.launc       Approval completed.                       Backoffice, REP.
+                                    h-approved
+
+  PackageActivated                  sophix.catalog.package.activ       Package/version becomes active.           FUL-02, sales app cache, Backoffice,
+                                    ated                                                                         REP.
+
+  PackageAvailabilityChanged        sophix.catalog.package.avail       Availability                              FE apps, FUL-02, API cache.
+                                    ability-changed                    added/suspended/resumed/ended.
+
+  PackageEndOfSale                  sophix.catalog.package.end-o       Package no longer sellable.               Sales apps, order capture.
+                                    f-sale
+
+  PackageRetired                    sophix.catalog.package.retir       Package/version archived.                 REP, audit.
+                                    ed
+
+
+
+
+ 10. Frontend And API Consumers
+  Frontend area                               APIs/modules used                                    Notes
+
+  Product Backoffice                          SIP-01 package APIs plus SIP-02 launch APIs          Create package in SIP-01, launch it through SIP-02.
+
+  Approval inbox                              EM-CFG-04 task APIs                                  Launch approval tasks are not local SIP-02 tasks.
+
+  Backoffice order capture                    GET /api/packages/available                          Lists sellable packages for selected customer
+                                                                                                   location/channel.
+
+  Sales outdoor app                           GET /api/packages/available through                  Must filter by franchise, territory, HomePass/region,
+                                              FUL-02 quote flow                                    and channel.
+
+  Self-care                                   GET /api/packages/available with                     Only eligible package changes shown.
+                                              customer/subscription context
+
+  Reporting                                   SIP-02 events and read models                        Launch pipeline, availability, package lifecycle KPIs.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                      Page 9
+ 11. Worker Model
+ Workers can be consolidated with catalog/commercial workers.
+
+  Worker job                                       Purpose                                                   Frequency
+
+  package-launch-activation                        Activates approved scheduled launch plans when            Every minute or event-driven.
+                                                   due.
+
+  package-cutover-runner                           Updates current version and supersedes old                Every minute or due queue.
+                                                   version.
+
+  package-retirement-runner                        Executes approved end-of-sale/end-of-life plans.          Every 5 minutes.
+
+  package-lifecycle-outbox-publish                 Publishes lifecycle events.                               Continuous/short interval.
+
+  package-availability-cache-refresh               Refreshes read cache after lifecycle changes.             Event-driven.
+
+
+ These are command/job types, not necessarily separate deployments.
+
+
+
+ 12. Infrastructure Recommendations
+ For a medium budget deployment, SIP-02 should run inside the catalog/commercial API deployment together with
+ SIP-01/SIP-03/SIP-04/SIP-05 unless load proves otherwise.
+
+  Component                                                                      Recommendation
+
+  API                                                                            Same catalog API service exposes /api/package-launch-plans,
+                                                                                 /api/packages/available, and retirement APIs.
+
+  Database                                                                       Catalog schema in PostgreSQL.
+
+  Cache                                                                          Redis for package availability read model, invalidated by lifecycle events.
+
+  Workers                                                                        Shared catalog worker deployment.
+
+  Rules                                                                          Use existing Drools/KIE foundation.
+
+  Approval                                                                       Use EM-CFG-04 and existing Camunda only for BPMN-backed policies.
+
+
+ Suggested medium starting size:
+
+  Layer                                                                          Starting size
+
+  Catalog API pods                                                               2 replicas, 2 vCPU, 4 GB RAM each.
+
+  Catalog workers                                                                1 replica, 2 vCPU, 4 GB RAM.
+
+  PostgreSQL                                                                     Shared catalog/business DB; no separate DB for SIP-02.
+
+  Redis                                                                          Shared cache namespace catalog:package-availability.
+
+
+
+
+ 13. AWS Deployment Notes
+  AWS layer                                                                      Recommendation
+
+  Compute                                                                        ECS/EKS service colocated with catalog API and worker.
+
+  Database                                                                       RDS PostgreSQL, same catalog/business DB cluster.
+
+  Cache                                                                          ElastiCache Redis for availability cache.
+
+  Events                                                                         MSK or Kafka-compatible broker using catalog topics.
+
+  Secrets                                                                        AWS Secrets Manager for DB, service tokens, KIE, and EM-CFG-04
+                                                                                 credentials.
+
+  Scheduling                                                                     EventBridge can trigger worker tasks if not using internal scheduler.
+
+
+ Keep package availability cache small and invalidation-driven. A stale sales package list directly affects customer onboarding.
+
+
+
+ 14. Testing Guidance
+  Test                                                                           Expected result
+
+  Launch package without existing SIP-01 version                                 Validation fails.
+
+
+SOPHIX BSS Design Documents                                                                                                                              Page 10
+  Test                                                                 Expected result
+
+  Launch package with inactive service                                 Validation FAIL, cannot submit review.
+
+  Launch requiring approval                                            EM-CFG-04 request created; SIP-02 waits for callback.
+
+  EM-CFG-04 rejection                                                  Launch plan becomes REJECTED, package remains not sellable.
+
+  Scheduled activation due                                             Package/version becomes active and availability rows become active.
+
+  Activation final validation fails                                    Launch remains blocked and event/alert created.
+
+  Available packages query by franchise/channel                        Only active matching package versions returned.
+
+  Suspend availability                                                 Sales app no longer sees package for that scope.
+
+  End of sale                                                          New sales blocked, existing subscription references remain valid.
+
+  Version cutover                                                      current_version_id changes for new sales only.
+
+
+
+
+ 15. Acceptance Criteria
+   - SIP-02 launch plan, check, availability, cutover, lifecycle event, and retirement tables exist.
+
+   - Package launch validates SIP-01, PLM-CFG, and BIL-CFG dependencies.
+
+   - Launch approval is routed through EM-CFG-04; SIP-02 does not hardcode approval steps.
+
+   - Drools rule files exist for configurable readiness, approval, availability, and retirement policy.
+
+   - Activation updates package/version current state for new sales without changing existing subscriptions.
+
+   - GET /api/packages/available is usable by Backoffice, sales app, order capture, and self-care.
+
+   - Lifecycle and availability events are emitted through outbox.
+
+   - Tests cover validation, approval callbacks, activation, suspension, end-of-sale, and version cutover.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 11
+

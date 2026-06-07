@@ -1,0 +1,1272 @@
+ DD: PLM-CFG-06 — Equipment Type Catalog
+ Developer implementation guide: DD_PLM-CFG-06-Equipment_Type_Catalog-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract
+ DD_PLM-CFG-06-Equipment_Type_Catalog-v1.0.md.
+
+ Verdict: ■ New | Wave: 2 | Group P: Catalogs (PLM family) | Version: v1.0 | Module: Product Lifecycle Management —
+ Equipment Catalog The system of record for all physical equipment types Wananchi installs at customer premises or holds
+ in stock: routers, ONTs, set-top boxes, splitters, customer-premises cables, wall sockets, mounting kits — every SKU the
+ operator stocks, ships, installs, or returns. Owned at operator scope. Referenced by WO module (work orders bind equipment
+ to install jobs), by OSR-01 Stock Chain Engine (pending, owns stock balances), by FUL-02 STEP-PAYMENT (calculates
+ equipment fees), and by BIL-01 charging (for one-time equipment charges). Retires wo_equipment_ref_stub
+ (DD_WO-01-FRAMEWORK §9.3) — the placeholder schema WO module has been using for equipment-binding at WO
+ finalization is replaced by this DD's structured catalog plus a clean WO→catalog FK.
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    9_catalogs/DD_PLM-CFG-06-Equipment_Type_Catalog-v1.0.md
+
+  Version                                                           v1.0
+
+  DD type                                                           module contract
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   Not explicitly defined
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+   - GET /api/equipment-compatibility?operatorCode=WIK&sourceSkuId=WIK-ONT-HG8245-H5
+
+   - GET /api/equipment-kinds?operatorCode=WIK&active=true
+
+   - GET /api/equipment-skus/{id}/fees
+
+   - GET /api/equipment-skus/{sku_id}
+
+   - GET /api/equipment-skus/{sku_id}/compatibility
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+   - GET /api/equipment-skus/{sku_id}/fees
+
+   - GET /api/equipment-skus?operatorCode=WIK&active=true&kindCode=ONT
+
+   - GET /api/equipment-skus?operatorCode=X
+
+   - GET /api/equipment-skus?operatorCode=X&kindCode=Y
+
+   - PATCH /api/equipment-compatibility/{id}
+
+   - PATCH /api/equipment-kinds/{operator}/{kind_code}
+
+   - PATCH /api/equipment-skus/{sku_id}
+
+   - POST /api/equipment-compatibility
+
+   - POST /api/equipment-kinds
+
+   - POST /api/equipment-skus
+
+   - POST /api/equipment-skus/validate
+
+   - POST /api/equipment-skus/{sku_id}/fees
+
+ 4.2 Tables
+   - equipment_compatibility
+
+   - equipment_fee
+
+   - equipment_kind
+
+   - equipment_sku
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - No worker topics are explicitly declared in this DD.
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - EquipmentCompatibilityChanged
+
+   - EquipmentFeeChanged
+
+   - EquipmentKindCreated
+
+   - EquipmentSkuCreated
+
+   - EquipmentSkuDeactivated
+
+   - EquipmentSkuUpdated
+
+   - WorkOrderEquipmentBound
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 2
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                           Recommendation
+
+  API/runtime                                                       Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                           Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                          Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                             Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                           Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                            Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                           Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                    Store with IRSA.
+
+  Observability                                                     Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                    dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ New | Wave: 2 | Group P: Catalogs (PLM family) | Version: v1.0 | Module: Product Lifecycle Management —
+ Equipment Catalog
+
+ The system of record for all physical equipment types Wananchi installs at customer premises or holds in stock: routers,
+ ONTs, set-top boxes, splitters, customer-premises cables, wall sockets, mounting kits — every SKU the operator stocks,
+ ships, installs, or returns. Owned at operator scope. Referenced by WO module (work orders bind equipment to install jobs),
+ by OSR-01 Stock Chain Engine (pending, owns stock balances), by FUL-02 STEP-PAYMENT (calculates equipment fees),
+ and by BIL-01 charging (for one-time equipment charges).
+
+ Retires wo_equipment_ref_stub (DD_WO-01-FRAMEWORK §9.3) — the placeholder schema WO module has been
+ using for equipment-binding at WO finalization is replaced by this DD's structured catalog plus a clean WO→catalog FK.
+
+
+
+ 1. What this module is
+ When a Wananchi installer arrives at Hon. Sarah Wanjiku's address with a router, an ONT, and a wall socket, every piece of
+ equipment they leave behind needs an identity. That identity has several axes: what kind of thing is it (router, ONT, splitter,
+ …), what brand + model is it (Huawei HG8245H5, MikroTik hAP ac², …), what SKU does the operator inventory it under
+ (WIK-RTR-HG8245-H5), how much does it cost the customer (deposit + monthly rental), and is it a returnable / consumable /
+
+SOPHIX BSS Design Documents                                                                                                                   Page 3
+ one-shot. This DD owns all of that.
+
+ The catalog is structural and operator-scoped — each operator catalogs their own equipment, sometimes overlapping
+ (Huawei HG8245H5 is sold in KE and UG, with different SKUs and prices). The catalog is read by every module that touches
+ equipment in any way: stock chain, work orders, fulfillment, billing, audit.
+
+ What this module does
+   1. Catalog equipment SKUs — operator-scoped, the master identifier (e.g., WIK-RTR-HG8245-H5) that all other modules
+     reference.
+
+   2. Classify equipment by kind — operator-extensible kind hierarchy: ROUTER, ONT, STB, SPLITTER, WALL_SOCKET,
+     CABLE_PATCH, MOUNTING_KIT, EXTERNAL_ANTENNA, etc. Used by WO module to validate "an install WO must include
+     exactly one ROUTER + exactly one ONT".
+
+   3. Record brand + model — manufacturer + model number, for ordering, returns, RMA workflows, and customer support
+     context.
+
+   4. Define equipment fees — one-time install fees, monthly rental fees, deposit (refundable on return). Currency follows
+     operator. References to PLM-CFG-04 discount eligibility codes for promo bundling.
+
+   5. Define equipment ownership semantics — RETURNABLE (customer must return on disconnect; refundable deposit),
+     CONSUMABLE (no return expected; e.g., a wall socket is left in place), ONE_SHOT (e.g., a cable is consumed at install time;
+     no return), or RENTED (Wananchi-owned, customer keeps custody but ownership stays with operator).
+
+   6. Surface stock signals (read-only from OSR-01) — does this SKU have stock available right now? (This is a
+     read-through to OSR-01; PLM-CFG-06 does not store stock balances. For v1.0 with OSR-01 pending, PLM-CFG-06
+     surfaces a placeholder "stock-status-unknown" via OSR-01 stub.)
+
+   7. Record compatibility constraints — operator-extensible compatibility rules between SKUs (e.g., "this ONT requires this
+     specific splitter type"; "this router is incompatible with this ONT firmware"). v1.0 ships a minimal compatibility table; full
+     constraint resolution lives in WO module.
+
+   8. Track equipment-fee history — fee changes are versioned (effective_from / effective_to); historical WO +
+     invoice queries resolve to the fee active at the time of the install / billing event.
+
+ What this module does NOT do
+   - Doesn't track stock balances or movements. Where the SKU is physically located, how many are in central warehouse
+     vs. contractor van vs. customer premises — all OSR-01 (pending). PLM-CFG-06 is the *definition*; OSR-01 is the
+     *quantity + location*.
+
+   - Doesn't track individual equipment instances. Each physical router has a serial number; that data lives in OSR-01
+     (equipment_instance table per OSR-01 plan). PLM-CFG-06 carries only the SKU/type level.
+
+   - Doesn't own provisioning configuration. Which firmware, which provisioning profile, which RADIUS realm — those
+     belong to provisioning modules (FUL-03 + downstream). PLM-CFG-06 records "this is a Huawei HG8245H5"; what gets
+     pushed to it lives elsewhere.
+
+   - Doesn't manage RMA / return workflows. RMA, repair, refurbishment, write-off — all OSR-01 + WO module (return work
+     orders). PLM-CFG-06 supplies the SKU metadata they need.
+
+   - Doesn't manage contracts with equipment vendors. Vendor procurement (POs, vendor SLAs, lead times) is EM-02
+     (pending — Procurement / Contractor Registry) or a dedicated procurement DD. PLM-CFG-06 just records
+     "brand=Huawei", not "we source it from Huawei East Africa via vendor PO #12345".
+
+   - Doesn't model packaged bundles. A "starter kit" combining router + ONT + cables is a package modeled in SIP-01
+     (Package Management) or PLM-CFG-01 (Service Catalog), not here. PLM-CFG-06 records the individual SKUs that
+     bundles reference.
+
+ Regional flexibility
+ Different operators stock different equipment based on network technology, regional vendor relationships, and regulatory
+ constraints:
+
+   - WIK (Kenya) — primarily Huawei + ZTE for ONTs (Wananchi's GPON network), MikroTik + TP-Link for routers,
+     locally-procured patch cables and wall sockets. Kenya allows direct import; SKU codes follow WIK-<KIND>-<MODEL>
+     convention.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 4
+   - WUG (Uganda) — similar to WIK on technology (also GPON), but local vendor relationships and import constraints differ;
+     some SKUs are UG-specific even for the same physical device. SKU prefix WUG-.
+
+   - WTZ (Tanzania) — TBD; pending workshop. Likely smaller equipment range. SKU prefix WTZ-.
+
+   - YASSN (Senegal) — different vendor mix: Senegal market favors Sagemcom + Huawei. SKU prefix YASSN-.
+     French-language display names; deposit amounts in XOF currency.
+
+ The schema accommodates all four via:
+
+   - Operator-scoped SKU IDs (each operator's catalog is independent)
+
+   - TEXT-typed kind_code enum-style values (operator-extensible — new kinds land via config, not DDL)
+
+   - Currency-aware fee columns (fee_currency per row)
+
+   - Multi-language display names (display_name_primary + display_name_secondary) for bilingual operators
+
+ Glossary
+  Term                                                           Meaning
+
+  Equipment                                                      Any physical item Wananchi installs, ships, holds in stock, or returns. Includes
+                                                                 both customer-side (router, ONT, STB, wall socket, cables at premises) and
+                                                                 operator-side (network equipment is OUT of scope — that's RLM/NMS).
+
+  SKU                                                            Stock Keeping Unit — the operator's master identifier for one variant of one
+                                                                 product. Two routers with the same brand+model but different firmware versions
+                                                                 sold for different prices are two SKUs.
+
+  Kind                                                           The functional category — what does this device DO. ROUTER, ONT, STB,
+                                                                 SPLITTER, WALL_SOCKET, etc. Operator-extensible.
+
+  Brand + model                                                  Manufacturer identification (Huawei, ZTE, MikroTik, Sagemcom) + their model
+                                                                 designation (HG8245H5, ZXHN H267A, hAP ac², F@st 3686).
+
+  Ownership semantics                                            Whether the customer can keep the equipment, must return it, must pay a
+                                                                 deposit, etc. Drives disconnect-flow + dunning-flow behaviors. RETURNABLE /
+                                                                 CONSUMABLE / ONE_SHOT / RENTED.
+
+  Install fee                                                    One-time charge applied at install for this equipment, in addition to subscription
+                                                                 fees. Workshop term often "activation fee" but the catalog separates
+                                                                 equipment-specific from service-activation.
+
+  Monthly rental                                                 Recurring monthly charge for equipment use; applied via BIL-01 as a recurring
+                                                                 line item. For RETURNABLE ownership, monthly rental continues until equipment
+                                                                 is returned.
+
+  Deposit                                                        Refundable amount charged at install, refunded (via PLM-CFG-05 adjustment)
+                                                                 when equipment is returned in working condition. Only applies to RETURNABLE
+                                                                 SKUs.
+
+  Compatibility                                                  A rule restricting which SKUs can be installed together (e.g., "ONT-X requires
+                                                                 SPLITTER-Y"). Read by WO module at WO finalization to flag invalid
+                                                                 equipment combinations.
+
+
+
+
+ 2. Tables overview + relationships
+ 2.1 Tables overview
+ PLM-CFG-06 owns four tables:
+
+  Table                                                          Purpose
+
+  equipment_kind                                                 Operator-extensible catalog of equipment kinds (ROUTER, ONT, STB, etc.).
+
+  equipment_sku                                                  The master SKU catalog: brand, model, kind, ownership semantics, display
+                                                                 names.
+
+  equipment_fee                                                  Time-versioned fee schedule per SKU: install fee, monthly rental, deposit,
+                                                                 currency.
+
+  equipment_compatibility                                        Rule rows defining which SKUs require / conflict with which other SKUs.
+
+
+ Full DDL in §3.
+
+ 2.2 Cross-DD anchoring
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 5
+   - WO module FRAMEWORK §9.3 — currently uses wo_equipment_ref_stub for equipment binding at finalization; this
+     DD retires that stub. The retirement plan is in §8.
+
+   - OSR-01 Stock Chain Engine (pending) — will reference equipment_sku.sku_id as the FK for every stock-movement
+     row, every inventory balance, every individual equipment instance.
+
+   - FUL-02 STEP-PAYMENT — reads equipment_fee to add install fee + first month's rental to the order payment
+     calculation.
+
+   - BIL-01 Charging Engine — applies monthly rental as a recurring line on the customer's account via the
+     equipment_fee.monthly_rental value resolved at billing-cycle time (versioned read).
+
+   - PLM-CFG-04 Discount Catalog — equipment SKUs may be discountable; discount eligibility codes can target specific
+     SKUs (e.g., "free router with annual prepay" promo).
+
+   - PLM-CFG-05 Adjustment Type Catalog — deposit refunds at disconnect are issued via adjustment codes
+     (ADJ-EQUIPMENT-DEPOSIT-RETURN) defined in PLM-CFG-05; this DD doesn't own the refund mechanism, just the
+     deposit amount.
+
+
+
+ 3. Schemas
+ 3.1 equipment_kind
+ Operator-extensible catalog of equipment kinds. New kinds added without DDL.
+           CREATE TABLE equipment_kind (
+              operator_code         TEXT NOT NULL,
+              kind_code             TEXT NOT NULL,                  -- 'ROUTER' | 'ONT' | 'STB' | 'SPLITTER' | 'WALL_SOCKET' | 'CABLE_
+              display_name_primary TEXT NOT NULL,                   -- 'Router' | 'Optical Network Terminal' | 'Set-top Box'
+              display_name_secondary TEXT NULL,                     -- bilingual; YASSN uses French
+              description           TEXT NULL,
+              is_install_required   BOOLEAN NOT NULL DEFAULT FALSE, -- TRUE = WO must include at least one SKU of this kind
+              install_role          TEXT NULL,                      -- 'CPE-PRIMARY' | 'CPE-SECONDARY' | 'CABLING' | 'NONE' — informat
+              active                BOOLEAN NOT NULL DEFAULT TRUE,
+              display_order         INTEGER NOT NULL DEFAULT 100,
+              created_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+              updated_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+              updated_by            TEXT NOT NULL,
+              PRIMARY KEY (operator_code, kind_code)
+           );
+
+           CREATE INDEX idx_eq_kind_active ON equipment_kind (operator_code, active);
+
+ Sample data:
+
+  operator_code         kind_code           display_name_primary   display_name_secondar   is_install_required   install_role
+                                                                   y
+
+  WIK                   ROUTER              Router                 NULL                    true                  CPE-PRIMARY
+
+  WIK                   ONT                 Optical Network        NULL                    true                  CPE-PRIMARY
+                                            Terminal
+
+  WIK                   STB                 Set-top Box            NULL                    false                 CPE-SECONDARY
+
+  WIK                   SPLITTER            Optical Splitter       NULL                    false                 CABLING
+
+  WIK                   WALL_SOCKET         Wall Socket /          NULL                    false                 CABLING
+                                            Faceplate
+
+  WIK                   CABLE_PATCH         Patch Cable            NULL                    false                 CABLING
+
+  WIK                   MOUNTING_KIT        Mounting Kit           NULL                    false                 NONE
+
+  WUG                   ROUTER              Router                 NULL                    true                  CPE-PRIMARY
+
+  WUG                   ONT                 Optical Network        NULL                    true                  CPE-PRIMARY
+                                            Terminal
+
+  WUG                   STB                 Set-top Box            NULL                    false                 CPE-SECONDARY
+
+  YASSN                 ROUTER              Router                 Routeur                 true                  CPE-PRIMARY
+
+  YASSN                 ONT                 Optical Network        Terminal Optique        true                  CPE-PRIMARY
+                                            Terminal
+
+  YASSN                 STB                 Set-top Box            Décodeur                false                 CPE-SECONDARY
+
+
+ is_install_required lets WO module validate at finalization that an install WO has equipment from each required kind.
+ KE/UG/SN all require a ROUTER + an ONT on install per current network architecture; STB is optional (only IPTV
+
+SOPHIX BSS Design Documents                                                                                                     Page 6
+ customers); cabling kinds are flexible.
+
+ YASSN rows include display_name_secondary in French (the rest is operator-language-default).
+
+ 3.2 equipment_sku
+ The master SKU catalog.
+           CREATE TABLE equipment_sku (
+              sku_id                TEXT PRIMARY KEY,               -- 'WIK-RTR-HG8245-H5' — operator-scoped, human-readable
+              operator_code         TEXT NOT NULL,
+              kind_code             TEXT NOT NULL,                  -- FK composite: (operator_code, kind_code) → equipment_kind
+              brand                 TEXT NOT NULL,                  -- 'Huawei' | 'ZTE' | 'MikroTik' | 'Sagemcom' | 'TP-Link'
+              model                 TEXT NOT NULL,                  -- 'HG8245H5' | 'ZXHN H267A' | 'hAP ac²' | 'F@st 3686' | 'Archer C
+              hardware_revision     TEXT NULL,                      -- 'rev-B' | 'v2' — distinguishes hardware revs same brand+model
+              display_name_primary TEXT NOT NULL,                   -- 'Huawei HG8245H5 (4-port Gigabit ONT)'
+              display_name_secondary TEXT NULL,                     -- bilingual
+              description           TEXT NULL,
+              ownership_semantics   TEXT NOT NULL,                  -- 'RETURNABLE' | 'CONSUMABLE' | 'ONE_SHOT' | 'RENTED'
+              vendor_part_number    TEXT NULL,                      -- vendor's catalog code (for procurement linkage)
+              manufacturer_country TEXT NULL,                       -- 'CN' | 'FR' | etc. — for customs/RMA reference
+              active                BOOLEAN NOT NULL DEFAULT TRUE,
+              is_serialized         BOOLEAN NOT NULL DEFAULT TRUE, -- TRUE = each instance has a serial number tracked in OSR-01
+              expected_lifecycle_months INTEGER NULL,               -- replacement-cycle hint for ops
+              notes                 TEXT NULL,
+              created_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+              updated_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+              updated_by            TEXT NOT NULL,
+              FOREIGN KEY (operator_code, kind_code) REFERENCES equipment_kind(operator_code, kind_code)
+           );
+
+           CREATE INDEX idx_sku_operator    ON equipment_sku (operator_code, active);
+           CREATE INDEX idx_sku_kind        ON equipment_sku (operator_code, kind_code, active);
+           CREATE INDEX idx_sku_brand_model ON equipment_sku (brand, model);
+
+ Sample data:
+
+  sku_id         operator_code   kind_code     brand      model         display_name_   ownership_se   is_serialized   active
+                                                                        primary         mantics
+
+  WIK-ONT-HG8    WIK             ONT           Huawei     HG8245H5      Huawei          RETURNABLE     true            true
+  245-H5                                                                HG8245H5
+                                                                        (4-port
+                                                                        Gigabit
+                                                                        ONT)
+
+  WIK-ONT-ZXH    WIK             ONT           ZTE        ZXHN H267A    ZTE ZXHN        RETURNABLE     true            true
+  N-H267A                                                               H267A
+                                                                        (Dual-band
+                                                                        Wi-Fi 6
+                                                                        ONT)
+
+  WIK-RTR-HAP    WIK             ROUTER        MikroTik   hAP ac²       MikroTik        RETURNABLE     true            true
+  -AC2                                                                  hAP ac²
+                                                                        Wireless
+                                                                        Router
+
+  WIK-RTR-ARC    WIK             ROUTER        TP-Link    Archer C50    TP-Link         RETURNABLE     true            true
+  HER-C50                                                               Archer C50
+                                                                        (AC1200
+                                                                        Wireless
+                                                                        Router)
+
+  WIK-STB-MAG    WIK             STB           Infomir    MAG420        Infomir         RETURNABLE     true            true
+  420                                                                   MAG420 IPTV
+                                                                        Set-top Box
+
+  WIK-SPL-1X8    WIK             SPLITTER      Generic    1x8-SC-APC    1x8 SC/APC      ONE_SHOT       false           true
+  -SC                                                                   Optical
+                                                                        Splitter
+
+  WIK-WS-FACE    WIK             WALL_SOCKET   Generic    Faceplate-1   Single-Gang     CONSUMABLE     false           true
+  PLATE-1G                                                G-SC          Faceplate
+                                                                        with SC/APC
+                                                                        Port
+
+  WIK-CABLE-P    WIK             CABLE_PATCH   Generic    Patch-3m-SC   3m SC/APC       ONE_SHOT       false           true
+  ATCH-3M-SC                                              -APC          Patch Cable
+
+  YASSN-ONT-F    YASSN           ONT           Sagemcom   F@st 3686     Sagemcom        RETURNABLE     true            true
+  AST3686                                                               F@st 3686
+                                                                        ONT
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                     Page 7
+  sku_id          operator_code   kind_code         brand             model           display_name_    ownership_se     is_serialized     active
+                                                                                      primary          mantics
+
+  YASSN-RTR-H     YASSN           ROUTER            MikroTik          hAP ac²         MikroTik         RETURNABLE       true              true
+  AP-AC2                                                                              hAP ac²
+                                                                                      Routeur
+
+  WUG-ONT-HG8     WUG             ONT               Huawei            HG8245H5        Huawei           RETURNABLE       true              true
+  245-H5                                                                              HG8245H5
+                                                                                      ONT
+
+  WIK-ONT-HG8     WIK             ONT               Huawei            HG8245H5        Huawei           RETURNABLE       true              false
+  245-H5-V2                                                                           HG8245H5 v2
+                                                                                      (refreshed
+                                                                                      hardware)
+
+
+ Row 6 WIK-SPL-1X8-SC: a passive optical splitter is consumed at install (cabled in, can't reasonably be returned/reused);
+ not serialized.
+
+ Row 7 WIK-WS-FACEPLATE-1G: a wall faceplate stays at the customer premises; not returnable, not serialized.
+
+ Row 8 WIK-CABLE-PATCH-3M-SC: a patch cable cut to length and terminated; not serialized.
+
+ Row 11 WUG-ONT-HG8245-H5: same physical device as row 1 (Huawei HG8245H5) but a separate SKU because the
+ operator + sourcing + warranty differ.
+
+ Row 12: a deprecated v2 SKU that's been superseded; active=false means new installs cannot use it but historical
+ records still reference it.
+
+ 3.3 equipment_fee
+ Time-versioned per-SKU fee schedule.
+           CREATE TABLE equipment_fee (
+              fee_id                TEXT PRIMARY KEY,               -- 'fee_01HZ...' ULID
+              sku_id                TEXT NOT NULL REFERENCES equipment_sku(sku_id),
+              install_fee_amount    NUMERIC(12,2) NOT NULL DEFAULT 0, -- one-time charge at install
+              monthly_rental_amount NUMERIC(12,2) NOT NULL DEFAULT 0, -- recurring monthly
+              deposit_amount        NUMERIC(12,2) NOT NULL DEFAULT 0, -- refundable; only meaningful for RETURNABLE
+              fee_currency          TEXT NOT NULL,                  -- 'KES' | 'UGX' | 'TZS' | 'XOF'
+              tax_inclusive         BOOLEAN NOT NULL DEFAULT TRUE,
+              effective_from        DATE NOT NULL,
+              effective_to          DATE NULL,                      -- NULL = current
+              notes                 TEXT NULL,
+              created_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+              created_by            TEXT NOT NULL
+           );
+
+           CREATE INDEX idx_fee_sku           ON equipment_fee (sku_id, effective_from);
+           CREATE INDEX idx_fee_sku_active    ON equipment_fee (sku_id) WHERE effective_to IS NULL;
+           CREATE UNIQUE INDEX uq_fee_sku_active
+             ON equipment_fee (sku_id) WHERE effective_to IS NULL; -- only one active fee row per SKU
+
+ The unique partial index enforces that at any given time, each SKU has at most one current fee row. To change a fee: insert a
+ new row with effective_from = today, update the previous row's effective_to = today - 1.
+
+ Sample data:
+
+  fee_id            sku_id              install_fee_amou    monthly_rental_a   deposit_amount    fee_currency       effective_from      effective_to
+                                        nt                  mount
+
+  fee_01HZ_WIK_     WIK-ONT-HG824       0                   0                  5000              KES                2023-01-01          2025-06-30
+  HG8245_V1         5-H5
+
+  fee_01HZ_WIK_     WIK-ONT-HG824       0                   0                  6500              KES                2025-07-01          NULL
+  HG8245_V2         5-H5
+
+  fee_01HZ_WIK_     WIK-ONT-ZXHN-       0                   250                7500              KES                2025-01-01          NULL
+  ZXHN_H267A        H267A
+
+  fee_01HZ_WIK_     WIK-RTR-HAP-A       0                   0                  8000              KES                2024-04-01          NULL
+  HAP_AC2           C2
+
+  fee_01HZ_WIK_     WIK-RTR-ARCHE       0                   0                  4500              KES                2024-04-01          NULL
+  ARCHER_C50        R-C50
+
+  fee_01HZ_WIK_     WIK-STB-MAG42       2500                350                4500              KES                2024-09-01          NULL
+  MAG420            0
+
+  fee_01HZ_WIK_     WIK-SPL-1X8-S       0                   0                  0                 KES                2023-01-01          NULL
+  SPL               C
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                        Page 8
+  fee_id             sku_id          install_fee_amou   monthly_rental_a   deposit_amount   fee_currency       effective_from   effective_to
+                                     nt                 mount
+
+  fee_01HZ_WIK_      WIK-WS-FACEPL   800                0                  0                KES                2023-01-01       NULL
+  FACEPLATE          ATE-1G
+
+  fee_01HZ_WIK_      WIK-CABLE-PAT   0                  0                  0                KES                2023-01-01       NULL
+  CABLE_3M           CH-3M-SC
+
+  fee_01HZ_YASS      YASSN-ONT-FAS   0                  0                  30000            XOF                2024-06-01       NULL
+  N_FAST3686         T3686
+
+  fee_01HZ_YASS      YASSN-RTR-HAP   5000               0                  40000            XOF                2024-06-01       NULL
+  N_HAP_AC2          -AC2
+
+  fee_01HZ_WUG_      WUG-ONT-HG824   0                  0                  200000           UGX                2024-01-01       NULL
+  HG8245_H5          5-H5
+
+
+ Row 1 + 2: KE Huawei ONT deposit raised from 5,000 KES to 6,500 KES on 2025-07-01. Historical WO + invoice queries for
+ the period before 2025-07-01 resolve to row 1; current installs use row 2.
+
+ Row 3 KE ZTE ONT carries a monthly rental of 250 KES (this is the higher-end Wi-Fi 6 SKU, rented rather than
+ owned-after-deposit). Note both deposit AND rental — operator can configure either or both.
+
+ Row 6 KE Set-top box: install fee + monthly rental + deposit all non-zero (IPTV is a premium tier with explicit fee structure).
+
+ Rows 7-9: passive/consumable items priced at zero (cost absorbed in install fee for the service line, not equipment-line; cable
+ cost is in WIK's labor budget).
+
+ Row 8 WIK-WS-FACEPLATE-1G: small install fee for the faceplate itself; no deposit (consumable).
+
+ 3.4 equipment_compatibility
+ Rule rows defining required-with / incompatible-with relationships between SKUs.
+            CREATE TABLE equipment_compatibility (
+               compatibility_id      TEXT PRIMARY KEY,               -- 'compat_01HZ...'
+               operator_code         TEXT NOT NULL,
+               rule_type             TEXT NOT NULL,                  -- 'REQUIRES' | 'INCOMPATIBLE_WITH' | 'RECOMMENDED_WITH'
+               source_sku_id         TEXT NOT NULL REFERENCES equipment_sku(sku_id),
+               target_sku_id         TEXT NULL,                      -- the partner SKU; NULL if rule is kind-level
+               target_kind_code      TEXT NULL,                      -- alternative: rule targets a kind (e.g., 'any ROUTER')
+               severity              TEXT NOT NULL,                  -- 'BLOCK' | 'WARN'
+               notes                 TEXT NULL,
+               effective_from        DATE NOT NULL,
+               effective_to          DATE NULL,
+               created_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+               created_by            TEXT NOT NULL,
+               CHECK ((target_sku_id IS NOT NULL) OR (target_kind_code IS NOT NULL))
+            );
+
+            CREATE INDEX idx_compat_operator ON equipment_compatibility (operator_code);
+            CREATE INDEX idx_compat_source   ON equipment_compatibility (source_sku_id) WHERE effective_to IS NULL;
+
+ rule_type:
+
+   - REQUIRES — source SKU MUST be paired with target SKU (or target kind) in the same WO. Used for: "this ONT requires
+     the matching splitter".
+
+   - INCOMPATIBLE_WITH — source SKU cannot be paired with target. Used for firmware mismatches, regulatory restrictions.
+
+   - RECOMMENDED_WITH — soft hint to dispatcher / installer; not enforced.
+
+ severity:
+
+   - BLOCK — WO module rejects the WO finalization if rule is violated.
+
+   - WARN — WO module flags the WO for review but allows it.
+
+ Sample data:
+
+  compatibility_id   operator_code   rule_type          source_sku_id      target_sku_id    target_kind_code   severity         notes
+
+  compat_01HZ_H      WIK             REQUIRES           WIK-ONT-HG824      NULL             ROUTER             BLOCK            Bridge-mode
+  G8245_NEEDS_R                                         5-H5                                                                    ONT — needs a
+  TR                                                                                                                            separate router
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                               Page 9
+  compatibility_id   operator_code   rule_type       source_sku_id   target_sku_id        target_kind_code     severity              notes
+
+  compat_01HZ_Z      WIK             INCOMPATIBLE_   WIK-ONT-ZXHN-   NULL                 ROUTER               WARN                  ONT has
+  XHN_NO_RTR                         WITH            H267A                                                                           integrated Wi-Fi
+                                                                                                                                     6; external router
+                                                                                                                                     redundant but not
+                                                                                                                                     harmful
+
+  compat_01HZ_M      WIK             REQUIRES        WIK-STB-MAG42   NULL                 ROUTER               BLOCK                 STB needs
+  AG420_NEEDS_R                                      0                                                                               Ethernet to a
+  TR                                                                                                                                 router
+
+  compat_01HZ_H      WIK             REQUIRES        WIK-ONT-HG824   WIK-SPL-1X8-S        NULL                 WARN                  Soft recommend
+  G8245_NEEDS_S                                      5-H5            C                                                               the standard
+  PL                                                                                                                                 splitter; field
+                                                                                                                                     engineer may sub
+
+  compat_01HZ_Y      YASSN           REQUIRES        YASSN-ONT-FAS   NULL                 ROUTER               BLOCK                 Bridge-mode
+  ASSN_FAST_RTR                                      T3686                                                                           ONT
+
+
+ Row 1: an install WO that includes WIK-ONT-HG8245-H5 must also include some ROUTER SKU (the rule doesn't say which
+ router — operator-defined; the dispatcher picks based on tier). If the WO is finalized without a ROUTER, WO module rejects it
+ with rule reference compat_01HZ_HG8245_NEEDS_RTR.
+
+ Row 2: a soft warn — a WO combining ZXHN ONT (which has Wi-Fi 6 built in) with another router will go through but with a
+ warning logged for the dispatcher to review.
+
+
+
+ 4. Rules
+  Rule                                                               Description
+
+  R-PLM-EQ-1                                                         A sku_id is operator-scoped and human-readable, conventionally
+                                                                     <OPERATOR>-<KIND-ABBR>-<MODEL-ABBR> (e.g., WIK-RTR-HG8245-H5).
+                                                                     The ID is stable across fee changes, brand corrections, hardware revisions (use
+                                                                     a new SKU if hardware diverges substantively).
+
+  R-PLM-EQ-2                                                         An equipment_sku row with active=false is hidden from new-install WO
+                                                                     equipment-pickers and from FUL-02 STEP-PAYMENT calculations. Historical
+                                                                     WO + invoice rows still resolve via the SKU FK; the row remains queryable.
+
+  R-PLM-EQ-3                                                         At any moment, each sku_id has exactly zero or one equipment_fee row
+                                                                     with effective_to IS NULL (the current fee). The partial UNIQUE index
+                                                                     enforces this. Fee changes are append + close-previous in a single transaction.
+
+  R-PLM-EQ-4                                                         Historical fee resolution: BIL-01 charging at billing-cycle time uses the fee row
+                                                                     where effective_from <= billing_period_start AND
+                                                                     (effective_to IS NULL OR effective_to >=
+                                                                     billing_period_start). FUL-02 STEP-PAYMENT at order capture uses
+                                                                     the fee row active on NOW().
+
+  R-PLM-EQ-5                                                         ownership_semantics='RETURNABLE' SKUs MUST have a non-zero
+                                                                     deposit in their active fee row (enforced by API validation at fee insert; existing
+                                                                     rows are not retroactively validated). CONSUMABLE and ONE_SHOT SKUs MUST
+                                                                     have deposit_amount=0. RENTED SKUs MAY have deposit or rental or both.
+
+  R-PLM-EQ-6                                                         is_install_required=TRUE on an equipment_kind row means WO
+                                                                     module at WO finalization MUST find at least one equipment line with a SKU of
+                                                                     that kind. Missing → WO module rejects finalization with reason
+                                                                     MISSING_REQUIRED_EQUIPMENT_KIND. (Validation is enforced in WO
+                                                                     module per WO-01-FRAMEWORK §9; PLM-CFG-06 declares the requirement.)
+
+  R-PLM-EQ-7                                                         Compatibility BLOCK rules are enforced at WO finalization by WO module: if
+                                                                     any equipment_compatibility row of rule_type=REQUIRES,
+                                                                     severity=BLOCK is not satisfied (target SKU/kind absent), or any
+                                                                     rule_type=INCOMPATIBLE_WITH, severity=BLOCK is violated, WO
+                                                                     finalization is rejected with EQUIPMENT_COMPATIBILITY_BLOCKED + the
+                                                                     compatibility_id. WARN rules log but don't block.
+
+  R-PLM-EQ-8                                                         Per-operator kind extensibility: an operator can add a new kind_code value
+                                                                     (e.g., EXTERNAL_ANTENNA for some operators, MESH_NODE for others) by
+                                                                     inserting an equipment_kind row. Consumers (WO module, OSR-01) must
+                                                                     treat unknown kind codes as informational rather than fatal — they may not be
+                                                                     able to validate them but they shouldn't reject SKUs they don't recognise.
+
+  R-PLM-EQ-9                                                         Operator + kind hierarchy: a WIK SKU references a (operator_code=WIK,
+                                                                     kind_code=ROUTER) kind row. Cross-operator references (e.g., a WIK SKU
+                                                                     pointing to a WUG kind) are forbidden by the composite FK.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                   Page 10
+  Rule                                                            Description
+
+  R-PLM-EQ-10                                                     Deposit refund mechanism: at disconnect, OSR-01 confirms equipment return +
+                                                                  condition. Working-condition return triggers a PLM-CFG-05 adjustment
+                                                                  (ADJ-EQUIPMENT-DEPOSIT-RETURN) with amount =
+                                                                  equipment_fee.deposit_amount resolved at the time the deposit was
+                                                                  originally charged (audit trail in BIL-01 charging records). PLM-CFG-06 does
+                                                                  not initiate the refund; it provides the historical deposit lookup.
+
+  R-PLM-EQ-11                                                     Currency consistency: an equipment_fee.fee_currency must match the
+                                                                  operator's default billing currency for the operator owning the SKU. v1.0 does
+                                                                  not support multi-currency pricing for the same SKU.
+
+  R-PLM-EQ-12                                                     Multi-language display: display_name_primary is the operator's default
+                                                                  language (English for WIK/WUG/WTZ; French for YASSN).
+                                                                  display_name_secondary is optional bilingual where the operator uses it.
+                                                                  WO module BO UI + invoice rendering pick based on user preference language.
+
+
+
+
+ 5. REST API
+ 5.1 Equipment kind catalog
+          GET /api/equipment-kinds?operatorCode=WIK&active=true HTTP/1.1
+          Authorization: Bearer <staff-or-service-jwt>
+
+          → 200 OK
+          {
+            "kinds": [
+               {
+                  "operatorCode":           "WIK",
+                  "kindCode":               "ROUTER",
+                  "displayNamePrimary":     "Router",
+                  "displayNameSecondary":   null,
+                  "isInstallRequired":      true,
+                  "installRole":            "CPE-PRIMARY",
+                  "active":                 true,
+                  "displayOrder":           10
+               },
+               {
+                  "operatorCode":           "WIK",
+                  "kindCode":               "ONT",
+                  "displayNamePrimary":     "Optical Network Terminal",
+                  "isInstallRequired":      true,
+                  "installRole":            "CPE-PRIMARY",
+                  "active":                 true,
+                  "displayOrder":           20
+               },
+               ...
+            ],
+            "totalCount": 7
+          }
+
+          POST /api/equipment-kinds                                 # add a new kind (BO admin only)
+          PATCH /api/equipment-kinds/{operator}/{kind_code}         # update mutable fields
+
+
+ 5.2 Equipment SKU catalog
+          GET /api/equipment-skus?operatorCode=WIK&active=true&kindCode=ONT HTTP/1.1
+          Authorization: Bearer <staff-or-service-jwt>
+
+          → 200 OK
+          {
+            "skus": [
+              {
+                "skuId":                "WIK-ONT-HG8245-H5",
+                "operatorCode":         "WIK",
+                "kindCode":             "ONT",
+                "brand":                "Huawei",
+                "model":                "HG8245H5",
+                "hardwareRevision":     null,
+                "displayNamePrimary":   "Huawei HG8245H5 (4-port Gigabit ONT)",
+                "ownershipSemantics":   "RETURNABLE",
+                "isSerialized":         true,
+                "active":               true,
+                "currentFee": {
+                  "installFeeAmount":    0,
+                  "monthlyRentalAmount": 0,
+                  "depositAmount":       6500,
+                  "feeCurrency":         "KES",
+
+
+SOPHIX BSS Design Documents                                                                                                              Page 11
+                         "effectiveFrom":       "2025-07-01"
+                     }
+                   },
+                   ...
+               ]
+           }
+
+ The currentFee block is denormalized — GET returns the SKU + its active fee row in one call. This is the high-traffic shape
+ used by FUL-02 STEP-PAYMENT to render the install summary screen.
+           GET /api/equipment-skus/{sku_id}                              # detail including all fees, compatibility rules
+           GET /api/equipment-skus/{sku_id}/fees                         # full fee history (active + retired)
+           GET /api/equipment-skus/{sku_id}/compatibility                # compatibility rules where this SKU is source or target
+           POST /api/equipment-skus                                      # create new SKU
+           PATCH /api/equipment-skus/{sku_id}                            # update mutable fields (display name, notes, active flag)
+
+
+ 5.3 Fee management
+           POST /api/equipment-skus/{sku_id}/fees HTTP/1.1
+           Authorization: Bearer <bo-admin-jwt>
+           Content-Type: application/json
+
+           {
+               "installFeeAmount":          0,
+               "monthlyRentalAmount":       0,
+               "depositAmount":             6500,
+               "feeCurrency":               "KES",
+               "taxInclusive":              true,
+               "effectiveFrom":             "2025-07-01",
+               "notes":                     "Deposit raised in line with KES depreciation"
+           }
+
+           → 201 Created
+           {
+             "feeId":                "fee_01HZ_WIK_HG8245_V2",
+             "skuId":                "WIK-ONT-HG8245-H5",
+             "supersededFeeId":      "fee_01HZ_WIK_HG8245_V1",
+             "supersededEffectiveTo": "2025-06-30"
+           }
+
+ Behind the scenes: a transaction that (1) sets the prior current row's effective_to = effectiveFrom - 1 day, (2)
+ inserts the new row. Returns both IDs for audit.
+
+ Errors:
+
+   - 400 INVALID_FEE_DATES — effectiveFrom <= the previous current row's effective_from.
+
+   - 422 CURRENCY_MISMATCH — feeCurrency doesn't match the operator's default.
+
+ 5.4 Compatibility rules
+           GET /api/equipment-compatibility?operatorCode=WIK&sourceSkuId=WIK-ONT-HG8245-H5 HTTP/1.1
+           → 200 OK
+           {
+             "rules": [
+               {
+                  "compatibilityId": "compat_01HZ_HG8245_NEEDS_RTR",
+                  "ruleType":        "REQUIRES",
+                  "sourceSkuId":     "WIK-ONT-HG8245-H5",
+                  "targetSkuId":     null,
+                  "targetKindCode":  "ROUTER",
+                  "severity":        "BLOCK"
+               },
+               ...
+             ]
+           }
+
+           POST /api/equipment-compatibility                           # add a new rule
+           PATCH /api/equipment-compatibility/{id}                     # close (set effective_to)
+
+
+ 5.5 SKU validation for WO finalization
+ A dedicated endpoint WO module hits at WO finalization to check the equipment-line set against the operator's catalog.
+           POST /api/equipment-skus/validate HTTP/1.1
+           Authorization: Bearer <wo-service-jwt>
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "woType":       "INSTALL",
+
+
+SOPHIX BSS Design Documents                                                                                                Page 12
+               "equipmentLines": [
+                 { "skuId": "WIK-ONT-HG8245-H5", "qty": 1 },
+                 { "skuId": "WIK-RTR-HAP-AC2",    "qty": 1 },
+                 { "skuId": "WIK-SPL-1X8-SC",     "qty": 1 },
+                 { "skuId": "WIK-WS-FACEPLATE-1G","qty": 1 }
+               ]
+           }
+
+           → 200 OK
+           {
+             "valid":           true,
+             "warnings":        [],
+             "rulesEvaluated": 4,
+             "totalChargesAtTodaysFees": {
+               "installFeeAmount":     800,
+               "monthlyRentalAmount": 0,
+               "depositAmount":        14500,
+               "feeCurrency":          "KES"
+             }
+           }
+
+ Or with violations:
+           {
+               "valid": false,
+               "errors": [
+                  {
+                     "code":            "MISSING_REQUIRED_KIND",
+                     "details":         "Install WO requires a SKU of kind ROUTER but none provided",
+                     "missingKind":     "ROUTER"
+                  },
+                  {
+                     "code":            "EQUIPMENT_COMPATIBILITY_BLOCKED",
+                     "compatibilityId": "compat_01HZ_HG8245_NEEDS_RTR",
+                     "details":         "WIK-ONT-HG8245-H5 REQUIRES a SKU of kind ROUTER"
+                  }
+               ],
+               "warnings": []
+           }
+
+
+
+
+ 6. Kafka events
+ PLM-CFG-06 publishes on sophix.plm.eq.*.
+
+  Event type                        Topic                            Emitted when                             Consumers
+
+  EquipmentSkuCreated               sophix.plm.eq.sku-created        New equipment_sku row                    OSR-01 (pending), WO module BO UI
+                                                                                                              catalog refresh
+
+  EquipmentSkuUpdated               sophix.plm.eq.sku-updated        Mutable fields changed                   FUL-02 BO UI catalog refresh
+
+  EquipmentSkuDeactivated           sophix.plm.eq.sku-deactivate     active=true→false                        OSR-01 (block new stock receipts),
+                                    d                                                                         FUL-02 (hide from picker)
+
+  EquipmentFeeChanged               sophix.plm.eq.fee-changed        New equipment_fee row inserted           BIL-01 charging cache invalidation;
+                                                                     (with prior row auto-closed)             FUL-02 BO UI fee refresh
+
+  EquipmentKindCreated              sophix.plm.eq.kind-created       New equipment_kind row                   WO module rule cache invalidation
+
+  EquipmentCompatibilityChange      sophix.plm.eq.compatibility-     New compatibility rule or rule closure   WO module rule cache invalidation
+  d                                 changed
+
+
+
+ 6.1 Sample event — EquipmentFeeChanged
+           {
+               "eventType":   "EquipmentFeeChanged",
+               "aggregateId": "WIK-ONT-HG8245-H5",
+               "timestamp":   "2025-07-01T00:00:00.000Z",
+               "payload": {
+                 "operatorCode":         "WIK",
+                 "skuId":                "WIK-ONT-HG8245-H5",
+                 "kindCode":             "ONT",
+                 "newFeeId":             "fee_01HZ_WIK_HG8245_V2",
+                 "supersededFeeId":      "fee_01HZ_WIK_HG8245_V1",
+                 "oldFee": {
+                   "installFeeAmount":    0,
+                   "monthlyRentalAmount": 0,
+                   "depositAmount":       5000,
+                   "feeCurrency":         "KES",
+                   "effectiveFrom":       "2023-01-01",
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 13
+                     "effectiveTo":         "2025-06-30"
+                  },
+                  "newFee": {
+                     "installFeeAmount":    0,
+                     "monthlyRentalAmount": 0,
+                     "depositAmount":       6500,
+                     "feeCurrency":         "KES",
+                     "effectiveFrom":       "2025-07-01",
+                     "effectiveTo":         null
+                  },
+                  "changes":               ["depositAmount: 5000 → 6500"],
+                  "actionRequired":        "FUL-02 STEP-PAYMENT in-progress orders captured before 2025-07-01 retain the old deposit; ord
+              }
+          }
+
+ This event is consumed by BIL-01 to invalidate its charging cache, by FUL-02 BO UI to refresh the install summary screen,
+ and by ops dashboards for audit.
+
+
+
+ 7. Stub retirement
+ PLM-CFG-06 retires wo_equipment_ref_stub, the placeholder schema in DD_WO-01-FRAMEWORK §9.3.
+
+ 7.1 Stub recap
+ DD_WO-01-FRAMEWORK §9.3 defines a stub wo_equipment_ref_stub(wo_id, equipment_ref) where
+ equipment_ref was an opaque string carrying brand/model/qty information without structure. The stub was always known
+ to be temporary; per DD_WO-01-FRAMEWORK's stub-retirement note, when "the future Inventory/Equipment Catalog DD is
+ written" the stub would be replaced with:
+
+   - SKUs as first-class entities in PLM-CFG-06 (this DD)
+
+   - A WO equipment table referencing equipment_sku.sku_id as FK
+
+   - Equipment kind collapse into the SKU's kind reference (per row 12 column WO retains only (wo_id,
+     equipment_ref) → after retirement, WO has wo_id + sku_id + qty)
+
+ 7.2 Migration steps
+   1. Pre-deployment: PLM-CFG-06 schema deployed; SKU catalog seeded per operator (KE / UG / TZ / SN initial SKUs from
+     operator inventory lists).
+
+   2. WO module schema migration: new table wo_equipment(wo_id, sku_id, qty, serial_number_ref)
+     deployed alongside the old wo_equipment_ref_stub. Both coexist during transition.
+
+   3. Backfill: a one-time job iterates wo_equipment_ref_stub rows. For each, parses the opaque equipment_ref string
+     (operator-specific parsing logic) and maps (brand, model) → sku_id by joining with equipment_sku.brand +
+     .model. Where the mapping is ambiguous or fails, the row is flagged for manual review; the migration ops team resolves
+     them by hand.
+
+   4. WO module cutover: WO finalization code switches from INSERT INTO wo_equipment_ref_stub to INSERT INTO
+     wo_equipment. Pre-finalization SKU validation now calls POST /api/equipment-skus/validate (per §5.5) before
+     allowing the WO to commit.
+
+   5. Verification window: 2 weeks of dual-write — WO module writes to BOTH wo_equipment_ref_stub (legacy path)
+     AND wo_equipment (new path). A daily reconciliation job compares the two and reports deltas. Production traffic on the
+     new path is monitored.
+
+   6. Removal: Drop wo_equipment_ref_stub table; remove the dual-write code path in WO module;
+     DD_WO-01-FRAMEWORK §9.3 documentation replaced with "retired — see DD_PLM-CFG-06."
+
+ 7.3 Caller-side changes
+ In DD_WO-01-FRAMEWORK FINALIZATION step:
+
+ 7. (Legacy) Write the equipment reference string to wo_equipment_ref_stub for downstream provisioning.
+
+ becomes:
+
+ 7. Call POST /api/equipment-skus/validate with the equipment lines. If valid, insert one row into wo_equipment per
+ line referencing equipment_sku.sku_id. Emit WorkOrderEquipmentBound event with the structured equipment data
+ (SKU IDs, qtys).
+
+
+SOPHIX BSS Design Documents                                                                                             Page 14
+ Downstream consumers of WO equipment data (provisioning, billing, OSR-01 stock decrement) now read structured sku_id
+ references rather than parsing the opaque string. OSR-01 in particular needs the structured data to track stock movements
+ accurately.
+
+ 7.4 Historical preservation
+ wo_equipment_ref_stub rows from before migration are preserved during the dual-write window in an archive table
+ wo_equipment_ref_stub_archive (created at migration step 6 just before drop). Historical WO queries for pre-migration
+ orders pull from the archive; new queries hit wo_equipment.
+
+
+
+ 8. Cross-DD coordination
+ 8.1 Upstream callers
+  Caller                                   Endpoint                                 When
+
+  FUL-02 STEP-PAYMENT                      GET /api/equipment-skus?operatorCode=X   Order capture, when door-to-door agent selects
+                                           &kindCode=Y                              equipment for the install
+
+  FUL-02 STEP-PAYMENT                      POST /api/equipment-skus/validate        Before finalizing order's equipment list — flags
+                                                                                    compatibility issues at order time
+
+  WO module FRAMEWORK §9 (FINALIZATION)    POST /api/equipment-skus/validate        Before allowing WO finalization — second validation
+                                                                                    pass (catches changes since order capture)
+
+  BIL-01 Charging Engine                   GET /api/equipment-skus/{id}/fees        At billing-cycle time, to look up
+                                                                                    monthly_rental_amount historical fee row for
+                                                                                    the active billing period
+
+  OSR-01 (pending)                         GET /api/equipment-skus?operatorCode=X   Stock chain operations: receipts, transfers, audits
+
+  BO admin UI                              various                                  Catalog management
+
+
+
+ 8.2 Downstream consumers (Kafka)
+  Consumer                                 Events subscribed                        Action
+
+  FUL-02 BO UI                             EquipmentSkuUpdated,                     Refresh equipment-picker cache
+                                           EquipmentFeeChanged,
+                                           EquipmentSkuDeactivated
+
+  WO module                                EquipmentSkuDeactivated,                 Invalidate WO finalization rule cache
+                                           EquipmentCompatibilityChanged
+
+  OSR-01 (pending)                         EquipmentSkuCreated,                     Open / close stock-tracking for the SKU
+                                           EquipmentSkuDeactivated
+
+  BIL-01                                   EquipmentFeeChanged                      Invalidate fee cache for monthly charging
+
+  Ops dashboards                           All sophix.plm.eq.*                      Catalog audit + reporting
+
+
+
+ 8.3 Sibling modules
+  Module                                   Direction                                Contract
+
+  PLM-CFG-04 (Discount Catalog)            PLM-CFG-04 → PLM-CFG-06 (read)           Discount eligibility rules may reference specific
+                                                                                    sku_id values (e.g., "free Huawei HG8245H5 on
+                                                                                    annual prepay"). Discount evaluation in BIL-01 joins
+                                                                                    PLM-CFG-04 + PLM-CFG-06 to compute applicable
+                                                                                    amounts.
+
+  PLM-CFG-05 (Adjustment Type Catalog)     PLM-CFG-05 → PLM-CFG-06 (read)           Deposit refund adjustments
+                                                                                    (ADJ-EQUIPMENT-DEPOSIT-RETURN) read
+                                                                                    equipment_fee.deposit_amount historically
+                                                                                    resolved at original install time.
+
+  OSR-01 (pending — Stock Chain)           OSR-01 → PLM-CFG-06 (read)               OSR-01's stock_balance, stock_movement,
+                                                                                    equipment_instance tables all FK to
+                                                                                    equipment_sku.sku_id. OSR-01 owns the
+                                                                                    quantities + serials + locations; PLM-CFG-06 owns
+                                                                                    the definitions.
+
+  WO module                                WO → PLM-CFG-06 (read + validate)        WO's new wo_equipment table FKs to
+                                                                                    equipment_sku.sku_id. Validation API gates
+                                                                                    WO finalization.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                     Page 15
+  Module                                    Direction                                  Contract
+
+  FUL-02                                    FUL-02 → PLM-CFG-06 (read + validate)      Order capture reads SKU catalog for the
+                                                                                       equipment-picker; calls validate API for compatibility
+                                                                                       check.
+
+  BIL-01                                    BIL-01 → PLM-CFG-06 (read)                 Monthly billing reads SKU fees; historical fee
+                                                                                       resolution per R-PLM-EQ-4.
+
+
+
+ 8.4 Dependencies (build order)
+   1. PLM-CFG-04 (Discount Catalog) — already shipped; foundational for fee + discount interactions.
+
+   2. PLM-CFG-05 (Adjustment Type Catalog) — provides the deposit-refund adjustment codes.
+
+   3. Operator currencies must be configured (BIL-01 or operator config DD).
+
+   4. Equipment kind + SKU + fee seed — per-operator seed scripts populate the three tables. WIK v1.0 seed includes ~30
+     SKUs across all kinds; YASSN v1.0 seed includes Sagemcom + MikroTik standard SKUs; WUG / WTZ partial seeds
+     pending full operator inventory data.
+
+   5. WO module migration window — per §7.2, dual-write to wo_equipment_ref_stub + wo_equipment for 2 weeks;
+     then archive + drop stub.
+
+   6. OSR-01 (pending — does NOT block PLM-CFG-06 v1.0) — PLM-CFG-06 v1.0 ships and operates without OSR-01.
+     Stock-availability queries from BO UI return "stock-status-unknown" until OSR-01 lands.
+
+
+
+ 9. Workshop sources
+ Workshop deep-dive sources (Packages_Services + Inventory) are present in the project but the PDFs are
+ unreadable for text extraction at time of writing. Equipment functional requirements are referenced implicitly across
+ multiple workshops:
+
+   - Packages & Services workshop (deep-dive 06) — package definitions reference included equipment (ONT, router);
+     informs the SKU + kind structure.
+
+   - Inventory workshop (separate deep-dive) — stock chain operations; informs how PLM-CFG-06 catalog must surface to
+      OSR-01.
+
+   - Work Order workshop (deep-dive 07) — equipment-on-WO finalization, install / shifting / support flows; informs validation
+     rules.
+
+ V3 design intent: provide a structured, operator-extensible equipment catalog that decouples SKU definitions from stock
+ tracking, fee charging, WO binding, and compatibility validation — each of those concerns lives in its own module. The TZ
+ codebase's current handling of equipment is unverified pending cartography; placeholder: "TBD pending codebase review."
+
+ Out of v1.0 scope:
+
+   - Stock balances + movements — owned by OSR-01 (pending).
+
+   - Individual equipment instance tracking (serial numbers) — owned by OSR-01.
+
+   - Vendor / procurement records — owned by EM-02 (pending) or future procurement DD.
+
+   - Firmware / provisioning profile per SKU — owned by FUL-03 / RLM provisioning modules.
+
+   - RMA workflows — owned by WO module (return WO types).
+
+   - Bundled equipment kits — packages live in SIP-01; this DD records only the constituent SKUs.
+
+   - Multi-currency same-SKU pricing — out; one currency per fee row per operator default.
+
+   - Per-region SKU restrictions — out; SKU catalog is operator-scoped, not region-scoped. Future enhancement if needed.
+
+
+ *End of DD_PLM-CFG-06-Equipment_Type_Catalog-v1.0.*
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                        Page 16
+

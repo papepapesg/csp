@@ -1,0 +1,1396 @@
+ DD: BIL-02-TAX-01 — Tax Invoice & Gateway
+ Developer implementation guide: DD_BIL-02-TAX-01-Tax_Invoice_and_Gateway-DEV_IMPL_GUIDE-v1.4.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract
+ DD_BIL-02-TAX-01-Tax_Invoice_and_Gateway-v1.4.md.
+
+ Verdict: ■ New | Wave: 1 | Group II: Billing & Revenue | Version: v1.4 Satellite of BIL-02 Invoicing (Core). Owns the
+ generation, signing, and lifecycle of tax invoices — the legal documents that prove tax was declared on received customer
+ payments, signed by the operator's tax authority gateway. Includes the pluggable gateway pattern, retry framework, and
+ admin operations. Sibling DDs: BIL-02-GEN-01 Invoice Generation, BIL-02-ADJ-01 Invoice Adjustments, BIL-02-READ-01
+ Invoice Read API, BIL-02-STA-01 Status Management & Recovery. Version history: see
+ CHANGELOG_BIL-02-TAX-01-Tax_Invoice_and_Gateway.md in the same directory.
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    5_billing/DD_BIL-02-TAX-01-Tax_Invoice_and_Gateway-v1.4.md
+
+  Version                                                           v1.4
+
+  DD type                                                           module contract
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   Not explicitly defined
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+   - GET /api/tax-invoices/dashboard?operator={code}
+
+   - GET /api/tax-invoices/{id}
+
+   - GET /api/tax-invoices/{id}/pdf
+
+   - GET /api/tax-invoices/{id}/signing-history
+
+   - POST /api/cycles/.../settle
+
+   - POST /api/payments/...
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+   - POST /api/tax-invoices/manual
+
+   - POST /api/tax-invoices/{id}/cancel
+
+   - POST /api/tax-invoices/{id}/cancel/approve
+
+   - POST /api/tax-invoices/{id}/resolve-no-action
+
+   - POST /api/tax-invoices/{id}/retry-signing
+
+ 4.2 Tables
+   - No CREATE TABLE block is explicitly declared in this DD.
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - billing-invoicing
+
+   - billing-invoicing-tax
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - InvoiceGenerator
+
+   - PaymentApplied
+
+   - PaymentReceived
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+SOPHIX BSS Design Documents                                                                                              Page 2
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                         Recommendation
+
+  API/runtime                                                     Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                         Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                        Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                           Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                         Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                          Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                         Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                  Store with IRSA.
+
+  Observability                                                   Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                  dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ New | Wave: 1 | Group II: Billing & Revenue | Version: v1.4
+
+ Satellite of BIL-02 Invoicing (Core). Owns the generation, signing, and lifecycle of tax invoices — the legal documents that
+ prove tax was declared on received customer payments, signed by the operator's tax authority gateway. Includes the
+ pluggable gateway pattern, retry framework, and admin operations.
+
+ Sibling DDs: BIL-02-GEN-01 Invoice Generation, BIL-02-ADJ-01 Invoice Adjustments, BIL-02-READ-01 Invoice Read API,
+ BIL-02-STA-01 Status Management & Recovery.
+
+ Version history: see CHANGELOG_BIL-02-TAX-01-Tax_Invoice_and_Gateway.md in the same directory.
+
+
+ Glossary
+  Term                                                            Meaning
+
+  Tax invoice                                                     A legal document, distinct from the regular cycle invoice, that proves tax was
+                                                                  declared on a received customer payment. Issued whenever the customer pays
+                                                                  money to the operator — for POSTPAID customers this is when they pay a
+                                                                  cycle/one-off invoice; for PREPAID customers this is when they top up their
+                                                                  wallet (or pay each cycle directly if the operator doesn't use wallets). The tax
+                                                                  invoice carries the tax authority's signed reference number and (in most
+                                                                  jurisdictions) a QR code that lets the customer verify the invoice with the
+                                                                  authority. Required by tax regulators in operators that mandate it.
+
+  Payment moment                                                  The instant money moves from customer to operator. This is when tax is
+                                                                  collected (the customer's payment is tax-inclusive — a portion of every payment
+                                                                  is tax owed to the authority). The tax invoice declares that tax. Payment
+                                                                  moments include: POSTPAID customer paying an invoice (full or partial),
+                                                                  PREPAID customer topping up their wallet, PREPAID customer making a direct
+                                                                  per-cycle payment (no-wallet operator model).
+
+  Tax authority                                                   The regulator in each country that enforces tax invoicing requirements, where
+                                                                  one exists. Some countries require electronic tax invoice signing through a
+                                                                  national platform; others do not. TAX-01 supports both deployment types:
+                                                                  where there is an authority, the per-operator signer integrates with it; where
+                                                                  there is none, tax invoice generation is simply disabled for that operator.
+
+  Tax Gateway                                                     The TAX-01 component that talks to the tax authority's API where one exists.
+                                                                  Pluggable per operator — each operator has its own signer implementation that
+                                                                  knows the authority's protocol, payload format, certificate handling, etc.
+
+  Signed invoice number                                           A reference number issued by the tax authority when it successfully signs a tax
+                                                                  invoice. The customer sees this on the tax invoice PDF and uses it to verify with
+                                                                  the authority. Distinct from the operator-internal legal_invoice_number
+                                                                  (which is allocated before signing). Format varies per authority.
+
+  Tax signature payload                                           The raw data returned by the tax authority's signing response — typically
+                                                                  containing the signed reference number, QR code data, timestamp, signer
+                                                                  certificate info, optional cryptographic signature. Stored on the tax invoice for
+                                                                  audit and PDF rendering.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                   Page 3
+  Term                                                                        Meaning
+
+  QR signature data                                                           A QR-code-encodable string returned by the tax authority allowing a third party
+                                                                              (customer, auditor) to verify the tax invoice independently by scanning. Format
+                                                                              varies by authority.
+
+  Pluggable signer                                                            A Java implementation of the TaxInvoiceSigner interface, one per operator
+                                                                              that has tax invoicing enabled. Selected at runtime based on operator_code
+                                                                              + invoice_type_operator_config.signing_service_implementati
+                                                                              on_ref.
+
+  Signing failure                                                             The tax authority rejected the submission (malformed payload, missing field,
+                                                                              authentication failed, customer's tax ID not registered, etc.) or the gateway is
+                                                                              unreachable. Triggers retry per the failure framework.
+
+
+
+
+ A — Target
+ 1. What this process is about
+ In most jurisdictions where these operators run, the tax authority requires that for every payment received from a customer,
+ the operator must produce a separate legal document called a tax invoice that proves tax (VAT, excise, etc.) was declared
+ on the payment. The customer's payment is tax-inclusive: a portion of every payment they make is tax that the operator
+ collects and remits to the authority. The tax invoice is how the operator declares that collected tax.
+
+ This is distinct from the regular cycle invoice — the cycle invoice tells the customer "you owe X for cycle Y"; the tax invoice
+ tells the authority "we received payment of Z, of which T is tax."
+
+ The tax invoice carries a signed reference number issued by the tax authority's electronic invoicing platform where one
+ exists. To get this reference, the operator submits the tax invoice payload to the authority's API; the authority validates, signs,
+ and returns a unique reference plus QR code data. The customer's tax invoice PDF displays the signed reference and QR
+ code so anyone can verify it with the authority.
+
+ TAX-01 is built to support both deployment types: operator countries that require electronic tax invoice signing, and operator
+ countries that do not. Where signing is required, the per-operator signer integrates with the local authority's platform. Where it
+ is not, the operator simply disables tax invoice generation.
+
+ Tax invoice is triggered by every customer payment. Tax is collected at the moment money moves from customer to
+ operator, regardless of what that payment is for (cycle invoice, wallet topup, direct per-cycle pay) and regardless of billing
+ mode. Three payment moments fire three different events that TAX-01 consumes:
+
+  Customer model                      Payment moment                          Event TAX-01 consumes                      Tax invoice covers
+
+  POSTPAID                            Customer pays a cycle or one-off        PaymentApplied from BIL-01                 The paid amount (proportional to the
+                                      invoice (full or partial) via M-Pesa,   Charging Engine                            parent invoice if partial)
+                                      bank, card, cash
+
+  PREPAID — wallet model              Customer tops up their wallet via       WalletToppedUp from BIL-05 Wallet          The full topup amount
+                                      M-Pesa, bank, card, cash. All           and Topup
+                                      PREPAID services (Internet, TV,
+                                      Voice, etc.) flow through the wallet.
+
+  PREPAID — direct-pay model (for     Customer pays for an upcoming cycle     PaymentReceived from BIL-01                The full direct-pay amount
+  operators that don't use wallets)   directly                                Charging Engine
+
+
+ In all three cases the customer's payment is tax-inclusive — they paid X and X already contains the tax. The tax invoice
+ decomposes X into base + tax components per PLM-CFG-02 Tax Configuration's cascade rules for the relevant service.
+
+ TAX-01 owns this end-to-end: receive the payment event, generate the tax invoice with proper tax decomposition, submit to
+ the right gateway, persist the signed response, retry transient failures, escalate persistent failures, and emit events so
+ downstream consumers (notification, BIL-01 Charging Engine, analytics) can react.
+
+ #### What TAX-01 explicitly does not own
+
+   - Regular cycle invoices and one-off invoices — BIL-02-GEN-01 Invoice Generation
+
+   - Adjustments (credit/debit notes) — BIL-02-ADJ-01 Invoice Adjustments
+
+   - Tax computation rules (which taxes apply, rates, exemptions, cascading) — PLM-CFG-02 Tax Configuration. TAX-01
+     stores the breakdowns and submits them to the authority; it does not compute tax.
+
+   - Payment recording — BIL-01 Charging Engine. TAX-01 only consumes payment events, doesn't record them.
+
+   - Wallet mechanics — BIL-05 Wallet and Topup. TAX-01 only consumes WalletToppedUp events; it doesn't manage the
+     wallet itself.
+
+SOPHIX BSS Design Documents                                                                                                                              Page 4
+   - Invoice PDF retrieval — BIL-02-READ-01 Invoice Read API. TAX-01 emits TaxInvoiceIssued with full payload; PDF
+      rendering and channel dispatch are owned by DD_NOT-01 Notification Service; PDF stream retrieval is owned by
+      READ-01.
+
+ 2. Business rules and tax invoice flow
+ Rules grouped by phase: T (trigger), G (tax invoice generation), S (signing flow), F (failure and retry), C (cancellation and
+ re-signing), D (admin operations).
+
+ #### Rule group T — Trigger
+
+  ID                                          Rule                                                      Triggered on
+
+  R-TAX-01-T-1                                TAX-01 consumes                                           POSTPAID payment trigger
+                                              sophix.billing.payment.applied from
+                                              BIL-01 Charging Engine for POSTPAID payments.
+                                              Payload: subscription_id, invoice_id (the cycle or
+                                              one-off invoice paid against), payment_id,
+                                              paid_amount, payment_method
+                                              (M-Pesa/bank/card/cash), payment_timestamp,
+                                              operator_code, currency.
+
+  R-TAX-01-T-2                                TAX-01 consumes                                           PREPAID wallet topup trigger
+                                              sophix.billing.wallet.toppedup from
+                                              BIL-05 Wallet and Topup for PREPAID wallet
+                                              topups. Payload: subscription_id, wallet_id,
+                                              wallet_type_code, service_category_code (resolved
+                                              from PLM-CFG-03 Wallet Configuration),
+                                              topup_amount, topup_method
+                                              (M-Pesa/bank/card/cash), payment_ref,
+                                              topup_timestamp, operator_code, currency.
+
+  R-TAX-01-T-3                                TAX-01 consumes                                           PREPAID direct-pay trigger
+                                              sophix.billing.payment.received from
+                                              BIL-01 Charging Engine for PREPAID direct-pay
+                                              payments (operators that don't use wallets).
+                                              Payload: subscription_id, payment_id,
+                                              target_cycle_start, target_cycle_end, paid_amount,
+                                              payment_method, payment_timestamp,
+                                              operator_code, currency.
+
+  R-TAX-01-T-4                                TAX-01 evaluates per-operator config to decide            Per-operator enablement
+                                              whether to generate a tax invoice:
+                                              invoice_type_operator_config.enabled for
+                                              the TAX_INVOICE type must be true for that
+                                              operator. If disabled, TAX-01 acknowledges the
+                                              event but generates nothing.
+
+  R-TAX-01-T-5                                The triggering event ID is captured as                    Idempotency
+                                              triggering_event_ref on the tax invoice.
+                                              Idempotency: re-consumption of the same event
+                                              (Kafka retry) returns the existing tax invoice if found
+                                              instead of generating a duplicate.
+
+  R-TAX-01-T-6                                If the operator has tax invoice enabled but the           Missing tax ID handling
+                                              customer's tax_identifier is missing from the
+                                              customer snapshot (the customer doesn't have a
+                                              registered tax ID — common for individuals in some
+                                              jurisdictions), TAX-01 may still generate the tax
+                                              invoice with a default placeholder per the operator's
+                                              signing implementation. The signer implementation
+                                              handles jurisdiction-specific placeholder rules.
+
+  R-TAX-01-T-7                                Admin can also trigger tax invoice generation             Manual generation
+                                              manually via REST (e.g., TAX-01 was down during
+                                              the original event). Endpoint: POST
+                                              /api/tax-invoices/manual with {
+                                              payment_id } or { topup_event_id }. The
+                                              system loads the original payment context, builds
+                                              the generation context, and runs the standard flow.
+
+
+ #### Rule group G — Tax invoice generation
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 5
+  ID                          Rule                                                     Triggered on
+
+  R-TAX-01-G-1                TAX-01 implements TaxInvoiceGenerator, a                 Generator framework conformance
+                              generator class that follows the BIL-02 Core
+                              InvoiceGenerator framework. Same canonical
+                              structure as GEN-01's generators: idempotency
+                              check, customer snapshot capture, line item
+                              building, sequence allocation, atomic write. Lives in
+                              this DD because of its tight coupling with the signing
+                              flow.
+
+  R-TAX-01-G-2                Every customer payment is tax-inclusive — the            Tax-inclusive principle
+                              amount the customer paid already contains the tax
+                              owed to the authority. The tax invoice decomposes
+                              that paid amount into base + tax components per
+                              PLM-CFG-02 Tax Configuration's cascade rules.
+                              The customer never owes anything beyond what
+                              they already paid; the tax invoice just declares the
+                              tax portion.
+
+  R-TAX-01-G-3                For POSTPAID PaymentApplied (full or partial             POSTPAID payment (incl. partial)
+                              payment): the tax invoice covers the paid amount.
+                              The tax breakdown is proportional to the original
+                              invoice's tax breakdown — if the customer paid
+                              54.66% of the invoice, the tax invoice shows
+                              54.66% of each tax component. NOT a
+                              recomputation via PLM-CFG-02 — the tax was
+                              determined at charge time when the original invoice
+                              was generated; the tax invoice just confirms that the
+                              paid portion includes a proportional share of that
+                              tax. The tax invoice's line items mirror the original
+                              invoice's line structure (same service categories,
+                              packages, wallet types) but with proportional
+                              amounts. original_invoice_id points to the
+                              parent invoice. Every payment (partial or full)
+                              triggers its own tax invoice — multiple partial
+                              payments against the same parent invoice produce
+                              multiple tax invoices, each covering its specific paid
+                              portion.
+
+  R-TAX-01-G-4                For PREPAID WalletToppedUp: the tax invoice              PREPAID wallet topup
+                              covers the full topup amount. One line item with:
+                              service_category_code = wallet's service category
+                              (e.g., INTERNET, TV, VOICE), wallet_type_code =
+                              topup'd wallet's type, package_ref = synthetic value
+                              like TOPUP_{WALLET_TYPE}, total = topup amount
+                              (tax-inclusive). PLM-CFG-02 Tax Configuration's
+                              TaxService.computeTax(total,
+                              customer_location, service_category) is
+                              called with the inclusive total to decompose it into
+                              base + tax components per the cascade.
+                              original_invoice_id is NULL — there is no
+                              upstream invoice. metadata.topup_event_id
+                              and topup_payment_ref populated.
+
+  R-TAX-01-G-5                For PREPAID PaymentReceived (direct-pay):                PREPAID direct-pay
+                              similar to wallet topup but the payment is direct (no
+                              wallet). One line item with: service_category_code =
+                              the subscription's service category (resolved via
+                              PLM-CFG-01 Package Catalog), package_ref = the
+                              subscription's package, total = paid_amount
+                              (tax-inclusive), decomposed via PLM-CFG-02.
+                              original_invoice_id may be NULL (if there's
+                              no pro forma) or set to the corresponding pro
+                              forma's ID (for traceability).
+                              metadata.payment_received_event_id
+                              populated.
+
+  R-TAX-01-G-6                A fresh customer snapshot is captured at tax             Fresh snapshot
+                              invoice generation time per Core R-C-3. Different
+                              payments → different snapshots (the customer's
+                              tax_identifier or address may have changed
+                              between payments).
+
+  R-TAX-01-G-7                The tax invoice's billing_mode is set from the           Billing mode capture
+                              trigger context: for PaymentApplied, copied from
+                              the original invoice (POSTPAID); for
+                              WalletToppedUp and PaymentReceived,
+                              always PREPAID.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 6
+  ID                           Rule                                                    Triggered on
+
+  R-TAX-01-G-8                 The tax invoice's legal_invoice_number is               Legal numbering
+                               allocated from the TAX_INVOICE sequence
+                               (gap-free per operator + fiscal year, same as other
+                               legal documents). Format is per-operator and
+                               configured in invoice_type_operator_config
+                               .legal_number_format. Allocated atomically
+                               with the write.
+
+  R-TAX-01-G-9                 After successful write, the tax invoice's status is     Initial state
+                               GENERATED and payment_status is PAID (by
+                               definition — the payment that triggered it already
+                               happened). No due date. The signing scanner picks
+                               it up next.
+
+  R-TAX-01-G-10                For POSTPAID with hybrid grouping: if the parent        Grouping policy inheritance (POSTPAID)
+                               invoice belonged to a specific group of the
+                               operator's grouping policy, the tax invoice inherits
+                               that grouping_config_ref and
+                               grouping_key_values. The tax invoice covers only
+                               the paid portion of that one parent invoice. If a
+                               customer paid two sibling invoices as separate
+                               payments, two separate PaymentApplied events
+                               fire, producing two separate tax invoices.
+
+  R-TAX-01-G-11                For PREPAID topup and direct-pay: tax invoice           Grouping policy (PREPAID)
+                               grouping is SINGLE dimension by default (one tax
+                               invoice per payment event, no group split).
+                               Operators can configure otherwise if their
+                               invoice_grouping_config for TAX_INVOICE
+                               specifies a different dimension.
+
+  R-TAX-01-G-12                Each line item on the tax invoice carries its full      Line-level segregation for reporting
+                               identifying metadata: service_category_code,
+                               package_ref, wallet_type_code. This enables
+                               downstream tax reporting that segregates collected
+                               tax per service type and per package — required for
+                               operator finance teams reconciling with tax authority
+                               filings.
+
+
+ #### Rule group S — Signing
+
+  ID                           Rule                                                    Triggered on
+
+  R-TAX-01-S-1                 After tax invoice generation, TAX-01 must submit it     Pluggable signer
+                               to the tax authority for signing. This is done via a
+                               pluggable signer pattern: the TaxInvoiceSigner
+                               interface has one implementation per operator. The
+                               implementation is registered as a @Component and
+                               selected at runtime based on invoice_type_ope
+                               rator_config.signing_service_implement
+                               ation_ref for the operator + TAX_INVOICE type.
+
+  R-TAX-01-S-2                 The signing flow is asynchronous from the               Asynchronous signing
+                               generation flow. After generation, the tax invoice is
+                               in status GENERATED. A scheduled scanner (every 1
+                               minute per operator) picks up tax invoices in
+                               GENERATED status and submits them to the
+                               appropriate gateway. The tax invoice status
+                               transitions to PENDING_SIGNATURE during
+                               submission.
+
+  R-TAX-01-S-3                 On successful signing, the gateway returns a            Successful signing
+                               payload containing at minimum: signed reference
+                               number, QR signature data, timestamp. The signer
+                               parses this into a normalized structure stored on the
+                               tax invoice's metadata JSONB as
+                               tax_signature_data. The tax invoice status
+                               transitions to SIGNED, the
+                               signed_invoice_number is set, and a
+                               TaxInvoiceSigned Kafka event fires.
+
+  R-TAX-01-S-4                 On signing failure, the tax invoice transitions to      Failed signing
+                               SIGNING_FAILED and a row is recorded in
+                               tax_invoice_signing_failure with the failure
+                               detail. The failure type determines next steps (see
+                               rule group F).
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                     Page 7
+  ID                                     Rule                                                        Triggered on
+
+  R-TAX-01-S-5                           Each signer implementation owns its gateway's               Gateway abstraction
+                                         protocol details: REST vs SOAP, certificate
+                                         handling, authentication (mTLS, OAuth, signed
+                                         JWTs, etc.), payload schema mapping, response
+                                         parsing, error code interpretation. The shared
+                                         TAX-01 framework knows nothing about specific
+                                         gateways — it just calls
+                                         signer.sign(taxInvoice) and handles the
+                                         abstracted response.
+
+  R-TAX-01-S-6                           Signer implementations must be deterministic in             Idempotency at gateway level
+                                         their submission ordering: the same tax invoice
+                                         submitted twice must produce the same signed
+                                         reference (some gateways are idempotent natively;
+                                         for those that aren't, the signer uses a deduplication
+                                         token derived from the tax invoice ID). This ensures
+                                         Kafka retries don't produce duplicate signed
+                                         references.
+
+  R-TAX-01-S-7                           Signing has a timeout (default 30 seconds per               Timeout
+                                         submission, operator-configurable). If the gateway
+                                         doesn't respond in time, the signer aborts and the
+                                         tax invoice falls into SIGNING_FAILED with
+                                         failure_type = GATEWAY_TIMEOUT. The retry
+                                         framework re-tries — gateways are often slow, not
+                                         broken.
+
+
+ #### Rule group F — Failure and retry
+
+  ID                                     Rule                                                        Triggered on
+
+  R-TAX-01-F-1                           Signing failures fall into categories: (a) transient —      Failure categorization
+                                         gateway unreachable, timeout, 5xx response,
+                                         certificate temporarily invalid → auto-retry; (b)
+                                         validation — gateway rejected the payload (missing
+                                         field, wrong format, customer PIN not registered) →
+                                         admin review required; (c) persistent — same
+                                         validation error after 8 retries → escalate.
+
+  R-TAX-01-F-2                           A scheduled retry scanner runs every 5 minutes per          Transient retry
+                                         operator scanning tax_invoice rows in
+                                         SIGNING_FAILED status with failure_type in
+                                         the transient category and next_retry_at <=
+                                         now(). For each, it re-submits to the gateway.
+                                         Success → status SIGNED. Continued failure →
+                                         retry_count increments, next_retry_at extends via
+                                         exponential backoff (5min, 15min, 30min, 1h, 2h, 4h,
+                                         8h, 24h).
+
+  R-TAX-01-F-3                           For validation failures (category b), retry_count is        Validation failure handling
+                                         NOT incremented automatically — the failure won't
+                                         fix itself by re-submitting. The tax invoice stays in
+                                         SIGNING_FAILED with failure_type =
+                                         VALIDATION_FAILURE until admin reviews and
+                                         acts. Admin actions: (i) fix the underlying issue (e.g.,
+                                         update customer PIN in CRM) and trigger manual
+                                         re-sign; (ii) mark as RESOLVED_NO_ACTION (tax
+                                         authority accepted offline reconciliation); (iii)
+                                         escalate.
+
+  R-TAX-01-F-4                           After 8 transient retries without success (~3 days),        Give up after max retries
+                                         the tax invoice transitions from SIGNING_FAILED
+                                         to GAVE_UP_AUTO. An alert fires for operator
+                                         review. Admin can: (i) trigger another retry manually
+                                         (retry_count reset); (ii) mark resolved with notes; (iii)
+                                         escalate.
+
+  R-TAX-01-F-5                           Failure detail is stored in                                 Failure audit
+                                         tax_invoice_signing_failure (one row per
+                                         signing attempt that failed), with: attempt_number,
+                                         failed_at, failure_type, gateway_response_code,
+                                         gateway_response_body, error_message,
+                                         retry_scheduled_at. This audit trail is essential for
+                                         diagnosing recurring issues with a specific gateway.
+
+  R-TAX-01-F-6                           Operator alerting fires on: any individual tax invoice      Alerts
+                                         reaching GAVE_UP_AUTO; signing failure rate
+                                         exceeding 1% per operator-hour (configurable
+                                         threshold); gateway responding with auth failures
+                                         (suggesting expired certificate).
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                         Page 8
+ #### Rule group C — Cancellation and re-signing
+
+  ID                                      Rule                                                     Triggered on
+
+  R-TAX-01-C-1                            A signed tax invoice can be cancelled only via an        Signed cancellation
+                                          explicit admin action with elevated privileges (Tax
+                                          Compliance Officer role + dual approval).
+                                          Cancellation requires reconciliation with the tax
+                                          authority — most authorities require notification of
+                                          any cancelled tax invoice. The cancellation flow:
+                                          admin submits cancellation request → operator's
+                                          compliance officer approves → TAX-01 calls the
+                                          gateway's cancellation API → on success, tax
+                                          invoice transitions to CANCELLED with
+                                          cancel_reason_code and
+                                          cancellation_reference from the authority.
+
+  R-TAX-01-C-2                            An UNSIGNED tax invoice (status GENERATED,               Unsigned cancellation
+                                          PENDING_SIGNATURE, or SIGNING_FAILED) can
+                                          be cancelled with regular admin privileges (no Tax
+                                          Compliance Officer approval needed, no gateway
+                                          call) since the authority has no record of it. Status
+                                          transitions to CANCELLED, gateway is not notified.
+
+  R-TAX-01-C-3                            Re-signing of a SIGNING_FAILED or                        Re-signing
+                                          GAVE_UP_AUTO tax invoice is supported via admin
+                                          action — admin clicks "Retry signing"; system
+                                          re-submits to gateway. The same tax invoice row is
+                                          updated with the new signed reference (if
+                                          successful). The
+                                          tax_invoice_signing_failure audit trail
+                                          preserves all prior failure history.
+
+  R-TAX-01-C-4                            Bulk reversal of tax invoices is prohibited as a         Bulk reversal exclusion
+                                          normal operation — too risky for tax compliance.
+                                          The bulk reversal capability in BIL-02-GEN-01
+                                          Invoice Generation explicitly excludes
+                                          TAX_INVOICE from its scope. To reverse multiple
+                                          tax invoices, admins must process them one at a
+                                          time via the signed-cancellation flow with per-invoice
+                                          reconciliation.
+
+
+ #### Rule group D — Admin operations
+
+  ID                                      Rule                                                     Triggered on
+
+  R-TAX-01-D-1                            Admin console provides a Tax Invoice Operations          Operations dashboard
+                                          view per operator showing: pending generation
+                                          count, pending signature count, signing failure count
+                                          by failure_type, gave-up count, average signing
+                                          latency, gateway error rate. Used by ops team for
+                                          daily monitoring.
+
+  R-TAX-01-D-2                            Admin can drill into any tax invoice and see: full       Per-invoice detail
+                                          lifecycle history (state transitions with timestamps),
+                                          all signing attempts (one row per attempt with failure
+                                          detail), the signed payload from the gateway (raw
+                                          and parsed).
+
+  R-TAX-01-D-3                            Admin can manually trigger generation for a              Manual generation
+                                          payment that should have produced a tax invoice
+                                          but didn't (e.g., TAX-01 was down when the
+                                          payment was applied). Endpoint: POST
+                                          /api/tax-invoices/manual with {
+                                          payment_id }. The system loads the payment,
+                                          builds the generation context, and runs the standard
+                                          flow.
+
+  R-TAX-01-D-4                            Admin can mark a tax invoice as                          Offline resolution
+                                          RESOLVED_NO_ACTION when offline reconciliation
+                                          with the authority is the chosen path. Requires
+                                          resolution notes. The tax invoice status remains
+                                          SIGNING_FAILED or GAVE_UP_AUTO, but an
+                                          annotation is added indicating offline resolution; no
+                                          further automatic retries.
+
+  R-TAX-01-D-5                            All admin actions on tax invoices (manual retry,         Audit trail
+                                          mark resolved, cancel signed, re-sign) are captured
+                                          in invoice_history with the admin user ID,
+                                          timestamp, and reason.
+
+
+
+ 3. Module owner and impacted modules
+
+SOPHIX BSS Design Documents                                                                                                  Page 9
+  Role                                       Module                                                 What it does
+
+  Owner                                      New billing-invoicing-tax package within               Co-located with BIL-02 Core. Owns the
+                                             the billing-invoicing module on cluster C              TaxInvoiceGenerator, the pluggable
+                                                                                                    TaxInvoiceSigner interface and per-operator
+                                                                                                    implementations, the signing scanner, the retry
+                                                                                                    scanner, and admin REST endpoints.
+
+  Upstream events consumed                   BIL-01 Charging Engine (PaymentApplied,                Trigger sources for tax invoice generation:
+                                             PaymentReceived), BIL-05 Wallet and Topup              payment-applied for POSTPAID invoice payments,
+                                             (WalletToppedUp)                                       wallet-topped-up for PREPAID wallet topups,
+                                                                                                    payment-received for PREPAID direct-pay.
+
+  External calls (synchronous)               Tax authority gateway APIs, one per operator that      Calls vary per implementation: REST, SOAP, signed
+                                             has tax invoicing enabled                              JWTs over HTTPS, mTLS. Each signer owns its
+                                                                                                    own protocol.
+
+  Internal callees (synchronous)             PLM-CFG-02 Tax Configuration (compute tax              All synchronous calls.
+                                             decomposition for PREPAID topup/direct-pay; not
+                                             called for POSTPAID since tax is proportionally
+                                             scaled from the parent invoice's already-computed
+                                             tax breakdown), PLM-CFG-01 Package Catalog
+                                             (resolve package → service category for direct-pay),
+                                             PLM-CFG-03 Wallet Configuration (resolve wallet →
+                                             service category for topup events), SUB-LM-01
+                                             Subscription Lifecycle Management (read
+                                             subscription state), CRM/customer service
+                                             (customer snapshot via Core), BIL-02 Core
+                                             (sequence service, invoice writer, event publisher),
+                                             BIL-01 Charging Engine (read parent invoice details
+                                             for POSTPAID), BIL-02-GEN-01 Invoice Generation
+                                             (read parent invoice for POSTPAID)
+
+  Downstream events emitted                  TaxInvoiceIssued, TaxInvoiceSigned,                    Consumed by DD_NOT-01 Notification Service
+                                             TaxInvoiceSigningFailed,                               (delivery), BIL-01 (audit), analytics, ops alerting.
+                                             TaxInvoiceSigningGaveUp,
+                                             TaxInvoiceCancelled
+
+  Frontend                                   Admin Console — Tax Invoice Operations                 Built on BIL-02 Core's admin shell.
+                                             dashboard, per-invoice detail, manual
+                                             retry/cancel/regenerate
+
+  Engines                                    No Drools in TAX-01. Tax rules in PLM-CFG-02 Tax       —
+                                             Configuration (called via REST).
+
+
+
+ 4. Foundation references
+ DB → FOUNDATION_DB.md · Kafka → FOUNDATION_KAFKA.md · Auth → FOUNDATION_AUTH.md (introduces
+ TAX_COMPLIANCE_OFFICER role). Framework: BIL-02 Invoicing (Core) + SUB-WF-FRAMEWORK-01 Subscription
+ Workflow Framework.
+
+
+
+ Technical design
+ Module placement
+ Co-located in billing-invoicing module on cluster C. New sub-package tax. Shares BIL-02 Core's invoice table for
+ tax invoice rows (a tax invoice IS an invoice with invoice_type_code = TAX_INVOICE, plus operator-specific signing
+ metadata). Adds 1 new dedicated table (tax_invoice_signing_failure) and uses Core's existing tables for everything
+ else.
+
+ Code structure
+             modules/billing-invoicing/
+               src/main/java/com/sophix/billing/invoicing/tax/
+                 service/
+                   TaxInvoiceGenerator.java          ← implements InvoiceGenerator (Core)
+                   TaxInvoiceSigner.java             ← interface for pluggable signers
+                   TaxInvoiceSigningService.java     ← orchestrates signer invocation
+                 signer/
+                   (one TaxInvoiceSigner implementation per operator that has tax invoicing enabled)
+                 scanner/
+                   SigningScanner.java               ← every 1 minute: picks GENERATED → submits to gateway
+                   RetryScanner.java                 ← every 5 minutes: re-submits SIGNING_FAILED transient
+                 kafka/
+                   PaymentAppliedConsumer.java       ← consumes BIL-01 payment-applied events (POSTPAID payments)
+                   WalletToppedUpConsumer.java       ← consumes BIL-05 topup events (PREPAID wallet topups)
+                   PaymentReceivedConsumer.java      ← consumes BIL-01 payment-received events (PREPAID direct-pay)
+
+
+SOPHIX BSS Design Documents                                                                                                                        Page 10
+               rest/
+                 TaxInvoiceAdminResource.java      ← admin operations endpoints
+               domain/
+                 TaxSignaturePayload.java          ← normalized signing response structure
+                 TaxInvoiceSigningFailure.java
+               repository/
+                 TaxInvoiceSigningFailureRepository.java
+             src/main/resources/
+               config/liquibase/changelog/billing-invoicing/
+                 050_tax_invoice_signing_failure.xml
+
+
+ Tax invoice end-to-end flow
+ The canonical happy path from customer payment to signed tax invoice. Three flows depending on payment source:
+ POSTPAID payment-applied, PREPAID wallet topup, PREPAID direct-pay. After generation, the signing flow is the same for
+ all three.
+
+ #### Flow A — POSTPAID payment applied (full or partial)
+          Step 1 — Payment event arrives
+            Customer pays a cycle/one-off invoice via M-Pesa, bank, card, cash, etc.
+            BIL-01 Charging Engine records the payment, applies it to the invoice, and emits:
+            sophix.billing.payment.applied with:
+            { subscription_id, invoice_id, payment_id, paid_amount, payment_method,
+              payment_timestamp, operator_code, currency }
+
+          Step 2 — TAX-01 consumes the event (R-TAX-01-T-1)
+            PaymentAppliedConsumer:
+              - Validates event payload
+              - Looks up invoice_type_operator_config for (operator_code, TAX_INVOICE); if disabled → ack and stop
+              - Loads the parent invoice row to get its line items, totals, grouping context
+              - Builds InvoiceGenerationContext and calls InvoiceGenerationService.generate(ctx)
+
+          Step 3 — TaxInvoiceGenerator runs (R-TAX-01-G-*)
+            - Idempotency check on triggering_event_ref (the PaymentApplied event ID)
+            - Capture fresh customer_snapshot via CustomerSnapshotService
+            - Compute payment ratio = paid_amount / parent_invoice.total_amount
+            - For each parent invoice line item, build a corresponding tax invoice line:
+                same service_category_code, package_ref, wallet_type_code, description
+                subtotal = parent.subtotal × payment_ratio
+                tax_breakdown = scale each component proportionally (parent.tax_breakdown × payment_ratio)
+                total = parent.total × payment_ratio
+            - Aggregate per-line tax breakdowns into invoice-level tax_summary
+            - Build invoice header:
+                billing_mode = POSTPAID (copied from parent invoice)
+                customer_snapshot = fresh
+                triggering_event_ref = PaymentApplied event ID
+                original_invoice_id = parent invoice ID
+                grouping_config_ref = parent's grouping_config_ref (preserved)
+                grouping_dimension, grouping_key_values = copied from parent
+                due_date = NULL
+                status = GENERATED, payment_status = PAID
+            - Allocate TAX_INVOICE sequence number atomically
+            - Write invoice + line items + outbox event (TaxInvoiceIssued with full payload)
+            Result: tax invoice row in status GENERATED, ready for signing.
+
+             Note: a subsequent partial payment against the same parent invoice produces a SECOND tax invoice
+             with its own triggering_event_ref (different payment_id). Customer ends up with two tax invoices
+             for the parent invoice, each declaring the tax on its own paid portion.
+
+          Step 4-6 — Signing, retries, downstream — see "Signing flow (all three flows)" below.
+
+ #### Flow B — PREPAID wallet topup
+          Step 1 — Topup event arrives
+            Customer tops up their wallet via M-Pesa / bank / card / cash. BIL-05 Wallet and Topup processes
+            the payment, credits the wallet, and emits:
+            sophix.billing.wallet.toppedup with:
+            { subscription_id, wallet_id, wallet_type_code, service_category_code (resolved from PLM-CFG-03),
+              topup_amount, topup_method, payment_ref, topup_timestamp, operator_code, currency }
+
+          Step 2 — TAX-01 consumes the event (R-TAX-01-T-2)
+            WalletToppedUpConsumer:
+              - Validates event payload
+              - Looks up invoice_type_operator_config for (operator_code, TAX_INVOICE); if disabled → ack and stop
+              - Builds InvoiceGenerationContext (no parent invoice lookup needed — topup is self-contained)
+              - Calls InvoiceGenerationService.generate(ctx)
+
+          Step 3 — TaxInvoiceGenerator runs (R-TAX-01-G-*)
+            - Idempotency check on triggering_event_ref (the WalletToppedUp event ID)
+            - Capture fresh customer_snapshot
+            - Build ONE line item for the topup:
+
+
+SOPHIX BSS Design Documents                                                                                          Page 11
+                 description = "Wallet top-up — {service_category_label}" (localized)
+                 package_ref = synthetic value like "TOPUP_{WALLET_TYPE}"
+                 service_category_code = wallet's service category (e.g., INTERNET, TV, VOICE)
+                 wallet_type_code = topup'd wallet's type
+                 total = topup_amount (tax-inclusive)
+                 Call PLM-CFG-02 Tax Configuration TaxService.computeTax(total, customer_location, service_category)
+                   → returns tax_breakdown decomposing the inclusive total into base + tax components
+                   per the operator's tax rules for that service category
+                 subtotal = the decomposed pre-tax base
+                 tax_total = total - subtotal
+             - Build invoice header:
+                 billing_mode = PREPAID
+                 customer_snapshot = fresh
+                 triggering_event_ref = WalletToppedUp event ID
+                 original_invoice_id = NULL
+                 metadata.topup_event_id, topup_payment_ref, topup_method
+                 grouping_config_ref = SINGLE-dimension group for TAX_INVOICE (or per operator config)
+                 due_date = NULL, status = GENERATED, payment_status = PAID
+             - Allocate TAX_INVOICE sequence number atomically
+             - Write invoice + line items + outbox event
+             Result: tax invoice row in status GENERATED.
+
+          Step 4-6 — Signing, retries, downstream — see "Signing flow (all three flows)" below.
+
+ #### Flow C — PREPAID direct-pay (no wallet)
+          Step 1 — Payment event arrives
+            PREPAID customer (operator doesn't use wallets) pays for an upcoming cycle directly via
+            M-Pesa / bank / card / cash. BIL-01 Charging Engine records the payment and emits:
+            sophix.billing.payment.received with:
+            { subscription_id, payment_id, target_cycle_start, target_cycle_end, paid_amount,
+              payment_method, payment_timestamp, operator_code, currency }
+
+          Step 2 — TAX-01 consumes the event (R-TAX-01-T-3)
+            PaymentReceivedConsumer:
+              - Validates event payload
+              - Looks up invoice_type_operator_config for (operator_code, TAX_INVOICE); if disabled → ack and stop
+              - Resolves the subscription's package and service category via PLM-CFG-01 Package Catalog
+              - Optionally looks up the corresponding pro forma (if one exists) for traceability
+              - Builds InvoiceGenerationContext and calls InvoiceGenerationService.generate(ctx)
+
+          Step 3 — TaxInvoiceGenerator runs (R-TAX-01-G-*)
+            - Idempotency check on triggering_event_ref (the PaymentReceived event ID)
+            - Capture fresh customer_snapshot
+            - Build ONE line item for the direct payment:
+                description = "Cycle pre-payment — {package_name}" (localized)
+                package_ref = subscription's package
+                service_category_code = subscription's service category
+                total = paid_amount (tax-inclusive)
+                Call PLM-CFG-02 Tax Configuration TaxService.computeTax(total, customer_location, service_category)
+                  → returns tax_breakdown decomposing the inclusive total
+            - Build invoice header:
+                billing_mode = PREPAID
+                customer_snapshot = fresh
+                triggering_event_ref = PaymentReceived event ID
+                original_invoice_id = pro forma ID (if exists) or NULL
+                metadata.payment_received_event_id, payment_method
+                grouping_config_ref = SINGLE-dimension group for TAX_INVOICE (or per operator config)
+                period_start = target_cycle_start, period_end = target_cycle_end
+                due_date = NULL, status = GENERATED, payment_status = PAID
+            - Allocate TAX_INVOICE sequence number atomically
+            - Write invoice + line items + outbox event
+            Result: tax invoice row in status GENERATED.
+
+          Step 4-6 — Signing, retries, downstream — see "Signing flow (all three flows)" below.
+
+ #### Signing flow (common to all three flows)
+          Step 4 — SigningScanner picks up the tax invoice
+            Every 1 minute per operator, scanner queries:
+              SELECT * FROM invoice
+              WHERE invoice_type_code = 'TAX_INVOICE'
+                AND status = 'GENERATED'
+                AND operator_code = :operator
+            For each row:
+              Step 4a — Transition status to PENDING_SIGNATURE (atomic compare-and-swap)
+              Step 4b — Look up signer implementation via invoice_type_operator_config.signing_service_implementation_ref
+              Step 4c — Call signer.sign(taxInvoice):
+                          - Signer builds gateway-specific payload (proprietary format per authority)
+                          - Submits over HTTPS with appropriate auth (mTLS / OAuth / signed JWT / etc.)
+                          - Waits for response (timeout from operator config, default 30s)
+                          - On success: parses response into TaxSignaturePayload
+                          - On failure: throws TaxSigningException with category (TRANSIENT / VALIDATION)
+
+
+SOPHIX BSS Design Documents                                                                                            Page 12
+                   Step 4d — On success:
+                               - Update invoice.metadata.tax_signature_data, signed_invoice_number, signed_at
+                               - Transition status to SIGNED
+                               - Emit TaxInvoiceSigned event
+                   Step 4e — On failure:
+                               - Transition status to SIGNING_FAILED
+                               - Insert tax_invoice_signing_failure row
+                               - Set next_retry_at per failure category (transient → exponential backoff; validation → NULL)
+                               - Emit TaxInvoiceSigningFailed event
+
+             Step 5 — RetryScanner picks up transient failures (R-TAX-01-F-2)
+               Every 5 minutes per operator: re-submits SIGNING_FAILED with transient failure_type and next_retry_at <= NOW.
+               After 8 transient failures: transitions to GAVE_UP_AUTO and emits TaxInvoiceSigningGaveUp event.
+
+             Step 6 — Downstream consumers
+               TaxInvoiceSigned → DD_NOT-01 Notification Service: renders PDF, sends to customer
+               TaxInvoiceSigningGaveUp → ops alerting
+               TaxInvoiceSigningFailed (VALIDATION) → admin queue: human action required
+
+ Failure paths:
+
+  Where it fails                                        Lands in                                          Recovery
+
+  TAX-01 consumer down                                  Kafka retains the event; consumed on restart      None needed (Kafka redelivery)
+
+  Tax invoice generation fails (DB, snapshot, BIL-01)   generation_failure_queue (same as GEN-01)         GenerationFailureRetryScanner (GEN-01 owns)
+
+  Gateway unreachable (network, DNS, 5xx)               Tax invoice in SIGNING_FAILED with failure_type   Retry scanner
+                                                        GATEWAY_UNREACHABLE
+
+  Gateway timeout                                       Same                                              Retry scanner
+
+  Gateway returns 4xx (validation)                      Tax invoice in SIGNING_FAILED with failure_type   Admin queue — no auto retry
+                                                        VALIDATION_FAILURE
+
+  Gateway returns auth failure                          Same with failure_type AUTH_FAILURE               Admin alert: certificate may have expired
+
+  8 transient retries exhausted                         Tax invoice in GAVE_UP_AUTO                       Admin manual review
+
+
+
+ The pluggable signer pattern
+ Every operator's tax authority has its own protocol. To support this without polluting the shared TAX-01 code with
+ per-jurisdiction conditionals, TAX-01 uses an interface-based signer pattern.
+
+ The interface:
+             public interface TaxInvoiceSigner {
+
+                   /**
+                    * Returns the operator code this signer is registered for.
+                    * Used by the registry to select the right signer for a given operator.
+                    */
+                   String getOperatorCode();
+
+                   /**
+                    * Submit the tax invoice to the operator's tax authority gateway.
+                    * Returns a normalized payload containing the signed reference,
+                    * QR signature data, and gateway-specific metadata.
+                    * Throws TaxSigningException with category (TRANSIENT / VALIDATION) on failure.
+                    */
+                   TaxSignaturePayload sign(Invoice taxInvoice) throws TaxSigningException;
+
+                   /**
+                    * Submit a cancellation request for an already-signed tax invoice.
+                    * Returns the gateway's cancellation reference on success.
+                    * Throws TaxSigningException on failure.
+                    */
+                   String cancel(Invoice signedTaxInvoice, String cancellationReason) throws TaxSigningException;
+             }
+
+ Concrete implementations: one Java class per operator. The implementation knows:
+
+   - The gateway's URL and credentials (loaded from environment-specific config, NOT hardcoded)
+
+   - The wire protocol (REST, SOAP, fiscal device proxy, etc.)
+
+   - The payload schema (each authority has its own JSON or XML format)
+
+   - The authentication mechanism (mTLS client certs, OAuth client credentials, signed JWTs, etc.)
+
+   - Response parsing (extract signed reference number, QR data, timestamp)
+
+
+
+SOPHIX BSS Design Documents                                                                                                                           Page 13
+   - Error code mapping (each authority returns errors differently; the signer normalizes them to the TaxSigningException
+     categories)
+
+ Signer registration: each implementation is a Spring @Component. At startup, the TaxInvoiceSignerRegistry scans
+ for all TaxInvoiceSigner beans, indexes them by getOperatorCode(). At runtime, TaxInvoiceSigningService
+ looks up the right signer based on the tax invoice's operator code.
+
+ What this means for adding a new operator: write a new signer class, annotate with @Component, deploy. No changes to
+ the scanner, the retry framework, the data model, or other operators' signers. The pattern is the same as the
+ InvoiceGenerator framework from BIL-02 Core.
+
+ Signer implementations at deployment time
+ Each operator that enables tax invoicing has one TaxInvoiceSigner implementation registered as a Spring @Component.
+ The specific authority, protocol, payload format, and credentials are provided by the operator's tax team at deployment time.
+ The TAX-01 framework supports any authority that fits the TaxInvoiceSigner contract; adding a new operator means
+ writing one new class and deploying it — no changes to the scanner, retry framework, data model, or other operators' signers.
+
+ Operators whose deployment country does not require electronic tax invoice signing leave the tax invoice capability disabled
+ (invoice_type_operator_config.enabled = false for TAX_INVOICE). For those operators, no signer is needed.
+
+ Additional data model (beyond Core)
+ The invoice table from Core is reused for tax invoice rows (with invoice_type_code = TAX_INVOICE).
+ Signing-specific metadata lives in the invoice.metadata JSONB and (for detail audit) in this new table:
+
+ #### tax_invoice_signing_failure
+
+ One row per signing attempt that failed. Multiple rows per tax invoice are normal (each retry that fails creates a new row).
+
+  Column                                      Type                                             Notes
+
+  id                                          TEXT PK                                          ULID
+
+  invoice_id                                  TEXT NOT NULL                                    FK to the tax invoice in the invoice table
+
+  attempt_number                              INTEGER NOT NULL                                 1, 2, 3, ... — sequential per invoice
+
+  failed_at                                   TIMESTAMPTZ NOT NULL                             When the attempt failed
+
+  failure_type                                TEXT NOT NULL                                    GATEWAY_UNREACHABLE / GATEWAY_TIMEOUT /
+                                                                                               GATEWAY_5XX / AUTH_FAILURE /
+                                                                                               VALIDATION_FAILURE / RATE_LIMITED /
+                                                                                               UNKNOWN (extensible)
+
+  failure_category                            TEXT NOT NULL                                    TRANSIENT (auto-retry) / VALIDATION
+                                                                                               (admin-only)
+
+  gateway_response_code                       TEXT NULL                                        Raw response code from the gateway (HTTP status,
+                                                                                               SOAP fault code, etc.)
+
+  gateway_response_body                       TEXT NULL                                        Raw response body (truncated to 8KB for storage).
+                                                                                               Used for diagnosis.
+
+  error_message                               TEXT NULL                                        Human-readable summary
+
+  retry_scheduled_at                          TIMESTAMPTZ NULL                                 If transient: when the next retry will happen. NULL
+                                                                                               for validation failures.
+
+  admin_resolution                            TEXT NULL                                        Notes from admin who reviewed (for validation
+                                                                                               failures)
+
+  resolved_at                                 TIMESTAMPTZ NULL                                 When admin resolved (if applicable)
+
+  resolved_by                                 TEXT NULL                                        Admin user ID
+
+
+ Indexes: (invoice_id, attempt_number) UNIQUE; (failure_type, failed_at) for analytics;
+ (failure_category, retry_scheduled_at) partial WHERE failure_category='TRANSIENT' AND retry_scheduled_at
+ IS NOT NULL — used by retry scanner. P10Y retention.
+
+ Sample data:
+
+  id               invoice_id      attempt_number    failure_type    failure_category   gateway_respons      error_message         retry_scheduled_
+                                                                                        e_code                                     at
+
+  tsf_01...A       inv_01HZQX8N.   1                 GATEWAY_TIMEO   TRANSIENT          NULL                 Request timed         2026-10-10
+                   ..                                UT                                                      out after 30s         14:37:00
+
+  tsf_01...B       inv_01HZQX8N.   2                 GATEWAY_TIMEO   TRANSIENT          NULL                 Request timed         2026-10-10
+                   ..                                UT                                                      out after 30s         14:52:00
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 14
+  id                   invoice_id       attempt_number    failure_type        failure_category     gateway_respons      error_message        retry_scheduled_
+                                                                                                   e_code                                    at
+
+  tsf_01...C           inv_01HZQX9P.    1                 VALIDATION_FA       VALIDATION           400                  Customer tax         NULL
+                       ..                                 ILURE                                                         identifier not
+                                                                                                                        recognized by
+                                                                                                                        authority
+
+
+ How to read: the first invoice failed twice with timeout (transient — retry scheduled). The second invoice has a validation
+ failure (no retry scheduled; admin must fix the underlying issue in CRM and trigger manual re-signing).
+
+ API surface — what TAX-01 exposes
+  Mechanism                                        Used for                                              Examples
+
+  Kafka consumption (events in)                    Trigger tax invoice generation from payment events    PaymentApplied (POSTPAID invoice payments),
+                                                                                                         WalletToppedUp (PREPAID wallet topups),
+                                                                                                         PaymentReceived (PREPAID direct-pay)
+
+  Scheduled scanners (no inbound API)              Signing scanner (every 1 min), retry scanner (every   System-initiated, not external
+                                                   5 min)
+
+  Kafka emission (events out)                      Notify downstream of tax invoice lifecycle            TaxInvoiceIssued, TaxInvoiceSigned,
+                                                                                                         TaxInvoiceSigningFailed,
+                                                                                                         TaxInvoiceSigningGaveUp,
+                                                                                                         TaxInvoiceCancelled
+
+  REST (admin-facing)                              Operational endpoints for ops/tax compliance staff    Manual generation, retry, cancel, dashboard queries
+
+  Outbound HTTPS                                   Tax authority gateway submissions                     Per-signer protocol (mTLS, OAuth, etc.)
+
+
+ What TAX-01 does NOT expose as REST:
+
+  Capability                                                                  Where it lives instead
+
+  GET /api/tax-invoices/{id} (read tax invoice)                               BIL-02-READ-01 Invoice Read API (tax invoices are just invoices with
+                                                                              type=TAX_INVOICE; reading is unified there)
+
+  GET /api/tax-invoices/{id}/pdf                                              BIL-02-READ-01 Invoice Read API
+
+  POST /api/payments/... (record payment)                                     BIL-01 Charging Engine
+
+  POST /api/cycles/.../settle                                                 BIL-05 Wallet and Topup
+
+  Tax computation rules / rates                                               PLM-CFG-02 Tax Configuration
+
+
+ #### Events (Kafka) — TAX-01
+
+ Emits:
+
+  Topic                                            When                                                  Consumers
+
+  sophix.billing.taxinvoice.issued                 Tax invoice row written (status GENERATED)            analytics
+
+  sophix.billing.taxinvoice.signed                 Signing successful (status → SIGNED)                  DD_NOT-01 Notification Service (render + send
+                                                                                                         PDF), BIL-01 Charging Engine (audit), analytics
+
+  sophix.billing.taxinvoice.signingfaile           A signing attempt failed                              ops alerting (if validation), retry scanner (internal —
+  d                                                                                                      uses DB scan, not event)
+
+  sophix.billing.taxinvoice.signing.give           After 8 transient retries → GAVE_UP_AUTO              ops alerting
+  up
+
+  sophix.billing.taxinvoice.cancelled              Tax invoice cancelled                                 BIL-01 Charging Engine (audit), DD_NOT-01
+                                                                                                         Notification Service (notify customer if appropriate),
+                                                                                                         analytics
+
+
+ Consumes:
+
+  Topic                                            From                                                  Action
+
+  sophix.billing.payment.applied                   BIL-01 Charging Engine                                Trigger tax invoice generation for POSTPAID
+                                                                                                         invoice payments (full or partial)
+
+  sophix.billing.wallet.toppedup                   BIL-05 Wallet and Topup                               Trigger tax invoice generation for PREPAID wallet
+                                                                                                         topups
+
+  sophix.billing.payment.received                  BIL-01 Charging Engine                                Trigger tax invoice generation for PREPAID
+                                                                                                         direct-pay payments (no-wallet operator model)
+
+
+ #### REST endpoints (admin-facing — operational only)
+               GET   /api/tax-invoices/dashboard?operator={code}                           ← ops dashboard summary
+
+
+SOPHIX BSS Design Documents                                                                                                                            Page 15
+            GET /api/tax-invoices/{id}/signing-history                                    ← all attempts + failures for one invoice
+            POST /api/tax-invoices/{id}/retry-signing                                     ← manual retry
+            POST /api/tax-invoices/{id}/cancel                                            ← cancel (signed needs dual approval)
+            POST /api/tax-invoices/{id}/cancel/approve                                    ← Tax Compliance Officer approval for signed cancellation
+            POST /api/tax-invoices/{id}/resolve-no-action                                 ← mark failed invoice as offline-resolved
+            POST /api/tax-invoices/manual                                                 ← admin manually generates a tax invoice for a payment
+
+
+ Cross-DD coordination
+  Touched                                       What TAX-01 owns                                      What the other DD owns
+
+  BIL-02 Invoicing (Core)                       Implements TaxInvoiceGenerator per Core's             Owns framework + tables + lifecycle.
+                                                framework; uses sequence service, line builder,
+                                                writer, snapshot service, event publisher. Reuses
+                                                invoice and invoice_line_item tables for tax
+                                                invoice rows.
+
+  BIL-01 Charging Engine                        Consumes PaymentApplied (POSTPAID invoice             Owns payment recording + charge computation.
+                                                payments) and PaymentReceived (PREPAID
+                                                direct-pay). Calls BIL-01 read APIs to load the
+                                                parent invoice details for POSTPAID flow.
+
+  BIL-05 Wallet and Topup                       Consumes WalletToppedUp for PREPAID wallet            Owns wallet + topup mechanics.
+                                                topups.
+
+  BIL-02-GEN-01 Invoice Generation              Independent — no direct calls. GEN-01's bulk          Owns regular invoice generators.
+                                                reversal explicitly excludes TAX_INVOICE (TAX-01
+                                                owns tax invoice cancellation through its own
+                                                dual-approval flow).
+
+  PLM-CFG-01 Package Catalog                    For PREPAID direct-pay: looks up the subscription's   Owns package and service-category mapping.
+                                                package → service category to tag the tax invoice
+                                                line item.
+
+  PLM-CFG-03 Wallet Configuration               For PREPAID wallet topup: resolves                    Owns wallet type catalog.
+                                                wallet_type_code → service category.
+
+  BIL-02-ADJ-01 Invoice Adjustments             None directly. (Credit notes against a tax invoice    Owns adjustment workflow.
+                                                would require special handling — out of scope for
+                                                V3 launch.)
+
+  BIL-02-READ-01 Invoice Read API               None directly. Tax invoice PDF retrieval flows        Owns PDF retrieval.
+                                                through READ-01 via the unified invoice read API.
+
+  BIL-02-STA-01 Status Management & Recovery    None directly. Tax invoices don't have due dates      Owns lifecycle for invoices with due dates.
+                                                and aren't subject to overdue/dunning logic; STA-01
+                                                explicitly excludes them.
+
+  SUB-LM-01 Subscription Lifecycle Management   Reads subscription state during generation            Owns subscription master.
+                                                (PENDING gate).
+
+  PLM-CFG-02 Tax Configuration                  For PREPAID topup and direct-pay: calls TaxServ       Owns tax rules (rates, cascades, exemptions).
+                                                ice.computeTax(tax_inclusive_total,
+                                                customer_location, service_category) to
+                                                decompose the inclusive amount into base + tax
+                                                components per the cascade. For POSTPAID: no
+                                                PLM-CFG-02 call — tax is proportionally scaled
+                                                from the parent invoice's already-computed tax
+                                                breakdown (which GEN-01 obtained from
+                                                PLM-CFG-02 at invoice generation time).
+
+  CRM / Customer Service                        Called via Core's CustomerSnapshotService for         Owns live customer master.
+                                                customer snapshot.
+
+  DD_NOT-01 Notification Service                Emits TaxInvoiceSigned events with full payload;      Owns rendering + dispatch.
+                                                NOT-01 renders and sends.
+
+  Tax authority gateways (external)             Calls per-signer protocol to the operator's tax       External regulator-operated APIs.
+                                                authority API, where the operator has tax invoicing
+                                                enabled.
+
+
+
+ Dependencies
+  Dependency                                                               Owner
+
+  BIL-02 Invoicing (Core)                                                  billing team (same wave)
+
+  BIL-01 Charging Engine                                                   billing team
+
+  BIL-05 Wallet and Topup                                                  billing team
+
+  SUB-LM-01 Subscription Lifecycle Management                              subscription team
+
+  PLM-CFG-02 Tax Configuration                                             catalog team
+
+  CRM / Customer Service module                                            CRM team
+
+
+
+SOPHIX BSS Design Documents                                                                                                                         Page 16
+  Dependency                                                                         Owner
+
+  DD_NOT-01 Notification Service                                                     notification team
+
+  FOUNDATION_DB.md, FOUNDATION_KAFKA.md, FOUNDATION_AUTH.md                          infrastructure team
+
+  Per-operator tax authority API specifications                                      each operator's tax team
+
+  Per-operator certificates / OAuth credentials (provided by tax authorities)        each operator's tax team (handed to infrastructure for vault storage)
+
+
+
+ Operator-configurable capabilities (specific to TAX-01)
+  Capability                                              Where configured                                       Notes
+
+  Tax invoice enablement                                  invoice_type_operator_config.enabled for               Operator chooses to enable; if false, TAX-01
+                                                          TAX_INVOICE row                                        acknowledges trigger events but generates nothing
+
+  Signing service implementation                          invoice_type_operator_config.signing_s                 The Spring bean name of the signer class for this
+                                                          ervice_implementation_ref                              operator
+
+  Signing timeout                                         Per-signer config (gateway-specific)                   Default 30 seconds; operator can override per
+                                                                                                                 gateway behavior
+
+  Retry backoff schedule                                  Per-signer config                                      Default 5min/15min/30min/1h/2h/4h/8h/24h;
+                                                                                                                 operator can tune
+
+  Max transient retries                                   Per-signer config                                      Default 8; operator can adjust based on gateway
+                                                                                                                 reliability
+
+  Tax invoice PDF template                                Per-operator template in DD_NOT-01 Notification        Tax-authority-mandated layouts; each operator's
+                                                          Service                                                template includes the QR code and signed
+                                                                                                                 reference
+
+  Operator country-specific tax fields                    Captured in customer snapshot at issuance              tax_identifier.type per the operator's
+                                                                                                                 jurisdiction; operator-specific business registration
+                                                                                                                 number; other authority-required fields
+
+  Tax reporting segregation per package / service         Line items carry service_category_code,                Operator finance team can produce per-service-type
+                                                          package_ref, wallet_type_code; tax reporting           and per-package tax reports for reconciliation with
+                                                          queries aggregate by these dimensions                  authority filings
+
+  Per-operator regulatory pre-go-live declaration         Coordinated with PLM-CFG-01 Package Catalog            Some operators must declare discounts,
+                                                          change-management workflow                             promotions, price changes, and product code
+                                                                                                                 changes to their regulatory authority before
+                                                                                                                 activation. PLM-CFG-01 owns the workflow that
+                                                                                                                 gates such changes behind regulator-declaration
+                                                                                                                 confirmation; TAX-01 receives the activated
+                                                                                                                 configuration and applies it at tax invoice
+                                                                                                                 generation. The specific declaration requirements
+                                                                                                                 are per-operator.
+
+
+
+
+ B — Current TZ
+ Tax invoice generation does not exist in TZ Sophix. No prior implementation to describe or compare against.
+
+
+
+ C — Gap & bridge
+ TAX-01 is entirely new functionality. There is no TZ baseline to bridge from. All capabilities described in section A are
+ introduced fresh by V3.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                                   Page 17
+

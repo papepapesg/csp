@@ -1,0 +1,1757 @@
+ DD: WO-01-FLOW-SUPPORT — Support Work Order Flow
+ Developer implementation guide: DD_WO-01-FLOW-SUPPORT-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the operator BPMN flow DD_WO-01-FLOW-SUPPORT-v1.0.md.
+
+ Verdict: ■ New | Wave: 2 | Group III: Fulfillment & Operations | Version: v1.0 | Module: Work Order | Satellite of:
+ DD_WO-01-Work_Order_Module-v1.0 The Support flow satellite. Defines WorkOrder_Support_WIK.bpmn, the Drools
+ KJAR shape for routing and resolution gating, the operator-config rows seeding the framework's catalogs, the no-site-visit
+ branch for desk-resolved support, the Pattern A two-WO escalation mechanism (finalize original + raise QCS), the
+ area-outage exit, the 3-month warranty + RPT linkage, and the TRC/TRD contractor-billing codes. Built on
+ DD_WO-01-FRAMEWORK-v1.0; reuses parts of DD_WO-01-FLOW-INSTALLATION-v1.0 (equipment binding capture for
+ cases where Support replaces hardware). Covers all Job Types in the SUPPORT kind: GPON support (GP3, GP4, GP2), HFC
+ support (HS1, HS2, HS3, HS4), Wi-Fi extender support (DLC2), TV service call (SRV), proactive support (PSO, PSI), quality
+ control (QCA, QCS), other operational codes (COS, INA, ACD, ROE, LNM, SDI, SDS, SMU), specialized (VIP, ZOI, ZOT, WCS),
+ and the RPT linkage WO when a repeat-within-warranty issue is detected.
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    7_work_order/DD_WO-01-FLOW-SUPPORT-v1.0.md
+
+  Version                                                           v1.0
+
+  DD type                                                           operator BPMN flow
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   Not explicitly defined
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+   - POST /api/...
+
+   - POST /api/work-orders
+
+   - POST /api/work-orders/wo_01HZ...QCS1/finalize-first-confirm
+
+   - POST /api/work-orders/wo_01HZ...QCS1/reassign
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+   - POST /api/work-orders/wo_01HZ...SP1/attachments
+
+   - POST /api/work-orders/wo_01HZ...SP1/finalize-first-confirm
+
+   - POST /api/work-orders/wo_01HZ...SP1/notes
+
+   - POST /api/work-orders/wo_01HZ...SP2/finalize-first-confirm
+
+ 4.2 Tables
+   - No CREATE TABLE block is explicitly declared in this DD.
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - contractor-assignment-decision
+
+   - r1-vip-always-visit
+
+   - r1-vip-internal-first
+
+   - r2-no-site-visit-codes
+
+   - r2-zuku-office-internal
+
+   - r3-default-visit
+
+   - r3-qcs-noc-maintenance
+
+   - r4-hfc-rf-noc-first
+
+   - r5-gpon-by-region
+
+   - r6-hfc-by-region
+
+   - r7-fallback-default
+
+   - resolution-gate
+
+   - site-visit-decision
+
+   - wo-capture-equipment-bindings-at-finalize
+
+   - wo-check-warranty-linkage
+
+   - wo-emit-escalation-candidate
+
+   - wo-emit-escalation-candidate-if-needed
+
+   - wo-emit-state-event
+
+   - wo-emit-support-completed
+
+   - wo-enforce-finalize-checklist
+
+   - wo-mark-escalation-candidate
+
+   - wo-tag-warranty-window
+
+   - wo-validate-create
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+
+SOPHIX BSS Design Documents                                                                                              Page 2
+ 4.4 Events
+   - WorkOrderAssigned
+
+   - WorkOrderCancellationRequested
+
+   - WorkOrderCreated
+
+   - WorkOrderEquipmentBindingsRecorded
+
+   - WorkOrderEscalationCandidate
+
+   - WorkOrderFinalized
+
+   - WorkOrderRPTLinkageRecorded
+
+   - WorkOrderSupportCompleted
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                           Recommendation
+
+  API/runtime                                                       Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                           Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                          Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                             Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                           Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                            Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                           Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                    Store with IRSA.
+
+  Observability                                                     Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                    dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ New | Wave: 2 | Group III: Fulfillment & Operations | Version: v1.0 | Module: Work Order | Satellite of:
+ DD_WO-01-Work_Order_Module-v1.0
+
+
+SOPHIX BSS Design Documents                                                                                                                   Page 3
+ The Support flow satellite. Defines WorkOrder_Support_WIK.bpmn, the Drools KJAR shape for routing and resolution
+ gating, the operator-config rows seeding the framework's catalogs, the no-site-visit branch for desk-resolved support, the
+ Pattern A two-WO escalation mechanism (finalize original + raise QCS), the area-outage exit, the 3-month warranty + RPT
+ linkage, and the TRC/TRD contractor-billing codes. Built on DD_WO-01-FRAMEWORK-v1.0; reuses parts of
+ DD_WO-01-FLOW-INSTALLATION-v1.0 (equipment binding capture for cases where Support replaces hardware).
+
+ Covers all Job Types in the SUPPORT kind: GPON support (GP3, GP4, GP2), HFC support (HS1, HS2, HS3, HS4), Wi-Fi
+ extender support (DLC2), TV service call (SRV), proactive support (PSO, PSI), quality control (QCA, QCS), other operational
+ codes (COS, INA, ACD, ROE, LNM, SDI, SDS, SMU), specialized (VIP, ZOI, ZOT, WCS), and the RPT linkage WO when a
+ repeat-within-warranty issue is detected.
+
+
+
+ 1. What this flow is
+ A Support WO captures one customer-reported issue from creation through resolution. Caller — the future Ticketing module
+ (creating Support WOs from customer tickets with originating_context_type=TICKET), CSR via BO UI (manual
+ creation), or the field contractor (raising a QCS escalation) — supplies the customer, the HomePass, the issue category, the
+ contact info, and any operator metadata. The flow handles assignment, optional dispatch (some Support WOs resolve at the
+ desk without a site visit), on-site work, the resolution gate, equipment binding when hardware is replaced, the QCS escalation
+ pattern when the contractor cannot resolve, and warranty-aware RPT linkage when the issue is a repeat.
+
+ Three non-negotiable rules from the workshop:
+
+   1. Some Support WOs don't need a site visit. The Job Type catalog marks each code with requires_site_visit.
+     Codes like remote-modem-reboot (HS4 Modem Disconnection rare case), Proactive Support (PSO, PSI) when handled
+     remotely, and QCS escalation routed to NOC (NOC resolves remotely or dispatches maintenance themselves) may
+     complete without dispatching a tech. The BPMN's first gateway routes between desk-resolution path and full-on-site-flow
+     path based on the WO's job_type.requires_site_visit flag.
+
+   2. Escalation is two-WO (Pattern A), not single-WO. Unlike Installation (Pattern B reassignment within same wo_id),
+     Support uses a finalize-original-then-spawn-new pattern. The contractor finalizes their support WO with a final reason
+     indicating "could not resolve; escalating" and the framework's flow worker emits WorkOrderEscalationCandidate. A
+     new QCS WO is then created — either by the contractor directly (BO UI manual creation) in v1.0, or by the future
+     Ticketing module subscribing to the event and auto-creating. Both paths land at POST /api/work-orders with
+     master_wo_id set to the original.
+
+   3. Area-outage is a clean closure with the customer not resolved. When the field tech determines the issue is an
+     area-wide outage handled separately by NOC's outage-management process, the Support WO closes with
+     final_reason=AREA_OUTAGE_OPEN. No QCS is raised — the outage already has its own tracking. The customer
+     remains affected until the outage is fixed (out of this flow's concern).
+
+ The Support flow is single-phase — current_phase stays NULL throughout. Unlike Shifting, Support does not have
+ sub-phases. Unlike Installation, it does NOT use Pattern B reroute (same wo_id, new team) — when work hits a wall, the WO
+ closes and a separate QCS WO opens.
+
+ Cross-country variation
+ This BSS deploys in any Wananchi-Group country. Support flow's cross-country differences are smaller than Installation's (no
+ topology-capture concern — the customer's HomePass already has the topology from their prior install). The variation surface
+ is mostly:
+
+   - Job Type catalog rows (each country has its own service codes).
+
+   - Final-reason catalog (operator-specific resolution categories).
+
+   - Required-before-finalize checklist (operator preferences for evidence).
+
+   - Drools rules for assignment + resolution-gate thresholds.
+
+ The same per-operator BPMN/Drools/config pattern applies; no flow code changes between operators.
+
+ What this flow does NOT do
+   - Doesn't create tickets. The future Ticketing module owns ticket lifecycle (customer reaches out → ticket opened →
+     categorized → routed); Ticketing creates a Support WO when field action is needed. v1.0 ships without Ticketing —
+     Support WOs in v1.0 come from BO UI manual creation by CSRs.
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 4
+   - Doesn't manage area outages. Outages have their own NOC process (out-of-scope for v1.0 SOPHIX). The Support flow
+     just provides the AREA_OUTAGE_OPEN exit so contractors can close their visit cleanly while the outage is handled
+     elsewhere.
+
+   - Doesn't compute warranty status. The wo-check-warranty-linkage worker (§7) queries existing WOs by customer
+     to find a recent install/support within the warranty window; the result drives RPT creation but the warranty calculation itself
+     is pure read against work_order.completed_at + warranty_days. No separate warranty subsystem.
+
+   - Doesn't bill the customer. Customer billing is unaffected by support visits in v1.0; contractor invoicing (which DOES
+     depend on TRC/TRD/standard codes) is downstream of WorkOrderSupportCompleted event consumed by Finance.
+
+   - Doesn't define the WO module's state machine, REST API, schemas, contractor model, or Kafka primitives —
+     those live in DD_WO-01-FRAMEWORK.
+
+ Glossary additions (specific to this flow)
+  Term                                                               Meaning
+
+  No-site-visit branch                                               BPMN path taken when job_type.requires_site_visit = false. The
+                                                                     WO skips contractor assignment + dispatcher claim + on-site work loop and
+                                                                     goes straight to a desk-resolution worker that captures resolution notes and
+                                                                     finalizes. Used for remote-resolved issues (proactive monitoring, NOC-tier
+                                                                     triage, remote modem reboots).
+
+  Pattern A escalation                                               The two-WO support-escalation pattern from the workshop: the original Support
+                                                                     WO finalizes with final_reason=COULD_NOT_RESOLVE_ESCALATED (or
+                                                                     similar trigger code); the framework's wo-emit-escalation-candidate
+                                                                     worker fires; a new QCS WO is created (in v1.0: manually by contractor; future:
+                                                                     automatically by Ticketing) with master_wo_id pointing to the original. NOC
+                                                                     owns the QCS WO.
+
+  QCS WO                                                             Quality Control Service WO. A specific Job Type (QCS) within the Support kind.
+                                                                     Created via Pattern A escalation when an original Support WO couldn't resolve.
+                                                                     Assigned to the internal NOC Maintenance team (ctr_NOC_MAINT). Runs
+                                                                     through the same Support BPMN — same primitives, different team. The QCS
+                                                                     code exists specifically to give the NOC team their own trackable WO count
+                                                                     (workshop quote: "previously the same WO was passed between contractor
+                                                                     and maintenance — making it impossible to separately track the maintenance
+                                                                     team's output").
+
+  Area-outage exception                                              When the field tech determines the issue is an area-wide outage, they close the
+                                                                     Support WO with final_reason=AREA_OUTAGE_OPEN. No QCS is raised.
+                                                                     The flow exits cleanly; the customer remains affected by the outage which is
+                                                                     handled by NOC's separate outage-management process.
+
+  RPT WO                                                             Repeat Work Order. Created alongside a Support WO (not replacing it) when
+                                                                     the new issue is within the warranty window of a prior install (6 months) or prior
+                                                                     support visit (3 months). The RPT carries master_wo_id pointing to the prior
+                                                                     WO. Both the original new Support WO and the RPT WO progress in parallel;
+                                                                     the RPT mostly exists for tracking + contractor billing implications (TRC/TRD
+                                                                     codes), not as a separate work item.
+
+  TRC / TRD codes                                                    Contractor billing codes used when the contractor returns within the warranty
+                                                                     period. TRD = warranty disconnect (contractor takes back equipment installed
+                                                                     earlier under warranty); TRC = warranty reconnect (paired with TRD). These
+                                                                     codes signal Finance to apply the warranty billing rules (typically no fee or
+                                                                     reduced fee depending on whether the original work was at fault). The WO
+                                                                     module captures the code; Finance's WorkOrderSupportCompleted
+                                                                     consumer interprets it.
+
+  Initial Reason                                                     The categorization captured at WO creation that links the WO back to the
+                                                                     originating ticket / service request. Workshop: "think of it as the link between a
+                                                                     Service Request / Ticket and the WO." Stored as a structured note on the WO
+                                                                     (note_kind = initial_reason). Filtered picklist per Job Type.
+
+
+
+
+ 2. BPMN — WorkOrder_Support_WIK.bpmn
+ One BPMN per operator (v1.0 ships WIK only). The process key is WorkOrder_Support_WIK; future operators get _WUG,
+ _WTZ, _YASSN. Same workers run; per-operator variation is in operator-config rows (§3) + the operator's Drools KJAR (§4).
+
+ 2.1 Process shape
+                          start   (status=PENDING, current_phase=NULL,
+                                   job_type_code set per creation; initial_reason note attached)
+                           ■
+                           ▼
+                    ■■■■■■■■■■■■■■■■■■■■■■■■■■
+
+
+
+SOPHIX BSS Design Documents                                                                                                                     Page 5
+                  ■ wo-validate-create      ■ framework worker
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■
+                           ■
+                           ▼
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                  ■ wo-check-warranty-linkage                 ■ flow worker
+                  ■ - look up prior install (6mo) / support ■
+                  ■   (3mo) for this customer                 ■
+                  ■ - if hit: attach warranty linkage note    ■
+                  ■   AND create RPT WO via POST /api/...     ■
+                  ■   (separate wo_id, master_wo_id=prior)    ■
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                           ■
+                           ▼
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                  ■ Drools gateway: site-visit-decision ■ reads job_type.requires_site_visit
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                               ■ requires_visit    ■ no_site_visit
+                               ▼                    ▼
+                  ■■■■■■■■■■■■■■■■■■■■■■■ ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                  ■ (full flow path)     ■ ■ (desk resolution path)       ■
+                  ■                      ■ ■                              ■
+                  ■ wo-auto-assign-      ■ ■ await-desk-resolution-input ■ user task
+                  ■ contractor           ■ ■ - desk agent captures        ■
+                  ■   (framework         ■ ■      findings/solution       ■
+                  ■    worker, Drools) ■ ■ - selects final reason         ■
+                  ■       ■              ■ ■                               ■
+                  ■       ▼              ■ ■          ■                    ■
+                  ■ await-claim-or-      ■ ■         ▼                     ■
+                  ■ dispatcher-ack       ■ ■ await-finalize-first-confirm■
+                  ■       ■              ■ ■          ■                    ■
+                  ■       ▼              ■ ■          ▼                     ■
+                  ■ await-tech-start     ■ ■ (skip Drools client-up;      ■
+                  ■       ■              ■ ■ desk resolution doesn't       ■
+                  ■       ▼              ■ ■ check signal levels)          ■
+                  ■ on-site-work-loop    ■ ■         ■                     ■
+                  ■       ■              ■ ■          ▼                    ■
+                  ■       ▼              ■ ■ await-finalize-second-        ■
+                  ■ await-finalize-      ■ ■ confirm                      ■
+                  ■ first-confirm        ■ ■         ■                     ■
+                  ■       ■              ■ ■          ▼                    ■
+                  ■       ▼              ■ ■ (merge to common close)       ■
+                  ■ Drools:              ■ ■                              ■
+                  ■ resolution-gate      ■ ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                  ■       ■ ■            ■              ■
+                  ■       ■ ■            ■              ■
+                  ■ RESOLVED ■ NOT_RESOLVED               ■
+                  ■       ■    ■ (or AREA_OUTAGE)        ■
+                  ■       ▼    ▼                          ■
+                  ■ ■■■■■■■■■■■■ ■■■■■■■■■■■■■■■■■ ■
+                  ■ ■capture eq■ ■mark-escalation■ ■
+                  ■ ■bindings ■ ■candidate flag ■ ■
+                  ■ ■(if needed)■ ■ (note +            ■ ■
+                  ■ ■■■■■■■■■■■■ ■ metadata)             ■ ■
+                  ■         ■        ■■■■■■■■■■■■■■■■■ ■
+                  ■         ■              ■             ■
+                  ■         ■■■■■■■■■■■■■■■■                ■
+                  ■                ▼                     ■
+                  ■       await-finalize-second-        ■
+                  ■       confirm                       ■
+                  ■                ■                     ■
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                                  ■
+                                  ▼    (common close)
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                  ■ wo-enforce-finalize-checklist           ■ framework worker
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                                 ■ pass
+                                 ▼
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                  ■ wo-emit-state-event                ■ framework worker
+                  ■ (status → COMPLETED;                ■
+                  ■ emits WorkOrderFinalized)          ■
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                                 ■
+                                 ▼
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                  ■ wo-emit-escalation-candidate-if-needed    ■ flow worker
+                  ■ - if final_reason triggers escalation:     ■
+                  ■   emits WorkOrderEscalationCandidate      ■
+                  ■   (Ticketing consumes when it ships;      ■
+                  ■    in v1.0 contractor BO UI prompts to    ■
+
+
+
+SOPHIX BSS Design Documents                                                                    Page 6
+                  ■    raise QCS WO manually)                ■
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                                 ■
+                                 ▼
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                  ■ wo-tag-warranty-window          ■ flow worker (reused from Installation §7.3)
+                  ■ - support warranty = 3 months   ■
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                                 ■
+                                 ▼
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                  ■ wo-emit-support-completed       ■ flow worker
+                  ■ - emit WorkOrderSupportCompleted (rich event for Finance, RPT linkage)
+                  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+                                 ■
+                               end
+
+             + boundary message catch (interrupting): WorkOrderCancellationRequested
+               → wo-mark-cancelled (framework worker) → status=CANCELLED → end-cancelled
+
+ The flow has two gateways: site-visit-decision (routes the no-site-visit branch around the contractor assignment + on-site
+ loop) and resolution-gate (decides whether the Drools rules consider the issue resolved or whether the WO closes as an
+ escalation-candidate). The desk-resolution branch is intentionally lean — fewer steps, since there's no field work to
+ coordinate.
+
+ 2.2 BPMN XML — site-visit-decision gateway
+          <bpmn:businessRuleTask
+              id="site-visit-decision"
+              name="Drools: requires site visit?"
+              camunda:resultVariable="siteVisitDecision"
+              camunda:decisionRef="site-visit-decision"
+              camunda:decisionRefBinding="latest"
+              camunda:mapDecisionResult="singleEntry">
+            <bpmn:extensionElements>
+              <camunda:inputParameter name="operatorCode">${operatorCode}</camunda:inputParameter>
+              <camunda:inputParameter name="jobTypeCode">${jobType}</camunda:inputParameter>
+            </bpmn:extensionElements>
+          </bpmn:businessRuleTask>
+
+          <bpmn:exclusiveGateway id="gateway-site-visit">
+            <bpmn:outgoing>flow-requires-visit</bpmn:outgoing>
+            <bpmn:outgoing>flow-no-site-visit</bpmn:outgoing>
+          </bpmn:exclusiveGateway>
+
+          <bpmn:sequenceFlow id="flow-requires-visit" sourceRef="gateway-site-visit" targetRef="wo-auto-assign-contractor">
+            <bpmn:conditionExpression>${siteVisitDecision == 'REQUIRES_VISIT'}</bpmn:conditionExpression>
+          </bpmn:sequenceFlow>
+
+          <bpmn:sequenceFlow id="flow-no-site-visit" sourceRef="gateway-site-visit" targetRef="await-desk-resolution-input">
+            <bpmn:conditionExpression>${siteVisitDecision == 'NO_SITE_VISIT'}</bpmn:conditionExpression>
+          </bpmn:sequenceFlow>
+
+ The Drools site-visit-decision is trivial — looks up wo_job_type_catalog.requires_site_visit for the WO's
+ (operator_code, job_type_code). Returns REQUIRES_VISIT or NO_SITE_VISIT. Operator-level override is
+ possible by tuning the KJAR (e.g., VIP customers always get a site visit even for codes flagged otherwise).
+
+ 2.3 BPMN XML — resolution-gate
+          <bpmn:businessRuleTask
+              id="resolution-gate"
+              name="Drools: resolution outcome"
+              camunda:resultVariable="resolutionDecision"
+              camunda:decisionRef="resolution-gate"/>
+
+          <bpmn:exclusiveGateway id="gateway-resolution">
+            <bpmn:outgoing>flow-resolved</bpmn:outgoing>
+            <bpmn:outgoing>flow-not-resolved-escalate</bpmn:outgoing>
+            <bpmn:outgoing>flow-area-outage</bpmn:outgoing>
+          </bpmn:exclusiveGateway>
+
+          <bpmn:sequenceFlow id="flow-resolved" sourceRef="gateway-resolution" targetRef="wo-capture-equipment-bindings-at-finalize"
+            <bpmn:conditionExpression>${resolutionDecision == 'RESOLVED'}</bpmn:conditionExpression>
+          </bpmn:sequenceFlow>
+
+          <bpmn:sequenceFlow id="flow-not-resolved-escalate" sourceRef="gateway-resolution" targetRef="wo-mark-escalation-candidate"
+            <bpmn:conditionExpression>${resolutionDecision == 'NOT_RESOLVED_ESCALATE'}</bpmn:conditionExpression>
+          </bpmn:sequenceFlow>
+
+          <bpmn:sequenceFlow id="flow-area-outage" sourceRef="gateway-resolution" targetRef="await-finalize-second-confirm">
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 7
+             <bpmn:conditionExpression>${resolutionDecision == 'AREA_OUTAGE'}</bpmn:conditionExpression>
+           </bpmn:sequenceFlow>
+
+ The Drools resolution-gate reads the WO's final-reason code + the optical/signal readings + the notes. Three outcomes
+ per workshop:
+
+   - RESOLVED — issue addressed; equipment bindings captured if hardware was changed; final close.
+
+   - NOT_RESOLVED_ESCALATE — issue beyond contractor's scope; escalation candidate flag set; final close with that
+     final_reason; Pattern A QCS spawning happens after.
+
+   - AREA_OUTAGE — issue is part of a known area outage; closes cleanly without escalation (no QCS); customer-affecting
+     status handled by NOC's separate outage process.
+
+ 2.4 Cancellation
+ Same framework pattern as DD_WO-01-FLOW-INSTALLATION §2.3 and DD_WO-01-FLOW-SHIFTING §2.3 — interrupting
+ boundary message event on WorkOrderCancellationRequested. Valid in any non-terminal status.
+
+ 2.5 Per-operator BPMN composition
+ The Support flow varies per operator without code change. v1.0 ships WIK. Future operators can:
+
+   - Adjust the no-site-visit eligibility (some operators may always require a tech visit regardless of job type).
+
+   - Tune the Drools resolution-gate thresholds (signal-level cutoffs differ by network deployment).
+
+   - Add a pre-dispatch ticket-triage user task between WO creation and contractor assignment.
+
+   - Change escalation behavior (some operators may use Pattern B reroute for Support, like Installation, instead of Pattern A
+     QCS spawn).
+
+ All of these are BPMN edits + config-row additions, not framework or code changes.
+
+
+
+ 3. Per-operator + per-flow configuration rows
+ This flow seeds the following framework catalogs at v1.0 deploy time. All rows are operator-scoped to WIK.
+
+ 3.1 wo_flow_config row
+  operator_code                     kind                              bpmn_process_key                  drools_kjar_ref
+
+  WIK                               SUPPORT                           WorkOrder_Support_WIK             wo-support-wik-v1.0.kjar
+
+
+
+ 3.2 wo_job_type_catalog rows
+  operator_code    job_type_code    kind             display_name     description        network_type   requires_site_visi   warranty_days
+                                                                                                        t
+
+  WIK              GP3              SUPPORT          GPON Internet    LOS, drop          GPON           true                 90
+                                                     Service Call     cut, internet
+                                                                      issues for
+                                                                      GPON
+
+  WIK              GP4              SUPPORT          GPON TV          TV issues for      GPON           true                 90
+                                                     Service Call     GPON
+
+  WIK              GP2              SUPPORT          GPON ADD TV      GPON TV add        GPON           true                 90
+                                                                      request
+
+  WIK              HS1              SUPPORT          HFC Internet     Internet           HFC            true                 90
+                                                     Support          issues for
+                                                                      HFC
+
+  WIK              HS2              SUPPORT          HFC TV           TV issues for      HFC            true                 90
+                                                     Support          HFC
+
+  WIK              HS3              SUPPORT          HFC RF /         RF out of          HFC            true                 90
+                                                     Signal Level     range —
+                                                     Support          maintenance
+                                                                      dispatched
+
+  WIK              HS4              SUPPORT          Modem            Rarely used —      HFC            false                90
+                                                     Disconnection    modem disconn
+                                                                      ections
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                           Page 8
+  operator_code    job_type_code   kind            display_name     description      network_type    requires_site_visi   warranty_days
+                                                                                                     t
+
+  WIK              DLC2            SUPPORT         Wi-Fi            Connectivity     NULL            true                 90
+                                                   Extender         issue on a
+                                                   Support          Wi-Fi
+                                                                    extender
+
+  WIK              SRV             SUPPORT         TV Service       Same purpose     NULL            true                 90
+                                                   Call             as GP4 / HS2
+                                                                    — not
+                                                                    commonly used
+
+  WIK              PSO             SUPPORT         Proactive        NOC raises       GPON            false                0
+                                                   GPON Service     proactively
+                                                   Call             from
+                                                                    monitoring
+
+  WIK              PSI             SUPPORT         Proactive HFC    NOC raises       HFC             false                0
+                                                   Service Call     proactively
+                                                                    from
+                                                                    monitoring
+
+  WIK              QCA             SUPPORT         Quality          Internal QA      NULL            false                0
+                                                   Control Audit    audit
+
+  WIK              QCS             SUPPORT         Quality          Escalation WO    NULL            true                 0
+                                                   Control          — maintenance
+                                                   Service          team owns
+                                                                    this
+
+  WIK              QOS             SUPPORT         Quality of       Customer-faci    NULL            true                 90
+                                                   Service          ng QoS issue
+
+  WIK              COS             SUPPORT         Change of        Service plan     NULL            false                0
+                                                   Service          change
+                                                                    request
+
+  WIK              WCS             SUPPORT         Welcome Call     Issue            NULL            true                 90
+                                                   Support          reported on
+                                                                    the 2-day
+                                                                    welcome call
+
+  WIK              VIP             SUPPORT         VIP Support      MPs,             NULL            true                 90
+                                                                    governors,
+                                                                    senators,
+                                                                    MCAs
+
+  WIK              ZOI             SUPPORT         Zuku Office      Internet at      NULL            true                 90
+                                                   Internet         Zuku office
+                                                                    locations
+
+  WIK              ZOT             SUPPORT         Zuku Office      TV at Zuku       NULL            true                 90
+                                                   TV               office
+                                                                    locations
+
+  WIK              RPT             SUPPORT         Repeat Work      Repeat-within    NULL            false                0
+                                                   Order            -warranty
+                                                                    linkage WO
+                                                                    (raised
+                                                                    alongside
+                                                                    another
+                                                                    Support WO)
+
+  WIK              TRC             SUPPORT         Warranty         Contractor       NULL            true                 0
+                                                   Reconnect        billing code
+                                                                    — paired with
+                                                                    TRD
+
+  WIK              TRD             SUPPORT         Warranty         Contractor       NULL            true                 0
+                                                   Disconnect       billing code
+                                                                    — paired with
+                                                                    TRC
+
+  WIK              LNM             SUPPORT         Line             Maintenance      NULL            true                 0
+                                                   Maintenance      team
+                                                                    line-level
+                                                                    work
+
+
+
+ 3.3 wo_note_kind_registry rows (support-specific kinds)
+ Inherits framework's generic kinds + reuses installation-flow-registered kinds (findings, solution, optical_readings,
+ hfc_signal_readings, csr_note, dispatcher_note, customer_appointment, final_reason_set). Adds:
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                        Page 9
+  operator_code                   note_kind                     schema_jsonb (excerpt)               append_only
+
+  WIK                             initial_reason                {"required":["reasonCode","r         true
+                                                                easonDescription"],"properti
+                                                                es":{"reasonCode":{"type":"s
+                                                                tring"},"reasonDescription":
+                                                                {"type":"string"},"ticketRef
+                                                                ":{"type":"string"}}}
+
+  WIK                             warranty_linkage              {"required":["priorWoId","pr         true
+                                                                iorJobTypeCode","priorComple
+                                                                tedAt","warrantyDays"],"prop
+                                                                erties":{"priorWoId":{"type"
+                                                                :"string"},"priorJobTypeCode
+                                                                ":{"type":"string"},"priorCo
+                                                                mpletedAt":{"type":"string",
+                                                                "format":"date-time"},"warra
+                                                                ntyDays":{"type":"integer"}}
+                                                                }
+
+  WIK                             escalation_candidate_reason   {"required":["whyNotResolved         true
+                                                                ","handoffSummary"],"propert
+                                                                ies":{"whyNotResolved":{"typ
+                                                                e":"string"},"handoffSummary
+                                                                ":{"type":"string"}}}
+
+  WIK                             area_outage_ref               {"required":["outageId"],"pr         true
+                                                                operties":{"outageId":{"type
+                                                                ":"string"},"outageDescripti
+                                                                on":{"type":"string"}}}
+
+  WIK                             desk_resolution_summary       {"required":["actionTaken"],         true
+                                                                "properties":{"actionTaken":
+                                                                {"type":"string"},"customerN
+                                                                otifiedAt":{"type":"string",
+                                                                "format":"date-time"}}}
+
+
+
+ 3.4 wo_finalization_requirements rows
+ Two flavors: site-visit codes vs no-site-visit codes. The framework's wo-enforce-finalize-checklist reads the row
+ matching the WO's (operator_code, kind, job_type_code).
+
+  operator_code         kind                  job_type_code     required_note_kinds      required_attachment_ca    min_attachments_per_c
+                                                                                         tegories                  ategory
+
+  WIK                   SUPPORT               NULL              ["initial_reason",       []                        NULL
+                                                                "findings","soluti
+                                                                on","final_reason_
+                                                                set"]
+
+  WIK                   SUPPORT               GP3               ["initial_reason",       ["setup_photo","rf        NULL
+                                                                "findings","soluti       _optical_reading"]
+                                                                on","optical_readi
+                                                                ngs","final_reason
+                                                                _set"]
+
+  WIK                   SUPPORT               GP4               ["initial_reason",       ["setup_photo"]           NULL
+                                                                "findings","soluti
+                                                                on","optical_readi
+                                                                ngs","final_reason
+                                                                _set"]
+
+  WIK                   SUPPORT               HS1               ["initial_reason",       ["setup_photo","sp        NULL
+                                                                "findings","soluti       eed_test","rf_opti
+                                                                on","hfc_signal_re       cal_reading"]
+                                                                adings","final_rea
+                                                                son_set"]
+
+  WIK                   SUPPORT               HS2               ["initial_reason",       ["setup_photo"]           NULL
+                                                                "findings","soluti
+                                                                on","hfc_signal_re
+                                                                adings","final_rea
+                                                                son_set"]
+
+  WIK                   SUPPORT               HS3               ["initial_reason",       ["rf_optical_readi        NULL
+                                                                "findings","soluti       ng"]
+                                                                on","hfc_signal_re
+                                                                adings","final_rea
+                                                                son_set"]
+
+  WIK                   SUPPORT               HS4               ["initial_reason",       []                        NULL
+                                                                "desk_resolution_s
+                                                                ummary","final_rea
+                                                                son_set"]
+
+
+SOPHIX BSS Design Documents                                                                                                     Page 10
+  operator_code         kind                job_type_code        required_note_kinds   required_attachment_ca   min_attachments_per_c
+                                                                                       tegories                 ategory
+
+  WIK                   SUPPORT             PSO                  ["initial_reason",    []                       NULL
+                                                                 "desk_resolution_s
+                                                                 ummary","final_rea
+                                                                 son_set"]
+
+  WIK                   SUPPORT             PSI                  ["initial_reason",    []                       NULL
+                                                                 "desk_resolution_s
+                                                                 ummary","final_rea
+                                                                 son_set"]
+
+  WIK                   SUPPORT             QCA                  ["initial_reason",    []                       NULL
+                                                                 "desk_resolution_s
+                                                                 ummary","final_rea
+                                                                 son_set"]
+
+  WIK                   SUPPORT             QCS                  ["initial_reason",    ["rf_optical_readi       NULL
+                                                                 "findings","soluti    ng"]
+                                                                 on","optical_readi
+                                                                 ngs","hfc_signal_r
+                                                                 eadings","final_re
+                                                                 ason_set"]
+
+  WIK                   SUPPORT             COS                  ["initial_reason",    []                       NULL
+                                                                 "desk_resolution_s
+                                                                 ummary","final_rea
+                                                                 son_set"]
+
+  WIK                   SUPPORT             RPT                  ["initial_reason",    []                       NULL
+                                                                 "warranty_linkage"
+                                                                 ,"final_reason_set
+                                                                 "]
+
+
+ For the QCS code: required notes include both optical_readings AND hfc_signal_readings because the NOC may
+ handle either network type. The Drools rules in §4 deal with which set actually applies per the WO's network_type; this row
+ just lists the kinds that COULD be required. In practice, only one set is checked because only one is captured.
+
+ 3.5 wo_final_reason_catalog rows
+  operator_code         kind                job_type_code        final_reason_code     display_name             triggers_escalation_eve
+                                                                                                                nt
+
+  WIK                   SUPPORT             NULL                 RESOLVED_ON_SITE      Resolved on site         false
+
+  WIK                   SUPPORT             NULL                 NO_FAULT_FOUND        No fault found           false
+
+  WIK                   SUPPORT             NULL                 CABLE_REPLACED        Faulty cable             false
+                                                                                       replaced
+
+  WIK                   SUPPORT             NULL                 MODEM_REPLACED        Faulty modem             false
+                                                                                       replaced
+
+  WIK                   SUPPORT             NULL                 ONT_REPLACED          Faulty ONT               false
+                                                                                       replaced
+
+  WIK                   SUPPORT             NULL                 CUSTOMER_NOT_AVAIL    Customer not             false
+                                                                 ABLE                  available —
+                                                                                       reschedule
+
+  WIK                   SUPPORT             NULL                 AREA_OUTAGE_OPEN      Area outage —            false
+                                                                                       handled separately
+                                                                                       by NOC
+
+  WIK                   SUPPORT             NULL                 COULD_NOT_RESOLVE_    Could not resolve        true
+                                                                 ESCALATED             — escalate to NOC
+
+  WIK                   SUPPORT             NULL                 RESOLVED_REMOTELY     Resolved remotely        false
+                                                                                       (no site visit
+                                                                                       needed)
+
+  WIK                   SUPPORT             QCS                  MAINTENANCE_RESOLV    Maintenance team         false
+                                                                 ED                    resolved upstream
+                                                                                       issue
+
+  WIK                   SUPPORT             QCS                  DISPATCHED_TO_CONS    Issue requires           false
+                                                                 TRUCTION              construction work
+                                                                                       — handed off
+
+  WIK                   SUPPORT             RPT                  RPT_LINKAGE_RECORD    Repeat-within-warr       false
+                                                                 ED                    anty linkage
+                                                                                       recorded
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 11
+ COULD_NOT_RESOLVE_ESCALATED is the one final reason whose triggers_escalation_event is true. When the
+ original Support WO finalizes with this code, the framework's wo-emit-escalation-candidate-if-needed worker fires
+ WorkOrderEscalationCandidate (event from framework §7). Pattern A handling proceeds (§5).
+
+ 3.6 Operator variation surface
+ Same six axes as documented in DD_WO-01-FLOW-INSTALLATION §3.6. The Support flow does not introduce new
+ variation axes.
+
+
+
+ 4. Drools KJAR — wo-support-wik-v1.0.kjar
+ Three named decisions in this KJAR:
+
+   1. contractor-assignment-decision — picks contractor + team for site-visit Support WOs. Same shape as
+     Installation flow's; routing rules tuned for Support call-out patterns.
+
+   2. site-visit-decision — reads wo_job_type_catalog.requires_site_visit for the WO's
+     (operator_code, job_type_code). Returns REQUIRES_VISIT or NO_SITE_VISIT. Operator can override per VIP
+     rules.
+
+   3. resolution-gate — at first-confirm, decides whether the WO closes as resolved, as escalation candidate, or as
+     area-outage.
+
+ 4.1 contractor-assignment-decision
+ Inputs: {operatorCode, kind=SUPPORT, jobTypeCode, networkType, techRegionCode,
+ customerVipTier?, scheduledAt}.
+
+ Output: ContractorAssignmentDecision { contractorId, teamId, technicianId?, mode, considered[]
+ }.
+
+ v1.0 KE WIK rules:
+
+  Rule                                     Trigger                                    Decision
+
+  r1-vip-internal-first                    customerVipTier == "VIP" OR jobTypeCode    ctr_Z071H (internal in-house) TEAM mode.
+                                           == "VIP"
+
+  r2-zuku-office-internal                  jobTypeCode IN ("ZOI","ZOT")               ctr_Z071H TEAM mode (Zuku Office accounts
+                                                                                      handled in-house).
+
+  r3-qcs-noc-maintenance                   jobTypeCode == "QCS"                       ctr_NOC_MAINT (internal NOC) TEAM mode.
+
+  r4-hfc-rf-noc-first                      jobTypeCode == "HS3"                       ctr_NOC_MAINT TEAM mode (RF/signal-level
+                                                                                      issues go to NOC for line investigation).
+
+  r5-gpon-by-region                        networkType == "GPON" and region matches   ctr_Z071H TEAM mode.
+                                           internal coverage
+
+  r6-hfc-by-region                         networkType == "HFC" and region matches    ctr_Z071H TEAM mode.
+                                           internal coverage
+
+  r7-fallback-default                      Otherwise                                  ctr_ADRIAN (external) TEAM mode.
+
+
+
+ 4.2 site-visit-decision
+ Inputs: {operatorCode, jobTypeCode, customerVipTier?}.
+
+ Output: REQUIRES_VISIT or NO_SITE_VISIT.
+
+ v1.0 KE WIK rules:
+
+  Rule                                     Trigger                                    Decision
+
+  r1-vip-always-visit                      customerVipTier == "VIP"                   REQUIRES_VISIT (VIPs always get a tech
+                                                                                      regardless of job type)
+
+  r2-no-site-visit-codes                   jobTypeCode IN                             NO_SITE_VISIT
+                                           ("HS4","PSO","PSI","QCA","COS","RPT")
+
+  r3-default-visit                         Otherwise                                  REQUIRES_VISIT
+
+
+
+ 4.3 resolution-gate
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 12
+ Inputs: {woId, jobTypeCode, finalReasonCode, latestSignalReading?, latestOpticalReading?,
+ hasEscalationCandidateNote, hasAreaOutageRefNote}.
+
+ Output: RESOLVED | NOT_RESOLVED_ESCALATE | AREA_OUTAGE.
+
+ v1.0 KE WIK rules:
+
+  Rule                                                              Decision
+
+  final_reason == "AREA_OUTAGE_OPEN" AND area_outage_ref note       AREA_OUTAGE
+  present
+
+  final_reason == "COULD_NOT_RESOLVE_ESCALATED" AND                 NOT_RESOLVED_ESCALATE
+  escalation_candidate_reason note present
+
+  final_reason IN ("RESOLVED_ON_SITE","NO_FAULT_FOUND","CABL        RESOLVED
+  E_REPLACED","MODEM_REPLACED","ONT_REPLACED","RESOLVED_REMO
+  TELY","MAINTENANCE_RESOLVED")
+
+  final_reason == "CUSTOMER_NOT_AVAILABLE"                          RESOLVED (administratively closed; not an escalation; can be reissued by CSR
+                                                                    as a new WO)
+
+  Default                                                           NOT_RESOLVED_ESCALATE (defensive — unknown final reasons treated as
+                                                                    escalation candidates for human review)
+
+
+
+
+ 5. Pattern A escalation — narrative
+ The Support flow's escalation pattern is fundamentally different from Installation's. Installation uses Pattern B (same wo_id,
+ reassigned to maintenance/construction, returns to install contractor for finalize). Support uses Pattern A: two-WO
+ sequence — finalize the original Support WO, raise a new QCS WO.
+
+ 5.1 Pattern A rationale (workshop quote)
+ From the workshop transcript:
+
+ Previously the same WO was passed between contractor and maintenance — making it impossible to separately track the
+ maintenance team's output. QCS gives maintenance their own trackable count.
+
+ So Pattern A exists for operational accountability: the contractor's WO count reflects their workload; the NOC's QCS count
+ reflects theirs. Pattern B (Installation) doesn't have this problem because the install contractor retains ownership end-to-end;
+ with Support, the work genuinely transfers to a different team.
+
+ 5.2 Pattern A mechanics
+ When the contractor first-confirms the original Support WO with final_reason = COULD_NOT_RESOLVE_ESCALATED:
+
+   1. Drools resolution-gate returns NOT_RESOLVED_ESCALATE.
+
+   2. Flow worker wo-mark-escalation-candidate runs. Appends an escalation_candidate_reason note with the
+     contractor's handoff summary ("ONT RX -32 dBm, optical fault upstream — need OLT-side check"). Sets
+     metadata.escalationCandidatePending = true on the WO.
+
+   3. Second-confirm proceeds. Framework's checklist passes; WO transitions to COMPLETED.
+
+   4. wo-emit-state-event fires WorkOrderFinalized (framework event, status=COMPLETED).
+
+   5. wo-emit-escalation-candidate-if-needed runs AFTER WorkOrderFinalized. Reads
+     wo_final_reason_catalog.triggers_escalation_event for the WO's (operator, kind, job_type,
+     final_reason). For COULD_NOT_RESOLVE_ESCALATED this is true. Worker emits
+     WorkOrderEscalationCandidate (framework event from DD_WO-01-FRAMEWORK §7).
+
+ The original Support WO is now closed. A separate QCS WO needs to be created — that's step 6, which has two
+ implementations depending on whether Ticketing module exists.
+
+ 5.3 QCS WO creation — v1.0 (no Ticketing module yet)
+ In v1.0 the future Ticketing module hasn't shipped. The QCS WO must be created manually by the contractor via BO UI:
+
+   1. Contractor's BO UI subscribes to WorkOrderEscalationCandidate events for their own WOs. When one arrives, UI
+     surfaces a prompt: "Original WO finalized as escalation. Create QCS handoff to NOC?"
+
+   2. Contractor confirms via UI button. UI calls:
+            POST /api/work-orders HTTP/1.1
+
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 13
+          {
+              "operatorCode":           "WIK",
+              "kind":                   "SUPPORT",
+              "jobTypeCode":            "QCS",
+              "customerId":             "<copied from original>",
+              "homepassId":             "<copied from original>",
+              "originatingContextType": "MASTER_WO",
+              "originatingContextRef": "<original wo_id>",
+              "masterWoId":             "<original wo_id>",
+              "linkType":               "ESCALATION",
+              "idempotencyKey":         "qcs-from-<original-wo-id>",
+              "metadata":               {"escalationCandidateNoteRef":"<note_id>"}
+          }
+
+ The new QCS WO starts a fresh Camunda process instance (same Support BPMN). The auto-assignment Drools picks
+ ctr_NOC_MAINT (rule r3-qcs-noc-maintenance). NOC owns the new WO.
+
+ 5.4 QCS WO creation — future (with Ticketing module)
+ When Ticketing module ships, the option to use automatic spawning opens. Ticketing subscribes to
+ WorkOrderEscalationCandidate events and:
+
+   1. Reads the event payload (carries the original wo_id, customer, homepass, final reason, last findings note).
+
+   2. Decides whether to spawn QCS based on operator-configurable Drools rules in the Ticketing module.
+
+   3. If yes: Ticketing calls the same POST /api/work-orders endpoint above with
+     originating_context_type=TICKET (the new ticket Ticketing opened) and master_wo_id set to the original.
+
+   4. Returns success or "decided not to escalate" with a reason captured on the ticket.
+
+ Both paths coexist — contractor can still raise manual QCS via BO UI; Ticketing can auto-create. If both fire for the same
+ source event (race), the framework's idempotency on (operator_code, originating_context_type,
+ idempotency_key) deduplicates — Ticketing's auto-create uses one idempotency key, contractor's manual uses a
+ different one, so they could in theory both succeed. Best-practice: Ticketing's auto-create includes the original wo_id in the
+ idempotency key (qcs-auto-from-<original-wo-id>); contractor's manual uses the same key
+ (qcs-from-<original-wo-id>). Same key → second call returns 409 IDEMPOTENCY_HIT. The flow doesn't enforce
+ which side wins; it only ensures one QCS exists per source escalation.
+
+ 5.5 What the QCS WO does
+ The QCS WO is just another Support WO with job_type=QCS. It runs through the same Support BPMN as any other
+ Support WO. Differences from a regular Support WO:
+
+   - Assigned team is ctr_NOC_MAINT (internal NOC), set by Drools contractor-assignment-decision.
+
+   - master_wo_id is set to the original Support WO + link_type=ESCALATION.
+
+   - NOC verifies optics / signal levels remotely first. If they can resolve remotely →
+     final_reason=MAINTENANCE_RESOLVED, close.
+
+   - If they cannot resolve remotely → dispatch maintenance team physically. Same QCS WO, reassigned (TEAM-mode
+      reassignment) within NOC.
+
+   - Workshop is explicit: "Once maintenance resolves: updates and closes the QCS WO. No further WO raised back to
+     the contractor."
+
+ QCS does NOT trigger a Pattern A escalation back. If maintenance escalates further, it's a separate operational matter
+ outside the WO flow (engineering ticket, area-outage declaration, customer compensation review — handled by other
+ modules, not by spawning more QCS WOs).
+
+ 5.6 Cancellation during escalation
+ If the contractor cancels the original Support WO before second-confirm, no escalation candidate event fires. If the original
+ WO is cancelled AFTER second-confirm (which means it's already COMPLETED — cancellation from COMPLETED is not
+ allowed per framework state machine), the situation doesn't arise. If a QCS WO is cancelled, the original Support WO is
+ unaffected — they're independent.
+
+
+
+ 6. Warranty linkage + RPT WO
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 14
+ Workshop: when a second WO is raised within the warranty window of a prior installation (6 months) or support visit (3
+ months), an RPT WO is raised alongside to track the repeat pattern. The original new Support WO progresses normally; the
+ RPT WO exists for tracking + contractor billing implications.
+
+ 6.1 Warranty detection at creation
+ The wo-check-warranty-linkage flow worker runs immediately after wo-validate-create for every new Support
+ WO. It queries:
+          SELECT wo_id, kind, job_type_code, completed_at, metadata
+          FROM work_order
+          WHERE customer_id = $customerId
+            AND operator_code = $operatorCode
+            AND status = 'COMPLETED'
+            AND completed_at >= NOW() - INTERVAL '180 days'
+          ORDER BY completed_at DESC
+          LIMIT 1
+
+ Then checks whether the prior WO's completion date plus its warranty_days is still in the future:
+
+   - Prior Installation WO with warranty_days=180 completed 90 days ago → warranty window is 90 days remaining → still
+     under warranty → spawn RPT.
+
+   - Prior Support WO with warranty_days=90 completed 100 days ago → expired → no RPT.
+
+   - No prior WO within 180 days → no RPT.
+
+ If under warranty:
+
+   1. Append warranty_linkage note to the NEW Support WO with prior WO details.
+
+   2. Create an RPT WO via POST /api/work-orders:
+          POST /api/work-orders HTTP/1.1
+          {
+            "operatorCode":           "WIK",
+            "kind":                   "SUPPORT",
+            "jobTypeCode":            "RPT",
+            "customerId":             "<same as new WO>",
+            "homepassId":             "<same as new WO>",
+            "originatingContextType": "MASTER_WO",
+            "originatingContextRef": "<prior wo_id under warranty>",
+            "masterWoId":             "<prior wo_id under warranty>",
+            "linkType":               "REPEAT_WITHIN_WARRANTY",
+            "idempotencyKey":         "rpt-<new-support-wo-id>",
+            "metadata":               {
+              "linkedSupportWoId":   "<new support wo_id>",
+              "priorJobTypeCode":    "<prior>",
+              "priorWarrantyDays":   180
+            }
+          }
+
+ The RPT WO is created with master_wo_id pointing to the prior under-warranty WO (not to the new Support WO). The
+ new Support WO is referenced in the RPT's metadata.linkedSupportWoId for back-reference.
+
+ 6.2 RPT WO lifecycle
+ The RPT WO is mostly an audit-and-billing marker. It runs through the Support BPMN but requires_site_visit=false
+ (RPT itself doesn't generate field work — the linked Support WO is what generates the actual work). Lifecycle:
+
+   1. Created with status=PENDING, kind=SUPPORT, job_type=RPT.
+
+   2. Skips the on-site flow (no_site_visit branch).
+
+   3. Desk-resolution path captures warranty_linkage note (auto-populated by wo-check-warranty-linkage).
+
+   4. Auto-finalizes with final_reason=RPT_LINKAGE_RECORDED once the linked Support WO is finalized.
+
+   5. Emits WorkOrderRPTLinkageRecorded event (§8) for Finance.
+
+ Finance uses the RPT WO + the linked Support WO's contractor info to apply warranty billing rules: typically the contractor
+ isn't paid for warranty visits (or is paid at reduced rate). TRC/TRD codes apply when the warranty visit involves a
+ disconnect/reconnect for equipment swap — Finance reads those codes from the linked Support WO's equipment bindings.
+
+ 6.3 What if multiple prior WOs are eligible?
+
+
+
+SOPHIX BSS Design Documents                                                                                             Page 15
+ The worker picks the most recent prior WO whose warranty window is still open. Even if the customer has 3 prior
+ under-warranty WOs, only one RPT is raised (linked to the most recent prior). This matches workshop intent: RPT is a "this is
+ a repeat" marker, not a comprehensive incident history (history lives in the audit log + reporting layer).
+
+ 6.4 Operator override
+ The 90/180-day warranty windows are operator-configurable via wo_job_type_catalog.warranty_days. Future
+ operators can deploy different windows by editing the catalog rows — no flow code change.
+
+
+
+ 7. Flow-specific workers
+ Four workers specific to this flow, plus two reused from the Installation flow.
+
+ 7.1 wo-check-warranty-linkage
+ External task topic: wo-check-warranty-linkage.
+
+ Runs right after wo-validate-create for every new Support WO. Action:
+
+   1. Query for the customer's most recent COMPLETED WO within the last 180 days (§6.1 SQL).
+
+   2. If found AND prior WO's completed_at + warranty_days > NOW(): append warranty_linkage note to the new
+     WO; create RPT WO via internal POST /api/work-orders call.
+
+   3. If not found or out of warranty: no-op.
+
+   4. Complete the Camunda task.
+
+ Lock duration: 8s (the SQL query + potential RPT WO creation).
+
+ 7.2 wo-mark-escalation-candidate
+ External task topic: wo-mark-escalation-candidate.
+
+ Runs after resolution-gate Drools returns NOT_RESOLVED_ESCALATE. Action:
+
+   1. Verify an escalation_candidate_reason note is present (contractor must have captured why they can't resolve). If
+     missing, fail the task with an error code that the BPMN routes to a user task for the contractor to add the note.
+
+   2. Set metadata.escalationCandidatePending = true on the WO.
+
+   3. Complete the Camunda task.
+
+ Lock duration: 3s.
+
+ 7.3 wo-emit-escalation-candidate-if-needed
+ External task topic: wo-emit-escalation-candidate-if-needed.
+
+ Runs after wo-emit-state-event confirms WorkOrderFinalized for any Support WO. Action:
+
+   1. Read wo_final_reason_catalog.triggers_escalation_event for the WO's (operator, kind,
+     job_type, final_reason).
+
+   2. If true: emit WorkOrderEscalationCandidate (framework event from DD_WO-01-FRAMEWORK §7) with payload
+     including:
+
+   - woId, operatorCode, kind, jobTypeCode, customerId, homepassId
+
+   - finalReasonCode, escalationCandidateReason (the note content)
+
+   - originalAssignedContractorId, originalAssignedTeamId
+
+   - suggestedHandoffTeam = "ctr_NOC_MAINT" (per Pattern A rules)
+
+   3. If false: no-op.
+
+   4. Complete the Camunda task.
+
+ Lock duration: 3s.
+
+ 7.4 wo-emit-support-completed
+
+SOPHIX BSS Design Documents                                                                                              Page 16
+ External task topic: wo-emit-support-completed.
+
+ Runs at the end of the Support BPMN, after warranty tagging. Action:
+
+   1. Read the WO's wo_equipment_ref_stub rows (if any — Support sometimes replaces hardware, e.g., modem swap,
+     cable replacement).
+
+   2. Read the WO's warranty_linkage note (if present from §7.1).
+
+   3. Read the WO's area_outage_ref note (if present).
+
+   4. Emit WorkOrderSupportCompleted rich event (§8) with all relevant payload fields.
+
+   5. Complete the Camunda task.
+
+ Lock duration: 5s.
+
+ 7.5 Reused workers from the Installation flow
+ The Support flow reuses two workers:
+
+   - wo-capture-equipment-bindings-at-finalize — same as DD_WO-01-FLOW-INSTALLATION §7.2. For Support
+     WOs where hardware was replaced (e.g., faulty modem swapped → new modem installed), the binding is captured before
+     final-confirm. Required bindings per Job Type for Support are looser than for Installation (most Support WOs replace
+     nothing; only modem/cable swaps trigger binding capture). The flow's per-Job-Type rules: HS1/HS2/GP3/GP4 may have
+     an INSTALLED+REPLACED pair if modem swapped; otherwise no binding required.
+
+   - wo-tag-warranty-window — same as DD_WO-01-FLOW-INSTALLATION §7.3. Support WOs get 90-day warranty
+     (per wo_job_type_catalog.warranty_days = 90 for most Support codes). QCS, RPT, PSO, PSI, COS get 0 days
+     (not warranty-eligible).
+
+
+
+ 8. Flow-specific events
+ This flow extends the framework's event catalog with three new events. The framework's
+ WorkOrderEscalationCandidate event is the central one for Pattern A and is fired by this flow (§7.3).
+
+ 8.1 Event table
+  Event type                              Topic                          Emitted when                            Key consumers
+
+  WorkOrderEscalationCandidate            sophix.work-orders.escalatio   Original Support WO finalizes with fi   Contractor BO UI (prompts manual
+  (framework event, fired by this flow)   n-candidate                    nal_reason.triggers_escalati            QCS creation in v1.0), future
+                                                                         on_event=true                           Ticketing module (auto-creates
+                                                                                                                 QCS), audit
+
+  WorkOrderRPTLinkageRecorded             sophix.work-orders.rpt-linka   RPT WO finalizes                        Finance (warranty billing decision),
+                                          ge-recorded                                                            audit
+
+  WorkOrderSupportCompleted               sophix.work-orders.support-c   Any Support WO (including QCS,          Finance (contractor invoicing with
+                                          ompleted                       RPT) finalizes                          TRC/TRD aware billing), retention
+                                                                                                                 (filters), audit
+
+
+
+ 8.2 Sample event — WorkOrderEscalationCandidate
+            {
+                "eventType":    "WorkOrderEscalationCandidate",
+                "aggregateId": "wo_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+                "timestamp":    "2026-05-18T16:30:00.512Z",
+                "payload": {
+                  "woId":                        "wo_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+                  "operatorCode":                "WIK",
+                  "kind":                        "SUPPORT",
+                  "jobTypeCode":                 "GP3",
+                  "networkType":                 "GPON",
+                  "customerId":                  "cust_01HX...",
+                  "homepassId":                  "hp_01HX...",
+                  "finalReasonCode":             "COULD_NOT_RESOLVE_ESCALATED",
+                  "escalationCandidateReason": {
+                     "whyNotResolved": "ONT RX power -32 dBm, optical loss upstream of customer premise",
+                     "handoffSummary": "Need OLT-side optical check + maintenance dispatch if line fault confirmed"
+                  },
+                  "originalAssignedContractorId": "ctr_ADRIAN",
+                  "originalAssignedTeamId":        "team_adrian_eastlands_install",
+                  "originalCompletedAt":           "2026-05-18T16:25:00.000Z",
+
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 17
+                  "suggestedHandoffTeam":          "ctr_NOC_MAINT"
+              }
+          }
+
+
+ 8.3 Sample event — WorkOrderSupportCompleted
+          {
+              "eventType":    "WorkOrderSupportCompleted",
+              "aggregateId": "wo_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+              "timestamp":    "2026-05-18T16:30:30.000Z",
+              "payload": {
+                "woId":                 "wo_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+                "operatorCode":         "WIK",
+                "kind":                 "SUPPORT",
+                "jobTypeCode":          "GP3",
+                "networkType":          "GPON",
+                "customerId":           "cust_01HX...",
+                "homepassId":           "hp_01HX...",
+                "completedAt":          "2026-05-18T16:25:00.000Z",
+                "finalReasonCode":      "COULD_NOT_RESOLVE_ESCALATED",
+                "wasEscalated":         true,
+                "wasAreaOutage":        false,
+                "warrantyExpiresAt":    "2026-08-16T16:25:00.000Z",
+                "warrantyDays":         90,
+                "linkedInstallWoId":    "wo_01HZ_INSTALL_PRIOR",
+                "linkedInstallWoUnderWarranty": true,
+                "linkedRptWoId":        "wo_01HZ_RPT_LINKAGE",
+                "finalAssignedContractorId": "ctr_ADRIAN",
+                "finalAssignedTeamId":          "team_adrian_eastlands_install",
+                "finalAssignedTechnicianId": null,
+                "claimedByDispatcher":          "dispatcher_user_adrian_01",
+                "equipmentBindings": []
+              }
+          }
+
+
+ 8.4 Sample event — WorkOrderRPTLinkageRecorded
+          {
+              "eventType":    "WorkOrderRPTLinkageRecorded",
+              "aggregateId": "wo_01HZ_RPT_LINKAGE",
+              "timestamp":    "2026-05-18T16:30:35.000Z",
+              "payload": {
+                "rptWoId":                 "wo_01HZ_RPT_LINKAGE",
+                "linkedSupportWoId":       "wo_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+                "priorWoId":               "wo_01HZ_INSTALL_PRIOR",
+                "priorJobTypeCode":        "GIN",
+                "priorCompletedAt":        "2026-03-15T14:00:00.000Z",
+                "priorWarrantyDays":       180,
+                "priorWarrantyExpiresAt": "2026-09-11T14:00:00.000Z",
+                "linkType":                "REPEAT_WITHIN_WARRANTY",
+                "operatorCode":            "WIK",
+                "customerId":              "cust_01HX..."
+              }
+          }
+
+
+
+
+ 9. REST API additions
+ The Support flow uses the framework's REST surface (DD_WO-01-FRAMEWORK §8) plus the Installation flow's
+ /equipment-bindings endpoint (reused). No additional endpoints are needed in v1.0; QCS WO creation reuses the
+ standard POST /api/work-orders endpoint with master_wo_id + link_type=ESCALATION payload fields, and RPT
+ WO creation reuses the same endpoint with link_type=REPEAT_WITHIN_WARRANTY.
+
+
+
+ 10. Workshop sources
+ The Wananchi KE Support workflow (workshop 2026-04-29 + Bildad Gitonga transcript 2026-04-30) requires:
+
+   - A Support WO per customer-reported issue, kind=SUPPORT, with Job Types spanning service calls (GP3, GP4, HS1,
+     HS2, HS3, HS4, DLC2, SRV), proactive (PSO, PSI), quality control (QCA, QCS), and operational codes (COS, WCS, VIP,
+     ZOI, ZOT, RPT, TRC, TRD, LNM).
+
+   - A configurable "Initial Reason" picklist per Job Type, linking the WO back to its originating ticket / service request.
+
+   - No-site-visit option for codes that resolve at the desk (workshop names "No Site Visit" checkbox).
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 18
+   - The standard finalization checklist (findings, solution, signal/optical readings where applicable, final reason, photos),
+     enforced via wo_finalization_requirements.
+
+   - 2-step finalization confirm.
+
+   - Pattern A escalation: when the contractor cannot resolve, they finalize the original Support WO and a separate QCS WO is
+     raised to NOC. Two WOs, not one. QCS gives NOC their own trackable count, separate from contractor's count.
+
+   - Area-outage exception: the contractor can finalize cleanly without resolving the customer if the issue is part of a known
+     area outage. No QCS raised in this case.
+
+   - 3-month support warranty (vs 6-month install warranty). Within warranty, a new Support WO triggers creation of an RPT
+     linkage WO alongside.
+
+   - TRC/TRD contractor billing codes for warranty visits.
+
+   - Final-reason picklist per workshop: RESOLVED_ON_SITE, NO_FAULT_FOUND, CABLE_REPLACED, MODEM_REPLACED,
+     ONT_REPLACED, CUSTOMER_NOT_AVAILABLE, AREA_OUTAGE_OPEN, COULD_NOT_RESOLVE_ESCALATED,
+     RESOLVED_REMOTELY.
+
+
+
+ 11. Cross-DD coordination
+ 11.1 Module owner
+ This satellite is owned by the Fulfillment & Operations team alongside the WO module parent. Depends on
+ DD_WO-01-FRAMEWORK-v1.0 for all primitives and reuses workers from DD_WO-01-FLOW-INSTALLATION-v1.0
+ (equipment binding capture, warranty tagging).
+
+ 11.2 Impacted modules
+  Module                                       Direction                                    Contract
+
+  WO-01-FRAMEWORK                              this flow ← framework                        Consumes all framework primitives.
+
+  WO-01-FLOW-INSTALLATION                      this flow ← Installation flow                Reuses equipment-binding capture worker, warranty
+                                                                                            tagging worker, equipment-bindings REST endpoint.
+                                                                                            Reads installation WOs'
+                                                                                            metadata.warrantyExpiresAt for RPT linkage
+                                                                                            decisions (§6).
+
+  Future Ticketing module                      this flow ↔ Ticketing                        Consumes WorkOrderEscalationCandidate
+                                                                                            events to optionally auto-create QCS handoff WOs.
+                                                                                            Creates regular Support WOs from customer tickets
+                                                                                            with originating_context_type=TICKET. v1.0
+                                                                                            ships without Ticketing — Support WOs created by
+                                                                                            CSR via BO UI.
+
+  Contractor BO UI                             BO UI → this flow                            Manual QCS creation in v1.0 (until Ticketing ships).
+                                                                                            Subscribes to WorkOrderEscalationCandidate
+                                                                                            for their own WOs. Standard claim/start/finalize for
+                                                                                            site-visit WOs.
+
+  NOC Console (BO UI)                          BO UI → this flow                            NOC team owns QCS WOs. Same dispatcher
+                                                                                            actions as any other Support WO.
+
+  ILM-CFG-01 (Customer Service — future)       this flow → ILM-CFG-01                       Reads customer context at WO creation. v1.0 uses
+                                                                                            customer_stub.
+
+  RLM-CFG-01 (HomePass)                        this flow ← RLM                              Reads homepass.tech_region_code for
+                                                                                            assignment Drools input.
+
+  Future Inventory                             this flow → Inventory                        WorkOrderEquipmentBindingsRecorded
+                                                                                            events (reused from Installation flow's primitive) for
+                                                                                            replaced/installed equipment during support visits.
+
+  Finance                                      this flow → Finance                          WorkOrderSupportCompleted consumed for
+                                                                                            contractor invoicing. Finance interprets TRC/TRD
+                                                                                            codes from equipment bindings for warranty billing.
+                                                                                            WorkOrderRPTLinkageRecorded consumed for
+                                                                                            warranty-aware billing decisions.
+
+  Future SLA engine (Phase 2)                  this flow → SLA                              Consumes all WO state events for SLA
+                                                                                            computation.
+
+
+
+ 11.3 Boundary clarifications
+
+
+SOPHIX BSS Design Documents                                                                                                              Page 19
+   - ■ Support BPMN (single-phase with no-site-visit branch), Drools KJAR (assignment + site-visit + resolution gates),
+     operator-config seeds, Pattern A escalation flow, warranty + RPT linkage, area-outage exit.
+
+   - ■ Ticket lifecycle and customer-facing channels — owned by future Ticketing module.
+
+   - ■ Outage management — owned by NOC's separate outage process (not in v1.0 SOPHIX).
+
+   - ■ Contractor invoicing rules (TRC/TRD billing logic) — owned by Finance.
+
+   - ■ Customer billing for support visits — out of scope; support is contractor-billed where applicable, customer-free.
+
+ 11.4 Dependencies (build order)
+   1. DD_WO-01-FRAMEWORK-v1.0 must be shipped first.
+
+   2. DD_WO-01-FLOW-INSTALLATION-v1.0 should be shipped before — Support reuses several workers and the
+     warranty-window mechanism.
+
+   3. RLM-CFG-01 (HomePass) for tech-region lookup.
+
+   4. BO UI for CSR manual WO creation and contractor QCS manual creation.
+
+   5. Future Ticketing module is NOT a v1.0 dependency — Support flow works fully without it, with manual CSR +
+     contractor BO UI flows filling the gap.
+
+ 11.5 Migration approach
+   1. DDL — framework's tables are the only schema; this flow adds no new tables. Seed wo_flow_config,
+     wo_job_type_catalog (23 new rows for Support codes), wo_note_kind_registry (5 new rows),
+     wo_finalization_requirements, wo_final_reason_catalog rows per §3.
+
+   2. BPMN deployment — deploy WorkOrder_Support_WIK.bpmn to Camunda.
+
+   3. Drools KJAR deployment — deploy wo-support-wik-v1.0.kjar.
+
+   4. Cutover — CSR Console exposes "Raise Support WO" workflow; contractor BO UIs surface Support WOs alongside
+     Installation and Shifting.
+
+   5. Future operator onboarding — add operator-suffixed BPMN + KJAR + config rows; no code change.
+
+
+
+ 12. Runtime walkthrough — narrative
+ Two scenarios: a happy-path GP3 (GPON Internet Service Call) that resolves on site, and a Pattern A escalation where the
+ contractor can't resolve and QCS is raised to NOC.
+
+ 12.1 Happy path — GP3 Internet Service Call
+ Scenario. Customer Aïssatou Diop reports slow internet on 2026-05-18 morning. She's a GPON customer in Karen, originally
+ installed 90 days ago. CSR creates a Support WO via BO UI.
+
+ Step 1 — CSR creates the WO. UI calls:
+          POST /api/work-orders HTTP/1.1
+          {
+            "operatorCode":           "WIK",
+            "kind":                   "SUPPORT",
+            "jobTypeCode":            "GP3",
+            "customerId":             "cust_01HY...",
+            "homepassId":             "hp_01HX_KAR",
+            "originatingContextType": "BACKOFFICE",
+            "originatingContextRef": "csr_user_42",
+            "idempotencyKey":         "support-csr_42-cust_01HY-2026-05-18-08-15",
+            "metadata":               {"customerName":"Aïssatou Diop","contactNumber":"+254712345678"}
+          }
+
+ Framework creates the WO with status=PENDING, kind=SUPPORT, jobTypeCode=GP3. Starts Camunda process.
+ Returns woId=wo_01HZ...SP1. Emits WorkOrderCreated.
+
+ Step 2 — CSR adds the initial_reason note.
+          POST /api/work-orders/wo_01HZ...SP1/notes
+          {"noteKind":"initial_reason","contentJsonb":{"reasonCode":"SPEED_BELOW_EXPECTED","reasonDescription":"Customer reports spe
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 20
+ Step 3 — BPMN runs wo-check-warranty-linkage. SQL query finds a prior install WO wo_01HZ_INSTALL_PRIOR
+ (GIN, completed 2026-02-17, warranty 180 days, expires 2026-08-16). Today is 2026-05-18 — under warranty. Worker:
+
+   1. Appends warranty_linkage note to wo_01HZ...SP1 with prior WO details.
+
+   2. Creates RPT WO via POST /api/work-orders with jobTypeCode=RPT,
+     masterWoId=wo_01HZ_INSTALL_PRIOR, linkType=REPEAT_WITHIN_WARRANTY. RPT WO id: wo_01HZ_RPT....
+
+ Step 4 — Drools site-visit-decision runs. GP3 requires site visit. Takes the full flow path.
+
+ Step 5 — Drools contractor-assignment-decision. GPON + Karen region → ctr_Z071H +
+ team_rapid_response, TEAM mode. Status → ASSIGNED. Emits WorkOrderAssigned.
+
+ Step 6 — Tech claims, /start, on-site work. tech_01HZ_KAREN_03 claims; calls /start; status IN_PROGRESS. Captures
+ notes + readings:
+          POST /api/work-orders/wo_01HZ...SP1/notes
+          {"noteKind":"findings","contentText":"On-site test shows actual line speed 48Mbps. Customer's Wi-Fi router was overheating
+
+          POST /api/work-orders/wo_01HZ...SP1/notes
+          {"noteKind":"optical_readings","contentJsonb":{"ontRxDbm":-22.5,"oltRxDbm":-9.5}}
+
+          POST /api/work-orders/wo_01HZ...SP1/notes
+          {"noteKind":"solution","contentText":"Repositioned customer equipment for ventilation. Speed test now shows 50/10 Mbps. Cu
+
+          POST /api/work-orders/wo_01HZ...SP1/attachments       category=setup_photo, file=ont_repositioned.jpg
+          POST /api/work-orders/wo_01HZ...SP1/attachments       category=rf_optical_reading, file=speed_test_after.png
+
+ Step 7 — Contractor first-confirms.
+          POST /api/work-orders/wo_01HZ...SP1/finalize-first-confirm
+          {"finalReasonCode":"RESOLVED_ON_SITE","confirmedBy":"ctr_Z071H_dispatcher_01"}
+
+ Status → FINALIZATION_PENDING. BPMN advances to resolution-gate.
+
+ Step 8 — Drools resolution-gate. final_reason=RESOLVED_ON_SITE → returns RESOLVED. Equipment-binding
+ worker runs — no hardware replaced, no bindings to capture, passes.
+
+ Step 9 — Second-confirm. Checklist for GP3 verifies notes (initial_reason ✓, findings ✓, solution ✓, optical_readings ✓,
+ final_reason_set ✓) and attachments (setup_photo ✓, rf_optical_reading ✓). Pass. Status → COMPLETED.
+
+ Step 10 — wo-emit-escalation-candidate-if-needed runs.
+ RESOLVED_ON_SITE.triggers_escalation_event = false. No event. No-op.
+
+ Step 11 — wo-tag-warranty-window runs. Sets warrantyExpiresAt = completed_at + 90 days =
+ 2026-08-16.
+
+ Step 12 — wo-emit-support-completed runs. Emits WorkOrderSupportCompleted (§8.3 sample) with
+ wasEscalated=false, linkedInstallWoId=wo_01HZ_INSTALL_PRIOR, linkedRptWoId=wo_01HZ_RPT....
+
+ Step 13 — RPT WO finalization. The RPT WO (separate process instance) is meanwhile in its no-site-visit branch. The
+ wo-check-warranty-linkage worker's RPT-creation step already populated its warranty_linkage note. The RPT WO
+ finalizes when the linked Support WO finalizes (orchestration handled by the RPT WO's BPMN watching for the linked WO's
+ completion event). RPT finalizes with final_reason=RPT_LINKAGE_RECORDED, emits
+ WorkOrderRPTLinkageRecorded (§8.4 sample). Finance consumes both events; applies warranty billing logic (this
+ contractor's visit is on a customer still under install warranty, so the visit may be billed at warranty-rate or zero depending on
+ Finance's rules — out of WO module's scope).
+
+ Total elapsed: ~5 hours (CSR creates 08:15, contractor finalizes 13:25).
+
+ 12.2 Pattern A escalation — GP3 with optical fault
+ Scenario. Customer Joseph Mwangi (GPON Eastlands, served by external contractor ctr_ADRIAN) reports complete
+ service loss. CSR creates GP3 WO.
+
+ Step 1-2 — Creation and initial_reason. Same shape as §12.1.
+
+ Step 3 — Warranty check finds no eligible prior WO (customer's last install was 18 months ago, out of warranty). No
+ RPT created.
+
+ Step 4 — Drools site-visit-decision: REQUIRES_VISIT. Drools assignment: external contractor ctr_ADRIAN +
+ team_adrian_eastlands_install. TEAM mode.
+
+ Step 5 — External dispatcher acks the WO via /claim with claimedByExternalDispatcher=true. ADRIAN's
+ dispatcher sends a freelancer.
+
+
+
+SOPHIX BSS Design Documents                                                                                                  Page 21
+ Step 6 — Field tech on-site. Captures findings:
+          POST .../notes      noteKind=findings, contentText="ONT shows LOS red light. Optical RX power -32 dBm, well below acceptable t
+          POST .../notes      noteKind=optical_readings, contentJsonb={"ontRxDbm":-32.0,"oltRxDbm":-9.5,"distanceM":1450}
+          POST .../notes      noteKind=findings, contentText="Customer's installation is fine on the customer-premise side. The optical
+
+ Step 7 — Contractor captures the escalation reason.
+          POST .../notes
+          {
+            "noteKind":"escalation_candidate_reason",
+            "contentJsonb":{
+               "whyNotResolved":"Optical RX -32 dBm. Loss is upstream of customer ONT. Contractor cannot fix upstream optical without
+               "handoffSummary":"Need NOC to verify OLT port 0/3/2/4 optics and dispatch maintenance if needed."
+            },
+            "appendedBy":"dispatcher_user_adrian_01","appendedByRole":"CONTRACTOR_DISPATCHER"
+          }
+
+ Step 8 — Contractor first-confirms with escalation final reason.
+          POST /api/work-orders/wo_01HZ...SP2/finalize-first-confirm
+          {"finalReasonCode":"COULD_NOT_RESOLVE_ESCALATED","confirmedBy":"dispatcher_user_adrian_01"}
+
+ Step 9 — Drools resolution-gate. final_reason=COULD_NOT_RESOLVE_ESCALATED +
+ escalation_candidate_reason note present → returns NOT_RESOLVED_ESCALATE. BPMN takes the escalation
+ branch.
+
+ Step 10 — wo-mark-escalation-candidate runs. Verifies escalation note present ✓. Sets
+ metadata.escalationCandidatePending=true.
+
+ Step 11 — Second-confirm. Checklist passes (initial_reason, findings, solution, optical_readings, final_reason_set,
+ escalation_candidate_reason present). Status → COMPLETED.
+
+ Step 12 — wo-emit-state-event fires WorkOrderFinalized.
+
+ Step 13 — wo-emit-escalation-candidate-if-needed runs. Reads catalog:
+ COULD_NOT_RESOLVE_ESCALATED.triggers_escalation_event = true. Emits
+ WorkOrderEscalationCandidate (§8.2 sample).
+
+ Step 14 — wo-emit-support-completed runs. Emits WorkOrderSupportCompleted with wasEscalated=true.
+
+ Step 15 — Contractor BO UI receives the escalation candidate event. Surfaces prompt to ADRIAN's dispatcher: "Original
+ WO finalized as escalation. Create QCS handoff to NOC?" Dispatcher clicks yes.
+
+ Step 16 — BO UI calls POST /api/work-orders to create the QCS WO.
+          POST /api/work-orders HTTP/1.1
+          {
+            "operatorCode":           "WIK",
+            "kind":                   "SUPPORT",
+            "jobTypeCode":            "QCS",
+            "customerId":             "cust_01HY...",
+            "homepassId":             "hp_01HX_EASTLANDS",
+            "originatingContextType": "MASTER_WO",
+            "originatingContextRef": "wo_01HZ...SP2",
+            "masterWoId":             "wo_01HZ...SP2",
+            "linkType":               "ESCALATION",
+            "idempotencyKey":         "qcs-from-wo_01HZ...SP2",
+            "metadata":               {"escalationCandidateReason":"Optical RX -32 dBm upstream"}
+          }
+
+ Returns woId=wo_01HZ...QCS1. Status PENDING. New Camunda process instance. Drools assignment for QCS fires rule
+ r3-qcs-noc-maintenance → ctr_NOC_MAINT + team_noc_maintenance, TEAM mode.
+
+ Step 17 — NOC dispatcher acks via /claim. Status assigned, then NOC starts the WO (status IN_PROGRESS).
+
+ Step 18 — NOC investigates remotely. Verifies OLT port 0/3/2/4 optics — confirms upstream fault. Decides: needs
+ maintenance physical visit. NOC dispatcher reassigns the QCS WO within NOC:
+          POST /api/work-orders/wo_01HZ...QCS1/reassign
+          {"contractorId":"ctr_NOC_MAINT","teamId":"team_maintenance_field","technicianId":null,"assignmentReason":"manual_team_assi
+
+ (Same wo_id; no Pattern A spawn from QCS — Pattern A only happens once.)
+
+ Step 19 — Maintenance tech fixes the optical fault. Captures findings + readings showing the new optical levels are
+ acceptable (-22.5 dBm). Adds notes documenting the fix (splice repair at PBO-DKR-MAR-127, etc.).
+
+ Step 20 — Maintenance first-confirms with success.
+          POST /api/work-orders/wo_01HZ...QCS1/finalize-first-confirm
+          {"finalReasonCode":"MAINTENANCE_RESOLVED","confirmedBy":"maintenance_dispatcher_01"}
+
+
+SOPHIX BSS Design Documents                                                                                            Page 22
+ Step 21 — Drools resolution-gate for the QCS WO. MAINTENANCE_RESOLVED → RESOLVED. No further escalation.
+ Second-confirm. Status COMPLETED. QCS finalized.
+
+ Step 22 — wo-emit-escalation-candidate-if-needed for QCS WO.
+ MAINTENANCE_RESOLVED.triggers_escalation_event=false. No event. Workshop quote satisfied: "No further WO
+ raised back to the contractor."
+
+ Step 23 — wo-emit-support-completed for QCS WO. Finance now has both events: the original Support WO
+ (ADRIAN's contractor visit, eligible for invoicing per their fee schedule) and the QCS WO (NOC + maintenance work, tracked
+ separately for internal team productivity).
+
+ Total elapsed: ~20 hours across both WOs (original Support 11:00-13:30, QCS created 13:30, NOC investigation overnight,
+ maintenance fix next morning 09:00-10:30). The customer was without service throughout — a metric the future SLA engine
+ (Phase 2) will measure as "Support → resolved time" including QCS chain.
+
+ wo_assignment_history on the original Support WO shows one assignment (ADRIAN). On the QCS WO, three
+ assignments (NOC dispatcher → NOC field → maintenance team). Two separate wo_ids, two separate audit trails, two
+ separate contractor billings.
+
+
+ *End of DD_WO-01-FLOW-SUPPORT-v1.0.*
+
+
+
+
+SOPHIX BSS Design Documents                                                                                           Page 23
+

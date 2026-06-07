@@ -1,0 +1,379 @@
+ DD_OSR-02 - Procurement - Developer Implementation
+ Guide
+ Version: v1.0 Bundle: 08_osr_equipment Companion DD: DD_OSR-02-Procurement-v1.0
+
+
+
+ 1. Goal
+ Implement the procurement flow that creates approved purchase orders and posts vendor deliveries into OSR stock.
+
+ The key implementation rule is ownership:
+
+   - OSR-02 owns PO, goods receipt, and procurement discrepancy records.
+
+   - OSR-01 owns stock movements and balances.
+
+   - OSR-INSTANCE-01 owns serialized device rows.
+
+   - EM-CFG-04 owns approval tasks and approval process configuration.
+
+
+
+ 2. Runtime Flow
+           sequenceDiagram
+             participant BO as Backoffice
+             participant PO as OSR-02
+             participant PLM as PLM-CFG-06
+             participant APR as EM-CFG-04
+             participant OSR as OSR-01
+             participant INST as OSR-INSTANCE-01
+
+             BO->>PO: POST /api/procurement/orders
+             PO->>PLM: validate SKU
+             BO->>PO: POST /submit-approval
+             PO->>APR: evaluate/start approval
+             APR-->>PO: approval callback
+             BO->>PO: POST /api/procurement/goods-receipts
+             PO->>OSR: POST /api/stock-movements
+             PO->>INST: POST /api/equipment-instances/bulk-import
+             PO-->>BO: receipt posted
+
+
+
+
+ 3. Step 1 - Migrations
+ Create:
+
+   - procurement_vendor
+
+   - procurement_order
+
+   - procurement_order_line
+
+   - goods_receipt
+
+   - goods_receipt_line
+
+   - procurement_discrepancy
+
+ Add comments in migrations so a developer can inspect DB metadata and understand purpose.
+
+ Minimum uniqueness:
+
+   - (operator_code, vendor_code) on vendor.
+
+   - (operator_code, po_number) on PO.
+
+   - (operator_code, vendor_delivery_ref) on receipt.
+
+
+
+ 4. Step 2 - Create PO
+
+SOPHIX BSS Design Documents                                                                                         Page 1
+ Endpoint:
+           POST /api/procurement/orders
+           Idempotency-Key: po-wik-huawei-20260715
+           Content-Type: application/json
+
+ Request:
+           {
+               "operatorCode": "WIK",
+               "vendorId": "ven-huawei-ke",
+               "destinationLocationId": "WIK-CENTRAL-NRB",
+               "currencyCode": "KES",
+               "expectedDeliveryDate": "2026-07-15",
+               "lines": [
+                 {
+                   "skuId": "WIK-ONT-HUAWEI-EG8145V5",
+                   "orderedQty": 200,
+                   "unitCost": 6000.00
+                 }
+               ]
+           }
+
+ On OSR-02:
+
+   1. Validate request and idempotency key.
+
+   2. Load vendor; must be ACTIVE.
+
+   3. Load destination location from OSR-01 GET /api/stock-locations/{location_id}.
+
+   4. For each line, load SKU from PLM-CFG-06 and copy isSerialized.
+
+   5. Compute totals.
+
+   6. Create procurement_order in DRAFT.
+
+   7. Create procurement_order_line rows.
+
+   8. Emit ProcurementOrderCreated.
+
+ Do not call OSR-01 stock movement during PO creation.
+
+
+
+ 5. Step 3 - Submit PO For Approval
+ Endpoint:
+           POST /api/procurement/orders/po-2026-00045/submit-approval
+
+ Flow:
+
+   1. Load PO and lines.
+
+   2. Run fixed validation.
+
+   3. Build Drools fact.
+
+   4. Run procurement-order-approval.drl.
+
+   5. Call EM-CFG-04 POST /api/approvals/evaluate.
+
+   6. If approval not required, set PO APPROVED.
+
+   7. If approval required, call POST /api/approvals/requests.
+
+   8. Store approval_request_id, approval_mode, camunda_process_instance_id.
+
+   9. Set PO PENDING_APPROVAL.
+
+ EM-CFG-04 evaluate request:
+           {
+               "operatorCode": "WIK",
+               "moduleCode": "OSR-02",
+               "actionCode": "PROCUREMENT_ORDER_APPROVAL",
+               "subjectType": "PROCUREMENT_ORDER",
+               "subjectId": "po-2026-00045",
+               "context": {
+                 "totalEstimatedAmount": 1200000.00,
+                 "currencyCode": "KES",
+
+
+
+SOPHIX BSS Design Documents                                                           Page 2
+                  "vendorId": "ven-huawei-ke",
+                  "lineCount": 1
+              }
+          }
+
+ Camunda note: OSR-02 does not start Camunda. EM-CFG-04 starts Camunda only if the selected approval policy is BPMN.
+
+
+
+ 6. Step 4 - Approval Callback
+ Endpoint:
+          POST /internal/procurement/orders/po-2026-00045/approval-outcome
+          Content-Type: application/json
+
+          {
+              "approvalRequestId": "apr-po-00045",
+              "outcome": "APPROVED",
+              "decisionComment": "Approved for Nairobi stock replenishment."
+          }
+
+ Implement idempotently:
+
+   1. Load PO.
+
+   2. Verify request id matches PO.
+
+   3. If already processed, return 200.
+
+   4. APPROVED -> PO status APPROVED.
+
+   5. REJECTED -> PO status REJECTED.
+
+   6. Emit event.
+
+
+
+ 7. Step 5 - Record Goods Receipt
+ Endpoint:
+          POST /api/procurement/goods-receipts
+          Idempotency-Key: gr-dn-hw-7788
+          Content-Type: application/json
+
+ Flow:
+
+   1. Validate request and idempotency key.
+
+   2. Load PO; status must be APPROVED or SENT_TO_VENDOR.
+
+   3. Validate vendor delivery ref uniqueness.
+
+   4. For each line, match poLineId and skuId.
+
+   5. Validate quantities: acceptedQty + rejectedQty = receivedQty.
+
+   6. For serialized SKUs, validate serial count equals accepted qty.
+
+   7. Detect duplicates inside payload.
+
+   8. Optionally call OSR-INSTANCE lookup by serial to catch existing records.
+
+   9. Create goods_receipt and goods_receipt_line in VALIDATED.
+
+   10. Create procurement_discrepancy rows where needed.
+
+   11. Post accepted quantities to OSR-01.
+
+   12. Import accepted serialized units to OSR-INSTANCE-01.
+
+   13. Mark receipt POSTED.
+
+   14. Update PO line received qty and PO status.
+
+   15. Emit GoodsReceiptPosted.
+
+
+
+ 8. Step 6 - Call OSR-01 Stock Movement
+SOPHIX BSS Design Documents                                                                                       Page 3
+ For accepted quantity:
+           POST /api/stock-movements
+           Idempotency-Key: stock-move-gr-001-grl-001
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "movementType": "INBOUND",
+               "reasonCode": "VENDOR_RECEIPT",
+               "skuId": "WIK-ONT-HUAWEI-EG8145V5",
+               "quantity": 148,
+               "targetLocationId": "WIK-CENTRAL-NRB",
+               "originRefType": "GOODS_RECEIPT",
+               "originRefId": "gr-001",
+               "actorUserId": "usr-warehouse-001"
+           }
+
+ If OSR-01 fails, keep receipt not posted and retry safely. Do not create serial instances without matching quantity movement
+ unless you have a compensation/retry state.
+
+
+
+ 9. Step 7 - Call OSR-INSTANCE For Serialized SKUs
+ For accepted serialized units:
+           POST /api/equipment-instances/bulk-import
+           Idempotency-Key: instance-import-gr-001-grl-001
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "skuId": "WIK-ONT-HUAWEI-EG8145V5",
+               "initialState": "IN_MAIN_WAREHOUSE",
+               "initialLocationId": "WIK-CENTRAL-NRB",
+               "originRefKind": "GOODS_RECEIPT",
+               "originRefId": "gr-001",
+               "instances": [
+                 {
+                   "serialNumber": "48575443ABCD1234",
+                   "macAddress": "00:11:22:33:44:55"
+                 }
+               ]
+           }
+
+ If import partially fails because of duplicate serials:
+
+   - do not silently post partial success;
+
+   - create procurement_discrepancy with DUPLICATE_SERIAL;
+
+   - require warehouse/procurement resolution.
+
+
+
+ 10. Step 8 - Discrepancy Resolution
+ Endpoint:
+           POST /api/procurement/discrepancies/pd-001/resolve
+           Content-Type: application/json
+
+ Flow:
+
+   1. Load discrepancy.
+
+   2. Run goods-receipt-discrepancy.drl.
+
+   3. If approval required, call EM-CFG-04 using action PROCUREMENT_DISCREPANCY_RESOLUTION.
+
+   4. If approved/not required, apply resolution:
+
+   - ACCEPT: post remaining accepted stock if valid.
+
+   - REJECT_TO_VENDOR: leave quantity out of stock and close discrepancy.
+
+   - CREDIT_NOTE: record resolution for finance/reporting.
+
+   - REPLACEMENT_PENDING: keep discrepancy open with expected vendor replacement.
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 4
+   5. Emit ProcurementDiscrepancyResolved.
+
+
+
+ 11. Drools Samples
+          package com.sophix.osr.procurement
+
+          rule "High value PO requires finance approval"
+          when
+            $po : ProcurementOrderFact(totalAmount >= 1000000.00, currencyCode == "KES")
+            $d : ProcurementDecision()
+          then
+            $d.setApprovalRequired(true);
+            $d.setApprovalPolicyCode("PROCUREMENT_HIGH_VALUE_FINANCE");
+          end
+
+          rule "Damaged receipt above five units requires approval"
+          when
+            $disc : ProcurementDiscrepancyFact(discrepancyType == "DAMAGED", quantity > 5)
+            $d : ProcurementDecision()
+          then
+            $d.setApprovalRequired(true);
+            $d.setApprovalPolicyCode("PROCUREMENT_DAMAGED_RECEIPT_REVIEW");
+          end
+
+
+
+
+ 12. Worker Jobs
+ These are command/job handlers in the OSR worker deployment:
+
+  Job                                                            Purpose
+
+  procurement-outbox-publish                                     Publish PO/receipt/discrepancy events.
+
+  goods-receipt-posting-retry                                    Retry failed OSR-01/OSR-INSTANCE posting.
+
+  vendor-delivery-reminder                                       Notify procurement for overdue deliveries.
+
+  procurement-discrepancy-reminder                               Notify owners for unresolved discrepancies.
+
+
+
+
+ 13. Tests
+   - Create PO with active vendor and active SKU.
+
+   - Reject PO with inactive vendor.
+
+   - Submit approval and store EM-CFG-04 request.
+
+   - Approval callback is idempotent.
+
+   - Goods receipt posts OSR-01 movement.
+
+   - Serialized goods receipt calls OSR-INSTANCE bulk import.
+
+   - Duplicate vendor delivery ref does not double post stock.
+
+   - Duplicate serial creates discrepancy.
+
+   - Discrepancy resolution calls EM-CFG-04 when configured.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                    Page 5
+

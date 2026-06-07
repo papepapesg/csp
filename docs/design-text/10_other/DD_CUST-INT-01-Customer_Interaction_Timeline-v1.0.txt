@@ -1,0 +1,779 @@
+ DD_CUST-INT-01 - Customer Interaction Timeline
+ Version: v1.0
+
+ Status: Draft for review
+
+ Bundle: 10_other
+
+ Depends on:
+
+   - DD_CROSS-00-System_Traceability_and_Implementation_Map-v1.0
+
+   - DD_API-00-API_Catalog_and_Gateway_Standards-v1.0
+
+   - FOUNDATION_AUTH
+
+   - FOUNDATION_KAFKA
+
+   - FOUNDATION_FILE_STORAGE
+
+   - DD_EM-CFG-03-RBAC_Catalog-v1.0
+
+   - DD_ILM-CFG-01-Customer_Service-v1.0
+
+   - DD_TCK-01-Ticketing_and_Case_Management-v1.0
+
+   - DD_NOT-01-Notification_Service-v1.3
+
+   - DD_SALES-01-Lead_Territory_and_Franchise_Sales_Management-v1.0
+
+ Future dependencies:
+
+   - DD_ASR-01-Technical_Trouble
+
+   - DD_ASR-02-Information_Request
+
+   - DD_ASR-03-Complaint
+
+   - DD_ASR-04-Service_Request
+
+   - DD_EM-03-CVM_and_Retention
+
+
+
+ 1. Purpose
+ This DD defines the unified Customer Interaction Timeline for SOPHIX BSS.
+
+ The timeline gives customer care, supervisors, sales, service assurance, CVM, and reporting one chronological view of
+ customer-facing activity:
+
+   - manual customer notes and structured interactions from ILM;
+
+   - ticket/case events from TCK;
+
+   - sales lead activity from SALES;
+
+   - customer notifications from NOT;
+
+   - work order/customer visit milestones from WO;
+
+   - billing/dunning customer-facing events from BIL;
+
+   - future ASR and CVM activities.
+
+ CUST-INT-01 is not a replacement for ILM, TCK, SALES, NOT, WO, or BIL. It is a normalized customer-history projection.
+ Each owning module remains the source of truth for its own domain record.
+
+
+
+ 2. What This Module Is For
+ Use CUST-INT-01 when the system needs to answer:
+
+  Question                                                         CUST-INT answer
+
+  What happened recently with this customer across modules?        Query normalized timeline by customer/account/subscription.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 1
+  Question                                                               CUST-INT answer
+
+  Did customer care already contact this customer?                       Show ILM interactions, ticket comments, notifications, sales activities.
+
+  What did the customer see or receive?                                  Show customer-visible notifications/comments/events.
+
+  What is internal-only context?                                         Show internal events only to authorized staff.
+
+  Can Customer 360 load one history panel?                               Yes, from the timeline read API.
+
+  Can reporting count interactions by channel/type?                      Yes, from normalized timeline event rows.
+
+
+
+
+ 3. Scope
+ Included:
+
+  Capability                                                             Purpose
+
+  Unified timeline projection                                            One read model across customer-facing modules.
+
+  Event ingestion                                                        Consume Kafka events or internal API writes from source modules.
+
+  Normalization                                                          Convert module-specific events into common timeline categories.
+
+  Visibility model                                                       Separate internal-only, staff-visible, and customer-visible items.
+
+  Entity links                                                           Link timeline event to ticket, lead, notification, invoice, WO, order, subscription,
+                                                                         HomePass, or equipment.
+
+  Customer 360 read API                                                  Provide filtered/paged history for Backoffice.
+
+  Self-care-safe read API                                                Provide only customer-visible timeline items if enabled.
+
+  Retention and masking                                                  Support PII-safe summaries and retention policy.
+
+
+ Out of scope:
+
+  Out of scope                                                           Owner
+
+  Customer/account master                                                ILM-CFG-01
+
+  Manual customer notes/interactions source of truth                     ILM-CFG-01
+
+  Ticket/case lifecycle and ticket timeline                              TCK-01
+
+  Sales lead/activity source of truth                                    SALES-01
+
+  Notification rendering/delivery and delivery log                       NOT-01
+
+  Work order lifecycle and field notes                                   WO-01
+
+  Billing/payment/invoice facts                                          BIL modules
+
+  Formal audit log for all system mutations                              Foundation/module audit logs
+
+  Data warehouse/reporting marts                                         REP-01 consumes this timeline if needed
+
+
+
+
+ 4. Ownership Pattern
+ CUST-INT is a projection service.
+
+  Source event                                         Source of truth                                CUST-INT behavior
+
+  Customer note appended                               ILM                                            Store normalized timeline event referencing
+                                                                                                      note_id.
+
+  Structured customer interaction                      ILM                                            Store normalized interaction event referencing
+                                                                                                      interaction_id.
+
+  Ticket created/resolved/commented                    TCK                                            Store summarized ticket timeline event with
+                                                                                                      ticket_id.
+
+  Notification dispatched/failed/suppressed            NOT                                            Store customer communication event with
+                                                                                                      notification_id.
+
+  Sales lead activity                                  SALES                                          Store sales interaction summary with lead_id.
+
+  Work order appointment/finalized                     WO                                             Store customer visit/service milestone with
+                                                                                                      work_order_id.
+
+  Payment/dunning customer-facing action               BIL                                            Store billing communication or billing milestone
+                                                                                                      summary.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                          Page 2
+ Rule: if a user opens the item detail, Backoffice must call the owning module using the linked entity id. CUST-INT should not
+ contain enough data to reconstruct or mutate the source entity.
+
+
+
+ 5. Core Concepts
+  Concept                                                         Meaning
+
+  Timeline event                                                  A normalized customer-history item.
+
+  Source module                                                   Module that owns the original record.
+
+  Source event id                                                 Original event or record id used for idempotency.
+
+  Interaction category                                            Broad classification: note, call, ticket, notification, sales, visit, billing, system.
+
+  Visibility                                                      Who may see the event: internal only, staff, customer.
+
+  Redacted summary                                                Safe short text displayed in Customer 360.
+
+  Entity link                                                     Pointer to source detail such as ticket, invoice, WO, lead, notification.
+
+
+
+
+ 6. Data Ownership
+ CUST-INT owns:
+
+  Entity                                                          Purpose
+
+  customer_timeline_event                                         Normalized timeline row.
+
+  customer_timeline_link                                          Linked source/domain entities for the row.
+
+  customer_timeline_ingest_error                                  Failed ingestion records requiring review/retry.
+
+  customer_timeline_cursor                                        Consumer progress by Kafka topic/partition or source stream.
+
+
+ CUST-INT references:
+
+  Reference                                                       Owner
+
+  customer_id, account_id                                         ILM-CFG-01
+
+  ticket_id                                                       TCK-01
+
+  lead_id                                                         SALES-01
+
+  notification_id                                                 NOT-01
+
+  work_order_id                                                   WO-01
+
+  invoice_id, payment_id, wallet_id                               BIL modules
+
+  subscription_id                                                 SUB-LM-01
+
+  homepass_id                                                     RLM-CFG-01
+
+
+
+
+ 7. Core Tables
+ 7.1 customer_timeline_event
+ What it is for: stores one normalized customer-history item.
+
+ When to use it: Customer 360, customer-facing history where enabled, reporting counts, and cross-module support context.
+
+  Column                           Type                           Purpose                                       Sample
+
+  timeline_event_id                TEXT PK                        Timeline row id.                              cte_01J_CALL_001
+
+  operator_code                    TEXT                           Operator scope.                               WIK
+
+  customer_id                      TEXT                           ILM customer id.                              cust_01HX3K9M2P5
+
+  account_id                       TEXT NULL                      ILM account id when account-scoped.           acct_01HZ_KAREN
+
+  subscription_id                  TEXT NULL                      Subscription if event is                      sub_01HZ_FIBER
+                                                                  service-scoped.
+
+  event_time                       TIMESTAMP                      When the interaction happened in              2026-05-29T13:15:00Z
+                                                                  source module.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                        Page 3
+  Column                           Type                              Purpose                            Sample
+
+  ingested_at                      TIMESTAMP                         When CUST-INT stored it.           2026-05-29T13:15:04Z
+
+  source_module                    TEXT                              Owning module.                     TCK-01
+
+  source_event_id                  TEXT                              Source event/record id for         evt_tck_01J_CREATED
+                                                                     idempotency.
+
+  source_record_type               TEXT                              Source entity type.                TICKET
+
+  source_record_id                 TEXT                              Source entity id.                  tck_01J2SUPPORT001
+
+  category                         TEXT                              NOTE, CALL, TICKET,                TICKET
+                                                                     NOTIFICATION, SALES, VISIT,
+                                                                     BILLING, SYSTEM, CVM.
+
+  event_type                       TEXT                              Specific event code.               TicketCreated
+
+  direction                        TEXT                              INBOUND, OUTBOUND, INTERNAL,       INBOUND
+                                                                     SYSTEM.
+
+  channel                          TEXT NULL                         Contact/channel.                   CALL_CENTER
+
+  title                            TEXT                              Short display title.               Technical support ticket
+                                                                                                        opened
+
+  summary                          TEXT                              Redacted display summary.          Customer reported no
+                                                                                                        internet.
+
+  visibility                       TEXT                              INTERNAL_ONLY, STAFF,              STAFF
+                                                                     CUSTOMER_VISIBLE.
+
+  actor_user_id                    TEXT NULL                         Staff/system actor if known.       kc_user_csr_07
+
+  actor_display_name               TEXT NULL                         Display name snapshot.             Jane CSR
+
+  customer_visible                 BOOLEAN                           Whether self-care can show it if   false
+                                                                     enabled.
+
+  pii_level                        TEXT                              NONE, LOW, MEDIUM, HIGH.           LOW
+
+  metadata_json                    JSONB                             Safe structured metadata.          {"priority":"P2"}
+
+
+ Constraints:
+
+   - Unique (operator_code, source_module, source_event_id).
+
+   - summary must be redacted. Do not store raw ID numbers, passwords, full payment card data, or sensitive diagnostic
+     blobs.
+
+   - customer_visible = true only if the source module marks the item customer-safe.
+
+ 7.2 customer_timeline_link
+ What it is for: stores links from a timeline event to source/domain entities.
+
+ When to use it: Backoffice needs to open ticket detail, invoice detail, WO detail, or related customer data from a timeline row.
+
+  Column                           Type                              Purpose                            Sample
+
+  timeline_link_id                 TEXT PK                           Link id.                           ctl_01J_TCK_LINK
+
+  timeline_event_id                TEXT FK                           Timeline row.                      cte_01J_CALL_001
+
+  entity_type                      TEXT                              Linked entity type.                TICKET
+
+  entity_id                        TEXT                              Linked entity id.                  tck_01J2SUPPORT001
+
+  link_role                        TEXT                              Why linked.                        SOURCE_RECORD
+
+  display_ref                      TEXT NULL                         Human reference.                   KE-TCK-2026-000001
+
+  created_at                       TIMESTAMP                         Link creation time.                2026-05-29T13:15:04Z
+
+
+ Allowed entity_type examples:
+
+   - CUSTOMER
+
+   - ACCOUNT
+
+   - SUBSCRIPTION
+
+   - TICKET
+
+   - WORK_ORDER
+
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 4
+   - INVOICE
+
+   - PAYMENT
+
+   - WALLET
+
+   - ORDER
+
+   - LEAD
+
+   - NOTIFICATION
+
+   - HOME_PASS
+
+   - EQUIPMENT_INSTANCE
+
+ 7.3 customer_timeline_ingest_error
+ What it is for: stores failed ingestion attempts that need retry or repair.
+
+ When to use it: source event was malformed, customer id could not be resolved, visibility was invalid, or source event could
+ not be normalized.
+
+  Column                            Type                              Purpose                             Sample
+
+  ingest_error_id                   TEXT PK                           Error id.                           ctie_01J_BAD_EVENT
+
+  operator_code                     TEXT NULL                         Operator if known.                  WIK
+
+  source_module                     TEXT                              Source module.                      NOT-01
+
+  source_event_id                   TEXT                              Source event id.                    evt_not_01J_BAD
+
+  error_code                        TEXT                              Failure reason.                     CUSTOMER_ID_MISSING
+
+  error_message                     TEXT                              Human repair detail.                Notification event did not
+                                                                                                          include customerId.
+
+  payload_json                      JSONB                             Original payload or safe redacted   {"eventType":"NotificationDi
+                                                                      payload.                            spatched"}
+
+  status                            TEXT                              PENDING_RETRY, RESOLVED,            PENDING_RETRY
+                                                                      IGNORED, FAILED_FINAL.
+
+  attempt_count                     INT                               Retry count.                        1
+
+  created_at                        TIMESTAMP                         First failure time.                 2026-05-29T13:20:00Z
+
+  updated_at                        TIMESTAMP                         Last update time.                   2026-05-29T13:20:00Z
+
+
+
+ 7.4 customer_timeline_cursor
+ What it is for: tracks ingestion progress for event consumers.
+
+ When to use it: Kafka/inbox consumers need replay protection and operational visibility.
+
+  Column                            Type                              Purpose                             Sample
+
+  cursor_id                         TEXT PK                           Cursor id.                          cur_tck_ticket_created_p0
+
+  source_name                       TEXT                              Topic/source stream.                sophix.ticket.events
+
+  partition_no                      INT NULL                          Kafka partition if applicable.      0
+
+  last_offset                       BIGINT NULL                       Last committed offset.              99102
+
+  last_event_time                   TIMESTAMP NULL                    Last event time processed.          2026-05-29T13:19:00Z
+
+  status                            TEXT                              ACTIVE, PAUSED, ERROR.              ACTIVE
+
+  updated_at                        TIMESTAMP                         Last cursor update.                 2026-05-29T13:20:00Z
+
+
+
+
+ 8. Event Normalization
+ Minimum mapping:
+
+  Source                            Source event/record               Timeline category                   Visibility default
+
+  ILM                               CustomerNoteAppended              NOTE                                STAFF
+
+  ILM                               CustomerInteractionAppended       CALL or SYSTEM based on channel     STAFF
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 5
+  Source                          Source event/record                      Timeline category                   Visibility default
+
+  TCK                             TicketCreated                            TICKET                              STAFF or CUSTOMER_VISIBLE if
+                                                                                                               source says customer-visible
+
+  TCK                             TicketResolved                           TICKET                              STAFF or CUSTOMER_VISIBLE
+
+  TCK                             ticket customer-visible comment          TICKET                              CUSTOMER_VISIBLE
+
+  NOT                             NotificationDispatched                   NOTIFICATION                        CUSTOMER_VISIBLE if message was
+                                                                                                               customer-facing
+
+  NOT                             NotificationFailed                       NOTIFICATION                        INTERNAL_ONLY
+
+  SALES                           SalesLeadCreated                         SALES                               STAFF
+
+  SALES                           SalesLeadConverted                       SALES                               STAFF
+
+  WO                              WorkOrderAssigned                        VISIT                               STAFF
+
+  WO                              WorkOrderFinalized                       VISIT                               STAFF or CUSTOMER_VISIBLE if
+                                                                                                               source marks safe
+
+  BIL                             dunning notice sent                      BILLING                             CUSTOMER_VISIBLE
+
+  BIL                             manual write-off/adjustment              BILLING                             INTERNAL_ONLY unless source
+                                                                                                               marks customer-safe
+
+  CVM future                      recovery/retention activity              CVM                                 STAFF
+
+
+ Rule: source modules should include safe display fields in events. CUST-INT should not call every source module
+ synchronously during ingestion just to build a summary.
+
+
+
+ 9. APIs
+ All APIs require Authorization: Bearer <jwt> or service token.
+
+ 9.1 Read APIs
+  API                                           Purpose                                        Consumers
+
+  GET /api/customers/{customer_id}/timel        Customer timeline by customer.                 Backoffice, customer service.
+  ine?limit=50
+
+  GET /api/accounts/{account_id}/timelin        Account-scoped timeline.                       Backoffice Customer 360.
+  e?limit=50
+
+  GET /api/subscriptions/{subscription_i        Subscription/service-scoped timeline.          Backoffice subscription detail.
+  d}/timeline?limit=50
+
+  GET /api/customer-timeline/events/{tim        Timeline event detail.                         Backoffice.
+  eline_event_id}
+
+  GET /api/customer-timeline/ingest-erro        Ingestion repair queue.                        Platform ops.
+  rs?status=PENDING_RETRY
+
+
+ Query parameters:
+
+  Parameter                                     Meaning                                        Example
+
+  from                                          Start timestamp.                               2026-05-01T00:00:00Z
+
+  to                                            End timestamp.                                 2026-05-29T23:59:59Z
+
+  category                                      Filter category.                               TICKET
+
+  visibility                                    Filter visibility.                             CUSTOMER_VISIBLE
+
+  sourceModule                                  Filter source.                                 TCK-01
+
+  limit                                         Page size.                                     50
+
+  cursor                                        Pagination cursor.                             eyJ0Ijoi...
+
+
+
+ 9.2 Internal Ingestion API
+ Kafka is preferred. Internal API is allowed for modules that cannot publish events yet.
+
+  API                                           Purpose                                        Consumers
+
+  POST                                          Insert normalized or source event payload.     ILM/TCK/SALES/NOT/WO/BIL modules.
+  /internal/customer-timeline/events
+
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 6
+  API                                         Purpose                                              Consumers
+
+  POST /internal/customer-timeline/event      Bulk backfill.                                       Migration/data repair.
+  s/bulk
+
+  POST /internal/customer-timeline/inges      Retry failed ingestion.                              Platform ops.
+  t-errors/{id}/retry
+
+  POST /internal/customer-timeline/inges      Mark failed event ignored with reason.               Platform ops.
+  t-errors/{id}/ignore
+
+
+ Internal event sample:
+           {
+               "operatorCode": "WIK",
+               "customerId": "cust_01HX3K9M2P5",
+               "accountId": "acct_01HZ_KAREN",
+               "sourceModule": "TCK-01",
+               "sourceEventId": "evt_tck_01J_CREATED",
+               "sourceRecordType": "TICKET",
+               "sourceRecordId": "tck_01J2SUPPORT001",
+               "eventTime": "2026-05-29T13:15:00Z",
+               "category": "TICKET",
+               "eventType": "TicketCreated",
+               "direction": "INBOUND",
+               "channel": "CALL_CENTER",
+               "title": "Technical support ticket opened",
+               "summary": "Customer reported no internet.",
+               "visibility": "STAFF",
+               "customerVisible": false,
+               "links": [
+                 {
+                   "entityType": "TICKET",
+                   "entityId": "tck_01J2SUPPORT001",
+                   "linkRole": "SOURCE_RECORD",
+                   "displayRef": "KE-TCK-2026-000001"
+                 }
+               ]
+           }
+
+ Read response sample:
+           {
+               "customerId": "cust_01HX3K9M2P5",
+               "items": [
+                  {
+                    "timelineEventId": "cte_01J_CALL_001",
+                    "eventTime": "2026-05-29T13:15:00Z",
+                    "category": "TICKET",
+                    "eventType": "TicketCreated",
+                    "title": "Technical support ticket opened",
+                    "summary": "Customer reported no internet.",
+                    "visibility": "STAFF",
+                    "sourceModule": "TCK-01",
+                    "links": [
+                      {
+                        "entityType": "TICKET",
+                        "entityId": "tck_01J2SUPPORT001",
+                        "displayRef": "KE-TCK-2026-000001"
+                      }
+                    ]
+                  }
+               ],
+               "nextCursor": null
+           }
+
+
+
+
+ 10. Business Rules
+  Rule                                                                   Description
+
+  CINT-1                                                                 Source modules remain source of truth. Timeline rows are read-model
+                                                                         summaries.
+
+  CINT-2                                                                 Timeline ingestion must be idempotent by (operator_code,
+                                                                         source_module, source_event_id).
+
+  CINT-3                                                                 Customer-visible timeline events must be explicitly marked customer-safe by
+                                                                         source module.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 7
+  Rule                                                             Description
+
+  CINT-4                                                           Internal-only notes, diagnostics, and staff comments must never appear in
+                                                                   customer self-care.
+
+  CINT-5                                                           If customer/account cannot be resolved, store an ingest error instead of
+                                                                   dropping silently.
+
+  CINT-6                                                           Timeline summary must be redacted before storage.
+
+  CINT-7                                                           Entity links are references only; no cross-module foreign keys.
+
+  CINT-8                                                           Reads must enforce RBAC and customer/account scope.
+
+  CINT-9                                                           Corrections are additive. Do not mutate historical timeline content except for
+                                                                   legal redaction/anonymization.
+
+  CINT-10                                                          Customer 360 may tolerate missing timeline data; source modules still hold
+                                                                   authoritative detail.
+
+
+
+
+ 11. Frontend Usage
+ 11.1 FE-APP-01 Backoffice
+ Backoffice uses CUST-INT for the Customer 360 history panel.
+
+  Area                                                             API
+
+  Customer timeline panel                                          GET /api/customers/{customer_id}/timeline?limit=50
+
+  Account timeline panel                                           GET /api/accounts/{account_id}/timeline?limit=50
+
+  Filter by type                                                   query category=TICKET, category=BILLING, etc.
+
+  Open source detail                                               Use timeline links[] and call owning module detail API.
+
+  Ingest error repair                                              Platform ops screen over ingest-error APIs.
+
+
+ UI rule: timeline is for scanning history. Source module detail pages remain the place to act.
+
+ 11.2 FE-APP-04 Customer Self-Care
+ Self-care can use CUST-INT only for customer-visible events:
+             GET /api/customers/me/timeline?visibility=CUSTOMER_VISIBLE&limit=20
+
+ If this endpoint is not enabled, self-care continues to show ticket history from TCK and notification history from NOT
+ separately.
+
+
+
+ 12. Integration With Modules
+  Module                                                           Integration
+
+  ILM-CFG-01                                                       Emits notes/interactions events or CUST-INT consumes ILM events.
+
+  TCK-01                                                           Emits ticket lifecycle/comment events for timeline.
+
+  SALES-01                                                         Emits lead activity/conversion events for customer history after lead has
+                                                                   customer/prospect link.
+
+  NOT-01                                                           Emits notification dispatched/failed/suppressed events.
+
+  WO-01                                                            Emits customer visit/work milestone events where customer-linked.
+
+  BIL                                                              Emits customer-facing billing/dunning/payment events where needed.
+
+  ASR future                                                       Emits service assurance flow events through TCK or directly if needed.
+
+  CVM future                                                       Emits retention/recovery/upsell activities.
+
+  REP-01                                                           Consumes timeline data for interaction reporting.
+
+
+
+
+ 13. Infrastructure And Deployment
+ For a budget-conscious medium deployment:
+
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 8
+  Component                                                    Recommendation
+
+  Runtime                                                      Run inside ILM/customer-service pod or shared business-services pod. It can
+                                                               become separate later if event volume grows.
+
+  Database                                                     PostgreSQL customer_timeline schema in shared business DB. Partition
+                                                               customer_timeline_event by month if volume grows.
+
+  Kafka                                                        Consume module events through inbox/outbox pattern.
+
+  Cache                                                        Optional Redis cache for first page of customer timeline, TTL 1-5 minutes.
+
+  Search                                                       Start with PostgreSQL indexes. Add OpenSearch only if full-text timeline search
+                                                               becomes necessary.
+
+  Observability                                                Alert on ingest error backlog, consumer lag, and projection delay.
+
+
+ AWS recommendation:
+
+  Concern                                                      AWS guidance
+
+  Compute                                                      Shared ECS/EKS service initially.
+
+  DB                                                           Existing RDS PostgreSQL with monthly partitions if needed.
+
+  Events                                                       Existing MSK/Kafka.
+
+  Search                                                       Avoid OpenSearch in first budget-conscious deployment unless operational
+                                                               search requires it.
+
+  Storage                                                      Attachments remain in file storage; timeline stores only links.
+
+  Monitoring                                                   CloudWatch/Prometheus alerts for lag and ingest errors.
+
+
+
+
+ 14. Tests
+ Minimum tests:
+
+  Test                                                         Expected result
+
+  Ingest valid TCK event                                       Timeline row and link created.
+
+  Ingest same source event twice                               One row only, same response.
+
+  Ingest event missing customer id                             Ingest error created.
+
+  Customer-visible false event                                 Not returned by self-care timeline.
+
+  Internal-only event                                          Returned to authorized staff only.
+
+  Customer timeline pagination                                 Stable ordering by event_time desc, timeline_event_id desc.
+
+  Link opens source module                                     Link contains enough info for frontend to call owning module.
+
+  RBAC missing customer scope                                  Timeline read returns 403.
+
+  Redaction test                                               Sensitive fields not stored in summary.
+
+  Consumer retry after transient failure                       Event eventually ingested once.
+
+
+
+
+ 15. Open Decisions For Review
+  Decision                                                     Recommendation
+
+  Should CUST-INT own manual customer notes?                   No. ILM already owns notes/interactions. CUST-INT projects them.
+
+  Should CUST-INT be a separate deployment?                    Not initially. Start inside ILM/shared business services; split later if volume
+                                                               grows.
+
+  Should self-care show unified timeline?                      Optional. Start with tickets/notifications separately unless product wants one
+                                                               customer-facing history.
+
+  Should timeline store full event payload?                    No. Store safe summary and links; source module keeps full detail.
+
+  Should source modules publish events or call internal API?   Prefer Kafka events. Allow internal API for early modules until event coverage is
+                                                               complete.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 9
+

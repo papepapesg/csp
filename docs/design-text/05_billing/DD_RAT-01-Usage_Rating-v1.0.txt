@@ -1,0 +1,732 @@
+ DD_RAT-01 - Usage Rating
+ Version: 1.0 Status: Draft for review Bundle: 05_billing Audience: billing developers, usage rating developers, wallet
+ developers, invoicing developers, QA Related DDs:
+
+   - DD_MED-01 - Usage Mediation
+
+   - DD_PLM-CFG-07 - Voice Tariff Catalog
+
+   - DD_PLM-CFG-02 - Tax Configuration
+
+   - DD_BIL-05 - Wallet and Topup
+
+   - DD_BIL-02-GEN-01 - Invoice Generation
+
+   - DD_BIL-02-TAX-01 - Tax Invoice and Gateway
+
+   - DD_REP-01 - Reporting Data Mart and Dashboard API
+
+ MVP simplification baseline: RAT-01 is offline/batch rating only in this design. Implement after MED-01, wallet/payment
+ basics, and tariff catalog are stable. Do not implement online rating/session control in the first release.
+
+
+
+ 1. Purpose
+ RAT-01 defines how SOPHIX rates mediated usage records and turns them into billable financial results.
+
+ The first required use case is voice usage rating:
+            MED-01 mediated CDR
+              -> RAT-01 tariff lookup, allowance consumption, tax computation
+              -> PREPAID wallet debit or POSTPAID rated usage for invoice generation
+
+ RAT-01 exists because usage charging is different from lifecycle charging. BIL-01 handles lifecycle/business-intent charges
+ such as activation, migration, relocation, fees, and proration. RAT-01 handles high-volume usage records such as CDRs.
+
+
+
+ 2. Ownership Boundary
+  Concern                                                             Owner
+
+  Raw CDR import, normalization, duplicate detection, quarantine      MED-01
+
+  Tariff plans, zones, prefixes, rates, allowances definitions        PLM-CFG-07
+
+  Usage rating execution, rated usage ledger, allowance consumption   RAT-01
+
+  Tax computation for usage charge                                    PLM-CFG-02 called by RAT-01
+
+  PREPAID wallet debit                                                BIL-05 called by RAT-01
+
+  POSTPAID invoice generation from rated usage                        BIL-02-GEN-01 reads or consumes RAT-01 rated usage
+
+  Tax invoice after payment/topup/invoice                             BIL-02-TAX-01
+
+  Wallet balance and wallet ledger                                    BIL-05
+
+
+ Rule: RAT-01 must not parse raw CDR files. It consumes only mediated usage from MED-01.
+
+ Rule: RAT-01 must not own wallet balances or invoice numbering. It calls the owning modules.
+
+
+
+ 3. Scope
+ 3.1 In Scope
+   - Consume UsageMediated events or poll MED-01 records.
+
+   - Rate voice calls using PLM-CFG-07 tariff lookup.
+
+   - Apply call duration rounding rules.
+
+   - Apply charge policy:
+
+   - CHARGEABLE;
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+   - ZERO_RATED;
+
+   - BLOCKED;
+
+   - QUARANTINE.
+
+   - Manage per-subscription allowance buckets and allowance consumption.
+
+   - Compute tax using PLM-CFG-02.
+
+   - Store immutable rated usage records.
+
+   - Debit PREPAID wallets via BIL-05.
+
+   - Expose POSTPAID rated usage to invoice generation.
+
+   - Retry failed rating and failed settlement.
+
+   - Quarantine rating failures separately from MED-01 quarantine.
+
+ 3.2 Out Of Scope
+   - Raw CDR parsing.
+
+   - Destination prefix catalog maintenance.
+
+   - Wallet topup handling.
+
+   - External payment gateway callbacks.
+
+   - Dunning decisions after insufficient wallet balance.
+
+   - Invoice PDF generation.
+
+   - Tax authority signing.
+
+
+
+ 4. High Level Architecture
+           flowchart LR
+             MED["MED-01<br/>Mediated usage"]
+             RAT["RAT-01<br/>Usage rating"]
+             TAR["PLM-CFG-07<br/>Voice tariff"]
+             TAX["PLM-CFG-02<br/>Tax compute"]
+             WAL["BIL-05<br/>Wallet debit"]
+             INV["BIL-02-GEN-01<br/>Invoice generation"]
+             REP["REP-01<br/>Reporting"]
+
+               MED --> RAT
+               RAT --> TAR
+               RAT --> TAX
+               RAT --> WAL
+               RAT --> INV
+               RAT --> REP
+
+
+
+
+ 5. Core Concepts
+ 5.1 Rated Usage
+ A rated usage record is the immutable financial result of rating one mediated usage record.
+
+ Example:
+           {
+               "ratedUsageId": "rated-20260602-000001",
+               "mediatedUsageId": "med-20260602-000001",
+               "subscriptionId": "SUB-700045",
+               "usageType": "VOICE_CALL",
+               "zoneCode": "KE_MOBILE",
+               "actualDurationSeconds": 75,
+               "billableDurationSeconds": 120,
+               "grossAmount": 6.00,
+               "taxAmount": 0.96,
+               "netAmount": 6.96,
+               "currency": "KES",
+               "settlementStatus": "SETTLED"
+
+
+
+SOPHIX BSS Design Documents                                                                    Page 2
+            }
+
+
+ 5.2 Allowance Bucket
+ An allowance bucket tracks remaining included usage for a subscription and cycle.
+
+ Example:
+            100 on-net minutes per bill cycle
+
+ PLM-CFG-07 defines the allowance. RAT-01 creates and consumes the runtime bucket.
+
+ 5.3 Settlement
+ Settlement is what happens after rating:
+
+  Billing mode                                                             Settlement
+
+  PREPAID                                                                  Immediate wallet debit through BIL-05.
+
+  POSTPAID                                                                 Rated usage remains pending for invoice generation.
+
+  ZERO_RATED                                                               No settlement, but record is stored for audit/reporting.
+
+
+
+
+ 6. Runtime Flow
+ 6.1 PREPAID Voice Rating Flow
+            sequenceDiagram
+              participant M as MED-01
+              participant R as RAT-01
+              participant T as PLM-CFG-07
+              participant X as PLM-CFG-02
+              participant W as BIL-05
+
+                 M->>R: UsageMediated event
+                 R->>T: Voice rating lookup
+                 R->>R: Apply allowance and duration rounding
+                 R->>X: Compute tax
+                 R->>R: Store rated usage
+                 R->>W: Debit wallet
+                 W-->>R: Debit result
+                 R->>R: Mark SETTLED
+
+
+ 6.2 POSTPAID Voice Rating Flow
+            sequenceDiagram
+              participant M as MED-01
+              participant R as RAT-01
+              participant T as PLM-CFG-07
+              participant X as PLM-CFG-02
+              participant I as BIL-02-GEN-01
+
+                 M->>R: UsageMediated event
+                 R->>T: Voice rating lookup
+                 R->>R: Apply allowance and duration rounding
+                 R->>X: Compute tax
+                 R->>R: Store rated usage as POSTPAID_PENDING_INVOICE
+                 I->>R: Read rated usage for cycle
+                 I->>I: Generate invoice line summary
+
+
+
+
+ 7. Business Rules
+  Rule ID                                      Rule                                                    Notes
+
+  R-RAT-01                                     Only mediated records from MED-01 can be rated.         No raw CDR parsing.
+
+  R-RAT-02                                     Rating is idempotent on mediated_usage_id.              Same CDR cannot be charged twice.
+
+  R-RAT-03                                     Tariff lookup uses call start time, not processing      Historical rates matter.
+                                               time.
+
+  R-RAT-04                                     Destination zone and rate come from PLM-CFG-07.         RAT-01 must not hardcode rates.
+
+  R-RAT-05                                     Duration rounding uses the tariff rate's increment      60/60, 1/1, etc.
+                                               fields.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 3
+  Rule ID                                     Rule                                                     Notes
+
+  R-RAT-06                                    Allowance consumption happens before paid rating.        Free seconds reduce billable paid seconds.
+
+  R-RAT-07                                    Allowance consumption must be atomic per                 Prevent concurrent over-consumption.
+                                              subscription/cycle/allowance.
+
+  R-RAT-08                                    Tax is computed by PLM-CFG-02 for non-zero               Zero-rated records have zero tax.
+                                              gross charge.
+
+  R-RAT-09                                    PREPAID settlement calls BIL-05 with a stable            Prevent double debit.
+                                              idempotency key.
+
+  R-RAT-10                                    POSTPAID rated usage remains immutable and is            Prevent duplicate invoice lines.
+                                              consumed by invoice generation once.
+
+  R-RAT-11                                    Insufficient prepaid wallet balance marks rating         Rating amount is still valid.
+                                              settlement failed, not rating failed.
+
+  R-RAT-12                                    Unknown tariff/rate sends record to rating               MED was valid, rating config is missing.
+                                              quarantine.
+
+  R-RAT-13                                    Corrections after rating require reversal/adjustment     Audit protection.
+                                              flow, not editing rated usage.
+
+
+
+
+ 8. Data Model
+ 8.1 usage_rating_job
+ Tracks event or batch processing jobs.
+
+ Use this table to monitor rating worker progress.
+
+  Column                          Type                                    Purpose                                    Sample
+
+  rating_job_id                   UUID PK                                 Job id.                                    urj-001
+
+  operator_code                   TEXT                                    Operator/tenant.                           WIK
+
+  job_type                        TEXT                                    EVENT, BATCH, REPLAY.                      EVENT
+
+  source_ref_id                   TEXT                                    Event id, batch id, or replay id.          evt-usage-mediated-001
+
+  status                          TEXT                                    RUNNING, COMPLETED, FAILED,                COMPLETED
+                                                                          PARTIAL.
+
+  records_processed               INTEGER                                 Count processed.                           1
+
+  records_rated                   INTEGER                                 Count rated.                               1
+
+  records_quarantined             INTEGER                                 Count quarantined.                         0
+
+  started_at                      TIMESTAMP                               Start time.                                2026-06-02T11:06:00Z
+
+  completed_at                    TIMESTAMP NULL                          Completion time.                           2026-06-02T11:06:01Z
+
+
+ Recommended indexes:
+
+   - (operator_code, status, started_at).
+
+ 8.2 rated_usage_record
+ Stores one immutable rated usage result.
+
+ Use this table as the source of truth for usage charge audit and postpaid invoice generation.
+
+  Column                          Type                                    Purpose                                    Sample
+
+  rated_usage_id                  UUID PK                                 Rated usage id.                            rated-001
+
+  mediated_usage_id               TEXT UNIQUE                             MED-01 record id.                          med-20260602-000001
+
+  operator_code                   TEXT                                    Operator/tenant.                           WIK
+
+  usage_type                      TEXT                                    VOICE_CALL.                                VOICE_CALL
+
+  billing_mode                    TEXT                                    PREPAID, POSTPAID.                         PREPAID
+
+  subscription_id                 TEXT                                    Subscription.                              SUB-700045
+
+  customer_id                     TEXT                                    Customer.                                  CUS-100045
+
+  account_id                      TEXT NULL                               Billing account.                           ACC-900045
+
+  service_ref                     TEXT                                    PLM service.                               svc_VOIP_STD
+
+
+
+SOPHIX BSS Design Documents                                                                                                                         Page 4
+  Column                           Type                             Purpose                                Sample
+
+  package_ref                      TEXT NULL                        Package at usage time.                 pkg_INET_VOICE_STD
+
+  tariff_plan_code                 TEXT                             Applied tariff plan.                   WIK_RES_VOICE_STD_2026
+
+  zone_code                        TEXT                             Destination zone.                      KE_MOBILE
+
+  time_band_code                   TEXT                             Time band.                             ANYTIME
+
+  actual_duration_seconds          INTEGER                          Source duration.                       75
+
+  allowance_seconds_applied        INTEGER                          Seconds paid by allowance.             0
+
+  billable_duration_seconds        INTEGER                          Charged seconds after allowance and    120
+                                                                    rounding.
+
+  unit_price                       DECIMAL(18,6)                    Applied unit price.                    3.000000
+
+  gross_amount                     DECIMAL(18,6)                    Amount before tax.                     6.000000
+
+  tax_amount                       DECIMAL(18,6)                    Tax total.                             0.960000
+
+  net_amount                       DECIMAL(18,6)                    Gross plus tax.                        6.960000
+
+  currency_code                    TEXT                             Currency.                              KES
+
+  tax_breakdown_json               JSONB                            Tax lines from PLM-CFG-02.             [{"taxType":"VAT","amount":0
+                                                                                                           .96}]
+
+  rating_status                    TEXT                             RATED, ZERO_RATED, QUARANTINED.        RATED
+
+  settlement_status                TEXT                             NOT_REQUIRED, PENDING, SETTLED,        SETTLED
+                                                                    FAILED,
+                                                                    POSTPAID_PENDING_INVOICE,
+                                                                    INVOICED.
+
+  settlement_ref_id                TEXT NULL                        Wallet transaction id or invoice id.   wtx-001
+
+  rated_at                         TIMESTAMP                        Rating time.                           2026-06-02T11:06:00Z
+
+
+ Recommended indexes:
+
+   - Unique (mediated_usage_id).
+
+   - (operator_code, settlement_status, rated_at).
+
+   - (subscription_id, rated_at).
+
+   - (billing_mode, settlement_status, rated_at).
+
+ 8.3 usage_allowance_bucket
+ Stores runtime allowance balance for one subscription and cycle.
+
+ Use this table when a tariff plan includes free minutes.
+
+  Column                           Type                             Purpose                                Sample
+
+  bucket_id                        UUID PK                          Bucket id.                             uab-001
+
+  operator_code                    TEXT                             Operator/tenant.                       WIK
+
+  subscription_id                  TEXT                             Subscription.                          SUB-700045
+
+  tariff_plan_code                 TEXT                             Tariff plan.                           WIK_RES_VOICE_STD_2026
+
+  allowance_code                   TEXT                             PLM-CFG-07 allowance.                  ONNET_100_MIN
+
+  cycle_ref                        TEXT                             Billing or allowance cycle.            2026-06
+
+  included_seconds                 INTEGER                          Initial included seconds.              6000
+
+  consumed_seconds                 INTEGER                          Used seconds.                          120
+
+  remaining_seconds                INTEGER                          Remaining seconds.                     5880
+
+  status                           TEXT                             ACTIVE, EXHAUSTED, EXPIRED.            ACTIVE
+
+  created_at                       TIMESTAMP                        Creation timestamp.                    2026-06-01T00:00:00Z
+
+  updated_at                       TIMESTAMP                        Last update timestamp.                 2026-06-02T11:06:00Z
+
+
+ Recommended indexes:
+
+   - Unique (operator_code, subscription_id, allowance_code, cycle_ref).
+
+   - (subscription_id, status).
+
+
+
+SOPHIX BSS Design Documents                                                                                                         Page 5
+ 8.4 usage_allowance_consumption
+ Stores allowance consumption per rated usage record.
+
+ Use this table for audit and customer usage history.
+
+  Column                           Type                              Purpose                       Sample
+
+  consumption_id                   UUID PK                           Consumption id.               uac-001
+
+  bucket_id                        UUID FK                           Allowance bucket.             uab-001
+
+  rated_usage_id                   UUID FK                           Rated usage.                  rated-001
+
+  consumed_seconds                 INTEGER                           Seconds consumed.             60
+
+  created_at                       TIMESTAMP                         Creation timestamp.           2026-06-02T11:06:00Z
+
+
+ Recommended indexes:
+
+   - Unique (bucket_id, rated_usage_id).
+
+ 8.5 usage_rating_quarantine
+ Stores mediated records that cannot be rated due to rating configuration or settlement preparation errors.
+
+ Use this table when MED-01 was valid but rating cannot complete.
+
+  Column                           Type                              Purpose                       Sample
+
+  rating_quarantine_id             UUID PK                           Quarantine id.                urq-001
+
+  mediated_usage_id                TEXT                              MED-01 record id.             med-20260602-000002
+
+  operator_code                    TEXT                              Operator/tenant.              WIK
+
+  reason_code                      TEXT                              Why rating failed.            VOICE_RATE_NOT_FOUND
+
+  severity                         TEXT                              LOW, MEDIUM, HIGH.            HIGH
+
+  status                           TEXT                              OPEN, IN_REVIEW, RESOLVED,    OPEN
+                                                                     IGNORED.
+
+  context_json                     JSONB                             Rating context.               {"calledNumber":"+998..."}
+
+  resolution_notes                 TEXT NULL                         Repair notes.                 Tariff prefix added
+
+  created_at                       TIMESTAMP                         Creation timestamp.           2026-06-02T11:06:00Z
+
+  resolved_at                      TIMESTAMP NULL                    Resolution timestamp.         NULL
+
+
+ Recommended indexes:
+
+   - (operator_code, status, reason_code, created_at).
+
+ 8.6 usage_settlement_attempt
+ Stores each attempt to settle a rated usage record.
+
+ Use this table for wallet debit retries and postpaid invoice handoff audit.
+
+  Column                           Type                              Purpose                       Sample
+
+  settlement_attempt_id            UUID PK                           Attempt id.                   usa-001
+
+  rated_usage_id                   UUID FK                           Rated usage.                  rated-001
+
+  target_module                    TEXT                              BIL-05 or BIL-02-GEN-01.      BIL-05
+
+  target_endpoint                  TEXT                              Endpoint called.              /api/wallets/WAL-200045/debi
+                                                                                                   t
+
+  idempotency_key                  TEXT                              Settlement idempotency.       RAT:med-20260602-000001
+
+  status                           TEXT                              SUCCESS, FAILED_RETRYABLE,    SUCCESS
+                                                                     FAILED_FINAL.
+
+  request_payload_redacted         JSONB                             Redacted request.             {"amount":6.96}
+
+  response_payload_redacted        JSONB NULL                        Redacted response.            {"walletTransactionId":"wtx-
+                                                                                                   001"}
+
+  error_code                       TEXT NULL                         Error if failed.              INSUFFICIENT_BALANCE
+
+  created_at                       TIMESTAMP                         Attempt time.                 2026-06-02T11:06:01Z
+
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 6
+ Recommended indexes:
+
+   - (rated_usage_id, created_at).
+
+   - (status, created_at).
+
+
+
+ 9. APIs
+ 9.1 Rating APIs
+          POST /api/usage-rating/rate
+          POST /api/usage-rating/rate-batch
+          GET /api/usage-rating/rated-usages
+          GET /api/usage-rating/rated-usages/{rated_usage_id}
+          POST /api/usage-rating/rated-usages/{rated_usage_id}/retry-settlement
+
+
+ 9.2 Postpaid Invoice Read APIs
+ Used by invoice generation.
+          GET /api/usage-rating/postpaid-usage?subscriptionId={id}&cycleRef={cycle}
+          POST /api/usage-rating/postpaid-usage/mark-invoiced
+
+ mark-invoiced must include the invoice id and the list of rated usage ids included in the invoice.
+
+ 9.3 Quarantine APIs
+          GET /api/usage-rating/quarantine?status=OPEN
+          POST /api/usage-rating/quarantine/{rating_quarantine_id}/replay
+          POST /api/usage-rating/quarantine/{rating_quarantine_id}/ignore
+
+
+
+
+ 10. Events
+  Event                                     Topic                                      When emitted
+
+  UsageRated                                sophix.usage.rated                         A usage record is rated.
+
+  UsageRatingQuarantined                    sophix.usage.rating.quarantined            Rating cannot complete.
+
+  PrepaidUsageDebited                       sophix.usage.prepaid.debited               Wallet debit succeeds.
+
+  PrepaidUsageDebitFailed                   sophix.usage.prepaid.debitfailed           Wallet debit fails.
+
+  PostpaidUsageReadyForInvoice              sophix.usage.postpaid.readyforinvoice      POSTPAID rated usage is available.
+
+  PostpaidUsageInvoiced                     sophix.usage.postpaid.invoiced             Invoice generation marked rated usage invoiced.
+
+
+ Sample UsageRated:
+          {
+              "eventType": "UsageRated",
+              "operatorCode": "WIK",
+              "ratedUsageId": "rated-20260602-000001",
+              "mediatedUsageId": "med-20260602-000001",
+              "subscriptionId": "SUB-700045",
+              "usageType": "VOICE_CALL",
+              "zoneCode": "KE_MOBILE",
+              "grossAmount": 6.00,
+              "taxAmount": 0.96,
+              "netAmount": 6.96,
+              "currency": "KES",
+              "settlementStatus": "SETTLED"
+          }
+
+
+
+
+ 11. Frontend Usage
+ FE-APP-01 Backoffice uses RAT-01 for:
+
+   - Rated usage search by customer, subscription, date, usage type, and status.
+
+   - Rating quarantine queue.
+
+   - Settlement failure queue.
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 7
+   - Postpaid usage ready-for-invoice checks.
+
+   - Customer/subscription rated usage history.
+
+   - Allowance bucket inspection.
+
+ Self-care should read customer-safe usage summaries from a read API or reporting layer, not from raw rating operational
+ tables.
+
+
+
+ 12. Infra Recommendation
+ 12.1 Medium Budget Deployment
+  Component                                                        Recommendation
+
+  API pods                                                         2 pods, 1 vCPU, 1.5 GB RAM each.
+
+  Rating workers                                                   1-2 workers, 2 vCPU, 4 GB RAM each.
+
+  Settlement workers                                               1 worker, 1 vCPU, 2 GB RAM.
+
+  DB                                                               Billing PostgreSQL schema usage_rat; partition rated usage monthly.
+
+  Cache                                                            Redis/local cache for tariff lookup and tax config, invalidated by catalog events.
+
+  Kafka                                                            Consume UsageMediated, emit rating/settlement events.
+
+
+
+ 12.2 Recommended Partitions
+ Partition monthly:
+
+   - rated_usage_record
+
+   - usage_settlement_attempt
+
+   - usage_rating_quarantine
+
+   - usage_allowance_consumption
+
+ Allowance bucket table is current-state plus cycle history and does not need partitioning at launch.
+
+ 12.3 OS Recommendation
+ Use Ubuntu Server 24.04 LTS for VPS deployments or hardened Debian/Ubuntu slim base images for containers.
+
+ Rating workers should run near the database and cache. They do not need public internet exposure.
+
+
+
+ 13. AWS Deployment Recommendation
+  AWS component                                                    Usage
+
+  ECS/EKS                                                          Run rating API and workers.
+
+  RDS PostgreSQL                                                   Rated usage, allowance, quarantine, settlement tables.
+
+  MSK or managed Kafka equivalent                                  UsageMediated consumption and rating events.
+
+  ElastiCache Redis                                                Tariff/tax lookup cache and short locks.
+
+  CloudWatch                                                       Worker lag, rating failures, settlement failures.
+
+
+ Required alarms:
+
+   - Rating worker backlog growing.
+
+   - Rating quarantine count above threshold.
+
+   - Prepaid debit failure spike.
+
+   - Postpaid usage not invoiced after cycle close.
+
+   - Tariff lookup errors after catalog change.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 8
+ 14. Testing Requirements
+ 14.1 Unit Tests
+   - 75 seconds with 60/60 increments becomes 120 billable seconds.
+
+   - 61 seconds with 1/1 increments remains 61 billable seconds.
+
+   - Zero-rated rate creates zero gross/tax/net.
+
+   - Allowance reduces paid seconds.
+
+   - Allowance bucket lock prevents over-consumption.
+
+   - Tax compute response is stored in rated usage.
+
+   - Duplicate mediated usage returns prior rated result.
+
+ 14.2 Integration Tests
+   - UsageMediated event rates successfully.
+
+   - PLM-CFG-07 missing rate creates rating quarantine.
+
+   - PREPAID rated usage debits BIL-05 exactly once.
+
+   - BIL-05 insufficient balance marks settlement failed.
+
+   - POSTPAID rated usage is returned to invoice generation and marked invoiced.
+
+   - Retry settlement uses same idempotency key.
+
+ 14.3 End To End Tests
+   - Raw CDR from MED-01 becomes wallet debit for PREPAID customer.
+
+   - Raw CDR from MED-01 becomes invoice line source for POSTPAID customer.
+
+   - Duplicate CDR does not create second wallet debit.
+
+   - Tariff update effective tomorrow does not change today's CDR rating.
+
+
+
+ 15. Definition Of Done
+ RAT-01 is complete when:
+
+   - It consumes mediated usage from MED-01.
+
+   - It looks up tariffs through PLM-CFG-07.
+
+   - It applies duration rounding and allowances.
+
+   - It computes tax through PLM-CFG-02.
+
+   - It stores immutable rated usage records.
+
+   - PREPAID settlement debits BIL-05 idempotently.
+
+   - POSTPAID rated usage can be consumed once by invoice generation.
+
+   - Rating quarantine and replay are implemented.
+
+   - Settlement retry is implemented.
+
+   - Backoffice can inspect rated usage, allowance buckets, quarantine, and settlement failures.
+
+
+
+
+SOPHIX BSS Design Documents                                                                        Page 9
+

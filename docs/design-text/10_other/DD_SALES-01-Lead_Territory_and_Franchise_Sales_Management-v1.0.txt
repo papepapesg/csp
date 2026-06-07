@@ -1,0 +1,595 @@
+ DD_SALES-01 - Lead, Territory, and Franchise Sales
+ Management
+ Version: v1.0
+
+ Status: Draft for review
+
+ Bundle: 10_other
+
+ Depends on:
+
+   - DD_CROSS-00-System_Traceability_and_Implementation_Map-v1.0
+
+   - FOUNDATION_AUTH
+
+   - FOUNDATION_KAFKA
+
+   - FOUNDATION_FILE_STORAGE
+
+   - DD_EM-02-Contractor_and_Staff_Registry-v1.0
+
+   - DD_EM-02-Contractor_Team_Agent_Registry-v1.0
+
+   - DD_ILM-CFG-01-Customer_Service-v1.0
+
+   - DD_ILM-CFG-02-Tech_Region_Registry-v1.0
+
+   - DD_RLM-CFG-01-HomePass_Configuration-v1.0
+
+   - DD_SIP-01-Package_Management-v1.0
+
+   - DD_FUL-02-Order_Capture-v1.0
+
+   - DD_NOT-01-Notification_Service-v1.3
+
+
+ 1. Purpose
+ This DD defines the commercial sales module used by the Outdoor Sales / Franchise App.
+
+ SALES-01 owns commercial leads, lead assignment, sales territories, franchise sales teams, sales activity tracking, and
+ lead-to-order conversion references. It prevents the sales frontend from storing leads locally or misusing FUL-02 as a lead
+ CRM.
+
+ FUL-02 remains the owner of submitted customer orders. SALES-01 owns the pre-order commercial pipeline.
+
+
+ 2. Scope
+ Included:
+
+  Capability                                                      Purpose
+
+  Sales territory                                                 Define commercial areas, route areas, and franchise sales coverage.
+
+  Lead capture                                                    Capture prospects before they become customers/orders.
+
+  Lead assignment                                                 Assign leads to sales agents, teams, or franchise supervisors.
+
+  Lead qualification                                              Track interest, serviceability, package interest, consent, and duplicate risk.
+
+  Sales activity                                                  Capture visit/call/contact attempts and outcomes.
+
+  Lead conversion                                                 Convert qualified lead into FUL-02 order request.
+
+  Sales attribution                                               Preserve agent/franchise/channel attribution on the resulting order.
+
+  Commission event basis                                          Emit immutable sales attribution events; actual payout calculation may be
+                                                                  deferred.
+
+
+ Out of scope:
+
+  Out of scope                                                    Owner
+
+  Customer master/account after conversion                        ILM Customer Service
+
+  Order workflow after submission                                 FUL-02
+
+  Payment ledger                                                  BIL-01-PAY-01
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 1
+  Out of scope                                                    Owner
+
+  Contractor installation capacity                                EM-02 + WO
+
+  Package eligibility source of truth                             SIP/RLM/PLM
+
+  Final commission payroll/payout accounting                      Future HR/finance or commission DD if required
+
+
+ Commission scope decision: SALES-01 records attribution events needed for future commission reporting, but it does not
+ calculate payable commissions or create settlement/payroll obligations in v1. Commission payout is deliberately deferred to a
+ future finance/commission DD so the first release can support sales attribution without introducing payroll liability logic.
+
+
+ 3. Relationship To EM-02
+ EM-02 already owns contractor, staff, team, and agent registry. SALES-01 does not duplicate those records.
+
+ SALES-01 references EM agents/teams:
+
+  SALES concept                                                   Source
+
+  Sales agent user                                                em_agent where agent_kind = 'sales-rep' and linked to
+                                                                  FOUNDATION_AUTH user id.
+
+  Sales team                                                      em_team where team_kind is sales/franchise sales.
+
+  Franchise/contractor entity                                     em_contractor where contractor type is FRANCHISE or configured
+                                                                  commercial partner type.
+
+  Supervisor/team lead                                            em_agent_team_membership with role lead or supervisor mapping.
+
+
+ Rule: do not create separate sales-user tables unless they store sales-specific state. Person/team identity remains in EM.
+
+
+ 4. Frontend Usage
+ Primary frontend:
+
+   - FE-APP-02 Outdoor Sales / Franchise App
+
+ Secondary frontend:
+
+   - FE-APP-01 BSS Backoffice Web App for supervisor/admin views.
+
+ FE-APP-02 uses SALES-01 for:
+
+   - assigned leads;
+
+   - map/route lead list;
+
+   - lead capture drafts;
+
+   - duplicate lead/customer warning;
+
+   - follow-up tasks;
+
+   - lead conversion to order;
+
+   - agent/franchise performance counters.
+
+
+ 5. Data Ownership
+ SALES-01 owns:
+
+  Entity                                                          Purpose
+
+  sales_territory                                                 Commercial coverage area/route/franchise sales zone.
+
+  sales_lead                                                      Prospect/customer interest before a FUL order exists.
+
+  sales_lead_assignment                                           Current and historical assignment to agent/team/franchise.
+
+  sales_activity                                                  Contact attempts, visit outcomes, follow-up notes.
+
+  sales_lead_package_interest                                     Packages/products the prospect is interested in.
+
+  sales_conversion                                                Link from lead to FUL order/customer/subscription after conversion.
+
+  sales_attribution_event                                         Immutable record used by reporting/commission logic.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 2
+ SALES-01 stores references to customer/order/subscription ids after conversion, but does not own their lifecycle.
+
+
+ 6. Core Tables
+ 6.1 sales_territory
+ What it is for: defines a commercial sales area. It may align to a tech region, but it is not required to be identical. Commercial
+ territories can be smaller, larger, or franchise-specific.
+
+ When to use it: assign leads, filter sales app maps/lists, and track sales performance by area.
+
+  Column                           Type                              Purpose                                 Sample
+
+  territory_id                     UUID PK                           Internal id.                            terr_01J_NRBLAV_001
+
+  operator_code                    TEXT                              Operator scope.                         WIK
+
+  territory_code                   TEXT                              Stable business code.                   SALES-KE-NRB-LAVINGTON
+
+  name                             TEXT                              Display name.                           Lavington Door Sales
+
+  tech_region_code                 TEXT NULL                         Optional ILM-CFG-02 region link.        KE-NRB-LAVINGTON
+
+  franchise_contractor_id          TEXT NULL                         Optional EM contractor/franchise        contractor_ke_nairobi_a
+                                                                     owner.
+
+  active                           BOOLEAN                           Whether territory can receive new       true
+                                                                     leads.
+
+  metadata_json                    JSONB                             Boundary polygon, notes, route hints.   {"routeDay":"MON"}
+
+
+
+ 6.2 sales_lead
+ What it is for: stores a prospect before they become a formal customer order.
+
+ When to use it: a sales agent meets a prospect, gets phone/name/location/interest, but the prospect has not yet submitted a
+ full order or KYC.
+
+  Column                           Type                              Purpose                                 Sample
+
+  lead_id                          UUID PK                           Lead id.                                lead_01J9W7Y0Z3
+
+  operator_code                    TEXT                              Operator scope.                         WIK
+
+  lead_number                      TEXT UNIQUE                       Human-friendly reference.               SL-WIK-2026-000042
+
+  source_channel                   TEXT                              DOOR_TO_DOOR,                           DOOR_TO_DOOR
+                                                                     FRANCHISE_WALKIN, CALLBACK,
+                                                                     REFERRAL.
+
+  status                           TEXT                              Lead lifecycle state.                   QUALIFIED
+
+  prospect_name                    TEXT                              Prospect name if provided.              Jane Njeri
+
+  primary_phone                    TEXT                              Prospect phone.                         +254712345678
+
+  homepass_id                      TEXT NULL                         RLM HomePass if known.                  hp_01HX5...
+
+  territory_id                     UUID NULL                         Sales territory.                        terr_01J_NRBLAV_001
+
+  geo_lat                          NUMERIC NULL                      Captured latitude.                      -1.2831
+
+  geo_lng                          NUMERIC NULL                      Captured longitude.                     36.7820
+
+  consent_captured                 BOOLEAN                           Whether prospect consent was            true
+                                                                     captured.
+
+  duplicate_risk                   TEXT                              NONE, POSSIBLE_CUSTOMER,                POSSIBLE_LEAD
+                                                                     POSSIBLE_LEAD.
+
+  created_by_agent_id              TEXT                              EM agent id.                            agt_01HZ_SALES_04
+
+  created_at                       TIMESTAMP                         Creation time.                          2026-05-28T09:15:00Z
+
+  updated_at                       TIMESTAMP                         Last update.                            2026-05-28T10:00:00Z
+
+
+
+ 6.3 sales_lead_assignment
+ What it is for: tracks who owns the lead at any point.
+
+ When to use it: assign/reassign a lead to an agent, team, or franchise supervisor.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                           Page 3
+  Column                             Type                                    Purpose                                   Sample
+
+  assignment_id                      UUID PK                                 Assignment id.                            assn_01J9W8...
+
+  lead_id                            UUID FK                                 Lead.                                     lead_01J9W7Y0Z3
+
+  assigned_agent_id                  TEXT NULL                               EM agent id.                              agt_01HZ_SALES_04
+
+  assigned_team_id                   TEXT NULL                               EM team id.                               team_sales_nrb_04
+
+  assigned_by_user_id                TEXT                                    Auth user id.                             kc_user_sales_sup_1
+
+  reason_code                        TEXT                                    Reason for assignment.                    TERRITORY_DEFAULT
+
+  active                             BOOLEAN                                 Current assignment marker.                true
+
+  assigned_at                        TIMESTAMP                               Assignment time.                          2026-05-28T09:16:00Z
+
+
+
+ 6.4 sales_activity
+ What it is for: captures visit/call/follow-up actions.
+
+ When to use it: every meaningful sales contact attempt or outcome.
+
+  Column                             Type                                    Purpose                                   Sample
+
+  activity_id                        UUID PK                                 Activity id.                              act_01J9W9...
+
+  lead_id                            UUID FK                                 Lead.                                     lead_01J9W7Y0Z3
+
+  agent_id                           TEXT                                    EM agent id.                              agt_01HZ_SALES_04
+
+  activity_type                      TEXT                                    VISIT, CALL, SMS, FOLLOW_UP,              VISIT
+                                                                             CONVERSION.
+
+  outcome_code                       TEXT                                    Result.                                   INTERESTED
+
+  notes                              TEXT NULL                               Agent notes.                              Customer wants 50 Mbps
+                                                                                                                       package.
+
+  next_follow_up_at                  TIMESTAMP NULL                          Follow-up time.                           2026-05-29T08:00:00Z
+
+  created_at                         TIMESTAMP                               Activity time.                            2026-05-28T09:20:00Z
+
+
+
+ 6.5 sales_conversion
+ What it is for: links lead to downstream order/customer/subscription.
+
+ When to use it: after FE-APP-02 calls SALES-01 conversion endpoint and SALES-01 starts or references a FUL-02 order.
+
+  Column                             Type                                    Purpose                                   Sample
+
+  conversion_id                      UUID PK                                 Conversion id.                            conv_01J9WA...
+
+  lead_id                            UUID FK                                 Lead.                                     lead_01J9W7Y0Z3
+
+  order_id                           TEXT                                    FUL-02 order id.                          ord_01HZ...
+
+  customer_id                        TEXT NULL                               ILM customer id when created.             cust_01HX...
+
+  subscription_id                    TEXT NULL                               SUB-LM id when created.                   sub_01HY...
+
+  converted_by_agent_id              TEXT                                    EM agent id.                              agt_01HZ_SALES_04
+
+  converted_at                       TIMESTAMP                               Conversion time.                          2026-05-28T10:05:00Z
+
+
+
+
+ 7. Lead Lifecycle
+  Status                                         Meaning                                                  Allowed next statuses
+
+  DRAFT                                          Captured locally or partially submitted, not ready for   NEW, CANCELLED
+                                                 assignment.
+
+  NEW                                            Lead exists and awaits assignment/qualification.         ASSIGNED, DUPLICATE, CANCELLED
+
+  ASSIGNED                                       Owned by agent/team.                                     CONTACTED, UNREACHABLE, CANCELLED
+
+  CONTACTED                                      Prospect reached.                                        QUALIFIED, NOT_INTERESTED, FOLLOW_UP
+
+  FOLLOW_UP                                      Future contact scheduled.                                CONTACTED, QUALIFIED, NOT_INTERESTED
+
+  QUALIFIED                                      Prospect is eligible enough to create order.             CONVERTED, LOST, DUPLICATE
+
+  CONVERTED                                      FUL-02 order created/referenced.                         terminal
+
+  LOST                                           Prospect declined or not eligible.                       terminal
+
+
+
+SOPHIX BSS Design Documents                                                                                                                     Page 4
+  Status                                     Meaning                                        Allowed next statuses
+
+  DUPLICATE                                  Existing customer/lead/order likely exists.    terminal or reopen by supervisor
+
+  CANCELLED                                  Created in error or withdrawn.                 terminal
+
+
+
+
+ 8. APIs
+ All APIs require Authorization: Bearer <jwt>. Create/convert commands require Idempotency-Key.
+
+  API                                        Purpose                                        Caller
+
+  POST /api/sales/leads                      Create lead.                                   FE-APP-02, Backoffice.
+
+  GET /api/sales/leads?...                   List/filter leads.                             FE-APP-02, Backoffice.
+
+  GET /api/sales/leads/{lead_id}             Lead detail.                                   FE-APP-02, Backoffice.
+
+  PATCH /api/sales/leads/{lead_id}           Update allowed lead fields.                    Assigned agent/supervisor.
+
+  POST /api/sales/leads/{lead_id}/assign     Assign/reassign lead.                          Supervisor/system assignment.
+
+  POST                                       Add visit/call/follow-up.                      Assigned agent.
+  /api/sales/leads/{lead_id}/activities
+
+  POST                                       Run qualification checks.                      Assigned agent/supervisor.
+  /api/sales/leads/{lead_id}/qualify
+
+  POST /api/sales/leads/{lead_id}/conver     Create FUL-02 order and mark lead converted.   Assigned agent.
+  t-to-order
+
+  GET /api/sales/territories?...             Territory list.                                FE-APP-02, Backoffice.
+
+  POST /api/sales/territories                Create territory.                              Sales admin.
+
+  GET /api/sales/agents/{agent_id}/daily     Assigned leads/tasks for mobile app.           FE-APP-02.
+  -work
+
+
+
+ 8.1 Create Lead Example
+           POST /api/sales/leads
+           Authorization: Bearer <jwt>
+           Idempotency-Key: sales-lead-offline-draft-8f60c
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "sourceChannel": "DOOR_TO_DOOR",
+               "prospectName": "Jane Njeri",
+               "primaryPhone": "+254712345678",
+               "homepassId": "hp_01HX5M2K9P3Q7R4T6W8Y0Z2N4P",
+               "territoryCode": "SALES-KE-NRB-LAVINGTON",
+               "geo": { "lat": -1.2831, "lng": 36.7820 },
+               "consentCaptured": true,
+               "packageInterest": [
+                 { "packageId": "pkg_INET_50M_HOME", "priority": 1 }
+               ]
+           }
+
+
+ 8.2 Convert To Order Example
+ FE-APP-02 calls SALES-01. SALES-01 validates lead state and calls FUL-02 POST /api/orders.
+           POST /api/sales/leads/lead_01J9W7Y0Z3/convert-to-order
+           Authorization: Bearer <jwt>
+           Idempotency-Key: convert-lead_01J9W7Y0Z3
+           Content-Type: application/json
+
+           {
+               "selectedPackageId": "pkg_INET_50M_HOME",
+               "customerDraft": {
+                  "fullName": "Jane Njeri",
+                  "primaryPhone": "+254712345678",
+                  "idDocumentType": "NATIONAL_ID",
+                  "idDocumentNumber": "12345678"
+               },
+               "kycFileRefs": ["file_kyc_front_01", "file_kyc_back_01"],
+               "salesAttribution": {
+                  "leadId": "lead_01J9W7Y0Z3",
+                  "agentId": "agt_01HZ_SALES_04",
+                  "teamId": "team_sales_nrb_04",
+                  "franchiseContractorId": "contractor_ke_nairobi_a",
+
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 5
+                      "territoryCode": "SALES-KE-NRB-LAVINGTON"
+                  }
+              }
+
+
+
+ 9. Integration Rules
+  Rule                                                                 Description
+
+  SALES-1                                                              Lead creation must check for duplicate active lead by phone/homepass before
+                                                                       insert. Same idempotency key returns same lead.
+
+  SALES-2                                                              Lead conversion must be transactional inside SALES-01 for lead
+                                                                       status/conversion row, but FUL-02 remains order owner. If FUL order creation
+                                                                       fails, lead stays QUALIFIED with conversion failure detail.
+
+  SALES-3                                                              SALES-01 must call ILM/RLM/SIP APIs for qualification. It must not read their
+                                                                       DBs.
+
+  SALES-4                                                              FE-APP-02 offline drafts are not authoritative leads until submitted to
+                                                                       SALES-01.
+
+  SALES-5                                                              Commission payout must not be calculated from mutable lead fields. Use
+                                                                       immutable sales_attribution_event.
+
+  SALES-6                                                              A converted lead cannot be reassigned unless supervisor explicitly corrects
+                                                                       attribution through an audited endpoint.
+
+  SALES-7                                                              If a duplicate customer/order is found, return a structured conflict and link to
+                                                                       allowed existing record details.
+
+
+
+
+ 10. Events
+  Event                                 Topic                          Produced when                              Consumers
+
+  SalesLeadCreated                      sophix.sales.lead-created      Lead created.                              Reporting, notifications.
+
+  SalesLeadAssigned                     sophix.sales.lead-assigned     Lead assigned/reassigned.                  ICN, reporting.
+
+  SalesLeadQualified                    sophix.sales.lead-qualified    Qualification succeeds.                    Reporting.
+
+  SalesLeadConverted                    sophix.sales.lead-converted    FUL-02 order created.                      Reporting, commission/payout future.
+
+  SalesLeadLost                         sophix.sales.lead-lost         Lead closed lost.                          Reporting.
+
+  SalesAttributionRecorded              sophix.sales.attribution-rec   Attribution event written.                 Reporting, commission/payout future.
+                                        orded
+
+
+ All events use foundation outbox and include operatorCode, leadId, correlationId, eventId, schemaVersion, and
+ occurredAt.
+
+
+ 11. Frontend/API Mapping
+  FE-APP-02 screen                                                     Module APIs
+
+  Daily work                                                           GET /api/sales/agents/{agent_id}/daily-work, GET
+                                                                       /api/sales/leads?....
+
+  Lead capture                                                         POST /api/sales/leads, file upload through
+                                                                       FOUNDATION_FILE_STORAGE.
+
+  Coverage check                                                       GET /api/homepasses/{homepass_id}, HomePass search APIs from
+                                                                       RLM.
+
+  Package selection                                                    GET /api/packages/{package_id}, package list APIs from SIP.
+
+  Lead qualification                                                   POST /api/sales/leads/{lead_id}/qualify; SALES calls
+                                                                       ILM/RLM/SIP as needed.
+
+  Convert to order                                                     POST /api/sales/leads/{lead_id}/convert-to-order; SALES calls
+                                                                       FUL-02.
+
+  Follow-up                                                            POST /api/sales/leads/{lead_id}/activities.
+
+  Supervisor lead board                                                SALES lead/assignment APIs, EM agent/team APIs.
+
+
+
+
+ 12. Roles
+ Roles are sourced from FOUNDATION_AUTH.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                        Page 6
+  Role family                                                    Allowed actions
+
+  Sales agent                                                    Create/update own leads, add activity, qualify, convert assigned leads.
+
+  Sales supervisor                                               Assign/reassign leads, view team leads, correct lead status, view performance.
+
+  Franchise manager                                              View franchise leads and agents, supervise assigned territories.
+
+  Sales admin                                                    Manage territories and sales configuration.
+
+  Read-only/reporting                                            View only, no mutation.
+
+
+
+
+ 13. Infra Recommendation
+ Budget-conscious medium deployment:
+
+  Component                                                      Recommendation
+
+  API pods                                                       2 pods, 1-2 vCPU, 2-4 GB RAM.
+
+  Worker/outbox                                                  Can run in same deployment initially; split if event volume grows.
+
+  Database                                                       Existing business DB cluster, separate sales schema.
+
+  Cache                                                          Redis for territory/package/homepass lookup caching, not source of truth.
+
+  Storage                                                        Use FOUNDATION_FILE_STORAGE for consent/KYC evidence.
+
+
+
+
+ 14. Implementation Notes
+ Start with:
+
+   1. Create territory and lead tables.
+
+   2. Implement create/list/detail/update lead APIs.
+
+   3. Integrate EM agent/team lookup.
+
+   4. Implement duplicate detection by phone and HomePass.
+
+   5. Implement qualification wrapper calling RLM/SIP/ILM.
+
+   6. Implement convert-to-order with FUL-02.
+
+   7. Emit lead and attribution events through outbox.
+
+   8. Add FE-APP-02 screen mappings and E2E tests.
+
+
+ 15. Acceptance Checklist
+   - [ ] FE-APP-02 does not store authoritative leads locally.
+
+   - [ ] Lead-to-order conversion creates a FUL-02 order.
+
+   - [ ] Lead attribution survives order creation.
+
+   - [ ] Duplicate lead/customer detection exists.
+
+   - [ ] EM owns sales agent/team identity.
+
+   - [ ] SALES events are published through outbox.
+
+   - [ ] E2E test covers lead capture to order submission.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 7
+

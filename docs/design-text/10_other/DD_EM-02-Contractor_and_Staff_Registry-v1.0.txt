@@ -1,0 +1,1791 @@
+ DD: EM-02 — Contractor & Staff Registry
+ Developer implementation guide: DD_EM-02-Contractor_and_Staff_Registry-DEV_IMPL_GUIDE-v1.0.md.
+
+ Canonical note (2026-06-01): this is the canonical EM-02 implementation target. It supersedes
+ DD_EM-02-Contractor_Team_Agent_Registry-v1.0.md, which is retained only for historical traceability. Build one
+ EM-02 capability from this contractor/staff/capacity model.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract
+ DD_EM-02-Contractor_and_Staff_Registry-v1.0.md.
+
+ Verdict: ■ New | Wave: 2 | Group E: Employment Management | Version: v1.0 | Module: Contractor & Staff Registry The
+ system of record for who can do field work, where, and when: contractor companies + their staff, the geographic regions
+ and service scopes each contractor covers, the technical skills each contractor is qualified for, the time-window availability
+ slots each contractor accepts work in with concurrency caps, the per-WO slot commitments that consume that capacity, and
+ the main handler (one per contractor) plus optional staff roster the operator uses for contractor communication. Owned at
+ operator scope. Referenced by WO module Drools routing rules (the assign-contractor rule queries EM-02 to find an
+ available qualified contractor for a given region + scope + datetime + required skills), by ILM-CFG-02 cross-DD only
+ (ILM-CFG-02 provides region IDs that EM-02 references; no reverse FK), by OSR-01 (contractor_id referenced on
+ stock_location.contractor_id for vans; EM-02 retires osr_contractor_stub), and by ICN-01 (staff
+ foundation_auth_user_id linkage for notification dispatch). v1.0 scope: full contractor + scope + skills + availability +
+ slot commitment + staff (main handler mandatory, optional roster) model. The slot ledger is owned by EM-02 (per user
+ decision earlier in design discussion — one place owns both capacity and commitments). Per-staff skill certification is
+ explicitly out of scope — BSS is not an HR or training system; staff qualification tracking belongs in the operator's HR /
+ training systems.
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/1
+                                                                    0_other/DD_EM-02-Contractor_and_Staff_Registry-v1.0.md
+
+  Version                                                           v1.0
+
+  DD type                                                           module contract
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   Not explicitly defined
+
+
+
+
+ 4. Runtime Contracts To Implement
+
+SOPHIX BSS Design Documents                                                                                                 Page 1
+ 4.1 APIs
+   - DELETE /api/contractor-slot-commitments/{id}
+
+   - GET /api/contractor-slot-commitments/{id}
+
+   - GET /api/contractor-slot-commitments?slotId=X&date=Y
+
+   - GET /api/contractor-staff/{staff_id}
+
+   - GET /api/contractor-staff?contractorId=X&active=true
+
+   - GET /api/contractor-staff?contractorId=X&staffRoleTier=MAIN_HANDLER&active=true
+
+   - GET /api/contractor-staff?contractorId=X&staffRoleTier=OPTIONAL_ROSTER&active=true
+
+   - GET /api/contractors/{contractor_id}
+
+   - GET /api/contractors/{contractor_id}/availability-slots
+
+   - GET /api/contractors/{contractor_id}/main-handler
+
+   - GET /api/contractors/{contractor_id}/region-scopes
+
+   - GET /api/contractors/{contractor_id}/region-skills
+
+   - GET /api/contractors/{id}/main-handler
+
+   - GET /api/contractors?operatorCode=WIK&active=true&contractorType=FRANCHISE
+
+   - GET /api/contractors?operatorCode=X
+
+   - GET /api/skill-catalog?operatorCode=WIK&active=true
+
+   - PATCH /api/contractor-availability-slots/{slot_id}
+
+   - PATCH /api/contractor-staff/{staff_id}
+
+   - PATCH /api/contractors/{contractor_id}
+
+   - PATCH /api/skill-catalog/{operator}/{skill_code}
+
+   - POST /api/contractor-availability
+
+   - POST /api/contractor-slot-commitments
+
+   - POST /api/contractor-slot-commitments/{id}/consume
+
+   - POST /api/contractor-staff
+
+   - POST /api/contractors
+
+   - POST /api/contractors/{contractor_id}/availability-slots
+
+   - POST /api/contractors/{contractor_id}/main-handler/handover
+
+   - POST /api/contractors/{contractor_id}/region-scopes
+
+   - POST /api/contractors/{contractor_id}/region-skills
+
+   - POST /api/skill-catalog
+
+ 4.2 Tables
+   - contractor
+
+   - contractor_availability_slot
+
+   - contractor_region_scope
+
+   - contractor_region_skill
+
+   - contractor_slot_commitment
+
+   - contractor_staff
+
+   - skill_catalog
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+SOPHIX BSS Design Documents                                                               Page 2
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - assign-contractor
+
+   - contractor-availability
+
+   - dwdm-config
+
+   - fiber-install
+
+   - ftth-cpe
+
+   - huawei-academy
+
+   - iptv-stb-setup
+
+   - network-troubleshooting
+
+   - sophix-superadmin
+
+   - vehicle-license-class-b
+
+   - vip-handling
+
+   - wik-customer-service-training
+
+   - wik-franchise-onboarding
+
+   - wik-internal-tech-team
+
+   - wik-internal-training
+
+   - yassn-training
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - No domain events are explicitly declared in this DD.
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+
+SOPHIX BSS Design Documents                                                                                              Page 3
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                           Recommendation
+
+  API/runtime                                                       Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                           Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                          Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                             Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                           Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                            Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                           Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                    Store with IRSA.
+
+  Observability                                                     Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                    dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ New | Wave: 2 | Group E: Employment Management | Version: v1.0 | Module: Contractor & Staff Registry
+
+ The system of record for who can do field work, where, and when: contractor companies + their staff, the geographic
+ regions and service scopes each contractor covers, the technical skills each contractor is qualified for, the time-window
+ availability slots each contractor accepts work in with concurrency caps, the per-WO slot commitments that consume that
+ capacity, and the main handler (one per contractor) plus optional staff roster the operator uses for contractor communication.
+
+ Owned at operator scope. Referenced by WO module Drools routing rules (the assign-contractor rule queries EM-02 to
+ find an available qualified contractor for a given region + scope + datetime + required skills), by ILM-CFG-02 cross-DD only
+ (ILM-CFG-02 provides region IDs that EM-02 references; no reverse FK), by OSR-01 (contractor_id referenced on
+ stock_location.contractor_id for vans; EM-02 retires osr_contractor_stub), and by ICN-01 (staff
+ foundation_auth_user_id linkage for notification dispatch).
+
+ v1.0 scope: full contractor + scope + skills + availability + slot commitment + staff (main handler mandatory, optional roster)
+ model. The slot ledger is owned by EM-02 (per user decision earlier in design discussion — one place owns both capacity
+ and commitments). Per-staff skill certification is explicitly out of scope — BSS is not an HR or training system; staff
+ qualification tracking belongs in the operator's HR / training systems.
+
+
+
+ 1. What this module is
+ When WO module asks *"who can install fiber in KE-NRB-KAREN on Monday 2026-02-23 at 14:00 with skills
+ fiber-install + ftth-cpe + vip-handling, and has capacity?"*, the answer is structural: there is a list of
+ contractors covering KE-NRB-KAREN for service scope INSTALL, each with a skill profile and an availability slot schedule.
+ EM-02 owns that structural data.
+
+ The model is intentionally contractor-anchored — not staff-anchored. A contractor commits to a coverage window with a
+ concurrency cap (e.g., "Franchise A van accepts up to 5 concurrent install WOs on Mondays 09:00–18:00"); how Franchise A
+ internally staffs that capacity (which crew, which technician, which truck) is Franchise A's problem. The operator schedules
+ against the slot, decrements the capacity at commitment, and trusts the contractor to deliver.
+
+ The main-handler model
+ For staff tracking, EM-02 takes a pragmatic two-tier approach reflecting the operational reality that external contractor staff
+ churn is high and trying to mirror each contractor's internal HR moves is fragile:
+
+
+
+SOPHIX BSS Design Documents                                                                                                                   Page 4
+   - MAIN_HANDLER (mandatory) — every active contractor MUST have exactly one active MAIN_HANDLER staff record.
+     The main handler is the operator's spoke into that contractor: the person of contact for assignations, slot scheduling,
+     dispatching, escalation, and acknowledgments. ICN-01 dispatches contractor-facing notifications to the main handler's
+     FOUNDATION_AUTH user. If the main handler leaves the contractor, the contractor's BO admin updates the main
+     handler before the change takes effect (handover event tracked).
+
+   - OPTIONAL_ROSTER (opt-in per contractor) — additional staff records for contractors who want full roster visibility in the
+     operator system. Typically populated for INTERNAL contractors (where Wananchi is the employer) and for some large
+     franchises with sophisticated ops. For most franchises, this stays empty — and that's fine. The operator system does not
+     need to know every technician's name to schedule work.
+
+ WO routing does not depend on individual staff data. The Drools assign-contractor rule filters by
+ contractor_region_skill (contractor-level certification) — the question is "does this contractor have the skill in this
+ region", not "does this specific technician have the skill". Per-person qualification tracking is not in EM-02 scope.
+
+ What this module does
+   1. Catalog contractors — operator-scoped, with identity (legal entity name, registration number, type — FRANCHISE /
+     INTERNAL / SUB_CONTRACTOR), contract reference, contact details, performance reference (link to EM-04 Reporting
+     metrics, pending).
+
+   2. Define contractor coverage — per (contractor, tech_region_id, service_scope) row with effective dates. A contractor
+     can be INSTALL+SUPPORT in one region but only SUPPORT in another.
+
+   3. Maintain skill catalog — operator-extensible technical skill codes (fiber-install, ftth-cpe, dwdm-config,
+     vip-handling, iptv-stb-setup, etc.). Operator can add new codes via config.
+
+   4. Track contractor skill profiles per region — which skills a contractor is certified to perform in each region they cover.
+     This is what WO routing filters on. Different regions may require different skill mixes.
+
+   5. Define availability slots — day-of-week + hour-range windows with concurrency caps, per (contractor, region,
+     service_scope). Multiple slots per contractor allowed (Monday morning + Monday afternoon as separate rows with
+     different caps).
+
+   6. Maintain slot commitment ledger — immutable record of every WO committed against a slot, with consumption +
+     release. The slot's "remaining capacity at time T" is derived from the ledger.
+
+   7. Resolve availability — POST /api/contractor-availability is the WO module's hot path: given (region, scope,
+     required skills, datetime window, demand qty), return ranked list of contractors with capacity, with slot identifiers to
+     consume.
+
+   8. Track contractor main handlers — exactly one main handler per active contractor, mandatory; the spoke for all
+     operator-contractor communication. Tracked via contractor_staff.staff_role_tier = MAIN_HANDLER.
+
+   9. Optionally track contractor roster — for contractors who want it; same contractor_staff table with
+     staff_role_tier = OPTIONAL_ROSTER. Most contractors leave this empty; the operator system doesn't require it.
+
+ What this module does NOT do
+   - Doesn't own tech region definitions. Region IDs, boundaries, candidate group codes — all ILM-CFG-02. EM-02 carries
+     tech_region_id references only.
+
+   - Doesn't define service scopes. The set of valid service scope values (INSTALL, SUPPORT, MAINTENANCE, RECOVERY,
+     AUDIT) is operator-extensible and lives in a separate catalog or operator config. EM-02 enforces no canonical list at the
+     schema level.
+
+   - Doesn't pick the technician for a specific WO. EM-02 picks the contractor + commits to a slot. Which individual staff
+     member from that contractor goes to that WO is the contractor's internal scheduling — not exposed to the operator
+     system. (Some operators may surface this later via a staff-assignment-on-WO field; out of v1.0 for EM-02.)
+
+   - Doesn't require a full contractor staff roster. OPTIONAL_ROSTER staff records are opt-in per contractor. The
+     operator-contractor relationship runs through the main handler; the rest is internal to the contractor.
+
+   - Doesn't track staff real-time location. Where a tech currently is, what they're doing — not EM-02. WO module tracks
+     WO state; nothing tracks tech location in v1.0.
+
+   - Doesn't filter WO routing by individual staff skills. Contractor-level certification (contractor_region_skill) is the
+     routing filter. Per-staff skill data isn't tracked at all.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                  Page 5
+   - Doesn't track per-staff skill certifications. BSS is not an HR or training system. Operator HR / training departments
+     already run systems that track who is qualified for what; replicating that in BSS adds maintenance burden with no
+     operational payoff (WO routing uses contractor-level cert, not per-person).
+
+   - Doesn't own staff personal data beyond identity + role. Payroll, leave, performance metrics, personal contact details —
+     out of EM-02 v1.0 scope. Future HRM module owns those.
+
+   - Doesn't manage contractor contracts as legal documents. Contract reference field is just a string identifier; the actual
+     contract document, terms, vendor SLAs — live in an external contract management system or future procurement DD.
+
+   - Doesn't decide work order priority within a slot. If a slot has 3 capacity remaining and 5 WOs come in, EM-02's
+     commitment API returns "INSUFFICIENT_CAPACITY" for the overflow; the operator's WO module decides queueing /
+     rescheduling policy.
+
+ Regional flexibility
+ Contractor structures vary significantly between operators:
+
+   - WIK (Kenya) — hybrid: large internal team (wik-internal-tech-team) plus 6-8 franchise contractors across Nairobi
+     neighborhoods + Mombasa + Diani. Franchises are small (10-20 staff each); internal team is larger. Mix of full-time staff +
+     commission agents.
+
+   - WUG (Uganda) — primarily franchise model; 3-4 contractors across Kampala divisions. Smaller scale, lighter
+     administrative overhead.
+
+   - WTZ (Tanzania) — TBD pending workshop; assumed smaller franchise network.
+
+   - YASSN (Senegal) — Dakar-centric; mix of franchise and direct-employee model; bilingual French + Wolof staff records.
+
+ The schema accommodates:
+
+   - Multiple contractor types (FRANCHISE / INTERNAL / SUB_CONTRACTOR) — operator-extensible
+
+   - Multi-region contractors (same contractor with rows in multiple contractor_region_scope)
+
+   - Multi-skill contractors with operator-extensible skill catalogs
+
+   - Multiple availability slots per (contractor, region, scope) for fine-grained scheduling
+
+   - Bilingual staff and contractor display names
+
+ Glossary
+  Term                                                                 Meaning
+
+  Contractor                                                           A company providing field services. Three types: FRANCHISE (independent
+                                                                       business under contract), INTERNAL (Wananchi-owned pseudo-contractor for
+                                                                       internal teams — e.g., wik-internal-tech-team), or SUB_CONTRACTOR
+                                                                       (sub-contracted by another contractor; multi-level).
+
+  Service scope                                                        What kind of field work this contractor can do: INSTALL, SUPPORT,
+                                                                       MAINTENANCE, RECOVERY, AUDIT. Operator-extensible. A contractor may
+                                                                       have different scopes in different regions.
+
+  Region coverage                                                      The (contractor, tech_region_id, service_scope) relationship with effective
+                                                                       dates. The presence of an active row means "this contractor can do this scope
+                                                                       in this region".
+
+  Skill                                                                A technical competency code (fiber-install, ftth-cpe, vip-handling,
+                                                                       ...). Operator-extensible. Required for some WO routing decisions.
+
+  Contractor skill                                                     The relationship (contractor, region, skill) — "this contractor is
+                                                                       certified to perform this skill in this region". Region-specific because regulatory
+                                                                       requirements may differ.
+
+  Availability slot                                                    A time-window with concurrency cap: (contractor, region,
+                                                                       service_scope, day_of_week, hour_range, max_concurrent). The
+                                                                       slot is the unit against which capacity is reserved for WOs.
+
+  Slot commitment                                                      An immutable record: "this WO consumed N units of capacity from this slot at
+                                                                       this time". The slot's remaining capacity = max_concurrent -
+                                                                       count(active commitments).
+
+  Staff                                                                An individual person associated with a contractor. Has FOUNDATION_AUTH
+                                                                       user ID, primary role (installer / support_tech / team_leader /
+                                                                       dispatcher / agent / main_handler), active status, and a staff role tier
+                                                                       (MAIN_HANDLER or OPTIONAL_ROSTER).
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                        Page 6
+  Term                                                                Meaning
+
+  Staff role tier                                                     Either MAIN_HANDLER (mandatory; exactly one per active contractor; the
+                                                                      operator's spoke for all communication with that contractor) or
+                                                                      OPTIONAL_ROSTER (opt-in; additional staff for contractors who want full roster
+                                                                      visibility).
+
+  Main handler                                                        The one staff member per contractor who is the operator's official point of
+                                                                      contact for assignations, slot scheduling, dispatching, escalation, and
+                                                                      acknowledgments. ICN-01 routes contractor-facing notifications to the main
+                                                                      handler's FOUNDATION_AUTH user.
+
+
+
+
+ 2. Tables overview + relationships
+ 2.1 Tables overview
+ EM-02 owns seven tables:
+
+  Table                                                               Purpose
+
+  contractor                                                          The contractor company / internal team / sub-contractor master record.
+
+  contractor_region_scope                                             Per-region service-scope coverage with effective dates. Time-versioned.
+
+  skill_catalog                                                       Operator-extensible catalog of technical skill codes.
+
+  contractor_region_skill                                             Which skills a contractor is certified for in each region.
+
+  contractor_availability_slot                                        Day-of-week + hour-range windows with concurrency caps.
+
+  contractor_slot_commitment                                          Immutable ledger of WO commitments against slots. Capacity is derived.
+
+  contractor_staff                                                    Main handler (mandatory, one per contractor) + optional roster, per contractor.
+
+
+ Full DDL in §3.
+
+ 2.2 Entity relationships
+ [Missing image: file:///home/claude/diagrams/em2_erd.png]
+
+ Reading the diagram:
+
+   - contractor is the root. Four children hang off it: region-scope coverage, region-skill profile, availability slots, staff.
+
+   - tech_region (ILM-CFG-02) is referenced by region-scope, region-skill, and availability-slot rows; EM-02 holds the FK,
+     ILM-CFG-02 owns the entity.
+
+   - skill_catalog is referenced by contractor_region_skill (contractor-level certification). This is the only skill
+     linkage; individual staff are not tied to skills.
+
+   - contractor_availability_slot defines capacity windows; contractor_slot_commitment records consumption
+     per WO. The slot's remaining capacity = max_concurrent - count(active commitments).
+
+   - work_order (WO module) is the source of slot commitments; EM-02 carries the wo_id reference but doesn't own the
+     WO entity.
+
+   - contractor_staff is a flat list of contractor contacts (one mandatory MAIN_HANDLER + optional OPTIONAL_ROSTER
+     entries). No skill linkage from this table — BSS does not track per-person qualifications.
+
+ 2.3 Cross-DD anchoring
+   - WO module Drools assign-contractor rule — calls POST /api/contractor-availability (the hot path).
+     Receives ranked contractor list with slot IDs; commits to a slot via POST /api/contractor-slot-commitments. On
+     WO completion or cancellation, releases the commitment.
+
+   - ILM-CFG-02 — provides tech_region_id entities that EM-02 references in contractor_region_scope,
+      contractor_region_skill, contractor_availability_slot. One-way FK from EM-02 to ILM-CFG-02; no
+      reverse.
+
+   - OSR-01 — retires osr_contractor_stub by pointing stock_location.contractor_id at EM-02's
+     contractor.contractor_id. Retirement plan in §7.
+
+   - ICN-01 — when a notification fires for a candidate group (e.g., tech-region-NRB-LAVINGTON), ICN-01 resolves group
+      membership via FOUNDATION_AUTH. The contractor_staff.foundation_auth_user_id is what makes a staff
+
+
+SOPHIX BSS Design Documents                                                                                                                    Page 7
+     member discoverable. EM-02 maintains this linkage; ICN-01 doesn't query EM-02 directly.
+
+   - FOUNDATION_AUTH — staff foundation_auth_user_id references FOUNDATION_AUTH users; EM-02 carries the
+     ID, FOUNDATION_AUTH owns identity + group memberships.
+
+
+
+ 3. Schemas
+ 3.1 contractor
+            CREATE TABLE contractor (
+               contractor_id          TEXT PRIMARY KEY,                -- 'contractor_ke_nairobi_a' | 'wik-internal-tech-team' | 'contr
+               operator_code          TEXT NOT NULL,
+               contractor_type        TEXT NOT NULL,                   -- 'FRANCHISE' | 'INTERNAL' | 'SUB_CONTRACTOR'
+               display_name_primary   TEXT NOT NULL,                   -- 'Franchise Nairobi A — Lavington Network Services Ltd'
+               display_name_secondary TEXT NULL,                       -- bilingual; YASSN uses French
+               legal_entity_name      TEXT NULL,                       -- official registered name; same as display for FRANCHISE; NULL
+               registration_number    TEXT NULL,                       -- business registration / tax number; NULL for INTERNAL
+               contract_reference     TEXT NULL,                       -- external contract management system reference
+               primary_contact_name   TEXT NULL,
+               primary_contact_phone TEXT NULL,
+               primary_contact_email TEXT NULL,
+               active                 BOOLEAN NOT NULL DEFAULT TRUE,
+               effective_from         DATE NOT NULL,
+               effective_to           DATE NULL,                       -- NULL = ongoing
+               notes                  TEXT NULL,
+               created_at             TIMESTAMP NOT NULL DEFAULT NOW(),
+               updated_at             TIMESTAMP NOT NULL DEFAULT NOW(),
+               updated_by             TEXT NOT NULL
+            );
+
+            CREATE INDEX idx_contractor_operator ON contractor (operator_code, active);
+            CREATE INDEX idx_contractor_type     ON contractor (operator_code, contractor_type, active);
+
+ Sample data:
+
+  contractor_id      operator_code     contractor_type   display_name_prima   legal_entity_name   active     effective_from
+                                                         ry
+
+  wik-internal-te    WIK               INTERNAL          WIK Internal         NULL                true       2018-01-01
+  ch-team                                                Tech Team
+
+  contractor_ke_n    WIK               FRANCHISE         Franchise A —        Lavington           true       2022-04-01
+  airobi_a                                               Lavington            Network
+                                                         Network              Services Ltd
+                                                         Services
+
+  contractor_ke_n    WIK               FRANCHISE         Franchise B —        Backup Net          true       2022-04-01
+  airobi_b                                               backup               Solutions Ltd
+                                                         Lavington
+
+  contractor_ke_n    WIK               FRANCHISE         Franchise E —        Eastlands Fiber     true       2020-09-01
+  airobi_e                                               Eastlands            Co Ltd
+
+  contractor_ke_n    WIK               FRANCHISE         Franchise K —        Kibera Tech         true       2023-02-01
+  airobi_k                                               Kibera + Mukuru      Services Ltd
+
+  contractor_ke_m    WIK               FRANCHISE         Former Mombasa       Mombasa Fiber       false      2019-06-01
+  ombasa_1                                               Franchise            Ltd (closed)
+                                                         (retired)
+
+  contractor_ke_m    WIK               FRANCHISE         Mombasa              Coast Network       true       2025-01-01
+  ombasa_2                                               Franchise            Ltd
+                                                         (current)
+
+  contractor_sn_d    YASSN             FRANCHISE         Franchise            Dakar Réseaux       true       2019-09-01
+  akar_1                                                 principale           SARL
+                                                         Dakar centre
+
+  contractor_ug_k    WUG               FRANCHISE         Franchise            Central Kampala     true       2022-08-01
+  ampala_central                                         Kampala Central      Networks Ltd
+                                                         Division
+
+
+ Row 1 wik-internal-tech-team matches the ILM-CFG-02 reference pattern (internal pseudo-contractor for Karen / VIP
+ customers). NULL legal_entity_name + registration_number since it's not a separate legal entity.
+
+ Row 6 contractor_ke_mombasa_1 has active=false matching ILM-CFG-02's contractor coverage termination at
+ 2024-12-31 (corresponding effective_to on its coverage rows in §3.2 below).
+
+ 3.2 contractor_region_scope
+
+SOPHIX BSS Design Documents                                                                                              Page 8
+ Per-region service-scope coverage. A contractor doing both INSTALL and SUPPORT in a region has TWO rows.
+           CREATE TABLE contractor_region_scope (
+              coverage_id           TEXT PRIMARY KEY,                -- 'cov_em_01HZ...'
+              contractor_id         TEXT NOT NULL REFERENCES contractor(contractor_id),
+              tech_region_id        TEXT NOT NULL,                   -- FK to ILM-CFG-02 tech_region; not enforced cross-module
+              service_scope         TEXT NOT NULL,                   -- 'INSTALL' | 'SUPPORT' | 'MAINTENANCE' | 'RECOVERY' | 'AUDIT'
+              coverage_role         TEXT NOT NULL,                   -- 'PRIMARY' | 'BACKUP' | 'EXCLUSIVE'
+              effective_from        DATE NOT NULL,
+              effective_to          DATE NULL,
+              notes                 TEXT NULL,
+              created_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+              created_by            TEXT NOT NULL
+           );
+
+           CREATE INDEX idx_crs_contractor ON contractor_region_scope (contractor_id, effective_to);
+           CREATE INDEX idx_crs_region     ON contractor_region_scope (tech_region_id, service_scope, effective_to);
+           CREATE INDEX idx_crs_active     ON contractor_region_scope (tech_region_id, service_scope) WHERE effective_to IS NULL;
+
+ coverage_role:
+
+   - PRIMARY — first-choice contractor for this (region, scope). The WO module's Drools rule prefers PRIMARY.
+
+   - BACKUP — fallback when PRIMARY has no capacity. Multiple BACKUPs allowed; ordered by something other than this
+     column (e.g., performance score from EM-04 Reporting).
+
+   - EXCLUSIVE — only contractor permitted for this (region, scope); no BACKUP allowed. Used for high-security or
+     specialized scopes.
+
+ Sample data:
+
+  coverage_id        contractor_id     tech_region_id    service_scope   coverage_role     effective_from       effective_to
+
+  cov_em_01HZ_KAR    wik-internal-te   KE-NRB-KAREN      INSTALL         PRIMARY           2018-01-01           NULL
+  EN_INTERNAL_INS    ch-team
+  TALL
+
+  cov_em_01HZ_KAR    wik-internal-te   KE-NRB-KAREN      SUPPORT         PRIMARY           2018-01-01           NULL
+  EN_INTERNAL_SUP    ch-team
+  PORT
+
+  cov_em_01HZ_LAV    contractor_ke_n   KE-NRB-LAVINGTO   INSTALL         PRIMARY           2022-04-01           NULL
+  _A_INSTALL         airobi_a          N
+
+  cov_em_01HZ_LAV    contractor_ke_n   KE-NRB-LAVINGTO   SUPPORT         PRIMARY           2022-04-01           NULL
+  _A_SUPPORT         airobi_a          N
+
+  cov_em_01HZ_LAV    contractor_ke_n   KE-NRB-LAVINGTO   INSTALL         BACKUP            2022-04-01           NULL
+  _B_INSTALL         airobi_b          N
+
+  cov_em_01HZ_LAV    contractor_ke_n   KE-NRB-LAVINGTO   SUPPORT         BACKUP            2022-04-01           NULL
+  _B_SUPPORT         airobi_b          N
+
+  cov_em_01HZ_EAS    contractor_ke_n   KE-NRB-EASTLAND   INSTALL         PRIMARY           2020-09-01           NULL
+  T_E_INSTALL        airobi_e          S
+
+  cov_em_01HZ_KIB    contractor_ke_n   KE-NRB-KIBERA     INSTALL         PRIMARY           2023-02-01           NULL
+  _K_INSTALL         airobi_k
+
+  cov_em_01HZ_NYA    contractor_ke_m   KE-MOMBASA-NYAL   INSTALL         PRIMARY           2019-06-01           2024-12-31
+  LI_M1_INSTALL      ombasa_1          I
+
+  cov_em_01HZ_NYA    contractor_ke_m   KE-MOMBASA-NYAL   INSTALL         PRIMARY           2025-01-01           NULL
+  LI_M2_INSTALL      ombasa_2          I
+
+  cov_em_01HZ_DIA    contractor_ke_m   KE-DIANI          INSTALL         PRIMARY           2025-01-01           NULL
+  NI_M2_INSTALL      ombasa_2
+
+  cov_em_01HZ_PLA    contractor_sn_d   SN-DKR-PLATEAU    INSTALL         PRIMARY           2019-09-01           NULL
+  TEAU_DKR1_INSTA    akar_1
+  LL
+
+
+ Row 9 + 10 show the Mombasa contractor handover: M1 PRIMARY until 2024-12-31, M2 PRIMARY from 2025-01-01.
+ Historical rows are preserved.
+
+ Row 11 — contractor_ke_mombasa_2 covers both KE-MOMBASA-NYALI AND KE-DIANI as PRIMARY for INSTALL
+ (matches ILM-CFG-02 candidate group sharing pattern).
+
+ 3.3 skill_catalog
+ Operator-extensible catalog of technical skill codes.
+           CREATE TABLE skill_catalog (
+             operator_code         TEXT NOT NULL,
+
+
+SOPHIX BSS Design Documents                                                                                                    Page 9
+              skill_code            TEXT NOT NULL,                    -- 'fiber-install' | 'ftth-cpe' | 'dwdm-config' | 'vip-handling'
+              display_name_primary TEXT NOT NULL,
+              display_name_secondary TEXT NULL,
+              description           TEXT NULL,
+              category              TEXT NOT NULL,                    -- 'TECHNICAL_INSTALL' | 'TECHNICAL_SUPPORT' | 'SOFT_SKILL' | 'C
+              active                BOOLEAN NOT NULL DEFAULT TRUE,
+              created_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+              updated_at            TIMESTAMP NOT NULL DEFAULT NOW(),
+              updated_by            TEXT NOT NULL,
+              PRIMARY KEY (operator_code, skill_code)
+            );
+
+            CREATE INDEX idx_skill_active   ON skill_catalog (operator_code, active);
+            CREATE INDEX idx_skill_category ON skill_catalog (operator_code, category, active);
+
+ Sample data:
+
+  operator_code               skill_code                    display_name_primary          category                    active
+
+  WIK                         fiber-install                 Fiber-optic                   TECHNICAL_INSTALL           true
+                                                            installation
+
+  WIK                         ftth-cpe                      FTTH CPE configuration        TECHNICAL_INSTALL           true
+
+  WIK                         dwdm-config                   DWDM configuration            TECHNICAL_INSTALL           true
+
+  WIK                         splicing                      Optical splicing              TECHNICAL_INSTALL           true
+
+  WIK                         vip-handling                  VIP customer handling         SOFT_SKILL                  true
+
+  WIK                         iptv-stb-setup                IPTV STB setup +              TECHNICAL_INSTALL           true
+                                                            provisioning
+
+  WIK                         network-troubleshootin        Network                       TECHNICAL_SUPPORT           true
+                              g                             troubleshooting +
+                                                            fault diagnosis
+
+  WIK                         vehicle-license-class-        Vehicle license —             COMPLIANCE                  true
+                              b                             Class B (light
+                                                            commercial)
+
+  YASSN                       fiber-install                 Installation fibre            TECHNICAL_INSTALL           true
+                                                            optique
+
+  YASSN                       ftth-cpe                      Configuration CPE FTTH        TECHNICAL_INSTALL           true
+
+
+ Skills are operator-scoped: a WIK skill_code is independent of a YASSN skill_code of the same name. Operator chooses the
+ catalog.
+
+ 3.4 contractor_region_skill
+ Which skills a contractor is certified to perform in each region.
+            CREATE TABLE contractor_region_skill (
+               contractor_id          TEXT NOT NULL REFERENCES contractor(contractor_id),
+               tech_region_id         TEXT NOT NULL,                   -- FK to ILM-CFG-02 tech_region
+               operator_code          TEXT NOT NULL,                   -- denormalized for FK to skill_catalog
+               skill_code             TEXT NOT NULL,
+               certified_at           DATE NOT NULL,                   -- when the contractor was certified for this skill in this regi
+               certified_by           TEXT NULL,                       -- 'wik-internal-training' | 'huawei-academy' | etc.
+               active                 BOOLEAN NOT NULL DEFAULT TRUE,
+               notes                  TEXT NULL,
+               created_at             TIMESTAMP NOT NULL DEFAULT NOW(),
+               updated_at             TIMESTAMP NOT NULL DEFAULT NOW(),
+               updated_by             TEXT NOT NULL,
+               PRIMARY KEY (contractor_id, tech_region_id, skill_code),
+               FOREIGN KEY (operator_code, skill_code) REFERENCES skill_catalog(operator_code, skill_code)
+            );
+
+            CREATE INDEX idx_crsk_region ON contractor_region_skill (tech_region_id, skill_code) WHERE active = TRUE;
+            CREATE INDEX idx_crsk_skill ON contractor_region_skill (operator_code, skill_code);
+
+ Sample data:
+
+  contractor_id         tech_region_id         skill_code                  certified_at              certified_by            active
+
+  wik-internal-tech-    KE-NRB-KAREN           fiber-install               2018-01-01                wik-internal-train      true
+  team                                                                                               ing
+
+  wik-internal-tech-    KE-NRB-KAREN           ftth-cpe                    2018-01-01                huawei-academy          true
+  team
+
+  wik-internal-tech-    KE-NRB-KAREN           vip-handling                2019-03-15                wik-customer-servi      true
+  team                                                                                               ce-training
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                           Page 10
+  contractor_id         tech_region_id      skill_code           certified_at        certified_by         active
+
+  wik-internal-tech-    KE-NRB-KAREN        iptv-stb-setup       2020-06-01          wik-internal-train   true
+  team                                                                               ing
+
+  wik-internal-tech-    KE-NRB-KAREN        network-troublesho   2018-01-01          wik-internal-train   true
+  team                                      oting                                    ing
+
+  contractor_ke_nair    KE-NRB-LAVINGTON    fiber-install        2022-04-01          wik-franchise-onbo   true
+  obi_a                                                                              arding
+
+  contractor_ke_nair    KE-NRB-LAVINGTON    ftth-cpe             2022-04-01          wik-franchise-onbo   true
+  obi_a                                                                              arding
+
+  contractor_ke_nair    KE-NRB-LAVINGTON    network-troublesho   2022-04-01          wik-franchise-onbo   true
+  obi_a                                     oting                                    arding
+
+  contractor_ke_nair    KE-NRB-EASTLANDS    fiber-install        2020-09-01          wik-franchise-onbo   true
+  obi_e                                                                              arding
+
+  contractor_ke_nair    KE-NRB-EASTLANDS    ftth-cpe             2020-09-01          wik-franchise-onbo   true
+  obi_e                                                                              arding
+
+  contractor_ke_momb    KE-MOMBASA-NYALI    fiber-install        2025-01-01          wik-franchise-onbo   true
+  asa_2                                                                              arding
+
+  contractor_ke_momb    KE-MOMBASA-NYALI    ftth-cpe             2025-01-01          wik-franchise-onbo   true
+  asa_2                                                                              arding
+
+  contractor_ke_momb    KE-DIANI            fiber-install        2025-01-01          wik-franchise-onbo   true
+  asa_2                                                                              arding
+
+  contractor_ke_momb    KE-DIANI            ftth-cpe             2025-01-01          wik-franchise-onbo   true
+  asa_2                                                                              arding
+
+  contractor_sn_daka    SN-DKR-PLATEAU      fiber-install        2019-09-01          yassn-training       true
+  r_1
+
+  contractor_sn_daka    SN-DKR-PLATEAU      ftth-cpe             2019-09-01          yassn-training       true
+  r_1
+
+
+ Internal team has VIP handling certification (matches the Hon. Wanjiku scenario from ILM-CFG-02 §7.2: VIP customers
+ routed to internal team partly because they hold vip-handling). Franchise A does NOT have vip-handling; the WO
+ Drools rule excludes them for VIP scopes.
+
+ Mombasa Franchise 2 holds the same skill set in BOTH Mombasa-Nyali AND Diani — supports the consolidated coverage
+ pattern.
+
+ 3.5 contractor_availability_slot
+ Day-of-week + hour-range windows with concurrency caps. The unit against which WO capacity is reserved.
+            CREATE TABLE contractor_availability_slot (
+               slot_id                TEXT PRIMARY KEY,                -- 'slot_em_01HZ...'
+               contractor_id          TEXT NOT NULL REFERENCES contractor(contractor_id),
+               tech_region_id         TEXT NOT NULL,                   -- FK to ILM-CFG-02 tech_region
+               service_scope          TEXT NOT NULL,                   -- INSTALL | SUPPORT | MAINTENANCE | etc.
+               day_of_week            TEXT NOT NULL,                   -- 'MONDAY' | 'TUESDAY' | ... | 'SUNDAY' | 'ALL_WEEK'
+               hour_start             TIME NOT NULL,                   -- e.g., '09:00'
+               hour_end               TIME NOT NULL,                   -- e.g., '18:00'
+               timezone               TEXT NOT NULL,                   -- 'Africa/Nairobi' | 'Africa/Dakar' | etc.
+               max_concurrent         INTEGER NOT NULL,                -- capacity cap; e.g., 5 = up to 5 concurrent WOs
+               emergency_only         BOOLEAN NOT NULL DEFAULT FALSE, -- TRUE = only used for high-priority WOs (e.g., overnight emerg
+               active                 BOOLEAN NOT NULL DEFAULT TRUE,
+               effective_from         DATE NOT NULL,
+               effective_to           DATE NULL,
+               notes                  TEXT NULL,
+               created_at             TIMESTAMP NOT NULL DEFAULT NOW(),
+               updated_at             TIMESTAMP NOT NULL DEFAULT NOW(),
+               updated_by             TEXT NOT NULL,
+               CHECK (max_concurrent > 0),
+               CHECK (hour_start < hour_end)
+            );
+
+            CREATE INDEX idx_slot_contractor ON contractor_availability_slot (contractor_id, active);
+            CREATE INDEX idx_slot_region     ON contractor_availability_slot (tech_region_id, service_scope, active);
+            CREATE INDEX idx_slot_day        ON contractor_availability_slot (tech_region_id, service_scope, day_of_week, active);
+
+ Sample data:
+
+
+
+
+SOPHIX BSS Design Documents                                                                                          Page 11
+  slot_id       contractor_id   tech_region_i   service_scop   day_of_week   hour_start   hour_end   timezone     max_concurr   emergency_o
+                                d               e                                                                 ent           nly
+
+  slot_em_01    wik-intern      KE-NRB-KAR      INSTALL        MONDAY        09:00        18:00      Africa/Nai   5             false
+  HZ_INT_KAR    al-tech-te      EN                                                                   robi
+  EN_INSTALL    am
+  _MON
+
+  slot_em_01    wik-intern      KE-NRB-KAR      INSTALL        TUESDAY       09:00        18:00      Africa/Nai   5             false
+  HZ_INT_KAR    al-tech-te      EN                                                                   robi
+  EN_INSTALL    am
+  _TUE
+
+  slot_em_01    wik-intern      KE-NRB-KAR      INSTALL        WEDNESDAY     09:00        18:00      Africa/Nai   5             false
+  HZ_INT_KAR    al-tech-te      EN                                                                   robi
+  EN_INSTALL    am
+  _WED
+
+  slot_em_01    wik-intern      KE-NRB-KAR      INSTALL        THURSDAY      09:00        18:00      Africa/Nai   5             false
+  HZ_INT_KAR    al-tech-te      EN                                                                   robi
+  EN_INSTALL    am
+  _THU
+
+  slot_em_01    wik-intern      KE-NRB-KAR      INSTALL        FRIDAY        09:00        13:00      Africa/Nai   2             false
+  HZ_INT_KAR    al-tech-te      EN                                                                   robi
+  EN_INSTALL    am
+  _FRI
+
+  slot_em_01    wik-intern      KE-NRB-KAR      SUPPORT        ALL_WEEK      08:00        20:00      Africa/Nai   3             false
+  HZ_INT_KAR    al-tech-te      EN                                                                   robi
+  EN_SUP_ALL    am
+  WEEK
+
+  slot_em_01    wik-intern      KE-NRB-KAR      SUPPORT        ALL_WEEK      20:00        08:00      Africa/Nai   1             true
+  HZ_INT_KAR    al-tech-te      EN                                                                   robi
+  EN_SUP_EME    am
+  RG
+
+  slot_em_01    contractor      KE-NRB-LAV      INSTALL        MONDAY        08:00        19:00      Africa/Nai   8             false
+  HZ_LAV_A_I    _ke_nairob      INGTON                                                               robi
+  NSTALL_MON    i_a
+
+  slot_em_01    contractor      KE-NRB-LAV      INSTALL        TUESDAY       08:00        19:00      Africa/Nai   8             false
+  HZ_LAV_A_I    _ke_nairob      INGTON                                                               robi
+  NSTALL_TUE    i_a
+
+  slot_em_01    contractor      KE-NRB-LAV      INSTALL        SATURDAY      09:00        15:00      Africa/Nai   3             false
+  HZ_LAV_A_I    _ke_nairob      INGTON                                                               robi
+  NSTALL_SAT    i_a
+
+  slot_em_01    contractor      KE-MOMBASA      INSTALL        MONDAY        08:30        17:30      Africa/Nai   4             false
+  HZ_NYALI_M    _ke_mombas      -NYALI                                                               robi
+  2_INSTALL_    a_2
+  MON
+
+  slot_em_01    contractor      KE-DIANI        INSTALL        MONDAY        09:00        17:00      Africa/Nai   2             false
+  HZ_DIANI_M    _ke_mombas                                                                           robi
+  2_INSTALL_    a_2
+  MON
+
+  slot_em_01    contractor      SN-DKR-PLA      INSTALL        MONDAY        08:30        18:00      Africa/Dak   6             false
+  HZ_PLATEAU    _sn_dakar_      TEAU                                                                 ar
+  _DKR1_INST    1
+  _MON
+
+
+ Rows 1-5 show the internal team's INSTALL schedule for KE-NRB-KAREN: 5-day work week, Mon-Thu full days at capacity
+ 5; Friday half-day at capacity 2 (e.g., end-of-week wind-down or admin time).
+
+ Row 6 + 7 show SUPPORT split between regular hours (cap 3, all week 08:00-20:00) and emergency-only overnight (cap 1,
+ 20:00-08:00). The emergency_only=true flag means only high-priority/critical WOs can consume this slot.
+
+ Row 10 — Franchise A has Saturday slots (cap 3); the internal team doesn't (no row for Saturday in their data).
+
+ The day_of_week='ALL_WEEK' shorthand on row 6 + 7 means "every day". Drools rule must evaluate slot eligibility
+ against the WO's requested datetime.
+
+ 3.6 contractor_slot_commitment
+ Immutable ledger: every WO committed to a slot is one row. Status moves ACTIVE → CONSUMED (WO completed) →
+ RELEASED (cancelled) or EXPIRED (slot window passed without consumption).
+            CREATE TABLE contractor_slot_commitment (
+              commitment_id          TEXT PRIMARY KEY,                -- 'cmt_01HZ...'
+              slot_id                TEXT NOT NULL REFERENCES contractor_availability_slot(slot_id),
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 12
+             contractor_id          TEXT NOT NULL REFERENCES contractor(contractor_id), -- denormalized for queries
+             wo_id                  TEXT NOT NULL,                   -- WO module reference
+             committed_for_datetime TIMESTAMP NOT NULL,              -- the actual scheduled WO datetime
+             qty                    INTEGER NOT NULL DEFAULT 1,      -- almost always 1; allows multi-unit demand if needed
+             status                 TEXT NOT NULL,                   -- 'ACTIVE' | 'CONSUMED' | 'RELEASED' | 'EXPIRED'
+             consumed_at            TIMESTAMP NULL,                  -- when WO completed (status → CONSUMED)
+             released_at            TIMESTAMP NULL,                  -- when WO cancelled (status → RELEASED)
+             expired_at             TIMESTAMP NULL,                  -- when slot window passed without consumption
+             notes                  TEXT NULL,
+             created_at             TIMESTAMP NOT NULL DEFAULT NOW(),
+             created_by             TEXT NOT NULL,
+             CHECK (qty > 0),
+             CHECK ((status = 'CONSUMED' AND consumed_at IS NOT NULL) OR
+                    (status = 'RELEASED' AND released_at IS NOT NULL) OR
+                    (status = 'EXPIRED' AND expired_at IS NOT NULL) OR
+                    (status = 'ACTIVE'   AND consumed_at IS NULL AND released_at IS NULL AND expired_at IS NULL))
+          );
+
+          CREATE INDEX idx_commitment_slot_active ON contractor_slot_commitment (slot_id, committed_for_datetime) WHERE status = 'AC
+          CREATE INDEX idx_commitment_wo          ON contractor_slot_commitment (wo_id);
+          CREATE INDEX idx_commitment_contractor ON contractor_slot_commitment (contractor_id, committed_for_datetime DESC);
+
+ Sample data:
+
+  commitment_id      slot_id           contractor_id     wo_id             committed_for_datet   qty       status
+                                                                           ime
+
+  cmt_01HZ_WANJIK    slot_em_01HZ_IN   wik-internal-te   wo_01HZ_WANJIKU   2026-02-23            1         CONSUMED
+  U_KAREN            T_KAREN_INSTALL   ch-team           _INSTALL          14:00:00
+                     _MON
+
+  cmt_01HZ_LAV_BA    slot_em_01HZ_LA   contractor_ke_n   wo_01HZ_LAV_001   2026-05-25            1         ACTIVE
+  TCH_001_A          V_A_INSTALL_MON   airobi_a                            10:00:00
+
+  cmt_01HZ_LAV_BA    slot_em_01HZ_LA   contractor_ke_n   wo_01HZ_LAV_002   2026-05-25            1         ACTIVE
+  TCH_001_B          V_A_INSTALL_MON   airobi_a                            14:00:00
+
+  cmt_01HZ_LAV_BA    slot_em_01HZ_LA   contractor_ke_n   wo_01HZ_LAV_003   2026-05-25            1         ACTIVE
+  TCH_001_C          V_A_INSTALL_MON   airobi_a                            11:00:00
+
+  cmt_01HZ_NYALI_    slot_em_01HZ_NY   contractor_ke_m   wo_01HZ_NYALI_0   2026-05-25            1         RELEASED
+  M2_001             ALI_M2_INSTALL_   ombasa_2          01                09:00:00
+                     MON
+
+  cmt_01HZ_PLATEA    slot_em_01HZ_PL   contractor_sn_d   wo_01HZ_PLAT_00   2026-05-25            1         ACTIVE
+  U_001              ATEAU_DKR1_INST   akar_1            1                 14:00:00
+                     _MON
+
+
+ Row 1 — Hon. Wanjiku's install consumed the internal team's Monday slot on 2026-02-23 (matches the ILM-CFG-02
+ walkthrough). status=CONSUMED since WO completed.
+
+ Rows 2-4 — Franchise A has 3 active commitments for next Monday (2026-05-25). With max_concurrent=8, remaining
+ capacity is 5.
+
+ Row 5 — Mombasa-Nyali commitment that was RELEASED (WO cancelled before install). Slot capacity is restored.
+
+ The slot's remaining capacity is computed live: max_concurrent - count(commitments with status='ACTIVE'
+ and committed_for_datetime within slot window).
+
+ 3.7 contractor_staff
+ Individual staff members per contractor. Two tiers:
+
+   - MAIN_HANDLER — mandatory, exactly one active per active contractor. The operator's spoke for all communication with
+     that contractor. ICN-01 routes contractor-facing notifications to this person.
+
+   - OPTIONAL_ROSTER — opt-in roster of additional staff. Most contractors leave this empty.
+          CREATE TABLE contractor_staff (
+            staff_id                TEXT PRIMARY KEY,                -- 'staff_em_01HZ...' or operator-readable 'main_wik_a01'
+            contractor_id           TEXT NOT NULL REFERENCES contractor(contractor_id),
+            operator_code           TEXT NOT NULL,
+            staff_role_tier         TEXT NOT NULL,                   -- 'MAIN_HANDLER' | 'OPTIONAL_ROSTER'
+            foundation_auth_user_id TEXT NULL,                       -- linkage to FOUNDATION_AUTH; MUST be set for MAIN_HANDLER; NU
+            display_name_primary    TEXT NOT NULL,                   -- 'Grace Wairimu'
+            display_name_secondary TEXT NULL,
+            primary_role            TEXT NOT NULL,                   -- 'main_handler' (for tier=MAIN_HANDLER) | 'installer' | 'supp
+            employment_type         TEXT NOT NULL,                   -- 'EMPLOYEE' | 'CONTRACT_AGENT' | 'COMMISSION_AGENT'
+            contact_phone           TEXT NULL,                       -- direct phone; especially relevant for MAIN_HANDLER
+            contact_email           TEXT NULL,                       -- direct email; especially relevant for MAIN_HANDLER
+            start_date              DATE NOT NULL,
+            end_date                DATE NULL,
+
+
+SOPHIX BSS Design Documents                                                                                           Page 13
+               active                  BOOLEAN NOT NULL DEFAULT TRUE,
+               notes                   TEXT NULL,
+               created_at              TIMESTAMP NOT NULL DEFAULT NOW(),
+               updated_at              TIMESTAMP NOT NULL DEFAULT NOW(),
+               updated_by              TEXT NOT NULL,
+               CHECK (staff_role_tier IN ('MAIN_HANDLER','OPTIONAL_ROSTER')),
+               CHECK (staff_role_tier = 'OPTIONAL_ROSTER' OR foundation_auth_user_id IS NOT NULL)
+             );
+
+             CREATE INDEX idx_staff_contractor       ON contractor_staff (contractor_id, active);
+             CREATE INDEX idx_staff_auth_user        ON contractor_staff (foundation_auth_user_id) WHERE foundation_auth_user_id IS NOT NUL
+             CREATE INDEX idx_staff_role             ON contractor_staff (operator_code, primary_role, active);
+             CREATE INDEX idx_staff_tier             ON contractor_staff (contractor_id, staff_role_tier, active);
+
+             -- Enforce exactly one active MAIN_HANDLER per contractor
+             CREATE UNIQUE INDEX uq_staff_main_handler
+               ON contractor_staff (contractor_id)
+               WHERE staff_role_tier = 'MAIN_HANDLER' AND active = TRUE;
+
+ The partial UNIQUE index enforces R-EM-CS-13 (see §4): a contractor can have at most one active MAIN_HANDLER row.
+ The application layer enforces the "at least one" side by rejecting contractor activation without a main handler.
+
+ Sample data:
+
+  staff_id            contractor_id     staff_role_tier      foundation_auth_us   display_name_prima   primary_role   active
+                                                             er_id                ry
+
+  main_wik_intern     wik-internal-te   MAIN_HANDLER         bo_user_main_in      Sarah Njoroge        main_handler   true
+  al_01               ch-team                                t_01
+
+  main_wik_a01        contractor_ke_n   MAIN_HANDLER         bo_user_main_a0      Grace Wairimu        main_handler   true
+                      airobi_a                               1
+
+  main_wik_e01        contractor_ke_n   MAIN_HANDLER         bo_user_main_e0      Joseph Mutiso        main_handler   true
+                      airobi_e                               1
+
+  main_wik_k01        contractor_ke_n   MAIN_HANDLER         bo_user_main_k0      Lydia Atieno         main_handler   true
+                      airobi_k                               1
+
+  main_wik_msa_02     contractor_ke_m   MAIN_HANDLER         bo_user_main_ms      Hassan Mwangi        main_handler   true
+                      ombasa_2                               a02
+
+  main_yassn_dkr1     contractor_sn_d   MAIN_HANDLER         bo_user_main_dk      Aïssatou Sow         main_handler   true
+                      akar_1                                 r1
+
+  tech_wik_k01        wik-internal-te   OPTIONAL_ROSTER      bo_user_tech_k0      John Mwangi          installer      true
+                      ch-team                                1
+
+  tech_wik_k02        wik-internal-te   OPTIONAL_ROSTER      bo_user_tech_k0      Esther Wanjiru       installer      true
+                      ch-team                                2
+
+  tech_wik_e01        contractor_ke_n   OPTIONAL_ROSTER      bo_user_tech_e0      Samuel Kiprop        installer      true
+                      airobi_e                               1
+
+  tech_wik_e02        contractor_ke_n   OPTIONAL_ROSTER      bo_user_tech_e0      Mary Achieng         installer      true
+                      airobi_e                               2
+
+  tech_wik_e03        contractor_ke_n   OPTIONAL_ROSTER      bo_user_tech_e0      David Otieno         installer      false
+                      airobi_e                               3
+
+  agent_wik_door_     contractor_ke_n   OPTIONAL_ROSTER      bo_user_door_05      James Maina          agent          true
+  05                  airobi_a
+
+
+ Reading the sample:
+
+   - Rows 1-6: every active contractor has exactly one active MAIN_HANDLER. Sarah Njoroge is the spoke for the internal
+     team; Grace Wairimu for Franchise A; etc. These rows are mandatory.
+
+   - Rows 7-11: wik-internal-tech-team (internal) opts in to OPTIONAL_ROSTER and lists their installers —
+     operationally useful for the internal team because Wananchi is the employer.
+
+   - Row 12: Franchise A opts in only enough to register one commission agent (door-to-door sales) — they don't list their
+     installers.
+
+   - The other franchises (E, K, MSA-2, DKR-1) have NO OPTIONAL_ROSTER rows — only their main handler. This is the
+     common pattern for external franchises.
+
+ WO routing in §5.1 (the hot path) does NOT query this table for skill filtering — it queries contractor_region_skill
+ (contractor-level certification, §3.4). The contractor_staff table answers a different question: "who's the operator's
+ contact at this contractor?" (MAIN_HANDLER) and optionally "who works there?" (OPTIONAL_ROSTER, where present).
+
+
+ 4. Rules
+SOPHIX BSS Design Documents                                                                                                    Page 14
+  Rule                        Description
+
+  R-EM-CS-1                   A contractor with active=false is
+                              excluded from POST
+                              /api/contractor-availability
+                              results. In-flight slot commitments to
+                              deactivated contractors continue to
+                              honor existing WO completions; new
+                              commitments are rejected.
+
+  R-EM-CS-2                   coverage_role: a region+scope
+                              may have ONE EXCLUSIVE row
+                              (excludes all others), or one PRIMARY
+                              + zero-or-more BACKUP rows. A
+                              second PRIMARY row for the same
+                              (region, scope) is permitted but
+                              indicates load-share — Drools rule
+                              decides allocation.
+
+  R-EM-CS-3                   Skill certification at the contractor level
+                              (contractor_region_skill) is
+                              REQUIRED for the contractor to
+                              appear in POST
+                              /api/contractor-availability
+                              results filtered by required skills. Skills
+                              are a hard filter: a contractor lacking
+                              even one required skill is excluded.
+                              Per-staff skill data is not tracked by
+                              EM-02; the contractor-level
+                              certification is the only signal WO
+                              routing consults.
+
+  R-EM-CS-4                   Slot eligibility evaluation: for a WO
+                              with committed_for_datetime =
+                              X, a slot is eligible if (a)
+                              active=true, (b)
+                              committed_for_datetime falls
+                              within the slot's [hour_start,
+                              hour_end) window in the slot's
+                              timezone, (c) the WO's day-of-week
+                              matches day_of_week or
+                              day_of_week='ALL_WEEK', (d)
+                              emergency_only=false OR the
+                              WO carries an emergency flag, (e)
+                              effective_from <= today AND
+                              (effective_to IS NULL OR
+                              effective_to >= today).
+
+  R-EM-CS-5                   Slot capacity computation:
+                              remaining_capacity(slot,
+                              datetime) = max_concurrent -
+                              count(contractor_slot_commit
+                              ment WHERE slot_id=slot AND
+                              status='ACTIVE' AND
+                              committed_for_datetime
+                              overlaps with the same
+                              operational window as
+                              datetime). The "operational
+                              window" for v1.0 is the same calendar
+                              day in the slot's timezone.
+
+  R-EM-CS-6                   Slot commitment atomicity: POST /ap
+                              i/contractor-slot-commitment
+                              s either commits the row +
+                              decrements available capacity
+                              atomically, or returns
+                              INSUFFICIENT_CAPACITY with the
+                              current capacity state. No partial
+                              commits.
+
+  R-EM-CS-7                   Commitment lifecycle: ACTIVE →                RELEASED (WO cancelled, capacity     EXPIRED (slot's day has passed
+                              CONSUMED (WO completed,                       restored if the day hasn't passed)   without the WO completing — system
+                              capacity is consumed for the period                                                flags for ops review). Status
+                              and not restored)                                                                  transitions are append-only via
+                                                                                                                 dedicated APIs.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                Page 15
+  Rule                           Description
+
+  R-EM-CS-9                      Staff with active=false are
+                                 excluded from FOUNDATION_AUTH
+                                 group memberships (cleared by a
+                                 daily reconciliation job). For
+                                 MAIN_HANDLER staff specifically,
+                                 deactivation requires a successor to
+                                 be designated first (see R-EM-CS-13);
+                                 the application layer enforces this
+                                 before deactivation commits.
+
+  R-EM-CS-10                     Contractor + staff cross-operator
+                                 scoping: every entity in EM-02 carries
+                                 operator_code (directly or via FK
+                                 chain to
+                                 contractor.operator_code).
+                                 Cross-operator queries require
+                                 sophix-superadmin role.
+
+  R-EM-CS-11                     Availability slot timezone is captured
+                                 per slot (not derived from operator)
+                                 because cross-timezone operators
+                                 may exist in future. v1.0 operators
+                                 each have a single timezone; the
+                                 column is forward-compatibility.
+
+  R-EM-CS-12                     A WO may consume capacity from
+                                 multiple slots if its work spans multiple
+                                 days (e.g., a multi-day install). Each
+                                 day's commitment is a separate
+                                 contractor_slot_commitment
+                                 row sharing the same wo_id. v1.0
+                                 ships single-day commitments only;
+                                 multi-day is supported by schema but
+                                 uses one row per day.
+
+  R-EM-CS-13                     Main handler mandate. Every active
+                                 contractor MUST have exactly one
+                                 active contractor_staff row with
+                                 staff_role_tier='MAIN_HANDLE
+                                 R'. The partial UNIQUE index
+                                 (uq_staff_main_handler)
+                                 enforces "at most one"; the application
+                                 layer enforces "at least one" by
+                                 rejecting (a) contractor activation
+                                 without a main handler, (b) main
+                                 handler deactivation without
+                                 successor designation. Main handler
+                                 changes emit a
+                                 ContractorMainHandlerChanged
+                                 Kafka event for operator notification
+                                 routing updates.
+
+  R-EM-CS-14                     contractor_staff.staff_role_
+                                 tier='MAIN_HANDLER' rows MUST
+                                 have a foundation_auth_user_id
+                                 set (enforced by CHECK constraint).
+                                 The main handler MUST be a real BO
+                                 UI user since they receive ICN-01
+                                 notifications. OPTIONAL_ROSTER
+                                 rows MAY have NULL
+                                 foundation_auth_user_id (e.g.,
+                                 a back-office records-only entry for a
+                                 non-login staff member).
+
+
+
+
+ 5. REST API
+ 5.1 Contractor availability — the hot path
+ The endpoint WO module's Drools assign-contractor rule calls every time it needs to pick a contractor.
+          POST /api/contractor-availability HTTP/1.1
+          Authorization: Bearer <wo-service-jwt>
+          Content-Type: application/json
+
+          {
+               "operatorCode":   "WIK",
+               "techRegionId":   "KE-NRB-KAREN",
+               "serviceScope":   "INSTALL",
+
+
+
+SOPHIX BSS Design Documents                                                                               Page 16
+              "requiredSkills":     ["fiber-install","ftth-cpe","vip-handling"],
+              "windowStart":        "2026-02-23T14:00:00+03:00",
+              "windowEnd":          "2026-02-23T17:00:00+03:00",
+              "concurrentDemand":   1,
+              "preferEmergency":    false
+          }
+
+          → 200 OK
+          {
+            "operatorCode":      "WIK",
+            "techRegionId":      "KE-NRB-KAREN",
+            "evaluatedAt":       "2026-02-17T10:00:00Z",
+            "availableContractors": [
+               {
+                 "contractorId":         "wik-internal-tech-team",
+                 "contractorType":       "INTERNAL",
+                 "coverageRole":         "PRIMARY",
+                 "matchedSkills":        ["fiber-install","ftth-cpe","vip-handling"],
+                 "slot": {
+                    "slotId":               "slot_em_01HZ_INT_KAREN_INSTALL_MON",
+                    "dayOfWeek":            "MONDAY",
+                    "hourStart":            "09:00",
+                    "hourEnd":              "18:00",
+                    "timezone":             "Africa/Nairobi",
+                    "maxConcurrent":        5,
+                    "currentlyCommitted": 2,
+                    "remainingCapacity": 3
+                 },
+                 "rank":                 1,
+                 "rankRationale":        "INTERNAL + full skill match + PRIMARY coverage"
+               }
+            ],
+            "totalAvailable": 1
+          }
+
+ If no contractor qualifies:
+          {
+              "availableContractors": [],
+              "totalAvailable": 0,
+              "reason": "No contractor in KE-NRB-KAREN with required skills [vip-handling] has capacity in the requested window"
+          }
+
+ Filter logic (the Drools rule that WO module wraps):
+
+   1. Find all contractor_region_scope rows matching (tech_region_id, service_scope) with effective_to
+     IS NULL.
+
+   2. Filter to contractors holding all requiredSkills per contractor_region_skill.
+
+   3. Filter to contractors with active=true.
+
+   4. For each, evaluate eligible slots per R-EM-CS-4 against windowStart/End.
+
+   5. For each eligible slot, compute remaining capacity per R-EM-CS-5.
+
+   6. Filter to slots with remaining_capacity >= concurrentDemand.
+
+   7. Rank by: coverage_role (PRIMARY > BACKUP), skill match completeness, remaining capacity ratio.
+
+   8. Return ranked list.
+
+ 5.2 Slot commitment
+          POST /api/contractor-slot-commitments HTTP/1.1
+          Authorization: Bearer <wo-service-jwt>
+          Content-Type: application/json
+
+          {
+              "slotId":               "slot_em_01HZ_INT_KAREN_INSTALL_MON",
+              "woId":                 "wo_01HZ_WANJIKU_INSTALL",
+              "committedForDatetime": "2026-02-23T14:00:00+03:00",
+              "qty":                  1
+          }
+
+          → 201 Created
+          {
+            "commitmentId":         "cmt_01HZ_WANJIKU_KAREN",
+            "slotId":               "slot_em_01HZ_INT_KAREN_INSTALL_MON",
+            "remainingCapacityAfter": 2,
+            "status":               "ACTIVE"
+          }
+
+
+SOPHIX BSS Design Documents                                                                                          Page 17
+ Or rejected:
+          → 409 Conflict
+          {
+            "error":                  "INSUFFICIENT_CAPACITY",
+            "slotId":                 "slot_em_01HZ_LAV_A_INSTALL_MON",
+            "requestedQty":           1,
+            "remainingCapacity":      0,
+            "details":                "Slot at capacity (8/8 committed) for 2026-05-25"
+          }
+
+          POST /api/contractor-slot-commitments/{id}/consume          # transition to CONSUMED (WO completed)
+          DELETE /api/contractor-slot-commitments/{id}                # transition to RELEASED (WO cancelled)
+          GET /api/contractor-slot-commitments?slotId=X&date=Y        # query commitments per slot
+          GET /api/contractor-slot-commitments/{id}                   # detail
+
+
+ 5.3 Contractor catalog
+          GET /api/contractors?operatorCode=WIK&active=true&contractorType=FRANCHISE
+          GET /api/contractors/{contractor_id}                          # detail
+          POST /api/contractors                                         # create (BO admin only)
+          PATCH /api/contractors/{contractor_id}                        # update mutable fields
+          GET /api/contractors/{contractor_id}/region-scopes            # list coverage rows
+          POST /api/contractors/{contractor_id}/region-scopes           # add coverage
+          GET /api/contractors/{contractor_id}/region-skills            # list certified skills
+          POST /api/contractors/{contractor_id}/region-skills           # add skill certification
+          GET /api/contractors/{contractor_id}/availability-slots       # list slots
+          POST /api/contractors/{contractor_id}/availability-slots      # add slot
+          PATCH /api/contractor-availability-slots/{slot_id}            # update slot (active, max_concurrent, etc.)
+
+
+ 5.4 Skill catalog
+          GET /api/skill-catalog?operatorCode=WIK&active=true
+          POST /api/skill-catalog
+          PATCH /api/skill-catalog/{operator}/{skill_code}
+
+
+ 5.5 Staff
+          GET /api/contractor-staff?contractorId=X&staffRoleTier=MAIN_HANDLER&active=true
+          GET /api/contractor-staff?contractorId=X&staffRoleTier=OPTIONAL_ROSTER&active=true
+          GET /api/contractor-staff?contractorId=X&active=true                            # both tiers
+          GET /api/contractor-staff/{staff_id}
+          POST /api/contractor-staff                                                       # create; tier required
+          PATCH /api/contractor-staff/{staff_id}                                           # update mutable fields
+
+ Main-handler resolution — the common query for ICN-01 + WO module dispatch:
+          GET /api/contractors/{contractor_id}/main-handler HTTP/1.1
+          Authorization: Bearer <service-jwt>
+
+          → 200 OK
+          {
+            "contractorId":         "contractor_ke_nairobi_a",
+            "staffId":              "main_wik_a01",
+            "displayNamePrimary":   "Grace Wairimu",
+            "foundationAuthUserId": "bo_user_main_a01",
+            "contactPhone":         "+254712345678",
+            "contactEmail":         "grace@franchise-a.co.ke",
+            "active":               true
+          }
+
+ This is the hot path for "who at contractor X do I notify about this WO assignation?" — ICN-01 calls it after the slot
+ commitment is made.
+
+ Main-handler change (handover) — requires successor designation; can't deactivate an active main handler without naming
+ the next one:
+          POST /api/contractors/{contractor_id}/main-handler/handover HTTP/1.1
+          Authorization: Bearer <bo-admin-jwt>
+          Content-Type: application/json
+
+          {
+              "outgoingStaffId":        "main_wik_a01",
+              "incomingStaff": {
+                "displayNamePrimary":   "Joseph Kibet",
+                "primaryRole":          "main_handler",
+                "foundationAuthUserId": "bo_user_main_a02",
+                "contactPhone":         "+254712999888",
+                "contactEmail":         "joseph@franchise-a.co.ke",
+                "employmentType":       "EMPLOYEE",
+                "startDate":            "2026-06-01"
+
+
+
+SOPHIX BSS Design Documents                                                                                               Page 18
+               },
+               "effectiveFrom":            "2026-06-01",
+               "handoverNotes":            "Grace moving to support role; Joseph promoted to main handler"
+           }
+
+           → 201 Created
+           {
+             "outgoingStaffId":            "main_wik_a01",
+             "outgoingStatus":             "deactivated",
+             "incomingStaffId":            "main_wik_a02",
+             "incomingStatus":             "active",
+             "handoverEventId":            "hndvr_01HZ_FRANCHISE_A_2026_06"
+           }
+
+ The outgoing main handler is automatically deactivated (and dropped from FOUNDATION_AUTH groups by the reconciliation
+ job); the incoming is activated. A ContractorMainHandlerChanged Kafka event fires (see §6).
+
+
+
+ 6. Kafka events
+ EM-02 publishes on sophix.em.cs.*.
+
+  Event type                       Topic                            Emitted when                            Consumers
+
+  ContractorCreated                sophix.em.cs.contractor-crea     New contractor row                      OSR-01 (open van location), ICN-01
+                                   ted                                                                      group setup
+
+  ContractorDeactivated            sophix.em.cs.contractor-deac     Contractor active=true → false          OSR-01 (close van location), WO
+                                   tivated                                                                  module (reroute in-flight WOs)
+
+  ContractorRegionScopeChanged     sophix.em.cs.region-scope-ch     Coverage row added or                   WO module (Drools rule cache
+                                   anged                            effective_to set                        invalidation)
+
+  ContractorRegionSkillChanged     sophix.em.cs.region-skill-ch     Skill certification added/removed for   WO module
+                                   anged                            contractor in region
+
+  ContractorAvailabilitySlotCh     sophix.em.cs.slot-changed        Slot row created or modified            WO module (capacity recompute)
+  anged
+
+  ContractorSlotCommitmentCrea     sophix.em.cs.slot-commitment     New commitment                          EM-04 Reporting (capacity analytics)
+  ted                              -created
+
+  ContractorSlotCommitmentCons     sophix.em.cs.slot-commitment     Commitment → CONSUMED                   Ops dashboards, EM-04
+  umed                             -consumed
+
+  ContractorSlotCommitmentRele     sophix.em.cs.slot-commitment     Commitment → RELEASED                   Ops dashboards
+  ased                             -released
+
+  ContractorMainHandlerChanged     sophix.em.cs.main-handler-ch     Main handler handover applied           WO module + ICN-01 (re-route
+                                   anged                            (outgoing deactivated + incoming        active assignation comms);
+                                                                    activated atomically)                   FOUNDATION_AUTH
+                                                                                                            (provision/deprovision); ops
+                                                                                                            dashboards
+
+  ContractorStaffCreated           sophix.em.cs.staff-created       New staff row                           FOUNDATION_AUTH provisioning (if
+                                                                                                            foundation_auth_user_id set),
+                                                                                                            ICN-01 group membership setup (for
+                                                                                                            MAIN_HANDLER). Event payload
+                                                                                                            includes staffRoleTier.
+
+  ContractorStaffDeactivated       sophix.em.cs.staff-deactivat     Staff active=true → false               FOUNDATION_AUTH deprovisioning,
+                                   ed                                                                       ICN-01 group removal. For
+                                                                                                            MAIN_HANDLER, this event fires only
+                                                                                                            AFTER
+                                                                                                            ContractorMainHandlerChanged
+                                                                                                            (i.e., a successor has been
+                                                                                                            designated). Event payload includes
+                                                                                                            staffRoleTier.
+
+
+
+ 6.1 Sample event — ContractorSlotCommitmentConsumed
+           {
+               "eventType":   "ContractorSlotCommitmentConsumed",
+               "aggregateId": "cmt_01HZ_WANJIKU_KAREN",
+               "timestamp":   "2026-02-23T15:45:00.000Z",
+               "payload": {
+                 "operatorCode":         "WIK",
+                 "commitmentId":         "cmt_01HZ_WANJIKU_KAREN",
+                 "slotId":               "slot_em_01HZ_INT_KAREN_INSTALL_MON",
+                 "contractorId":         "wik-internal-tech-team",
+                 "techRegionId":         "KE-NRB-KAREN",
+                 "serviceScope":         "INSTALL",
+
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 19
+                  "woId":                 "wo_01HZ_WANJIKU_INSTALL",
+                  "committedForDatetime": "2026-02-23T14:00:00+03:00",
+                  "consumedAt":           "2026-02-23T15:45:00+03:00",
+                  "timeToConsumeMinutes": 105
+              }
+          }
+
+ EM-04 Reporting (pending) consumes this for contractor performance metrics (mean time from commitment to completion).
+
+ 6.2 Sample event — ContractorMainHandlerChanged
+          {
+              "eventType":   "ContractorMainHandlerChanged",
+              "aggregateId": "contractor_ke_nairobi_a",
+              "timestamp":   "2026-06-01T08:00:00.000Z",
+              "payload": {
+                "operatorCode":              "WIK",
+                "contractorId":              "contractor_ke_nairobi_a",
+                "outgoingStaffId":           "main_wik_a01",
+                "outgoingDisplayName":       "Grace Wairimu",
+                "outgoingFoundationAuthUserId": "bo_user_main_a01",
+                "incomingStaffId":           "main_wik_a02",
+                "incomingDisplayName":       "Joseph Kibet",
+                "incomingFoundationAuthUserId": "bo_user_main_a02",
+                "incomingContactPhone":      "+254712999888",
+                "incomingContactEmail":      "joseph@franchise-a.co.ke",
+                "effectiveFrom":             "2026-06-01T00:00:00+03:00",
+                "handoverEventId":           "hndvr_01HZ_FRANCHISE_A_2026_06",
+                "handoverNotes":             "Grace moving to support role; Joseph promoted to main handler",
+                "actionRequired":            "WO module + ICN-01 reroute active assignation comms to incoming main handler"
+              }
+          }
+
+ WO module + ICN-01 are the critical consumers: any in-flight WO commitments that had been generating notifications to
+ Grace's FOUNDATION_AUTH user must reroute to Joseph from this event onward.
+
+
+
+ 7. Stub retirement
+ EM-02 retires osr_contractor_stub from OSR-01.
+
+ 7.1 Retirement plan
+ The stub osr_contractor_stub(contractor_id PK, contractor_name) exists today in OSR-01 v1.0 to satisfy the
+ FK reference from stock_location.contractor_id. EM-02's contractor table is the canonical replacement.
+
+ Migration steps:
+
+   1. Pre-deployment: EM-02 schema deployed alongside osr_contractor_stub. Both tables coexist.
+
+   2. Backfill: a one-time job iterates osr_contractor_stub rows. For each, insert a corresponding contractor row with
+     contractor_type='FRANCHISE' (default; ops review for any INTERNAL ones), effective_from=<reasonable
+     historical date>, and seed-script-derived display names. The contractor_id value is preserved verbatim (since
+     stock_location rows already reference it).
+
+   3. FK switch: stock_location.contractor_id FK target updated from osr_contractor_stub.contractor_id
+     to contractor.contractor_id. Since the contractor_id values are identical, this is a metadata change only — no
+     row updates needed.
+
+   4. Verification window: 1 week with both tables coexisting. Spot-check that every active stock_location row resolves to a
+     contractor row.
+
+   5. Removal: drop osr_contractor_stub. OSR-01 §3.1 / §10 documentation updated to reference EM-02 directly.
+
+ 7.2 Caller-side changes
+ OSR-01 BO admin UI ("Contractors" tab) now reads from EM-02's /api/contractors endpoint. Previously it read from the
+ stub; now full contractor metadata (legal entity, contract reference, contact details, skills, slots) is available.
+
+ WO module Drools rules previously had to fetch contractor info from EM-02 directly (since stub had only name); after
+ retirement, the rules continue to call EM-02 — no code change required since stub-vs-EM-02 was already abstracted at the
+ rule layer.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 20
+ 8. Cross-DD coordination
+ 8.1 Upstream callers
+  Caller                                     Endpoint                                     When
+
+  WO module Drools assign-contractor rule    POST /api/contractor-availability            Every WO assignment (FLOW-INSTALLATION +
+                                                                                          FLOW-SHIFTING + FLOW-SUPPORT)
+
+  WO module FLOW-INSTALLATION                POST /api/contractor-slot-commitments        After contractor selection — reserve the slot
+                                                                                          capacity
+
+  **WO module FLOW-* (completion)**          POST /api/contractor-slot-commitments/       When WO finalises — slot consumed
+                                             {id}/consume
+
+  **WO module FLOW-* (cancellation)**        DELETE                                       WO cancelled — slot capacity released
+                                             /api/contractor-slot-commitments/{id}
+
+  OSR-01                                     GET /api/contractors?operatorCode=X          Contractor selection at BO admin time (open new
+                                                                                          van)
+
+  **WO module FLOW-* (assignation comms)**   GET /api/contractors/{id}/main-handler       After slot commitment — find the contractor's spoke
+                                                                                          person for assignation notification
+
+  ICN-01                                     indirect — via FOUNDATION_AUTH               Group membership lookup uses MAIN_HANDLER
+                                                                                          contractor_staff.foundation_auth_user_
+                                                                                          id + any opted-in OPTIONAL_ROSTER staff with
+                                                                                          login
+
+  BO admin UI                                various                                      Contractor onboarding, slot scheduling, staff
+                                                                                          management
+
+
+
+ 8.2 Downstream consumers (Kafka)
+  Consumer                                   Events subscribed                            Action
+
+  WO module                                  ContractorRegionScopeChanged,                Invalidate routing rule caches
+                                             ContractorRegionSkillChanged,
+                                             ContractorAvailabilitySlotChanged
+
+  OSR-01                                     ContractorCreated,                           Open / close stock_location van rows
+                                             ContractorDeactivated
+
+  ICN-01                                     ContractorStaffCreated,                      Update FOUNDATION_AUTH group memberships
+                                             ContractorStaffDeactivated,                  (via reconciliation job); refresh main-handler routing
+                                             ContractorMainHandlerChanged                 on handover
+
+  FOUNDATION_AUTH                            ContractorStaffCreated,                      Provision / deprovision user accounts
+                                             ContractorStaffDeactivated,
+                                             ContractorMainHandlerChanged
+
+  EM-04 Reporting (pending)                  ContractorSlotCommitmentCreated,             Contractor performance metrics: WO completion
+                                             ContractorSlotCommitmentConsumed             rate, mean time to consume, slot utilization
+
+  BO admin ops dashboard                     All sophix.em.cs.*                           Contractor topology + performance display
+
+
+
+ 8.3 Sibling modules
+  Module                                     Direction                                    Contract
+
+  ILM-CFG-02 (Tech Region Registry)          EM-02 → ILM-CFG-02 (read)                    EM-02 references tech_region_id on
+                                                                                          contractor_region_scope,
+                                                                                          contractor_region_skill,
+                                                                                          contractor_availability_slot. ILM-CFG-02
+                                                                                          is upstream; no reverse FK.
+
+  OSR-01 (Stock Chain)                       OSR-01 → EM-02 (read, via stub retirement)   stock_location.contractor_id references
+                                                                                          contractor.contractor_id after retirement.
+
+  ICN-01 (Internal Communications)           ICN-01 ← EM-02 (via FOUNDATION_AUTH)         EM-02 maintains contractor_staff.foundati
+                                                                                          on_auth_user_id for MAIN_HANDLER
+                                                                                          (mandatory) and OPTIONAL_ROSTER (where
+                                                                                          present); FOUNDATION_AUTH owns group
+                                                                                          membership; ICN-01 queries FOUNDATION_AUTH
+                                                                                          at dispatch time. Contractor-facing assignation
+                                                                                          notifications route to the contractor's
+                                                                                          MAIN_HANDLER;
+                                                                                          ContractorMainHandlerChanged events trigger
+                                                                                          ICN-01 to refresh group memberships.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                            Page 21
+  Module                                      Direction                                   Contract
+
+  WO module                                   WO → EM-02 (heaviest reader + writer)       Drools rules call contractor-availability
+                                                                                          (filters by contractor_region_skill, NOT staff
+                                                                                          certs); slot commitments written +
+                                                                                          lifecycle-transitioned by WO module's actions. For
+                                                                                          assignation notifications WO module resolves the
+                                                                                          contractor's main handler via GET
+                                                                                          /api/contractors/{id}/main-handler.
+
+  FOUNDATION_AUTH                             EM-02 ↔ FOUNDATION_AUTH                     EM-02 carries the FK; FOUNDATION_AUTH owns
+                                                                                          identity + group memberships. A reconciliation job
+                                                                                          (daily) syncs contractor_staff active state to
+                                                                                          FOUNDATION_AUTH user enable/disable.
+
+  EM-04 Reporting (pending)                   EM-04 ← EM-02 (via Kafka)                   Performance metrics consumed from slot
+                                                                                          commitment events.
+
+
+
+ 8.4 Dependencies (build order)
+   1. ILM-CFG-02 (Tech Region Registry) — already shipped; provides tech_region_id references for region-scope +
+     region-skill + slot rows.
+
+   2. FOUNDATION_AUTH — staff foundation_auth_user_id references require pre-existing FOUNDATION_AUTH
+     users; provisioning workflow integrated via Kafka events.
+
+   3. Skill catalog seed — per-operator seed scripts populate skill_catalog with the operator's standard skill codes. WIK
+     ships ~12 codes; YASSN ships ~10 codes (French names); WUG + WTZ smaller seeds.
+
+   4. Contractor seed — per-operator seed of existing contractors (migrated from osr_contractor_stub plus internal
+     team rows) including their region scopes + skills + initial slot schedules.
+
+   5. Staff seed — per-operator staff data loaded from the operator's existing HR/contractor systems (out of scope for v1.0
+     schema — just data migration).
+
+   6. OSR-01 stub retirement — per §7; runs after EM-02 contractor seed is in place.
+
+   7. WO module integration — Drools assign-contractor rule deployed referencing EM-02's availability + commitment
+     APIs.
+
+
+
+ 9. Workshop sources
+ No dedicated workshop deep-dive for Contractor & Staff Registry. The functional area is implicit in:
+
+   - Work Order workshop (deep-dive 07) — contractor routing, dispatcher assignment, technician handover.
+
+   - HPRFS workshop (deep-dive 03) — homepass-to-contractor coverage relationships.
+
+   - Customer Management workshop (deep-dive 01) — references to franchise + internal team operational distinctions.
+
+ V3 design intent: contractor-anchored capacity model with availability slots + concurrency caps — the operator
+ schedules against contractor slots, not against individual technicians; contractors internally manage their staff scheduling.
+ Skill certifications track regulatory compliance + inform routing without coupling operator scheduling to individual staff. The TZ
+ codebase's current handling of contractor + staff data is unverified pending cartography; placeholder: "TBD pending
+ codebase review."
+
+ Out of v1.0 scope:
+
+   - Per-staff WO assignment from operator side — v1.0 commits to contractors + slots; the individual staff member
+     assigned is the contractor's internal scheduling. Future enhancement may surface a staff_id on the WO row for
+     visibility.
+
+   - Real-time staff location tracking — out.
+
+   - Multi-day WO commitments as a single ledger row — out; v1.0 uses one row per day.
+
+   - Contractor performance scoring + auto-ranking — out; EM-04 Reporting (pending) owns analytics.
+
+   - Sub-contracting chain depth > 1 — v1.0 supports SUB_CONTRACTOR type but doesn't model sub-contracting hierarchies
+     beyond simple typing.
+
+   - HRM concerns (payroll, leave, performance, personal contact details beyond identity) — out; future HRM module.
+
+   - Multi-currency contractor billing — out; contractor billing tracked outside V3.
+
+
+SOPHIX BSS Design Documents                                                                                                         Page 22
+   - Per-staff personal availability (vacation, leave) — out; contractor manages this internally; reflected as reduced slot
+     capacity if contractor chooses.
+
+
+ *End of DD_EM-02-Contractor_and_Staff_Registry-v1.0.*
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 23
+

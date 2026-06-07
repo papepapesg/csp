@@ -1,0 +1,785 @@
+ DD: FUL-02-STEP-KYC — KYC Two-Level Approval
+ Developer implementation guide: DD_FUL-02-STEP-KYC-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This rewritten DD is the developer-facing version of the module contract DD_FUL-02-STEP-KYC-v1.0.md.
+
+ Verdict: ■ New | Wave: 1 | Group III: Fulfillment | Version: v1.0 | Satellite of: DD_FUL-02-Order_Capture-v1.0.md Two
+ human-in-the-loop approval steps that gate install dispatch in the KE WIK flow. The customer has paid, but before a
+ contractor is sent out, two Wananchi staff must verify the customer's identity documents. L1 (regional supervisor) reviews
+ first; if approved, Team Leader (operator-level) reviews second. Either rejection terminates the order. Phase: IN_KYC.
+
+ The goal of this rewrite is to make the DD easier for a mid-level developer to implement without losing the detailed source
+ contract.
+
+
+ 2. Implementation Scope
+ This DD should be implemented as part of the owning SOPHIX capability, not as an isolated service unless the deployment
+ architecture explicitly separates that capability.
+
+ Implement this DD with these rules:
+
+   - Use the owning module APIs/repositories for authoritative writes.
+
+   - Use approved internal APIs/client wrappers when reading another module's data.
+
+   - Do not query another module's database tables directly from business flow code.
+
+   - Treat worker names as logical Camunda external-task topics, not separate deployments.
+
+   - One worker application may handle multiple topics, but metrics, retries, and logs must remain visible per topic.
+
+   - Emit success events only after the authoritative state commit succeeds.
+
+   - Use outbox publishing for Kafka events.
+
+
+ 3. Runtime Metadata
+  Item                                                              Value
+
+  Source file                                                       /Users/macbook/Downloads/Sophix_V3_BSS_DDs_MD_2026-05-27/0
+                                                                    6_fulfillment/DD_FUL-02-STEP-KYC-v1.0.md
+
+  Version                                                           v1.0
+
+  DD type                                                           module contract
+
+  BPMN/process keys                                                 Not explicitly defined
+
+  Drools packages                                                   Not explicitly defined
+
+
+
+
+ 4. Runtime Contracts To Implement
+ 4.1 APIs
+   - GET /api/groups/kenya-l1-kyc/members?operatorCode=WIK
+
+   - GET
+     /engine-rest/history/variable-instance?processInstanceId=...&variableName=kycL1Decision
+
+   - POST /api/notify/kyc-approval-needed
+
+   - POST /api/orders/ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1/user-tasks/cam_task_l1_01HZX9K8M7Q2N4P6R3T
+     5W8Y0Z3/complete
+
+   - POST /api/orders/ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1/user-tasks/cam_task_tl_01HZX9K8M7Q2N4P6R3T
+     5W8Y0Z4/complete
+
+   - POST /api/orders/ord_01HZ_REJECT/user-tasks/cam_task_l1_01HZ_REJECT/complete
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+   - POST /api/orders/{orderId}/user-tasks/{taskId}/complete
+
+   - POST /engine-rest/task/cam_task_l1_01HZX9K8M7Q2N4P6R3T5W8Y0Z3/complete
+
+   - POST /engine-rest/task/cam_task_tl_01HZX9K8M7Q2N4P6R3T5W8Y0Z4/complete
+
+ 4.2 Tables
+   - No CREATE TABLE block is explicitly declared in this DD.
+
+ For each table in this DD, implement the schema with:
+
+   - a short table comment explaining what the table is for;
+
+   - column comments or migration notes explaining each field;
+
+   - constraints and indexes from the DD;
+
+   - seed data where the DD provides operator-specific sample rows.
+
+ 4.3 Worker Topics
+   - create-install-wo
+
+   - kenya-kyc-leaders
+
+   - kenya-l1-kyc
+
+   - kyc-l1-supervisor-approval
+
+   - kyc-team-leader-approval
+
+   - mark-rejected
+
+   - order-create-install-wo
+
+   - order-mark-rejected
+
+   - uganda-kyc-leaders
+
+   - uganda-l1-kyc
+
+   - wait-payment
+
+ Worker-topic guidance:
+
+   - A BPMN service task uses the topic.
+
+   - A worker application subscribes to the topic.
+
+   - The topic handler validates input variables, calls the owning module/API, writes outputs back to Camunda, and records
+     metrics.
+
+   - Do not treat the topic string as a shell command or Kubernetes deployment name.
+
+ 4.4 Events
+   - PaymentReceived
+
+ Event guidance:
+
+   - Write events through the transactional outbox.
+
+   - Include operation id, aggregate id, operator code, actor, and correlation data.
+
+   - Consumers should be able to rebuild downstream state without querying workflow internals.
+
+
+ 5. Developer Implementation Checklist
+   1. Add or verify database migrations and seed rows.
+
+   2. Add or verify config rows for the operator/module.
+
+   3. Implement request/command DTOs and validation.
+
+   4. Implement idempotency and in-flight operation checks where the DD requires them.
+
+   5. Implement Drools fact mapping and package deployment where rules are used.
+
+SOPHIX BSS Design Documents                                                                                              Page 2
+   6. Implement BPMN process, service tasks, gateways, timers, and message catches where the DD is a flow.
+
+   7. Implement worker-topic handlers using owning module APIs.
+
+   8. Implement compensation paths and manual recovery paths.
+
+   9. Emit success/rejected events through the outbox.
+
+   10. Add smoke tests for happy path, validation failure, dependency failure, and retry/idempotency.
+
+
+ 6. Infrastructure And AWS Notes
+ Deploy this DD with the existing SOPHIX platform components unless the owning module requires isolation:
+
+  Concern                                                         Recommendation
+
+  API/runtime                                                     Run inside the owning module deployment or existing workflow API pods.
+
+  Workers                                                         Consolidate low-volume topics into shared worker apps; keep per-topic metrics.
+
+  Database                                                        Use the owning module PostgreSQL schema and migration pipeline.
+
+  Kafka                                                           Use the foundation Kafka/MSK setup and transactional outbox.
+
+  Camunda                                                         Deploy BPMN files through the workflow deployment pipeline.
+
+  Drools                                                          Deploy KJAR/rule artifacts through the approved rules pipeline.
+
+  Secrets                                                         Use the platform secret manager; on AWS prefer Secrets Manager/Parameter
+                                                                  Store with IRSA.
+
+  Observability                                                   Alert on stuck operations, failed workers, outbox backlog, and external
+                                                                  dependency failures.
+
+
+
+
+ 7. Original DD Detail Preserved
+ The following section preserves the detailed source contract for implementation and review.
+
+ Verdict: ■ New | Wave: 1 | Group III: Fulfillment | Version: v1.0 | Satellite of: DD_FUL-02-Order_Capture-v1.0.md
+
+ Two human-in-the-loop approval steps that gate install dispatch in the KE WIK flow. The customer has paid, but before a
+ contractor is sent out, two Wananchi staff must verify the customer's identity documents. L1 (regional supervisor) reviews
+ first; if approved, Team Leader (operator-level) reviews second. Either rejection terminates the order. Phase: IN_KYC.
+
+
+
+ 1. What this step does
+ The WIK business policy inherited from the workshop is no install dispatch without two-level KYC sign-off. The reason is
+ regulatory + fraud control: ISP licences in Kenya require customer-identity verification before service activation, and
+ contractors are expensive to dispatch — verifying the customer is real and the documents check out reduces wasted
+ dispatches and protects the operator from fraud-driven chargebacks.
+
+ The step has two user tasks stacked sequentially in the BPMN:
+
+   1. kyc-l1-supervisor-approval — assigned to candidate group kenya-l1-kyc. A regional/franchise supervisor
+     opens the customer's documents (ID front, ID back, address proof, captured by the field agent at order capture time and
+     stored in document storage), checks them against IPRS (national ID registry) where available, and decides APPROVE or
+     REJECT.
+
+   2. kyc-team-leader-approval — assigned to candidate group kenya-kyc-leaders. Only created if L1 approved.
+     The Team Leader sees L1's review as context and decides APPROVE or REJECT independently. This second review is a
+     four-eye control — even if L1 was wrong or compromised, the order doesn't proceed to dispatch without Team Leader
+     sign-off.
+
+ A user task is a BPMN step that doesn't run code — it sits in Camunda's task list waiting for a human to claim and complete it
+ through a UI. When Camunda creates the task, it triggers an HTTP connector that POSTs to FUL-02's
+ NotificationHandlerResource (FRAMEWORK §3), which dispatches notifications (email, in-app push) to everyone in
+ the task's candidate group. The first person to claim the task in the BO UI sees the documents, makes a decision, completes
+ the task. The BPMN then advances.
+
+ The decision outcomes
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 3
+  Stage                                      Decision                                   What happens
+
+  L1                                         APPROVE                                    BPMN creates the Team Leader task; L1's notes
+                                                                                        carry forward as context.
+
+  L1                                         REJECT                                     BPMN routes to STEP-VALIDATE's
+                                                                                        order-mark-rejected worker with reason
+                                                                                        KYC_REJECTED_L1. Order is terminal.
+
+  Team Leader                                APPROVE                                    BPMN advances to STEP-INSTALL. Order is
+                                                                                        cleared for contractor dispatch.
+
+  Team Leader                                REJECT                                     BPMN routes to order-mark-rejected with
+                                                                                        reason KYC_REJECTED_TEAM_LEADER. Order is
+                                                                                        terminal. L1's earlier approval doesn't save it —
+                                                                                        Team Leader has unilateral veto.
+
+
+
+ What this step deliberately doesn't do
+   - Doesn't auto-reject on inactivity. There's no boundary timer on the user tasks in v1.0. If a supervisor doesn't pick up the
+     task, ops sees the SLA breach on a NOC dashboard (driven by the OrderKycAwaitingL1 Kafka event timestamp) and
+     pages someone. The customer has already paid; auto-cancelling for staff-side delay would be unfair. Future v1.x may add
+     a soft escalation timer that pages without cancelling.
+
+   - KYC two-level is a KE WIK business rule. Other operators in the architecture may adopt different qualification models
+     via their own BPMN; v1.0 ships only the WIK BPMN with the two-level KYC pattern.
+
+   - Doesn't persist decisions onto customer_order. Decisions live in Camunda process variables (kycL1Decision,
+     kycL1Actor, kycTeamLeaderDecision, kycTeamLeaderActor, etc.) and are summarized in
+     customer_order_phase_history.metadata when the phase transitions. The only customer_order change is
+     failure_reason + failure_detail on rejection.
+
+   - Doesn't fetch documents from storage itself. The notification payload carries document references (e.g.,
+     idoc_01HX...front); the BO UI fetches actual document images from the document-storage service when the
+     supervisor opens the task.
+
+
+
+ 2. Worked example end-to-end (WIK, both levels APPROVE)
+ Continuing John Mwangi's order from STEP-PAYMENT. Order ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1, customer
+ cust_01HX3K9M2P5Q8R1T4W7Y0Z3N6, package pkg_INET_VOIP_RES, subscription
+ sub_01HX5M2K9P3Q7R4T6W8Y0Z2N4Q. Payment of 15000 KES landed at 11:23. Camunda just woke wait-payment via
+ PaymentReceived and the BPMN advanced to the L1 user task.
+
+ Step 1 — Camunda creates the L1 user task and fires the notification
+ Camunda creates kyc-l1-supervisor-approval with candidate group kenya-l1-kyc. The HTTP connector fires:
+          POST /api/notify/kyc-approval-needed HTTP/1.1
+          Host: fulfillment-order-capture.sophix.internal
+          X-Camunda-Connector-Secret: <shared secret>
+          Content-Type: application/json
+
+          {
+              "taskId":          "cam_task_l1_01HZX9K8M7Q2N4P6R3T5W8Y0Z3",
+              "taskName":        "L1 KYC Approval",
+              "businessKey":     "ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+              "orderId":         "ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+              "customerId":      "cust_01HX3K9M2P5Q8R1T4W7Y0Z3N6",
+              "operatorCode":    "WIK",
+              "candidateGroup": "kenya-l1-kyc",
+              "level":           "L1",
+              "customerName":    "John Mwangi",
+              "kycDocuments": [
+                 { "type": "ID_FRONT",      "ref": "idoc_01HX3K9_id_front",     "uploadedAt": "2026-05-18T09:00:00Z" },
+                 { "type": "ID_BACK",       "ref": "idoc_01HX3K9_id_back",      "uploadedAt": "2026-05-18T09:00:00Z" },
+                 { "type": "ADDRESS_PROOF", "ref": "idoc_01HX3K9_address_proof","uploadedAt": "2026-05-18T09:00:00Z" }
+              ],
+              "deepLink":        "/backoffice/orders/ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1/kyc/l1",
+              "channels":        ["email", "in_app_push"],
+              "template":        "kyc-approval-l1",
+              "urgency":         "medium"
+          }
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                         Page 4
+ NotificationHandlerResource resolves kenya-l1-kyc membership for WIK via FOUNDATION_AUTH, finds 7
+ supervisors on shift, writes 7 rows to staff_notification_stub and dispatches email + in-app push.
+
+ A task-create event listener also fires the Kafka event:
+           {
+               "eventType":    "OrderKycAwaitingL1",
+               "aggregateId": "ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+               "timestamp":    "2026-05-18T11:23:03.412Z",
+               "payload": {
+                 "orderId":         "ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+                 "customerId":      "cust_01HX3K9M2P5Q8R1T4W7Y0Z3N6",
+                 "operatorCode":    "WIK",
+                 "userTaskId":      "cam_task_l1_01HZX9K8M7Q2N4P6R3T5W8Y0Z3",
+                 "candidateGroup": "kenya-l1-kyc",
+                 "createdAt":       "2026-05-18T11:23:03.412Z"
+               }
+           }
+
+ PhaseProjector updates the order:
+           UPDATE customer_order
+              SET current_phase       = 'IN_KYC',
+                  current_activity_id = 'kyc-l1-supervisor-approval',
+                  last_updated_at     = NOW()
+            WHERE order_id            = 'ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1';
+
+
+ Step 2 — L1 supervisor reviews and approves
+ Supervisor supervisor_user_17 (a regional supervisor for the Nairobi-Karen franchise) opens the BO UI, sees the task in
+ their inbox, clicks through. The UI loads the documents from document storage by their idoc_* references. Supervisor:
+
+   - Cross-references John's national ID number against the IPRS lookup endpoint — match.
+
+   - Checks address proof (utility bill from KPLC dated last month) — matches HomePass
+     hp_01HX5M2K9P3Q7R4T6W8Y0Z2N4P address.
+
+   - Verifies the agent's at-capture metadata (GPS in capturedLocation, agent_01HZX9K8M7Q2N4P6R3T5W8Y0Z1) —
+     geo-coordinates match Karen postal area.
+
+ All checks satisfy. Supervisor clicks Approve. BO UI POSTs:
+           POST /api/orders/ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1/user-tasks/cam_task_l1_01HZX9K8M7Q2N4P6R3T5W8Y0Z3/complete HTTP/1.1
+           Authorization: Bearer <supervisor JWT, role ORDER_BACKOFFICE, groups [kenya-l1-kyc, ...]>
+           Content-Type: application/json
+
+           {
+               "decision":      "APPROVE",
+               "decisionNotes": "ID verified against IPRS (match); KPLC bill confirms address; agent GPS in correct area",
+               "actor":         "supervisor_user_17"
+           }
+
+ FUL-02's OrderCaptureService:
+
+   1. Verifies the actor is in kenya-l1-kyc group for WIK via FOUNDATION_AUTH GET
+     /api/groups/kenya-l1-kyc/members?operatorCode=WIK. ✓
+
+   2. Verifies the task is still open. ✓
+
+   3. Forwards completion to Camunda:
+           POST /engine-rest/task/cam_task_l1_01HZX9K8M7Q2N4P6R3T5W8Y0Z3/complete HTTP/1.1
+
+           {
+               "variables": {
+                 "kycL1Decision":      { "value": "APPROVE",
+                 "kycL1DecisionNotes": { "value": "ID verified against IPRS (match); KPLC bill confirms address; agent GPS in correct a
+                 "kycL1Actor":         { "value": "supervisor_user_17",
+                 "kycL1DecidedAt":     { "value": "2026-05-18T11:35:11Z",
+               }
+           }
+
+ Camunda 204. The BPMN gateway sees kycL1Decision = APPROVE and creates the Team Leader user task.
+
+ Step 3 — Camunda creates the Team Leader user task
+ kyc-team-leader-approval is created with candidate group kenya-kyc-leaders. The HTTP connector fires with an
+ enriched payload that includes L1's review:
+           POST /api/notify/kyc-approval-needed HTTP/1.1
+
+
+
+SOPHIX BSS Design Documents                                                                                            Page 5
+          {
+              "taskId":         "cam_task_tl_01HZX9K8M7Q2N4P6R3T5W8Y0Z4",
+              "taskName":       "Team Leader KYC Approval",
+              "businessKey":    "ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+              "orderId":        "ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+              "customerId":     "cust_01HX3K9M2P5Q8R1T4W7Y0Z3N6",
+              "operatorCode":   "WIK",
+              "candidateGroup": "kenya-kyc-leaders",
+              "level":          "TEAM_LEADER",
+              "customerName":   "John Mwangi",
+              "kycDocuments":   [ "...same 3 documents as L1..." ],
+              "kycL1Decision":      "APPROVE",
+              "kycL1DecisionNotes": "ID verified against IPRS (match); KPLC bill confirms address; agent GPS in correct area",
+              "kycL1Actor":         "supervisor_user_17",
+              "kycL1DecidedAt":     "2026-05-18T11:35:11Z",
+              "deepLink":           "/backoffice/orders/ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1/kyc/team-leader",
+              "channels":           ["email", "in_app_push"],
+              "template":           "kyc-approval-team-leader",
+              "urgency":            "medium"
+          }
+
+ A second Kafka event fires:
+          {
+              "eventType":    "OrderKycAwaitingTeamLeader",
+              "aggregateId": "ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+              "timestamp":    "2026-05-18T11:35:11.512Z",
+              "payload": {
+                "orderId":             "ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+                "customerId":          "cust_01HX3K9M2P5Q8R1T4W7Y0Z3N6",
+                "operatorCode":        "WIK",
+                "userTaskId":          "cam_task_tl_01HZX9K8M7Q2N4P6R3T5W8Y0Z4",
+                "candidateGroup":      "kenya-kyc-leaders",
+                "level":               "TEAM_LEADER",
+                "previousLevelActor": "supervisor_user_17",
+                "createdAt":           "2026-05-18T11:35:11.512Z"
+              }
+          }
+
+ current_activity_id updates to kyc-team-leader-approval; phase stays IN_KYC.
+
+ Step 4 — Team Leader reviews and approves
+ Team Leader team_leader_user_5 opens the BO UI, sees the task with L1's review visible at the top of the screen. They
+ glance at the documents (UI fetches from doc storage again), see L1's notes, see the IPRS match metadata. They concur.
+          POST /api/orders/ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1/user-tasks/cam_task_tl_01HZX9K8M7Q2N4P6R3T5W8Y0Z4/complete HTTP/1.1
+          Authorization: Bearer <team leader JWT, role ORDER_BACKOFFICE, groups [kenya-kyc-leaders, ...]>
+
+          {
+              "decision":      "APPROVE",
+              "decisionNotes": "Reviewed L1 decision; concur. Documents in order.",
+              "actor":         "team_leader_user_5"
+          }
+
+ OrderCaptureService verifies group membership, forwards completion to Camunda:
+          POST /engine-rest/task/cam_task_tl_01HZX9K8M7Q2N4P6R3T5W8Y0Z4/complete HTTP/1.1
+
+          {
+              "variables": {
+                "kycTeamLeaderDecision":      { "value": "APPROVE",                                       "type": "String" },
+                "kycTeamLeaderDecisionNotes": { "value": "Reviewed L1 decision; concur. Documents in order.", "type": "String" },
+                "kycTeamLeaderActor":         { "value": "team_leader_user_5",                            "type": "String" },
+                "kycTeamLeaderDecidedAt":     { "value": "2026-05-18T11:42:33Z",                          "type": "String" }
+              }
+          }
+
+ Camunda 204. BPMN gateway sees kycTeamLeaderDecision = APPROVE and advances to STEP-INSTALL's
+ order-create-install-wo external task. KYC is complete.
+
+ Total elapsed in step: ~19 minutes 30 seconds (from L1 task creation at 11:23:03 to Team Leader APPROVE at 11:42:33).
+ Wananchi's SLA target is 30 min combined for both approvals.
+
+
+
+ 3. Worked example — L1 REJECT
+ Variant of step 2: supervisor finds the address proof is from 18 months ago (Wananchi's KYC policy requires < 3 months).
+ They reject:
+
+
+SOPHIX BSS Design Documents                                                                                             Page 6
+            POST /api/orders/ord_01HZ_REJECT/user-tasks/cam_task_l1_01HZ_REJECT/complete HTTP/1.1
+
+            {
+                "decision":      "REJECT",
+                "decisionNotes": "Address proof dated 2024-11 — older than 3 months policy threshold. Customer must provide updated proo
+                "actor":         "supervisor_user_17"
+            }
+
+ Camunda gets:
+            {
+                "variables": {
+                  "kycL1Decision":      { "value": "REJECT",
+                  "kycL1DecisionNotes": { "value": "Address proof dated 2024-11 — older than 3 months policy threshold. Customer must pr
+                  "kycL1Actor":         { "value": "supervisor_user_17",
+                }
+            }
+
+ BPMN gateway routes to order-mark-rejected (STEP-VALIDATE's terminal worker) with reason KYC_REJECTED_L1.
+ That worker writes:
+            UPDATE customer_order
+               SET current_phase        = 'REJECTED',
+                   failure_reason       = 'KYC_REJECTED_L1',
+                   failure_detail       = 'Address proof dated 2024-11 — older than 3 months policy threshold. Customer must provide updat
+                   last_updated_at      = NOW()
+             WHERE order_id             = 'ord_01HZ_REJECT';
+
+ And emits OrderRejected on Kafka — same event shape as STEP-VALIDATE's rejection event but with failureReason
+ = KYC_REJECTED_L1. DD_NOT-01 consumes and sends the customer:
+
+ Sorry, your order could not be processed because your address proof was older than 3 months. Please submit a new order
+ with an updated utility bill.
+
+ Note: the customer has already paid 15000 KES. The rejection at this point triggers a refund cascade —
+ order-mark-rejected for KYC rejections (specifically KYC_REJECTED_L1 or KYC_REJECTED_TEAM_LEADER with
+ payment_received_amount > 0) emits OrderRefundRequested on top of OrderRejected. Finance processes the
+ refund per the operator's policy. The order itself remains terminally REJECTED — the customer must re-submit if they want
+ service.
+
+
+
+ 4. User tasks
+ 4.1 kyc-l1-supervisor-approval
+  Field                                                              Value
+
+  Purpose                                                            First-level KYC verification by a regional/franchise supervisor. Checks customer
+                                                                     documents against ID registry + address proof.
+
+  Candidate group                                                    kenya-l1-kyc (operator-scoped; FOUNDATION_AUTH)
+
+  Notification endpoint                                              POST /api/notify/kyc-approval-needed with level = L1
+
+  Completion endpoint                                                POST /api/orders/{orderId}/user-tasks/{taskId}/complete
+                                                                     (FUL-02 wrapper; verifies actor's group membership)
+
+  Decision values                                                    APPROVE / REJECT
+
+  Process variables set on completion                                kycL1Decision, kycL1DecisionNotes, kycL1Actor, kycL1DecidedAt
+
+  BPMN route on APPROVE                                              Creates kyc-team-leader-approval user task
+
+  BPMN route on REJECT                                               Routes to STEP-VALIDATE's order-mark-rejected with failureReason
+                                                                     = KYC_REJECTED_L1
+
+  Boundary timer                                                     None in v1.0 (see R-FUL-02-KYC-6)
+
+
+
+ 4.2 kyc-team-leader-approval
+  Field                                                              Value
+
+  Purpose                                                            Final-level KYC approval by a Wananchi Team Leader. Independent review
+                                                                     with L1's decision visible as context. Mandatory before install dispatch.
+
+  Candidate group                                                    kenya-kyc-leaders (operator-scoped; FOUNDATION_AUTH)
+
+  Notification endpoint                                              POST /api/notify/kyc-approval-needed with level = TEAM_LEADER
+                                                                     + L1's review carried in the payload
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                  Page 7
+  Field                                                                     Value
+
+  Completion endpoint                                                       Same as L1
+
+  Decision values                                                           APPROVE / REJECT
+
+  Process variables set on completion                                       kycTeamLeaderDecision, kycTeamLeaderDecisionNotes,
+                                                                            kycTeamLeaderActor, kycTeamLeaderDecidedAt
+
+  BPMN route on APPROVE                                                     Advances to STEP-INSTALL's order-create-install-wo
+
+  BPMN route on REJECT                                                      Routes to order-mark-rejected with failureReason =
+                                                                            KYC_REJECTED_TEAM_LEADER
+
+  Boundary timer                                                            None in v1.0
+
+
+
+
+ 5. DB tables touched
+ customer_order (FRAMEWORK §5.1) — UPDATE
+  Column                                When set                            Set by                                    Example value
+
+  current_phase                         On BPMN entry to first KYC task     PhaseProjector                            IN_KYC
+
+  current_activity_id                   On each Camunda transition          PhaseProjector                            kyc-l1-supervisor-approval →
+                                                                                                                      kyc-team-leader-approval →
+                                                                                                                      optionally mark-rejected
+
+  failure_reason (on REJECT only)       order-mark-rejected                 KYC_REJECTED_L1 or
+                                                                            KYC_REJECTED_TEAM_LEADER
+
+  failure_detail (on REJECT only)       order-mark-rejected                 Decision notes from the rejecting actor
+
+  last_updated_at                       On every UPDATE                     trigger / PhaseProjector                  2026-05-18 11:42:33.512
+
+
+ Sample data — five orders at various KYC stages:
+
+  order_id                  operator_code            payment_received_amo   current_phase              current_activity_id        failure_reason
+                                                     unt
+
+  ord_01HZ...A              WIK                      15000.00               IN_KYC (L1 approved;       kyc-team-leader-ap         NULL
+                                                                            awaiting Team Leader)      proval
+
+  ord_01HZ...B              WIK                      15000.00               IN_KYC (awaiting L1)       kyc-l1-supervisor-         NULL
+                                                                                                       approval
+
+  ord_01HZ...C              WIK                      15000.00               READY_FOR_INSTALL          create-install-wo          NULL
+                                                                            (Team Leader approved;
+                                                                            advanced to
+                                                                            STEP-INSTALL)
+
+  ord_01HZ...D              WIK                      15000.00               REJECTED (L1 rejected;     end                        KYC_REJECTED_L1
+                                                                            refund pending)
+
+  ord_01HZ...E              WIK                      15000.00               REJECTED (Team             end                        KYC_REJECTED_TEAM_
+                                                                            Leader rejected after L1                              LEADER
+                                                                            approval; refund
+                                                                            pending)
+
+
+
+ customer_order_phase_history (FRAMEWORK §5.2)
+ Multiple rows across the step. For the happy path (both APPROVE):
+
+  id                        previous_phase           new_phase              new_activity_id            triggered_by               metadata
+
+  ordh_..._k1               AWAITING_PAYMENT         IN_KYC                 kyc-l1-supervisor-         message_correlatio         {"correlatedMessag
+                                                                            approval                   n                          e":"PaymentReceive
+                                                                                                                                  d","paymentId":"pm
+                                                                                                                                  t_01HZ_MPESA_NK4XX
+                                                                                                                                  7QP9"}
+
+  ordh_..._k2               IN_KYC                   IN_KYC                 kyc-team-leader-ap         user_task_complete         {"kycL1Decision":"
+                                                                            proval                     d                          APPROVE","kycL1Act
+                                                                                                                                  or":"supervisor_us
+                                                                                                                                  er_17","kycL1Decis
+                                                                                                                                  ionNotes":"ID
+                                                                                                                                  verified against
+                                                                                                                                  IPRS..."}
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                        Page 8
+  id                       previous_phase       new_phase            new_activity_id     triggered_by         metadata
+
+  ordh_..._k3              IN_KYC               READY_FOR_INSTALL    create-install-wo   user_task_complete   {"kycTeamLeaderDec
+                                                                                         d                    ision":"APPROVE","
+                                                                                                              kycTeamLeaderActor
+                                                                                                              ":"team_leader_use
+                                                                                                              r_5","kycTeamLeade
+                                                                                                              rDecisionNotes":"R
+                                                                                                              eviewed L1
+                                                                                                              decision;
+                                                                                                              concur..."}
+
+
+ For L1 REJECT:
+
+  id                       previous_phase       new_phase            new_activity_id     triggered_by         metadata
+
+  ordh_..._kr1             IN_KYC               REJECTED             mark-rejected       user_task_complete   {"kycL1Decision":"
+                                                                                         d                    REJECT","kycL1Acto
+                                                                                                              r":"supervisor_use
+                                                                                                              r_17","failureReas
+                                                                                                              on":"KYC_REJECTED_
+                                                                                                              L1","decisionNotes
+                                                                                                              ":"Address proof
+                                                                                                              dated 2024-11..."}
+
+
+
+ staff_notification_stub (FRAMEWORK §6.3)
+ Two notification batches: one when L1 task is created (7 supervisors notified), one when Team Leader task is created (3
+ leaders notified). Sample for L1:
+
+  notification_id          order_id             task_id              candidate_group     dispatch_status      created_at
+
+  notif_01HZ_l1_01         ord_01HZ...A         cam_task_l1_01HZX9   kenya-l1-kyc        DISPATCHED           2026-05-18
+                                                K8M7Q2N4P6R3T5W8Y0                                            11:23:03.512
+                                                Z3
+
+  notif_01HZ_l1_02         ord_01HZ...A         cam_task_l1_01HZX9   kenya-l1-kyc        DISPATCHED           2026-05-18
+                                                K8M7Q2N4P6R3T5W8Y0                                            11:23:03.518
+                                                Z3
+
+  ...                      ...                  ...                  ...                 ...                  ...
+
+
+
+
+ 6. Kafka events emitted
+ sophix.orders.kyc-awaiting-l1
+             {
+                 "eventType":    "OrderKycAwaitingL1",
+                 "aggregateId": "ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+                 "timestamp":    "2026-05-18T11:23:03.412Z",
+                 "payload": {
+                   "orderId":         "ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+                   "customerId":      "cust_01HX3K9M2P5Q8R1T4W7Y0Z3N6",
+                   "operatorCode":    "WIK",
+                   "userTaskId":      "cam_task_l1_01HZX9K8M7Q2N4P6R3T5W8Y0Z3",
+                   "candidateGroup": "kenya-l1-kyc",
+                   "createdAt":       "2026-05-18T11:23:03.412Z"
+                 }
+             }
+
+
+ sophix.orders.kyc-awaiting-team-leader
+             {
+                 "eventType":    "OrderKycAwaitingTeamLeader",
+                 "aggregateId": "ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+                 "timestamp":    "2026-05-18T11:35:11.512Z",
+                 "payload": {
+                   "orderId":             "ord_01HZX9K8M7Q2N4P6R3T5W8Y0Z1",
+                   "customerId":          "cust_01HX3K9M2P5Q8R1T4W7Y0Z3N6",
+                   "operatorCode":        "WIK",
+                   "userTaskId":          "cam_task_tl_01HZX9K8M7Q2N4P6R3T5W8Y0Z4",
+                   "candidateGroup":      "kenya-kyc-leaders",
+                   "level":               "TEAM_LEADER",
+                   "previousLevelActor": "supervisor_user_17",
+                   "createdAt":           "2026-05-18T11:35:11.512Z"
+                 }
+             }
+
+
+SOPHIX BSS Design Documents                                                                                                  Page 9
+ Consumers:
+
+  Consumer                                                   Purpose
+
+  NOC                                                        SLA monitoring — both OrderKycAwaiting* events tracked; tasks unclaimed
+                                                             >15 min trigger pager alerts (since the customer has already paid, KYC delays
+                                                             directly impact customer experience).
+
+  CVM                                                        Funnel KYC stages — drop-offs at L1 vs Team Leader reveal whether
+                                                             documentation policy is stricter at one level than the other.
+
+
+ DD_NOT-01 does NOT consume OrderKycAwaiting* — the customer has nothing to do during KYC; no automated
+ message fires. The customer's next notification is when KYC completes and install is dispatched (STEP-INSTALL's
+ OrderInstallDispatched → DD_NOT-01 SMSes the install date).
+
+
+
+ 7. Step-pinned rules
+  ID                                                         Rule
+
+  R-FUL-02-KYC-1                                             Two-level approval mandatory in WIK before install dispatch: L1 supervisor
+                                                             (kenya-l1-kyc) → Team Leader (kenya-kyc-leaders). Both must
+                                                             APPROVE. Team Leader is created only if L1 approved; if L1 rejected, Team
+                                                             Leader never sees the task.
+
+  R-FUL-02-KYC-2                                             Either level rejecting → terminal REJECTED state via order-mark-rejected
+                                                             (STEP-VALIDATE's terminal worker, reused). No appeal path in v1.0 —
+                                                             customer submits a new order if circumstances change. Rejection with
+                                                             payment_received_amount > 0 triggers OrderRefundRequested via
+                                                             order-mark-rejected (refund cascade).
+
+  R-FUL-02-KYC-3                                             L1's decision (kycL1Decision, kycL1DecisionNotes, kycL1Actor) is
+                                                             passed forward as context fields in the Team Leader's notification payload.
+                                                             Team Leader is not blind — they see what L1 thought.
+
+  R-FUL-02-KYC-4                                             Completion endpoint verifies the actor is in the task's candidate group via
+                                                             FOUNDATION_AUTH before forwarding to Camunda. Out-of-group attempts →
+                                                             403. The actor's user ID must also match the JWT subject — preventing one
+                                                             person from "approving on behalf of" another.
+
+  R-FUL-02-KYC-5                                             Candidate groups are operator-scoped in FOUNDATION_AUTH. v1.0 carries
+                                                             only kenya-l1-kyc and kenya-kyc-leaders. Future WUG/WTZ
+                                                             deployments adopting KYC two-level would have their own candidate groups
+                                                             (e.g., uganda-l1-kyc, uganda-kyc-leaders). Group naming convention:
+                                                             {country}-{level}-kyc and {country}-kyc-leaders.
+
+  R-FUL-02-KYC-6                                             NO boundary timer on KYC user tasks in v1.0. KYC approvals are not
+                                                             auto-rejected for inactivity (would be unfair to the customer who already paid).
+                                                             Ops monitors via NOC SLA dashboards driven by OrderKycAwaiting* Kafka
+                                                             event timestamps; tasks unclaimed >15 min trigger a pager alert.
+
+  R-FUL-02-KYC-7                                             The KE WIK BPMN owns these two user tasks. Other operator BPMNs in the
+                                                             architecture may use different qualification models; v1.0 ships only the WIK
+                                                             BPMN.
+
+  R-FUL-02-KYC-8                                             Decisions are NOT persisted as dedicated customer_order columns. They
+                                                             live in Camunda's history (GET /engine-rest/history/variable-insta
+                                                             nce?processInstanceId=...&variableName=kycL1Decision) and
+                                                             customer_order_phase_history.metadata. Downstream needing
+                                                             filterable orders by KYC outcome should use the OrderRejected Kafka event
+                                                             (failureReason discriminates).
+
+  R-FUL-02-KYC-9                                             Document references in the notification payload are opaque IDs (idoc_*); the
+                                                             BO UI fetches actual document images from the document-storage service
+                                                             when the supervisor opens the task. This step's payload deliberately doesn't
+                                                             embed image bytes — would bloat the notification flow and create stale-image
+                                                             risk.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                        Page 10
+

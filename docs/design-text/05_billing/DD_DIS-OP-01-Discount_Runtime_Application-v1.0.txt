@@ -1,0 +1,919 @@
+ DD_DIS-OP-01 - Discount Runtime Application
+ Version: v1.0 Bundle: 05_billing Status: Draft for review Primary owner: Billing team Related DDs: DD_PLM-CFG-04,
+ DD_SIP-03, DD_SIP-05, DD_BIL-01, DD_BIL-02-GEN-01, DD_BIL-05, DD_BIL-CFG-01, DD_EM-CFG-04,
+ FOUNDATION_DROOLS
+
+ MVP simplification baseline: DIS-OP-01 starts with deterministic billing-time discount application for active assignments and
+ simple campaign eligibility. Keep high-volume runtime logic efficient and testable; use Drools only for operator-configurable
+ policy, not fixed arithmetic or invoice-line validation.
+
+
+
+ 1. Purpose
+ DIS-OP-01 defines how SOPHIX applies configured discounts during billing, order charging, invoice generation, and
+ wallet-credit operations.
+
+ The catalog and assignment modules answer these questions:
+
+  Question                                                                            Owning DD
+
+  What is this discount and how is it calculated?                                     PLM-CFG-04
+
+  Who has been granted this discount?                                                 SIP-03
+
+  Which campaign may create discount assignments?                                     SIP-05
+
+  Which charge event is being billed?                                                 BIL-CFG-01 and BIL-01
+
+  How is the discount applied at runtime?                                             DIS-OP-01
+
+
+ DIS-OP-01 is therefore the runtime calculation and audit layer. It receives a charge context from Billing, retrieves eligible
+ active assignments from SIP-03, loads discount definitions from PLM-CFG-04, applies ordering/stacking/cap rules, returns
+ discount lines to Billing, and records what happened.
+
+ Use this DD when:
+
+   - a recurring MRC charge must be reduced by a percentage or fixed amount;
+
+   - an installation charge must be waived during an acquisition campaign;
+
+   - a prorated invoice line must include discount impact;
+
+   - a prepaid wallet needs to receive a promotional credit;
+
+   - support must explain why a discount did or did not apply;
+
+   - a failed or disputed discount decision must be replayed without double-applying money.
+
+ Do not use DIS-OP-01 to create discounts or assign discounts to customers. That remains PLM-CFG-04 and SIP-03.
+
+
+
+ 2. Scope And Boundaries
+  Capability                                                                          Owner
+
+  Discount definition, amount type, calculation type, validity, allowed event codes   PLM-CFG-04
+
+  Discount assignment to                                                              SIP-03
+  customer/account/subscription/order/franchise/campaign cohort
+
+  Campaign targeting and bulk assignment trigger                                      SIP-05
+
+  Runtime discount eligibility, calculation, stacking, capping, audit                 DIS-OP-01
+
+  Charge creation and invoice item ownership                                          BIL-01 / BIL-02
+
+  Wallet debit/credit ledger                                                          BIL-05
+
+  Billable event code catalog                                                         BIL-CFG-01
+
+  Configurable approval for manual replay/override only                               EM-CFG-04
+
+  Configurable runtime commercial rules                                               Drools
+
+
+ Boundary rules:
+
+   - DIS-OP-01 must not create or approve discount assignments.
+
+SOPHIX BSS Design Documents                                                                                                  Page 1
+   - DIS-OP-01 must not mutate invoice totals directly. It returns discount lines to BIL-01/BIL-02 or posts a wallet credit through
+     BIL-05 when discount type requires it.
+
+   - DIS-OP-01 must be idempotent for the same billable event and charge context.
+
+   - Runtime approval is not required for normal discount application. Approvals happen before assignment/campaign launch.
+     EM-CFG-04 is used only for exceptional manual replay, override, or write-off style operations.
+
+
+
+ 3. Runtime Position
+             flowchart LR
+               A["BIL-01 receives billable event"] --> B["Build charge context"]
+               B --> C["DIS-OP-01 preview/apply"]
+               C --> D["SIP-03 active assignments"]
+               C --> E["PLM-CFG-04 discount definition"]
+               C --> F["Drools runtime policy"]
+               C --> G["Discount decision and lines"]
+               G --> H["BIL-01 charge result"]
+               H --> I["BIL-02 invoice lines"]
+               G --> J["BIL-05 wallet credit when needed"]
+
+ DIS-OP-01 should be callable in two modes:
+
+  Mode                                        Meaning                                                 Used by
+
+  PREVIEW                                     Calculate expected discount without financial           Quote, order capture, Backoffice, customer care.
+                                              posting.
+
+  APPLY                                       Calculate, persist, and return idempotent discount      BIL-01, BIL-02, BIL-05 integration.
+                                              application lines.
+
+
+
+
+ 4. Terminology
+  Term                                                                    Meaning
+
+  Charge context                                                          Runtime payload describing the customer, subscription, package, event code,
+                                                                          base amount, tax context, and date being charged.
+
+  Candidate assignment                                                    Active SIP-03 discount assignment that may apply to the charge context.
+
+  Discount definition                                                     PLM-CFG-04 record that defines amount, calculation type, validity, caps, event
+                                                                          applicability, and stacking metadata.
+
+  Runtime decision                                                        Auditable decision showing candidates, accepted discounts, rejected discounts,
+                                                                          and reasons.
+
+  Discount application                                                    The persisted result of applying discounts to one charge context.
+
+  Discount line                                                           One monetary effect returned to Billing or Wallet.
+
+  Stacking                                                                Whether multiple discounts can apply to the same charge context.
+
+  Cap                                                                     Maximum discount amount allowed per event, period, customer, assignment, or
+                                                                          campaign.
+
+
+
+
+ 5. Status Model
+ 5.1 Discount Application Status
+  Status                                      Meaning                                                 Next statuses
+
+  DRAFT                                       Runtime calculation started but not finalized.          APPLIED, REJECTED, FAILED
+
+  APPLIED                                     Discount lines were calculated and returned/posted      REVERSED
+                                              successfully.
+
+  REJECTED                                    No discount was applied because eligibility or rule     none
+                                              checks failed.
+
+  FAILED                                      Runtime error happened before final decision.           APPLIED, REJECTED by replay
+
+  REVERSED                                    Financial impact was reversed by an approved            none
+                                              billing adjustment.
+
+
+
+ 5.2 Runtime Decision Result
+
+SOPHIX BSS Design Documents                                                                                                                      Page 2
+  Result                                                            Meaning
+
+  ACCEPTED                                                          Candidate discount was used in final calculation.
+
+  REJECTED_NOT_ELIGIBLE                                             Candidate did not match package, event, channel, customer, geography, or
+                                                                    date.
+
+  REJECTED_STACKING_CONFLICT                                        Candidate conflicted with a higher-priority discount.
+
+  REJECTED_CAP_REACHED                                              Assignment, campaign, or event cap was already reached.
+
+  REJECTED_ZERO_BASE_AMOUNT                                         Base amount was zero or negative and policy forbids discount.
+
+  REJECTED_RUNTIME_POLICY                                           Drools/runtime policy rejected the candidate.
+
+
+
+
+ 6. Data Model
+ 6.1 discount_application
+ What it is for: stores one runtime application attempt for a specific billable event and charge context.
+
+ When to use it: every APPLY request from BIL-01/BIL-02 that may produce discount lines. A PREVIEW request can optionally
+ store a short-lived application record if audit is required, but normal preview should not persist unless configured.
+
+ Sample meaning: dapp-001 means the recurring MRC event for subscription SUB-700045 was charged on 2026-06-30,
+ DIS-OP-01 evaluated it once, applied KES 300 in discount, and returned the result to Billing.
+
+  Column                           Type                             Purpose                                   Sample
+
+  application_id                   UUID PK                          Runtime discount application id.          dapp-001
+
+  operator_code                    TEXT                             Tenant/operator.                          WIK
+
+  billable_event_code              TEXT                             BIL-CFG-01 event code.                    RECURRING_MRC
+
+  billable_event_ref               TEXT                             Idempotent event ref from                 bev-20260630-sub-700045
+                                                                    BIL-01/BIL-02.
+
+  charge_context_hash              TEXT                             Hash of the normalized charge             sha256:9f1b...
+                                                                    context.
+
+  customer_id                      TEXT NULL                        Customer id.                              CUS-100045
+
+  account_id                       TEXT NULL                        Account id.                               ACC-900045
+
+  subscription_id                  TEXT NULL                        Subscription id.                          SUB-700045
+
+  order_id                         TEXT NULL                        Order id for onboarding/order charges.    ORD-1001
+
+  package_ref                      TEXT NULL                        Package ref being charged.                pkg-fiber-100m
+
+  package_version_id               TEXT NULL                        Package version charged.                  pkv-100m-202607
+
+  currency_code                    TEXT                             ISO currency.                             KES
+
+  base_amount                      NUMERIC(14,2)                    Amount before discount and tax.           3000.00
+
+  total_discount_amount            NUMERIC(14,2)                    Sum of accepted discount lines.           300.00
+
+  net_amount                       NUMERIC(14,2)                    Base amount after discount, before        2700.00
+                                                                    any later tax handling.
+
+  mode                             TEXT                             PREVIEW or APPLY.                         APPLY
+
+  status                           TEXT                             DRAFT, APPLIED, REJECTED,                 APPLIED
+                                                                    FAILED, REVERSED.
+
+  decision_summary_code            TEXT                             Main decision summary.                    DISCOUNT_APPLIED
+
+  source_module_code               TEXT                             Caller module.                            BIL-01
+
+  idempotency_key                  TEXT                             Caller idempotency key.                   discount-apply-bev-20260630-
+                                                                                                              sub-700045
+
+  created_at                       TIMESTAMP                        Creation timestamp.                       2026-06-30T00:05:00Z
+
+  finalized_at                     TIMESTAMP NULL                   Finalization timestamp.                   2026-06-30T00:05:01Z
+
+
+ Recommended indexes:
+
+   - unique (operator_code, billable_event_ref, charge_context_hash, mode).
+
+   - (operator_code, subscription_id, created_at DESC).
+
+   - (operator_code, customer_id, created_at DESC).
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 3
+   - (operator_code, status, created_at DESC).
+
+ 6.2 discount_application_line
+ What it is for: stores each accepted monetary discount effect inside one application.
+
+ When to use it: create one row per accepted discount assignment/definition pair. Billing consumes these rows to create
+ invoice discount lines or reduced charge lines.
+
+ Sample meaning: dal-001 means assignment da-001 generated a KES 300 recurring service discount on one charge
+ event.
+
+  Column                          Type                             Purpose                              Sample
+
+  line_id                         UUID PK                          Discount line id.                    dal-001
+
+  application_id                  UUID                             Parent application.                  dapp-001
+
+  assignment_id                   UUID                             SIP-03 assignment id.                da-001
+
+  discount_code                   TEXT                             PLM-CFG-04 discount code.            RETENTION_10PCT_3M
+
+  discount_id                     TEXT                             PLM-CFG-04 discount id/version.      disc-1001
+
+  line_type                       TEXT                             PRICE_REDUCTION, FEE_WAIVER,         PRICE_REDUCTION
+                                                                   WALLET_CREDIT, INVOICE_CREDIT.
+
+  calculation_type                TEXT                             PERCENT, FIXED_AMOUNT,               PERCENT
+                                                                   FULL_WAIVER, WALLET_CREDIT.
+
+  base_amount                     NUMERIC(14,2)                    Amount used for this calculation.    3000.00
+
+  discount_rate                   NUMERIC(9,4) NULL                Percentage rate if applicable.       0.1000
+
+  discount_amount                 NUMERIC(14,2)                    Applied discount amount.             300.00
+
+  currency_code                   TEXT                             Currency.                            KES
+
+  priority                        INT                              Runtime priority used.               100
+
+  stacking_group_code             TEXT NULL                        Stacking group used.                 RECURRING_MRC
+
+  cap_check_code                  TEXT NULL                        Cap rule that passed.                MONTHLY_ASSIGNMENT_CAP
+
+  wallet_transaction_id           TEXT NULL                        BIL-05 transaction when line posts   wtxn-001
+                                                                   wallet credit.
+
+  invoice_line_ref                TEXT NULL                        BIL-02 invoice line after invoice    invline-9001
+                                                                   generation.
+
+  metadata_json                   JSONB                            Extra calculation details.           {"rateSource":"catalog","rou
+                                                                                                        nded":true}
+
+
+ Recommended indexes:
+
+   - (application_id).
+
+   - (assignment_id).
+
+   - (discount_code).
+
+   - (wallet_transaction_id).
+
+ 6.3 discount_runtime_decision
+ What it is for: stores accepted and rejected candidate decisions so care, billing, and audit teams can explain why a discount
+ did or did not apply.
+
+ When to use it: for every candidate returned by SIP-03 effective-assignment lookup, and for policy-level rejection before
+ candidate selection.
+
+ Sample meaning: drd-002 records that another active discount was found but rejected because it belonged to the same
+ stacking group and had lower priority.
+
+  Column                          Type                             Purpose                              Sample
+
+  decision_id                     UUID PK                          Decision id.                         drd-001
+
+  application_id                  UUID                             Parent application.                  dapp-001
+
+  assignment_id                   UUID NULL                        Candidate assignment.                da-001
+
+  discount_code                   TEXT NULL                        Candidate discount code.             RETENTION_10PCT_3M
+
+  decision_result                 TEXT                             Accepted/rejected result.            ACCEPTED
+
+
+
+SOPHIX BSS Design Documents                                                                                                      Page 4
+  Column                          Type                             Purpose                                 Sample
+
+  reason_code                     TEXT                             Machine-readable reason.                ELIGIBLE_AND_HIGHEST_PRIORIT
+                                                                                                           Y
+
+  message                         TEXT                             Human-readable explanation.             Applied 10 percent retention
+                                                                                                           discount.
+
+  rule_package_version            TEXT NULL                        Drools package/version used.            discount-runtime-v3.2
+
+  source_context_json             JSONB                            Candidate facts and relevant context.   {"eventCode":"RECURRING_MRC"
+                                                                                                           ,"packageRef":"pkg-fiber-100
+                                                                                                           m"}
+
+  decided_at                      TIMESTAMP                        Decision timestamp.                     2026-06-30T00:05:01Z
+
+
+ Recommended indexes:
+
+   - (application_id).
+
+   - (assignment_id, decision_result).
+
+   - (decision_result, reason_code).
+
+ 6.4 discount_runtime_cap_usage
+ What it is for: tracks discount cap consumption where caps are enforced by assignment, campaign, customer, or event
+ period.
+
+ When to use it: any discount definition or assignment includes a maximum amount/count by period. This table prevents
+ repeated runtime calls from exceeding approved commercial limits.
+
+ Sample meaning: customer CUS-100045 has consumed KES 900 from a monthly cap of KES 1000 for assignment da-001.
+
+  Column                          Type                             Purpose                                 Sample
+
+  cap_usage_id                    UUID PK                          Cap usage id.                           dcu-001
+
+  operator_code                   TEXT                             Tenant/operator.                        WIK
+
+  cap_scope_type                  TEXT                             ASSIGNMENT, CAMPAIGN, CUSTOMER,         ASSIGNMENT
+                                                                   SUBSCRIPTION, ORDER.
+
+  cap_scope_ref_id                TEXT                             Scope id.                               da-001
+
+  period_start                    DATE                             Cap period start.                       2026-06-01
+
+  period_end                      DATE                             Cap period end.                         2026-06-30
+
+  currency_code                   TEXT                             Currency.                               KES
+
+  used_amount                     NUMERIC(14,2)                    Consumed discount amount.               900.00
+
+  used_count                      INT                              Consumed application count.             3
+
+  last_application_id             UUID                             Last application that updated usage.    dapp-001
+
+  updated_at                      TIMESTAMP                        Last update timestamp.                  2026-06-30T00:05:01Z
+
+
+ Recommended indexes:
+
+   - unique (operator_code, cap_scope_type, cap_scope_ref_id, period_start, period_end).
+
+   - (operator_code, period_start, period_end).
+
+ 6.5 discount_runtime_replay
+ What it is for: records manual or system replay of failed discount runtime applications.
+
+ When to use it: only when a previous application failed or a billing support operator needs to recompute an audited result.
+ Replays that can change money should require EM-CFG-04 approval when configured.
+
+ Sample meaning: drep-001 is a support replay that recalculated failed discount application dapp-001 after SIP-03
+ assignment cache lag was repaired.
+
+  Column                          Type                             Purpose                                 Sample
+
+  replay_id                       UUID PK                          Replay id.                              drep-001
+
+  original_application_id         UUID                             Application being replayed.             dapp-001
+
+  new_application_id              UUID NULL                        New application result.                 dapp-002
+
+  requested_by_user_id            TEXT                             Requester.                              usr-billing-002
+
+
+SOPHIX BSS Design Documents                                                                                                        Page 5
+  Column                            Type                              Purpose                          Sample
+
+  reason_code                       TEXT                              Replay reason.                   CACHE_LAG_REPAIR
+
+  approval_request_id               TEXT NULL                         EM-CFG-04 approval request if    apr-drep-001
+                                                                      required.
+
+  approval_mode                     TEXT NULL                         EM-CFG-04 mode.                  MULTI_STEP
+
+  status                            TEXT                              REQUESTED, PENDING_APPROVAL,     COMPLETED
+                                                                      APPROVED, REJECTED, COMPLETED,
+                                                                      FAILED.
+
+  created_at                        TIMESTAMP                         Creation timestamp.              2026-07-01T10:00:00Z
+
+  completed_at                      TIMESTAMP NULL                    Completion timestamp.            2026-07-01T10:03:00Z
+
+
+ Recommended indexes:
+
+   - (original_application_id).
+
+   - (approval_request_id).
+
+   - (status, created_at DESC).
+
+
+
+ 7. APIs
+ All APIs require service authentication for module-to-module calls. User-facing preview/search calls are exposed through
+ Backoffice/API Gateway with RBAC from EM-CFG-03.
+
+ 7.1 Preview Runtime Discount
+ Used by order capture, sales app, Backoffice quote screens, and support.
+           POST /api/discount-runtime/preview
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "sourceModuleCode": "FUL-02",
+               "mode": "PREVIEW",
+               "billableEventCode": "INSTALLATION_FEE",
+               "billableEventRef": "quote-ORD-1001-installation",
+               "customerId": "CUS-100045",
+               "accountId": "ACC-900045",
+               "subscriptionId": null,
+               "orderId": "ORD-1001",
+               "packageRef": "pkg-fiber-100m",
+               "packageVersionId": "pkv-100m-202607",
+               "channelCode": "SALES_APP",
+               "franchiseId": "fr-019",
+               "chargeDate": "2026-07-01",
+               "currencyCode": "KES",
+               "baseAmount": 2500.00,
+               "taxIncluded": false
+           }
+
+ Response:
+           {
+               "applicationId": null,
+               "status": "APPLIED",
+               "baseAmount": 2500.00,
+               "totalDiscountAmount": 2500.00,
+               "netAmount": 0.00,
+               "lines": [
+                  {
+                    "assignmentId": "da-free-install-001",
+                    "discountCode": "ACQ_FREE_INSTALL",
+                    "lineType": "FEE_WAIVER",
+                    "discountAmount": 2500.00,
+                    "reasonCode": "FULL_WAIVER"
+                  }
+               ],
+               "decisions": [
+                  {
+                    "assignmentId": "da-free-install-001",
+                    "decisionResult": "ACCEPTED",
+                    "reasonCode": "ELIGIBLE_FOR_ORDER_INSTALLATION"
+                  }
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 6
+              ]
+          }
+
+
+ 7.2 Apply Runtime Discount
+ Used by BIL-01/BIL-02. This endpoint persists the result and must be idempotent.
+          POST /api/discount-runtime/apply
+          Idempotency-Key: discount-apply-bev-20260630-sub-700045
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "sourceModuleCode": "BIL-01",
+              "mode": "APPLY",
+              "billableEventCode": "RECURRING_MRC",
+              "billableEventRef": "bev-20260630-sub-700045",
+              "customerId": "CUS-100045",
+              "accountId": "ACC-900045",
+              "subscriptionId": "SUB-700045",
+              "orderId": null,
+              "packageRef": "pkg-fiber-100m",
+              "packageVersionId": "pkv-100m-202607",
+              "channelCode": "SYSTEM",
+              "franchiseId": "fr-019",
+              "chargeDate": "2026-06-30",
+              "currencyCode": "KES",
+              "baseAmount": 3000.00,
+              "taxIncluded": false
+          }
+
+ Response:
+          {
+              "applicationId": "dapp-001",
+              "status": "APPLIED",
+              "baseAmount": 3000.00,
+              "totalDiscountAmount": 300.00,
+              "netAmount": 2700.00,
+              "lines": [
+                {
+                  "lineId": "dal-001",
+                  "assignmentId": "da-001",
+                  "discountCode": "RETENTION_10PCT_3M",
+                  "lineType": "PRICE_REDUCTION",
+                  "discountAmount": 300.00,
+                  "currencyCode": "KES"
+                }
+              ]
+          }
+
+ If the same idempotency key and same normalized charge context are received again, return the same result. If the same
+ idempotency key is received with a different charge context hash, return 409 IDEMPOTENCY_KEY_CONFLICT.
+
+ 7.3 Query Application History
+          GET /api/discount-runtime/applications?operatorCode=WIK&subscriptionId=SUB-700045&from=2026-06-01&to=2026-06-30
+
+ Used by Backoffice, billing support, reporting API, and customer care timeline.
+
+ 7.4 Get Application Detail
+          GET /api/discount-runtime/applications/{application_id}
+
+ Returns application, lines, candidate decisions, cap usage updates, and source charge context snapshot.
+
+ 7.5 Request Replay
+          POST /api/discount-runtime/applications/{application_id}/replay
+          Idempotency-Key: discount-replay-dapp-001-cache-lag
+          Content-Type: application/json
+
+          {
+              "reasonCode": "CACHE_LAG_REPAIR",
+              "requestedByUserId": "usr-billing-002",
+              "expectedFinancialImpact": 300.00,
+              "comment": "Assignment existed before billing but runtime cache was stale."
+          }
+
+
+
+
+SOPHIX BSS Design Documents                                                                                           Page 7
+ DIS-OP-01 calls EM-CFG-04 only when policy requires approval for replay. If approved, DIS-OP-01 recomputes and returns
+ adjustment instructions to BIL-02/BIL-01 rather than editing old invoice rows directly.
+
+ 7.6 Internal Approval Callback
+ Only used for replay/override approvals.
+           POST /internal/discount-runtime/replays/{replay_id}/approval-outcome
+           Content-Type: application/json
+
+           {
+               "approvalRequestId": "apr-drep-001",
+               "outcome": "APPROVED",
+               "decisionComment": "Approved because customer should have received campaign discount."
+           }
+
+
+
+
+ 8. Integration Contracts
+ 8.1 Calls To SIP-03
+ DIS-OP-01 calls:
+           GET /api/discount-assignments/effective?operatorCode=WIK&subscriptionId=SUB-700045&eventCode=RECURRING_MRC&onDate=2026-06-
+
+ The response identifies assignments. DIS-OP-01 still validates the runtime charge context because the same assignment
+ may be eligible for one event and not another.
+
+ 8.2 Calls To PLM-CFG-04
+ DIS-OP-01 loads discount definitions by code/id. The definition must include:
+
+   - calculation type;
+
+   - value/rate;
+
+   - max amount and cap scope;
+
+   - allowed billable event codes;
+
+   - allowed package/service/category constraints;
+
+   - stacking group;
+
+   - rounding rule;
+
+   - wallet-credit behavior, if applicable.
+
+ 8.3 Calls To BIL-05
+ For WALLET_CREDIT discount lines, DIS-OP-01 does not write wallet ledger rows itself. It calls BIL-05:
+           POST /api/wallets/{wallet_id}/credit
+           Idempotency-Key: wallet-credit-dapp-001-dal-001
+           Content-Type: application/json
+
+           {
+               "amount": 500.00,
+               "currency": "KES",
+               "transactionType": "PROMOTIONAL_CREDIT",
+               "reference": "dapp-001/dal-001",
+               "reasonCode": "CAMPAIGN_WALLET_CREDIT"
+           }
+
+
+ 8.4 Return To BIL-01/BIL-02
+ BIL-01 uses netAmount and lines to create charge results. BIL-02 uses returned lines to show invoice-level discount details.
+ Tax calculation order must follow PLM-CFG-02 and BIL-02 tax rules.
+
+
+
+ 9. Events
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 8
+  Event                           Topic                                    When emitted                               Consumers
+
+  DiscountApplicationComputed     sophix.billing.discount.appl             Preview or apply calculation               REP, support timeline when
+                                  ication-computed                         completed.                                 configured.
+
+  DiscountApplied                 sophix.billing.discount.appl             Apply produced at least one accepted       BIL-02, REP, CUST-INT.
+                                  ied                                      discount line.
+
+  DiscountApplicationRejected     sophix.billing.discount.reje             No candidate applied.                      REP, support diagnostics.
+                                  cted
+
+  DiscountWalletCreditRequeste    sophix.billing.discount.wall             Wallet-credit discount was sent to         BIL-05, REP.
+  d                               et-credit-requested                      BIL-05.
+
+  DiscountReplayRequested         sophix.billing.discount.repl             Manual/system replay requested.            EM-CFG-04, audit.
+                                  ay-requested
+
+  DiscountReplayCompleted         sophix.billing.discount.repl             Replay finished.                           BIL, REP, support.
+                                  ay-completed
+
+
+ Use the transactional outbox pattern. Billing financial events must not be emitted from uncommitted database state.
+
+
+
+ 10. Business Rules
+  Rule                                         Description                                             Reason
+
+  R-DIS-OP-01                                  Only active/effective SIP-03 assignments can be         Prevent expired or unapproved discounts.
+                                               considered.
+
+  R-DIS-OP-02                                  Discount definition must be active and valid on         Prevent retired catalog use.
+                                               charge date.
+
+  R-DIS-OP-03                                  Billable event code must be allowed by discount         Avoid applying installation discount to MRC.
+                                               definition.
+
+  R-DIS-OP-04                                  Runtime target must match assignment scope.             Prevent customer/account/subscription leakage.
+
+  R-DIS-OP-05                                  Currency must match charge currency unless              Financial integrity.
+                                               explicit conversion support exists.
+
+  R-DIS-OP-06                                  Stacking rules select accepted discounts by priority    Revenue protection.
+                                               and group.
+
+  R-DIS-OP-07                                  Cap usage must be locked and updated atomically         Prevent cap overspend under concurrency.
+                                               during apply.
+
+  R-DIS-OP-08                                  Discount amount must never make net amount              Avoid invalid charge amounts.
+                                               negative unless the discount type is wallet credit or
+                                               invoice credit and policy permits it.
+
+  R-DIS-OP-09                                  Repeated apply for same event/context must return       Idempotency.
+                                               the same result.
+
+  R-DIS-OP-10                                  Same idempotency key with different context hash        Protect against caller bugs.
+                                               returns 409.
+
+  R-DIS-OP-11                                  Preview must not update cap usage or wallet ledger.     Preview must be side-effect free.
+
+  R-DIS-OP-12                                  Wallet-credit discount must be posted through           Ledger ownership.
+                                               BIL-05 with its own idempotency key.
+
+  R-DIS-OP-13                                  Manual replay that changes financial impact must        Governance.
+                                               call EM-CFG-04 if policy requires approval.
+
+  R-DIS-OP-14                                  Old invoice rows are not edited by replay;              Audit and tax integrity.
+                                               adjustments are created through billing adjustment
+                                               paths.
+
+
+
+
+ 11. Rule Engine Guidance
+ Use Drools for operator-variable decisions:
+
+  Rule file                                                                Purpose
+
+  discount-runtime-eligibility.drl                                         Decide if candidate assignment is eligible for the runtime context.
+
+  discount-runtime-stacking.drl                                            Select which candidates survive stacking conflict checks.
+
+  discount-runtime-cap-policy.drl                                          Choose cap scope and cap period when policy differs by
+                                                                           operator/channel/product.
+
+  discount-runtime-replay-approval.drl                                     Decide if a replay/override should call EM-CFG-04.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                           Page 9
+ Do not use Drools for fixed validations such as JSON shape, required fields, date parsing, DB uniqueness, or idempotency
+ hash comparison.
+
+ Example:
+              package com.sophix.discount.runtime
+
+              rule "Manual replay above threshold requires finance approval"
+              when
+                $r : DiscountReplayFact(expectedFinancialImpact >= 1000.00, currencyCode == "KES")
+                $d : ReplayDecision()
+              then
+                $d.setApprovalRequired(true);
+                $d.setApprovalPolicyCode("DISCOUNT_RUNTIME_REPLAY_FINANCE");
+                $d.addReason("REPLAY_FINANCIAL_IMPACT_ABOVE_THRESHOLD");
+              end
+
+
+
+
+ 12. Worker Model
+ DIS-OP-01 does not require a dedicated worker per action. For a budget-conscious medium deployment, consolidate these
+ jobs inside the billing worker deployment:
+
+  Worker job                                  Purpose                                                 Frequency
+
+  discount-cap-reconcile                      Reconcile cap usage with application lines.             Nightly.
+
+  discount-application-outbox-publish         Publish outbox events.                                  Continuous/short interval.
+
+  discount-wallet-credit-retry                Retry failed BIL-05 wallet-credit calls.                Every 5 minutes.
+
+  discount-replay-runner                      Execute approved replays.                               On demand / queue.
+
+
+ Operational rule: one worker process can handle multiple job types if metrics and retry queues are separated.
+
+
+
+ 13. Frontend And API Consumers
+  Frontend area                               API/module used                                         Notes
+
+  Backoffice billing support                  GET /api/discount-runtime/applications,                 Explain applied/missed discounts.
+                                              GET /api/discount-runtime/applications
+                                              /{id}
+
+  Backoffice replay action                    POST /api/discount-runtime/application                  Only for authorized users.
+                                              s/{id}/replay plus EM-CFG-04 tasks
+
+  Sales outdoor app                           POST /api/discount-runtime/preview                      Used to show discount in quote.
+                                              through FUL-02 quote flow
+
+  Customer care CRM                           history APIs plus CUST-INT timeline events              Explains invoice questions.
+
+  Reporting                                   events and read models                                  Discount cost by campaign, package, franchise,
+                                                                                                      channel.
+
+
+
+
+ 14. Infrastructure Recommendations
+ For a medium budget deployment, implement DIS-OP-01 inside the billing API/service deployment rather than a separate
+ pod. Keep the database tables in the billing schema.
+
+  Component                                                                Recommendation
+
+  API                                                                      Add /api/discount-runtime/* to billing API pods.
+
+  Database                                                                 PostgreSQL billing schema; use row locks for cap usage updates.
+
+  Cache                                                                    Redis cache for discount definition and active assignment read models, with
+                                                                           short TTL and event invalidation.
+
+  Workers                                                                  Consolidated billing worker deployment.
+
+  Kafka                                                                    Use existing Kafka/MSK topics with transactional outbox.
+
+  Observability                                                            Track discount latency, candidate count, rejection reason rate, cap lock
+                                                                           contention, BIL-05 credit failures.
+
+
+ Suggested medium starting size:
+
+
+SOPHIX BSS Design Documents                                                                                                                       Page 10
+  Layer                                                             Starting size
+
+  Billing API pods                                                  2 replicas, 2 vCPU, 4 GB RAM each.
+
+  Billing workers                                                   1-2 replicas, 2 vCPU, 4 GB RAM each.
+
+  PostgreSQL                                                        Same HA billing DB cluster; no separate database.
+
+  Redis                                                             Shared business cache cluster with namespace isolation.
+
+
+
+
+ 15. AWS Deployment Notes
+  AWS layer                                                         Recommendation
+
+  Compute                                                           ECS or EKS service colocated with billing API and billing worker services.
+
+  Database                                                          RDS PostgreSQL Multi-AZ if budget allows; otherwise single writer with strong
+                                                                    backup policy in non-critical environments.
+
+  Cache                                                             ElastiCache Redis for catalog/assignment cache and idempotency fast path.
+
+  Events                                                            MSK or managed Kafka-compatible service; reuse existing billing topics.
+
+  Secrets                                                           AWS Secrets Manager for service tokens and DB credentials.
+
+  Logs/metrics                                                      CloudWatch plus Prometheus/Grafana if already deployed.
+
+
+ Use Graviton only after testing Java/KIE/runtime dependencies if Drools rules execute inside the same service. If Drools is
+ called remotely through KIE Server, the billing service can run on ARM as long as its JVM/runtime dependencies are
+ validated.
+
+
+
+ 16. Testing Guidance
+  Test                                                              Expected result
+
+  No active assignment                                              Application status REJECTED, no lines.
+
+  One active percentage discount                                    Correct amount and net amount returned.
+
+  Full fee waiver                                                   Discount equals base amount, net zero.
+
+  Two discounts same stacking group                                 Highest priority accepted, other rejected with reason.
+
+  Two compatible stacking groups                                    Both accepted in configured order.
+
+  Cap reached                                                       Candidate rejected with REJECTED_CAP_REACHED.
+
+  Concurrent applies near cap                                       Cap usage not exceeded.
+
+  Same idempotency key/context                                      Same response returned.
+
+  Same idempotency key/different context                            409.
+
+  Wallet credit discount                                            BIL-05 credit called once with idempotency.
+
+  Preview request                                                   No cap update, no wallet credit.
+
+  Replay requiring approval                                         EM-CFG-04 request created; no recompute until approved.
+
+
+
+
+ 17. Acceptance Criteria
+   - Runtime preview and apply APIs exist.
+
+   - DIS-OP-01 reads effective assignments from SIP-03 and definitions from PLM-CFG-04.
+
+   - Billing apply is idempotent and records application, lines, decisions, and cap usage.
+
+   - Stacking, eligibility, cap, and replay approval rules are configurable through Drools where operator-variable.
+
+   - Wallet-credit discounts are posted through BIL-05, not direct DB writes.
+
+   - Replay/override financial changes use EM-CFG-04 when configured.
+
+   - Backoffice can explain why each candidate discount was accepted or rejected.
+
+   - Events are emitted through an outbox.
+
+   - Tests cover idempotency, cap concurrency, stacking, preview side effects, and wallet-credit integration.
+
+SOPHIX BSS Design Documents                                                                                                                Page 11
+

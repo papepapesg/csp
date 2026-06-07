@@ -1,0 +1,314 @@
+ DD_FUL-08 - Anchor Date Change - Developer
+ Implementation Guide
+ Version: v1.0 Bundle: 06_fulfillment Companion DD: DD_FUL-08-Anchor_Date_Change-v1.0
+
+
+
+ 1. Goal
+ Implement the flow that changes a subscription billing anchor date without breaking billing cycle integrity.
+
+ FUL-08 coordinates:
+
+   - subscription read/update through SUB-LM-01;
+
+   - billing preview/apply through BIL APIs;
+
+   - configurable approval through EM-CFG-04;
+
+   - optional Camunda workflow for async approval/payment/scheduled apply.
+
+
+
+ 2. Runtime Flow
+           sequenceDiagram
+             participant BO as Backoffice/Self-care
+             participant FUL as FUL-08
+             participant SUB as SUB-LM-01
+             participant BIL as BIL-01/BIL-02
+             participant APR as EM-CFG-04
+
+               BO->>FUL: POST preview
+               FUL->>SUB: read subscription
+               FUL->>BIL: preview financial impact
+               BO->>FUL: POST create request
+               FUL->>APR: evaluate/request approval if required
+               APR-->>FUL: approval callback
+               FUL->>SUB: apply anchor update
+               FUL->>BIL: apply fee/proration
+               FUL-->>BO: request APPLIED
+
+
+
+
+ 3. Step 1 - Migrations
+ Create:
+
+   - anchor_date_change_request
+
+   - anchor_date_change_preview
+
+   - anchor_date_change_apply_log
+
+ Add:
+
+   - unique active-request guard on (operator_code, subscription_id) for statuses DRAFT, VALIDATING,
+     PENDING_APPROVAL, PENDING_PAYMENT, APPROVED;
+
+   - index on approval_request_id;
+
+   - index on request status/date.
+
+
+
+ 4. Step 2 - Preview Endpoint
+ Endpoint:
+           POST /api/subscriptions/SUB-700045/anchor-date-change/preview
+           Content-Type: application/json
+
+ Request:
+           {
+               "operatorCode": "WIK",
+
+
+SOPHIX BSS Design Documents                                                                                     Page 1
+               "requestedAnchorDay": 15,
+               "effectiveMode": "NEXT_CYCLE",
+               "reasonCode": "CUSTOMER_REQUEST",
+               "sourceChannel": "BACKOFFICE"
+           }
+
+ Flow:
+
+   1. Validate day between 1 and 28.
+
+   2. Load subscription via SUB-LM-01.
+
+   3. Reject if subscription state is not allowed.
+
+   4. Check no pending anchor change exists.
+
+   5. Build Drools fact and run eligibility.
+
+   6. Call Billing preview:
+           POST /api/billing/anchor-date-change/preview
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "subscriptionId": "SUB-700045",
+               "currentAnchorDay": 1,
+               "requestedAnchorDay": 15,
+               "effectiveMode": "NEXT_CYCLE"
+           }
+
+   7. Return preview to caller.
+
+ Preview does not update subscription or billing ledger.
+
+
+
+ 5. Step 3 - Create Request
+ Endpoint:
+           POST /api/subscriptions/SUB-700045/anchor-date-change
+           Idempotency-Key: adc-sub-700045-202607-anchor15
+           Content-Type: application/json
+
+ Flow:
+
+   1. Validate idempotency key.
+
+   2. Re-run validation; do not trust old UI state.
+
+   3. Store anchor_date_change_request.
+
+   4. Store anchor_date_change_preview.
+
+   5. Run anchor-date-change-approval.drl.
+
+   6. If approval required, call EM-CFG-04.
+
+   7. If payment required, set PENDING_PAYMENT.
+
+   8. Otherwise set APPROVED.
+
+   9. Emit AnchorDateChangeRequested.
+
+
+
+ 6. Step 4 - EM-CFG-04 Approval
+ Evaluate:
+           {
+               "operatorCode": "WIK",
+               "moduleCode": "FUL-08",
+               "actionCode": "ANCHOR_DATE_CHANGE_APPROVAL",
+               "subjectType": "ANCHOR_DATE_CHANGE",
+               "subjectId": "adc-001",
+               "context": {
+                 "subscriptionId": "SUB-700045",
+                 "currentAnchorDay": 1,
+                 "requestedAnchorDay": 15,
+                 "prorationAmount": 1400.00,
+
+
+SOPHIX BSS Design Documents                                        Page 2
+                   "currencyCode": "KES"
+               }
+           }
+
+ If required, start request:
+           POST /api/approvals/requests
+           Idempotency-Key: approval-anchor-adc-001
+
+ Store:
+
+   - approval_request_id;
+
+   - approval_mode;
+
+   - camunda_process_instance_id if EM-CFG-04 returns one.
+
+ Camunda note: FUL-08 may have its own Camunda process for anchor-change orchestration. EM-CFG-04 may also use
+ Camunda internally for approval only if the approval policy is BPMN. Do not mix the two process responsibilities.
+
+
+
+ 7. Step 5 - Approval Callback
+ Endpoint:
+           POST /internal/anchor-date-change/adc-001/approval-outcome
+           Content-Type: application/json
+
+           {
+               "approvalRequestId": "apr-adc-001",
+               "outcome": "APPROVED",
+               "decisionComment": "Approved customer billing date alignment."
+           }
+
+ Flow:
+
+   1. Load request.
+
+   2. Verify approval request id.
+
+   3. If already processed, return 200.
+
+   4. If rejected, set REJECTED and emit event.
+
+   5. If approved and payment required, set PENDING_PAYMENT.
+
+   6. If approved and no payment required, set APPROVED.
+
+
+
+ 8. Step 6 - Apply
+ Endpoint:
+           POST /api/anchor-date-change/adc-001/apply
+           Idempotency-Key: apply-adc-001
+
+ Flow:
+
+   1. Load request and preview.
+
+   2. Validate status APPROVED or payment-cleared PENDING_PAYMENT.
+
+   3. Insert anchor_date_change_apply_log attempt.
+
+   4. Call SUB-LM-01:
+           POST /api/subscriptions/SUB-700045/anchor-date
+           Idempotency-Key: sub-anchor-adc-001
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "newAnchorDay": 15,
+               "effectiveAt": "2026-07-15T00:00:00Z",
+               "originRefType": "ANCHOR_DATE_CHANGE",
+               "originRefId": "adc-001"
+           }
+
+   5. Call Billing apply if preview has financial impact:
+
+
+
+SOPHIX BSS Design Documents                                                                                          Page 3
+          POST /api/billing/anchor-date-change/apply
+          Idempotency-Key: bil-anchor-adc-001
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "subscriptionId": "SUB-700045",
+              "requestId": "adc-001",
+              "billingPreviewRef": "bil-prev-adc-001"
+          }
+
+   6. Mark request APPLIED.
+
+   7. Emit AnchorDateChanged.
+
+ If Billing fails after SUB update, retry the billing apply with the same idempotency key. Do not create a second SUB update.
+
+
+
+ 9. Drools Samples
+          package com.sophix.fulfillment.anchor
+
+          rule "Self care anchor change not allowed for dunning subscriptions"
+          when
+            $f : AnchorChangeFact(sourceChannel == "SELF_CARE", dunningState != "CLEAR")
+            $d : AnchorChangeDecision()
+          then
+            $d.reject("DUNNING_SELF_CARE_NOT_ALLOWED");
+          end
+
+          rule "Large proration requires supervisor approval"
+          when
+            $f : AnchorChangeFact(prorationAmount >= 1000.00, currencyCode == "KES")
+            $d : AnchorChangeDecision()
+          then
+            $d.setApprovalRequired(true);
+            $d.setApprovalPolicyCode("ANCHOR_CHANGE_SUPERVISOR");
+          end
+
+
+
+
+ 10. Worker Jobs
+  Job                                                             Purpose
+
+  anchor-change-apply-due                                         Applies scheduled approved requests.
+
+  anchor-change-payment-watch                                     Correlates payment applied events to pending requests.
+
+  anchor-change-apply-retry                                       Retries failed SUB/Billing apply calls.
+
+  anchor-change-outbox-publish                                    Publishes events.
+
+
+ These can run in the shared fulfillment worker deployment.
+
+
+
+ 11. Tests
+   - Preview rejects invalid day 29.
+
+   - Preview calls Billing and returns proration.
+
+   - Create request stores preview.
+
+   - Approval required request starts EM-CFG-04.
+
+   - Approval callback is idempotent.
+
+   - Apply calls SUB-LM-01 once.
+
+   - Apply calls Billing once with idempotency.
+
+   - Retry after Billing failure does not repeat SUB update.
+
+   - BIL-03 uses new anchor only after applied event/state.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 4
+

@@ -1,0 +1,655 @@
+ DD_SUB-WF-ACTIVATE-01-FLOW-WIK - WIK Activation
+ BPMN
+ Developer implementation guide: DD_SUB-WF-ACTIVATE-01-FLOW-WIK-DEV_IMPL_GUIDE-v1.0.md.
+
+
+ 1. Purpose
+ This DD defines the WIK operator BPMN for subscription activation.
+
+ Process key:
+          sub-activate-wik
+
+ This BPMN implements the parent activation contract from
+ DD_SUB-WF-ACTIVATE-01-Subscription_Activation-v1.0.md for WIK.
+
+ The WIK activation flow is pay-first:
+          validate -> PENDING_ACTIVATION -> billing pre-authorize -> wait for payment -> confirm charge -> network activation -> Hom
+
+
+
+ 2. Ownership
+ This DD owns:
+
+   - WIK-specific activation BPMN process key.
+
+   - WIK happy-path BPMN sequence.
+
+   - WIK payment wait and timeout behavior.
+
+   - WIK compensation paths.
+
+   - WIK worker-topic composition.
+
+   - WIK message catches.
+
+   - WIK use of rules.subscription.activate.wik.
+
+   - WIK activation examples.
+
+ This DD does not own:
+
+   - Activation API contract and config table. See parent activation DD.
+
+   - Shared operation framework. See SUB-WF-FRAMEWORK-01.
+
+   - Worker contracts. See DD_SUB-WF-FRAMEWORK-01-WORKERS.
+
+   - Worker implementation code.
+
+   - SUB-LM, BIL, FUL, OSR, NOT internals.
+
+
+ 3. Required Runtime Configuration
+ 3.1 Framework Operation Config
+ Required row:
+          INSERT INTO subscription_operation_config (
+            operator_code,
+            operation_kind,
+            default_bpmn_process_key,
+            operation_timeout_seconds,
+            billing_call_timeout_seconds,
+            fulfillment_call_timeout_seconds,
+            feature_flags,
+            enabled,
+            updated_by
+          )
+          VALUES (
+            'WIK',
+            'ACTIVATE',
+            'sub-activate-wik',
+            900,
+
+
+
+SOPHIX BSS Design Documents                                                                                         Page 1
+               60,
+               120,
+               '{"pay_first_required": true, "payment_timeout_days": 7}',
+               TRUE,
+               'migration'
+             );
+
+ Meaning:
+
+   - WIK activation starts sub-activate-wik.
+
+   - WIK requires pay-first activation.
+
+   - Customer has 7 days to complete payment before the BPMN compensates.
+
+ 3.2 Activation Config
+ Required row:
+             INSERT INTO subscription_activation_config (
+                operator_code,
+                cycle_anchor_overflow_default,
+                customer_self_service_enabled,
+                sales_field_activation_enabled,
+                scheduled_activation_enabled,
+                equipment_binding_validation_strict,
+                backdating_allowed,
+                backdating_max_days,
+                backdating_required_role,
+                updated_by
+             )
+             VALUES (
+                'WIK',
+                'PRORATE_PARTIAL_CYCLE',
+                FALSE,
+                TRUE,
+                TRUE,
+                TRUE,
+                TRUE,
+                7,
+                'SUBSCRIPTION_ADMIN',
+                'migration'
+             );
+
+
+ 3.3 Drools Package
+ Required package:
+             rules.subscription.activate.wik
+
+ Required decisions:
+             validate-preconditions
+             validate-backdating
+             resolve-cycle-anchor-overflow
+             validate-equipment-bindings
+
+
+
+ 4. BPMN Start Variables
+ The framework starts Camunda with these variables.
+
+  Variable                                     Purpose                                 Example
+
+  operationId                                  Links BPMN to subscription_operation.   subop_01HZ_KAMAU_ACT
+
+  operatorCode                                 Operator scope.                         WIK
+
+  subscriptionId                               Subscription being activated.           sub_01HZ_KAMAU_FIBER
+
+  operationKind                                Always ACTIVATE.                        ACTIVATE
+
+  customerId                                   Customer reference.                     cust_01HZ_KAMAU
+
+  homepassId                                   HomePass to activate at.                hp_01HZ_KAREN_017
+
+  packageRef                                   Package being activated.                pkg_INET_VOIP_RES
+
+  packageVersionId                             Package version pinned at activation.   pkgver_003
+
+  billingMode                                  Billing mode on subscription.           PREPAID
+
+  activationTrigger                            Trigger channel.                        SALES_FIELD
+
+  intendedActivationDate                       Requested business activation date.     2026-05-18
+
+
+SOPHIX BSS Design Documents                                                                                   Page 2
+  Variable                                   Purpose                                                    Example
+
+  resolvedActivatedAt                        Activation timestamp resolved by parent validation.        2026-05-18T10:00:00Z
+
+  resolvedCycleAnchorDay                     SUB-LM-safe cycle anchor.                                  18
+
+  cycleAnchorOverflowApplied                 Overflow policy applied, if any.                           null
+
+  partialCycleDays                           Partial days for billing context.                          0
+
+  equipmentBindings                          Equipment to bind.                                         [{"equipmentRequirement":"GPON_ONT","e
+                                                                                                        quipmentRef":"ont_01HZ"}]
+
+  initiatingActorUserId                      Actor user/service.                                        sales-agent-wik-007
+
+  initiatingActorRole                        Actor role.                                                SALES_AGENT
+
+  initiatingWorkflowKind                     Upstream workflow.                                         FUL_02_OBR_01
+
+  initiatingWorkflowRef                      Upstream reference.                                        obr_01HZ_KAMAU
+
+
+
+
+ 5. Worker Topics Used
+ These are logical Camunda external-task topics, not separate deployments.
+
+  Worker topic                                                             Why WIK activation uses it
+
+  drools-decide                                                            Re-check WIK activation policy and route based on decisions.
+
+  sub-lm-put-pending-status                                                Move subscription to PENDING_ACTIVATION.
+
+  sub-lm-compute-cycle-window                                              Compute cycle window for billing context.
+
+  bil01-charge-pre-authorize                                               Create activation/installation/first-cycle pay-first charge.
+
+  bil01-confirm-charge                                                     Confirm charge after payment message arrives.
+
+  ful-call-activate                                                        Ask FUL-03 to provision WIK service.
+
+  ful-call-claim-homepass                                                  Claim HomePass active termination point through FUL-07.
+
+  osr-equipment-bind                                                       Bind ONT/ATA/STB equipment to subscription.
+
+  sub-lm-put-master-fields                                                 Store activation master fields.
+
+  sub-lm-commit-state                                                      Commit subscription to ACTIVE.
+
+  kafka-emit                                                               Write activation success/failure event to outbox.
+
+  notification-send                                                        Send welcome/failure notification without failing BPMN on notification failure.
+
+  subscription-operation-finalize                                          Set operation terminal state.
+
+  bil01-revert-pending-charge                                              Compensation for unpaid/failed activation charge.
+
+  sub-lm-revert-to-prior                                                   Compensation to return subscription to CREATED.
+
+  osr-equipment-unbind                                                     Compensation if equipment was bound and later needs rollback.
+
+
+
+
+ 6. Happy Path BPMN
+             Start
+               -> update operation state VALIDATING
+               -> drools-decide
+               -> gateway: eligible?
+                   no -> activation rejected path
+                   yes
+               -> update operation state PENDING_STATE_FLIP
+               -> sub-lm-put-pending-status
+               -> sub-lm-compute-cycle-window
+               -> update operation state BILLING_CALL
+               -> bil01-charge-pre-authorize
+               -> update operation state AWAITING_PAYMENT
+               -> wait for payment-confirmed message
+               -> bil01-confirm-charge
+               -> update operation state FULFILLMENT_CALL
+               -> ful-call-activate
+               -> update operation state AWAITING_FULFILLMENT_RESPONSE
+               -> wait for fulfillment-completed message
+               -> ful-call-claim-homepass
+               -> osr-equipment-bind
+               -> update operation state COMMITTING_FINAL_STATE
+               -> sub-lm-put-master-fields
+               -> sub-lm-commit-state
+               -> update operation state EMITTING_EVENT
+               -> kafka-emit SubscriptionActivated
+
+
+SOPHIX BSS Design Documents                                                                                                                          Page 3
+               -> notification-send
+               -> subscription-operation-finalize COMPLETED
+               -> End
+
+
+
+ 7. Step Details
+ 7.1 drools-decide
+ Inputs:
+           {
+               "kjarPackage": "rules.subscription.activate.wik",
+               "requestedDecisions": [
+                  "validate-preconditions",
+                  "validate-backdating",
+                  "resolve-cycle-anchor-overflow",
+                  "validate-equipment-bindings"
+               ],
+               "factsJson": "{...activation facts...}"
+           }
+
+ Expected output:
+           {
+               "decisionsJson": {
+                 "eligible": true,
+                 "resolvedActivatedAt": "2026-05-18T10:00:00Z",
+                 "resolvedCycleAnchorDay": 18,
+                 "partialCycleDays": 0,
+                 "equipmentValid": true
+               }
+           }
+
+ If eligible = false, route to rejection path.
+
+ 7.2 sub-lm-put-pending-status
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "toStatus": "PENDING_ACTIVATION",
+               "currentTransitionType": "ACTIVATE",
+               "currentTransitionReasonCode": "SALES_FIELD"
+           }
+
+ Output consumed later:
+           {
+               "priorStatusSnapshot": {
+                 "statusCode": "CREATED"
+               }
+           }
+
+
+ 7.3 bil01-charge-pre-authorize
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "chargeCode": "ACTIVATION_INTENT",
+               "currency": "KES",
+               "chargeContext": {
+                  "activationTrigger": "SALES_FIELD",
+                  "resolvedActivatedAt": "2026-05-18T10:00:00Z",
+                  "partialCycleDays": 0,
+                  "equipmentBindings": [
+                    {
+                      "equipmentRequirement": "GPON_ONT",
+                      "equipmentRef": "ont_01HZ_KAMAU"
+                    }
+                  ]
+               },
+               "cycleWindow": {
+                  "cycleStart": "2026-05-18",
+                  "cycleEnd": "2026-06-17"
+               }
+           }
+
+ Expected output:
+
+
+SOPHIX BSS Design Documents                                        Page 4
+           {
+               "billableEventId": "bevt_01HZ_KAMAU_ACT",
+               "customerChargeAmount": 7000.00,
+               "currency": "KES"
+           }
+
+
+ 7.4 Payment Message Catch
+ Message name:
+           payment-confirmed
+
+ Correlation key:
+           billableEventId
+
+ Timer:
+           P7D
+
+ If timer fires, route to payment-timeout compensation.
+
+ 7.5 ful-call-activate
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "activationCorrelationId": "subop_01HZ_KAMAU_ACT:activate",
+               "equipmentBindings": [
+                  {
+                    "equipmentRequirement": "GPON_ONT",
+                    "equipmentRef": "ont_01HZ_KAMAU"
+                  }
+               ],
+               "policy": {
+                  "operatorCode": "WIK",
+                  "technology": "GPON"
+               }
+           }
+
+ Expected output:
+           {
+               "activationFulfillmentId": "ful_01HZ_KAMAU_ACT",
+               "activationTerminalState": "SUBMITTED"
+           }
+
+ The BPMN then waits for fulfillment-completed or fulfillment-failed.
+
+ 7.6 sub-lm-put-master-fields
+ Inputs:
+           {
+               "subscriptionId": "sub_01HZ_KAMAU_FIBER",
+               "fieldsJson": {
+                 "activated_at": "2026-05-18T10:02:22Z",
+                 "cycle_anchor_day": 18,
+                 "package_version_id": "pkgver_003",
+                 "equipment_bindings": [
+                    {
+                      "equipmentRequirement": "GPON_ONT",
+                      "equipmentRef": "ont_01HZ_KAMAU"
+                    }
+                 ],
+                 "contract_started_at": "2026-05-18T10:02:22Z",
+                 "contract_end_at": "2027-05-18T10:02:22Z"
+               }
+           }
+
+
+ 7.7 kafka-emit
+ Success topic:
+           sophix.subscription.subscription.activated
+
+ Payload is SubscriptionActivated from the parent activation DD.
+
+
+ 8. Message Catches
+
+SOPHIX BSS Design Documents                                                  Page 5
+  Message                         Sent by                              Correlation key                       BPMN route
+
+  payment-confirmed               BIL/payment correlator               billableEventId                       Continue to
+                                                                                                             bil01-confirm-charge.
+
+  fulfillment-completed           FUL-03 correlator                    activationFulfillmentId               Continue to
+                                                                                                             HomePass/equipment/final commit.
+
+  fulfillment-failed              FUL-03 correlator                    activationFulfillmentId               Route to fulfillment-failed
+                                                                                                             compensation.
+
+  external-cancel-requested       Framework cancel API                 operationId                           Route to cancellation compensation.
+
+
+
+
+ 9. Compensation Paths
+ 9.1 Rejection Before Pending State
+ When validation rejects before sub-lm-put-pending-status, execute:
+
+  Order                                        Worker topic                                    Purpose
+
+  1                                            kafka-emit                                      Emit SubscriptionActivationFailed.
+
+  2                                            subscription-operation-finalize                 Finalize operation as FAILED.
+
+
+ No SUB-LM revert is needed because subscription is still CREATED.
+
+ 9.2 Payment Timeout
+ When payment-confirmed does not arrive within P7D, execute:
+
+  Order                                        Worker topic                                    Purpose
+
+  1                                            bil01-revert-pending-charge                     Cancel unpaid activation charge.
+
+  2                                            sub-lm-revert-to-prior                          Return subscription to CREATED.
+
+  3                                            kafka-emit                                      Emit SubscriptionActivationFailed.
+
+  4                                            subscription-operation-finalize                 Finalize operation as FAILED.
+
+
+ Failure code:
+            ACTIVATION_PAYMENT_TIMEOUT
+
+
+ 9.3 Fulfillment Failed
+ When FUL-03 sends fulfillment-failed, execute:
+
+  Order                                        Worker topic                                    Purpose
+
+  1                                            bil01-revert-pending-charge                     Cancel/reverse pending activation charge.
+
+  2                                            sub-lm-revert-to-prior                          Return subscription to CREATED.
+
+  3                                            kafka-emit                                      Emit SubscriptionActivationFailed.
+
+  4                                            subscription-operation-finalize                 Finalize operation as FAILED.
+
+
+ Failure code:
+            FULFILLMENT_FAILED
+
+
+ 9.4 Equipment Bind Failed
+ When OSR equipment binding fails after fulfillment succeeded, execute:
+
+  Order                                        Worker topic                                    Purpose
+
+  1                                            ful-call-terminate or approved rollback topic   Roll back network activation if supported.
+
+  2                                            bil01-revert-pending-charge                     Cancel/reverse activation charge according to BIL
+                                                                                               rules.
+
+  3                                            sub-lm-revert-to-prior                          Return subscription to CREATED.
+
+  4                                            kafka-emit                                      Emit SubscriptionActivationFailed.
+
+  5                                            subscription-operation-finalize                 Finalize operation as FAILED.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                                 Page 6
+ Failure code:
+           EQUIPMENT_BINDING_INVALID
+
+
+ 9.5 Notification Failed
+ Notification failure does not fail activation.
+
+ Behavior:
+
+   - Log failure.
+
+   - Let NOT-01 retry according to its own rules.
+
+   - Continue to operation finalization.
+
+
+ 10. BPMN XML Fragments
+ 10.1 Pay-First Gate
+           <bpmn:serviceTask id="Task_BilPreAuthorize"
+                             name="Pre-authorize activation charge"
+                             camunda:type="external"
+                             camunda:topic="bil01-charge-pre-authorize" />
+
+           <bpmn:intermediateCatchEvent id="Catch_PaymentConfirmed"
+                                        name="Payment confirmed">
+             <bpmn:messageEventDefinition messageRef="Message_payment_confirmed" />
+           </bpmn:intermediateCatchEvent>
+
+           <bpmn:boundaryEvent id="Boundary_PaymentTimeout"
+                               attachedToRef="Catch_PaymentConfirmed">
+             <bpmn:timerEventDefinition>
+               <bpmn:timeDuration>P7D</bpmn:timeDuration>
+             </bpmn:timerEventDefinition>
+           </bpmn:boundaryEvent>
+
+
+ 10.2 Fulfillment Wait
+           <bpmn:serviceTask id="Task_FulActivate"
+                             name="Activate service"
+                             camunda:type="external"
+                             camunda:topic="ful-call-activate" />
+
+           <bpmn:intermediateCatchEvent id="Catch_FulfillmentCompleted"
+                                        name="Fulfillment completed">
+             <bpmn:messageEventDefinition messageRef="Message_fulfillment_completed" />
+           </bpmn:intermediateCatchEvent>
+
+           <bpmn:intermediateCatchEvent id="Catch_FulfillmentFailed"
+                                        name="Fulfillment failed">
+             <bpmn:messageEventDefinition messageRef="Message_fulfillment_failed" />
+           </bpmn:intermediateCatchEvent>
+
+
+
+ 11. Worked Example
+ Kamau signs up for WIK fiber and voice.
+
+ Runtime sequence:
+
+   1. FUL-02 creates subscription sub_01HZ_KAMAU_FIBER in CREATED.
+
+   2. Field sales sends activation request.
+
+   3. Framework starts sub-activate-wik.
+
+   4. Drools accepts: subscription CREATED, package active, HomePass sellable, role SALES_AGENT.
+
+   5. SUB-LM moves subscription to PENDING_ACTIVATION.
+
+   6. BIL creates pay-first billable event for installation and first cycle.
+
+   7. Customer pays through M-Pesa.
+
+   8. Payment correlator sends payment-confirmed.
+
+   9. BIL confirms charge.
+
+
+SOPHIX BSS Design Documents                                                                        Page 7
+   10. FUL-03 provisions GPON/voice service.
+
+   11. FUL correlator sends fulfillment-completed.
+
+   12. FUL-07 claims HomePass capacity.
+
+   13. OSR binds ONT/ATA equipment.
+
+   14. SUB-LM stores activation fields.
+
+   15. SUB-LM commits ACTIVE.
+
+   16. BPMN emits SubscriptionActivated.
+
+   17. NOT-01 sends welcome notification.
+
+   18. Framework finalizes operation as COMPLETED.
+
+
+ 12. Monitoring
+ Monitor:
+
+  Metric                                                    Why
+
+  WIK activation count                                      Business volume.
+
+  WIK activation failure count                              Operational quality.
+
+  Payment timeout count                                     Customer/payment issue.
+
+  FUL-03 failure count                                      Network provisioning issue.
+
+  Average activation duration                               SLA.
+
+  Operations stuck in AWAITING_PAYMENT                      Payment/correlation issue.
+
+  Operations stuck in AWAITING_FULFILLMENT_RESPONSE         FUL/correlation issue.
+
+
+
+
+ 13. Cross-DD Dependencies
+  DD/module                                                 Relationship
+
+  Parent activation DD                                      Defines activation API, config, events, and generic rules.
+
+  Activation dev guide                                      Defines execution-style implementation flow.
+
+  SUB-WF framework                                          Starts and tracks operation.
+
+  WORKERS catalog                                           Defines worker topic contracts.
+
+  SUB-LM                                                    Owns subscription state.
+
+  BIL-01                                                    Activation billing and payment confirmation.
+
+  FUL-03                                                    Network activation.
+
+  FUL-07                                                    HomePass claim.
+
+  OSR-INSTANCE-01                                           Equipment bind.
+
+  NOT-01                                                    Welcome notification.
+
+
+
+
+ 14. Test Checklist
+   - [ ] BPMN deploys with process key sub-activate-wik.
+
+   - [ ] Happy path reaches COMPLETED.
+
+   - [ ] Payment timeout routes to compensation.
+
+   - [ ] Fulfillment failure routes to compensation.
+
+   - [ ] Equipment bind failure routes to compensation.
+
+   - [ ] Notification failure does not fail activation.
+
+   - [ ] SubscriptionActivated is emitted only after SUB-LM commits ACTIVE.
+
+   - [ ] Operation final state is set exactly once.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                              Page 8
+

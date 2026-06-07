@@ -1,0 +1,783 @@
+ DD_SIP-03 - Discount Assignment
+ Version: 1.0 Status: Draft for review Bundle: 09_catalogs Audience: commercial developers, billing developers, catalog
+ developers, frontend developers, QA Related DDs:
+
+   - DD_PLM-CFG-04 - Discount Catalog
+
+   - DD_SIP-01 - Package Management
+
+   - DD_SIP-05 - Promotional Campaigns
+
+   - DD_DIS-OP-01 - Discount Runtime Application
+
+   - DD_BIL-01 - Charging Engine Core
+
+   - DD_BIL-02 - Invoicing Core
+
+   - DD_BIL-05 - Wallet and Topup
+
+   - DD_EM-01 - Franchise Management
+
+   - DD_SALES-01 - Lead, Territory, and Franchise Sales Management
+
+   - DD_EM-CFG-04 - Approval Workflow Catalog
+
+   - FE-APP-01 - BSS Backoffice Web App
+
+   - FE-APP-02 - Outdoor Sales Franchise App
+
+ MVP simplification baseline: first release supports direct discount assignment/cancellation with approval where required. Bulk
+ assignment, complex campaign chaining, and advanced exception workflows are phased after the core billing path is stable.
+
+
+
+ 1. Purpose
+ SIP-03 defines how SOPHIX assigns configured discounts to customers, accounts, subscriptions, orders, franchises, or
+ campaign cohorts.
+
+ The discount catalog defines what a discount is. SIP-03 defines who gets it, why they get it, for which scope, for which period,
+ and how the assignment is cancelled or audited.
+
+ Examples:
+
+   - retention agent assigns 10% recurring discount to a subscription for 3 months;
+
+   - sales campaign assigns free installation discount to new customers in a territory;
+
+   - franchise manager assigns acquisition discount to leads converted by a franchise;
+
+   - care supervisor assigns goodwill discount after approved complaint;
+
+   - batch job assigns a campaign discount to eligible customers;
+
+   - admin cancels a customer discount assignment because customer no longer qualifies.
+
+ SIP-03 does not calculate invoice amounts at billing time. Billing-time application is owned by DIS-OP-01 and
+ BIL-01/BIL-02. SIP-03 creates and governs assignment records that runtime billing reads.
+
+
+
+ 2. Ownership Boundary
+  Concern                                                           Owner
+
+  Discount definition, amount/type/flavor/eligibility catalog       PLM-CFG-04
+
+  Discount assignment lifecycle and audit                           SIP-03
+
+  Campaign eligibility and campaign-owned mass assignment           SIP-05
+
+  Billing-time discount calculation/application                     DIS-OP-01 / BIL-01
+
+  Invoice generation using applied discount lines                   BIL-02
+
+  Wallet credit posting for wallet-credit discounts                 BIL-05 / DIS-OP-01
+
+  Franchise/agent eligibility                                       EM-01 / SALES-01
+
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 1
+  Concern                                                                         Owner
+
+  Configurable approval process, approval tasks, approval callbacks               EM-CFG-04
+
+  Backoffice UI                                                                   FE-APP-01
+
+  Sales app discount display/request                                              FE-APP-02
+
+
+ Rule: SIP-03 may create, approve, activate, cancel, and expire discount assignments. It must not apply money directly to
+ invoices or wallets. Runtime financial impact is handled by billing modules.
+
+ Approval rule: SIP-03 does not define approval steps locally. It calls EM-CFG-04 to evaluate and run the configured approval
+ policy for actions such as DISCOUNT_ASSIGNMENT_CREATE, DISCOUNT_ASSIGNMENT_CANCEL, or
+ DISCOUNT_ASSIGNMENT_OVERRIDE. EM-CFG-04 may execute the approval as auto-approval, single-step DB-driven
+ approval, multi-step approval, or Camunda BPMN depending on operator policy.
+
+
+
+ 3. Key Concepts
+  Concept                                                                         Meaning
+
+  Discount catalog item                                                           Configured discount definition from PLM-CFG-04.
+
+  Assignment                                                                      A record granting a discount to a target
+                                                                                  customer/account/subscription/order/franchise/cohort.
+
+  Scope                                                                           What the assignment applies to: customer, account, subscription, order,
+                                                                                  package, franchise, campaign cohort.
+
+  Validity window                                                                 Dates during which assignment can be used by runtime.
+
+  Assignment reason                                                               Business reason: acquisition, retention, complaint compensation, staff,
+                                                                                  franchise offer, migration, manual goodwill.
+
+  Campaign binding                                                                Link between assignment and campaign. Campaign owns eligibility; SIP-03
+                                                                                  owns assignment record.
+
+  Runtime application                                                             The billing event where an active assignment actually reduces a charge or posts
+                                                                                  a wallet credit. Owned by DIS-OP-01.
+
+
+
+
+ 4. High Level Flow
+            flowchart TD
+              A["User/system requests discount assignment"]
+              B["Load discount catalog item"]
+              C["Validate target and eligibility"]
+              D{"Approval required?"}
+              E["Create approval task"]
+              F["Create assignment DRAFT/PENDING_APPROVAL"]
+              G["Activate assignment"]
+              H["Publish DiscountAssigned event"]
+              I["DIS-OP/BIL runtime reads active assignment"]
+              J["Apply discount during charge/invoice/topup event"]
+              K["Assignment expires or is cancelled"]
+              L["Publish status event"]
+
+               A --> B --> C --> D
+               D -->|Yes| E --> F
+               D -->|No| F
+               F --> G --> H --> I --> J
+               G --> K --> L
+
+
+
+
+ 5. Assignment Scopes
+  Scope                                                Use                                                   Runtime behavior
+
+  CUSTOMER                                             Discount can apply to any eligible service owned by   Runtime selects matching subscriptions/events.
+                                                       customer.
+
+  ACCOUNT                                              Discount applies to account-level charges.            Runtime checks account id.
+
+  SUBSCRIPTION                                         Discount applies to one subscription.                 Most common recurring discount.
+
+  ORDER                                                Discount applies during onboarding/order charges.     Runtime checks order/pro forma/first invoice.
+
+  PACKAGE                                              Discount applies when target package is active.       Runtime checks package ref.
+
+
+
+SOPHIX BSS Design Documents                                                                                                                                 Page 2
+  Scope                                         Use                                                    Runtime behavior
+
+  FRANCHISE                                     Discount applies to customers/leads from a             Used for acquisition campaigns.
+                                                franchise.
+
+  CAMPAIGN_COHORT                               Discount applies to members of a campaign cohort.      Runtime checks assignment generated by
+                                                                                                       campaign.
+
+
+
+
+ 6. Tables
+ 6.1 discount_assignment
+ Stores the assignment lifecycle.
+
+ Use this table whenever a discount is granted to a target. Runtime billing reads only active/effective rows through APIs or
+ read models.
+
+  Column                            Type                                  Purpose                                   Sample
+
+  assignment_id                     UUID PK                               Assignment id.                            da-001
+
+  operator_code                     TEXT                                  Operator/tenant.                          WIK
+
+  discount_code                     TEXT                                  Discount catalog code from                RETENTION_10PCT_3M
+                                                                          PLM-CFG-04.
+
+  discount_id                       TEXT                                  Discount catalog id/version ref.          disc-1001
+
+  scope_type                        TEXT                                  CUSTOMER, ACCOUNT,                        SUBSCRIPTION
+                                                                          SUBSCRIPTION, ORDER, PACKAGE,
+                                                                          FRANCHISE, CAMPAIGN_COHORT.
+
+  scope_ref_id                      TEXT                                  Id of the scoped target.                  SUB-700045
+
+  customer_id                       TEXT NULL                             Customer id when known.                   CUS-100045
+
+  account_id                        TEXT NULL                             Account id when known.                    ACC-900045
+
+  subscription_id                   TEXT NULL                             Subscription id when known.               SUB-700045
+
+  package_ref                       TEXT NULL                             Package ref when package-scoped.          pkg-fiber-100m
+
+  campaign_id                       TEXT NULL                             Campaign that created assignment.         camp-retention-june
+
+  franchise_id                      TEXT NULL                             Franchise attribution.                    fr-019
+
+  reason_code                       TEXT                                  Business reason.                          RETENTION_SAVE
+
+  source_channel                    TEXT                                  BACKOFFICE, SALES_APP,                    BACKOFFICE
+                                                                          CAMPAIGN, ASR, BATCH, API.
+
+  valid_from                        DATE                                  Assignment start date.                    2026-06-01
+
+  valid_to                          DATE NULL                             Assignment end date.                      2026-08-31
+
+  status                            TEXT                                  DRAFT, PENDING_APPROVAL,                  ACTIVE
+                                                                          ACTIVE, SUSPENDED, EXPIRED,
+                                                                          CANCELLED, REJECTED.
+
+  priority                          INT                                   Runtime ordering when multiple            100
+                                                                          discounts match.
+
+  stacking_group_code               TEXT NULL                             Group used to prevent incompatible        RECURRING_MRC
+                                                                          stacking.
+
+  metadata_json                     JSONB                                 Extra source context.                     {"approvedBy":"usr-superviso
+                                                                                                                    r-002"}
+
+  created_by_user_id                TEXT                                  Creator user/system.                      usr-care-001
+
+  created_at                        TIMESTAMP                             Creation timestamp.                       2026-06-01T09:00:00Z
+
+  activated_at                      TIMESTAMP NULL                        Activation timestamp.                     2026-06-01T09:05:00Z
+
+  cancelled_at                      TIMESTAMP NULL                        Cancellation timestamp.                   null
+
+
+ Recommended indexes:
+
+   - (operator_code, status, valid_from, valid_to).
+
+   - (operator_code, scope_type, scope_ref_id, status).
+
+   - (customer_id, status).
+
+   - (subscription_id, status).
+
+
+SOPHIX BSS Design Documents                                                                                                                     Page 3
+   - (campaign_id, status).
+
+ 6.2 discount_assignment_approval
+ Stores the SIP-03 side reference to a shared EM-CFG-04 approval request.
+
+ Use this table when operator policy requires approval for high-value, long-duration, manual, or complaint-related discounts.
+ The configurable policy, approval steps, approver rules, BPMN process key, user tasks, and final decision are owned by
+ EM-CFG-04. This table lets SIP-03 block activation until the shared approval request returns an approved outcome.
+
+  Column                          Type                            Purpose                              Sample
+
+  approval_id                     UUID PK                         Approval id.                         daa-001
+
+  assignment_id                   UUID                            Assignment id.                       da-001
+
+  approval_policy_code            TEXT                            EM-CFG-04 policy code used.          DISCOUNT_ASSIGNMENT_RETENTIO
+                                                                                                       N
+
+  approval_request_id             TEXT NULL                       EM-CFG-04 runtime approval request   apr-da-001
+                                                                  id.
+
+  approval_mode                   TEXT                            EM-CFG-04 mode: AUTO,                BPMN
+                                                                  SINGLE_STEP, MULTI_STEP, BPMN.
+
+  camunda_process_instance_id     TEXT NULL                       Camunda instance id when             cam-proc-da-001
+                                                                  EM-CFG-04 uses BPMN.
+
+  status                          TEXT                            PENDING, APPROVED, REJECTED,         APPROVED
+                                                                  CANCELLED.
+
+  assigned_queue_code             TEXT                            Approval queue.                      CARE_SUPERVISOR
+
+  actor_user_id                   TEXT NULL                       Approver.                            usr-supervisor-002
+
+  decision_comment                TEXT NULL                       Decision note.                       Approved 3 month retention
+                                                                                                       save.
+
+  created_at                      TIMESTAMP                       Creation timestamp.                  2026-06-01T09:01:00Z
+
+  decided_at                      TIMESTAMP NULL                  Decision timestamp.                  2026-06-01T09:04:00Z
+
+
+ Recommended indexes:
+
+   - (assignment_id, status).
+
+   - (approval_request_id).
+
+   - (assigned_queue_code, status).
+
+ 6.3 discount_assignment_batch
+ Stores bulk assignment jobs.
+
+ Use this table for campaign, CSV upload, migration, or admin bulk operations.
+
+  Column                          Type                            Purpose                              Sample
+
+  batch_id                        UUID PK                         Batch id.                            dab-001
+
+  operator_code                   TEXT                            Operator/tenant.                     WIK
+
+  batch_type                      TEXT                            CSV_UPLOAD, CAMPAIGN, SEGMENT,       CAMPAIGN
+                                                                  MIGRATION, API.
+
+  discount_code                   TEXT                            Discount catalog code.               ACQ_FREE_INSTALL
+
+  campaign_id                     TEXT NULL                       Campaign source.                     camp-acq-june
+
+  requested_by_user_id            TEXT                            User/system.                         usr-commercial-001
+
+  status                          TEXT                            DRAFT, VALIDATING, READY,            RUNNING
+                                                                  RUNNING, COMPLETED,
+                                                                  PARTIALLY_FAILED, FAILED,
+                                                                  CANCELLED.
+
+  total_rows                      INT                             Total input targets.                 1200
+
+  valid_rows                      INT                             Rows passing validation.             1182
+
+  failed_rows                     INT                             Rows failed.                         18
+
+  created_at                      TIMESTAMP                       Creation timestamp.                  2026-06-01T08:00:00Z
+
+  completed_at                    TIMESTAMP NULL                  Completion timestamp.                2026-06-01T08:20:00Z
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 4
+ Recommended indexes:
+
+   - (operator_code, status, created_at DESC).
+
+   - (campaign_id).
+
+ 6.4 discount_assignment_batch_item
+ Stores per-target result for a bulk assignment batch.
+
+ Use this table so failed rows can be reviewed and retried without reprocessing successful rows.
+
+  Column                            Type                           Purpose                            Sample
+
+  batch_item_id                     UUID PK                        Batch item id.                     dabi-001
+
+  batch_id                          UUID                           Batch id.                          dab-001
+
+  target_ref_type                   TEXT                           CUSTOMER, ACCOUNT,                 SUBSCRIPTION
+                                                                   SUBSCRIPTION, ORDER, FRANCHISE.
+
+  target_ref_id                     TEXT                           Target id.                         SUB-700045
+
+  status                            TEXT                           PENDING, VALID, CREATED, FAILED,   CREATED
+                                                                   SKIPPED.
+
+  assignment_id                     UUID NULL                      Created assignment.                da-001
+
+  failure_code                      TEXT NULL                      Failure reason.                    DISCOUNT_NOT_ELIGIBLE_FOR_PA
+                                                                                                      CKAGE
+
+  failure_detail                    TEXT NULL                      Human-readable failure.            Target package is not
+                                                                                                      eligible.
+
+
+ Recommended indexes:
+
+   - (batch_id, status).
+
+   - (target_ref_type, target_ref_id).
+
+ 6.5 discount_assignment_status_history
+ Stores immutable assignment status changes.
+
+ Use this table for audit, reporting, and dispute investigation.
+
+  Column                            Type                           Purpose                            Sample
+
+  history_id                        UUID PK                        History id.                        dash-001
+
+  assignment_id                     UUID                           Assignment id.                     da-001
+
+  old_status                        TEXT NULL                      Previous status.                   PENDING_APPROVAL
+
+  new_status                        TEXT                           New status.                        ACTIVE
+
+  reason_code                       TEXT                           Reason for transition.             APPROVED
+
+  changed_by_user_id                TEXT                           Actor/system.                      usr-supervisor-002
+
+  changed_at                        TIMESTAMP                      Change timestamp.                  2026-06-01T09:05:00Z
+
+
+ Recommended indexes:
+
+   - (assignment_id, changed_at DESC).
+
+
+
+ 7. APIs
+ 7.1 Create Assignment
+           POST /api/discount-assignments
+           Idempotency-Key: da-retention-sub-700045-20260601
+           Content-Type: application/json
+
+           {
+               "operatorCode": "WIK",
+               "discountCode": "RETENTION_10PCT_3M",
+               "scopeType": "SUBSCRIPTION",
+               "scopeRefId": "SUB-700045",
+               "customerId": "CUS-100045",
+               "accountId": "ACC-900045",
+
+
+SOPHIX BSS Design Documents                                                                                                   Page 5
+              "subscriptionId": "SUB-700045",
+              "reasonCode": "RETENTION_SAVE",
+              "sourceChannel": "BACKOFFICE",
+              "validFrom": "2026-06-01",
+              "validTo": "2026-08-31",
+              "priority": 100,
+              "stackingGroupCode": "RECURRING_MRC"
+          }
+
+ Response:
+          {
+              "assignmentId": "da-001",
+              "status": "ACTIVE",
+              "approvalRequired": false
+          }
+
+
+ 7.2 Preview Assignment
+          POST /api/discount-assignments/preview
+          Content-Type: application/json
+
+ Returns whether the target is eligible and whether approval is required. SIP-03 determines this by calling EM-CFG-04
+ approval evaluation with a business context such as discount code, duration, reason code, source channel, customer
+ segment, franchise, estimated value, and requester role.
+
+ Example EM-CFG-04 evaluation call:
+          POST /api/approvals/evaluate
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "moduleCode": "SIP-03",
+              "actionCode": "DISCOUNT_ASSIGNMENT_CREATE",
+              "subjectType": "DISCOUNT_ASSIGNMENT",
+              "context": {
+                "discountCode": "RETENTION_10PCT_3M",
+                "reasonCode": "RETENTION_SAVE",
+                "sourceChannel": "BACKOFFICE",
+                "scopeType": "SUBSCRIPTION",
+                "durationDays": 92,
+                "estimatedValue": 1500.00,
+                "currencyCode": "KES"
+              }
+          }
+
+ If EM-CFG-04 returns approvalRequired = true, SIP-03 creates the assignment in PENDING_APPROVAL, starts an
+ approval request through EM-CFG-04, and stores approval_request_id.
+
+ 7.3 Approve Assignment
+ Normal approver action happens through EM-CFG-04 task APIs:
+          POST /api/approvals/tasks/{approval_task_id}/approve
+          Content-Type: application/json
+
+          {
+              "decisionComment": "Approved retention discount for three months."
+          }
+
+ After EM-CFG-04 finalizes the approval request, it calls the SIP-03 callback:
+          POST /internal/discount-assignments/{assignment_id}/approval-outcome
+          Content-Type: application/json
+
+          {
+              "approvalRequestId": "apr-da-001",
+              "outcome": "APPROVED",
+              "decisionComment": "Approved retention discount for three months."
+          }
+
+ SIP-03 then marks discount_assignment_approval.status = APPROVED and activates the assignment. If outcome
+ is REJECTED, SIP-03 marks the assignment REJECTED.
+
+ 7.4 Cancel Assignment
+          POST /api/discount-assignments/{assignment_id}/cancel
+          Content-Type: application/json
+
+          {
+
+
+
+SOPHIX BSS Design Documents                                                                                             Page 6
+              "reasonCode": "CUSTOMER_NO_LONGER_ELIGIBLE",
+              "effectiveDate": "2026-07-01",
+              "comment": "Customer migrated to package not eligible for this discount."
+          }
+
+ Cancellation stops future runtime application. It does not reverse already-applied invoice/wallet impact. Reversal requires BIL
+ adjustment.
+
+ 7.5 Bulk Assignment
+          POST /api/discount-assignment-batches
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "batchType": "CAMPAIGN",
+              "discountCode": "ACQ_FREE_INSTALL",
+              "campaignId": "camp-acq-june",
+              "validFrom": "2026-06-01",
+              "validTo": "2026-06-30",
+              "targets": [
+                {"targetRefType": "ORDER", "targetRefId": "ORD-1001"},
+                {"targetRefType": "ORDER", "targetRefId": "ORD-1002"}
+              ]
+          }
+
+
+ 7.6 Runtime Query API
+ Runtime billing modules query active assignments:
+          GET /api/discount-assignments/effective?operatorCode=WIK&subscriptionId=SUB-700045&eventCode=RECURRING_MRC&onDate=2026-06-
+
+ Response:
+          {
+              "assignments": [
+                {
+                  "assignmentId": "da-001",
+                  "discountCode": "RETENTION_10PCT_3M",
+                  "scopeType": "SUBSCRIPTION",
+                  "scopeRefId": "SUB-700045",
+                  "priority": 100,
+                  "stackingGroupCode": "RECURRING_MRC",
+                  "validFrom": "2026-06-01",
+                  "validTo": "2026-08-31"
+                }
+              ]
+          }
+
+ DIS-OP-01 uses this result to calculate application. SIP-03 does not calculate money.
+
+
+
+ 8. Events
+  Event                                      Topic                                       When emitted
+
+  DiscountAssignmentCreated                  sophix.commercial.discount-assignment.      Assignment created.
+                                             created
+
+  DiscountAssignmentApprovalRequired         sophix.commercial.discount-assignment.      Approval opened.
+                                             approvalrequired
+
+  DiscountAssignmentActivated                sophix.commercial.discount-assignment.      Assignment becomes active.
+                                             activated
+
+  DiscountAssignmentCancelled                sophix.commercial.discount-assignment.      Assignment cancelled.
+                                             cancelled
+
+  DiscountAssignmentExpired                  sophix.commercial.discount-assignment.      Assignment passes valid_to.
+                                             expired
+
+  DiscountAssignmentBatchCompleted           sophix.commercial.discount-assignment.      Batch finishes.
+                                             batchcompleted
+
+
+
+
+ 9. Business Rules
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 7
+  Rule                                        Description                                              Reason
+
+  R-SIP-DA-01                                 Discount code must exist and be active in                Prevent assigning retired discounts.
+                                              PLM-CFG-04.
+
+  R-SIP-DA-02                                 Target scope reference must exist in owning              Prevent orphan assignments.
+                                              module.
+
+  R-SIP-DA-03                                 Target must satisfy discount catalog eligibility:        Commercial control.
+                                              package, franchise, billable event, wallet,
+                                              geography.
+
+  R-SIP-DA-04                                 Assignment validity must be inside discount catalog      Avoid runtime surprises.
+                                              validity unless operator policy allows
+                                              shorter/overlap-safe windows only.
+
+  R-SIP-DA-05                                 Duplicate active assignment for same                     Prevent accidental double discount.
+                                              discount/scope/window is blocked unless duplicate
+                                              policy allows stacking.
+
+  R-SIP-DA-06                                 Stacking group rules must prevent incompatible           Revenue protection.
+                                              discounts from applying together.
+
+  R-SIP-DA-07                                 Manual high-value or long-duration assignments           Governance.
+                                              require approval.
+
+  R-SIP-DA-08                                 Cancellation affects future runtime only; past           Financial audit.
+                                              invoice/wallet impact requires BIL adjustment.
+
+  R-SIP-DA-09                                 Bulk assignment must be idempotent per target.           Prevent duplicate assignments on retry.
+
+  R-SIP-DA-10                                 Sales app can request or display only discounts          Channel control.
+                                              allowed for the agent/franchise/territory.
+
+  R-SIP-DA-11                                 Approval policy and tasks must be handled through        Shared approval governance.
+                                              EM-CFG-04. SIP-03 only stores local approval
+                                              reference and applies final outcome.
+
+  R-SIP-DA-12                                 Camunda is used only when EM-CFG-04 policy               Operational simplicity.
+                                              mode is BPMN; simple single-step approvals may be
+                                              DB-driven by EM-CFG-04 without Camunda.
+
+
+
+
+ 10. Rule Engine Guidance
+ SIP-03 should use Drools for operator-variable commercial decisions:
+
+  Rule file                                                                Purpose
+
+  discount-assignment-eligibility.drl                                      Validates target eligibility against discount, package, franchise, channel,
+                                                                           customer segment, and reason code.
+
+  discount-assignment-stacking.drl                                         Decides whether the new assignment conflicts with existing active assignments.
+
+  discount-assignment-approval.drl                                         Decides when to call EM-CFG-04 and which approval policy code to request.
+
+
+ Fixed checks such as non-null fields, date parsing, idempotency, and foreign id lookup remain normal application validation.
+
+ Example rule:
+              rule "Retention discount above 90 days requires approval"
+              when
+                $a : DiscountAssignmentFact(reasonCode == "RETENTION_SAVE", durationDays > 90)
+                $out : DiscountAssignmentDecision()
+              then
+                $out.setApprovalRequired(true);
+                $out.setApprovalPolicyCode("DISCOUNT_ASSIGNMENT_RETENTION");
+              end
+
+
+
+
+ 11. Frontend Usage
+ 11.1 FE-APP-01 Backoffice
+ Backoffice must support:
+
+   - discount assignment search by customer, subscription, campaign, status;
+
+   - create manual assignment with preview;
+
+   - approval queue;
+
+
+SOPHIX BSS Design Documents                                                                                                                              Page 8
+   - cancel/suspend assignment;
+
+   - bulk upload/batch monitoring;
+
+   - effective assignment view on customer 360 and subscription pages;
+
+   - runtime application drill-through link to DIS-OP/BIL when available.
+
+ 11.2 FE-APP-02 Outdoor Sales / Franchise App
+ Sales app must support:
+
+   - show eligible acquisition discounts for lead/order/package;
+
+   - show discount terms in customer quote;
+
+   - submit campaign/order-bound assignment request;
+
+   - work offline with cached eligible discount summaries where allowed;
+
+   - sync assignment request when online.
+
+ The sales app must not invent discounts. It displays discounts returned by SIP-03/SIP-05 eligibility APIs.
+
+
+
+ 12. Infra Recommendation
+ For a medium budget deployment, run SIP-03 inside the same commercial/catalog API deployment as SIP package
+ management or the billing discount submodule, depending on final code ownership. Do not create a separate pod at first.
+
+  Component                                                         Recommendation
+
+  API                                                               Existing catalog/commercial API pods expose
+                                                                    /api/discount-assignments.
+
+  DB                                                                Same PostgreSQL cluster as catalog/billing commercial config.
+
+  Workers                                                           Existing worker pool runs expiry scan and bulk assignment jobs.
+
+  Events                                                            Kafka/MSK topics under sophix.commercial.discount-assignment.*.
+
+  Cache                                                             Runtime read model/cache for active assignments by customer/subscription.
+
+
+ AWS deployment: use existing ECS/EKS service and RDS cluster, with separate schema if the team wants ownership clarity.
+ Add CloudWatch alarms for failed bulk jobs, high duplicate rejection rate, expiry worker failure, and runtime query latency.
+
+
+
+ 13. Testing Requirements
+ 13.1 Unit Tests
+   - Discount catalog eligibility validation.
+
+   - Scope target validation.
+
+   - Duplicate active assignment prevention.
+
+   - Stacking group conflict.
+
+   - Approval policy decision.
+
+   - EM-CFG-04 approval evaluation/request/callback integration.
+
+   - Drools eligibility/stacking/approval decision.
+
+   - Cancellation does not reverse past application.
+
+ 13.2 Integration Tests
+   - Create assignment after reading PLM-CFG-04 discount.
+
+   - Query effective assignments for DIS-OP.
+
+   - Bulk assignment creates per-target results.
+
+   - Cancel assignment and verify runtime query excludes it.
+
+
+SOPHIX BSS Design Documents                                                                                                             Page 9
+   - Sales app eligibility query respects franchise/territory.
+
+ 13.3 End To End Tests
+   - Retention agent creates approved subscription discount; next billing runtime sees it.
+
+   - Campaign creates order discounts in bulk; failed rows are reviewable.
+
+   - Cancelled discount stops future invoices but existing invoice remains unchanged.
+
+
+
+ 14. Definition Of Done
+   - Discount assignment tables and APIs exist.
+
+   - Assignment validates against discount catalog and target owner modules.
+
+   - Approval and batch assignment flows work.
+
+   - EM-CFG-04 is used for configurable approval policies; SIP-03 does not hardcode approver steps.
+
+   - Drools rule files exist for configurable eligibility, stacking, and approval decisions.
+
+   - Runtime query API returns active assignments for DIS-OP.
+
+   - Events are emitted for assignment state changes.
+
+   - Backoffice can create, approve, cancel, and monitor assignments.
+
+   - Sales app can show/request eligible discounts.
+
+   - Tests cover manual, campaign, bulk, cancellation, and runtime query paths.
+
+
+
+
+SOPHIX BSS Design Documents                                                                           Page 10
+

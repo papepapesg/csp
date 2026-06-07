@@ -1,0 +1,733 @@
+ DD_RAT-01 - Usage Rating - Developer Implementation
+ Guide
+ Version: 1.0 Status: Draft for review Bundle: 05_billing Audience: mid-level backend developers, billing developers, QA
+ Parent DD: DD_RAT-01 - Usage Rating
+
+
+
+ 1. How To Read This Guide
+ This guide follows the runtime flow.
+
+ MED-01 sends a clean mediated usage record. RAT-01 rates it, stores the result, and settles it depending on billing mode.
+
+ Do not read raw CDR files in RAT-01. Do not hardcode rates. Do not directly update wallet balances or invoice tables.
+
+
+
+ 2. Step 1 - Receive Mediated Usage
+ RAT-01 receives UsageMediated:
+          {
+              "eventType": "UsageMediated",
+              "operatorCode": "WIK",
+              "mediatedUsageId": "med-20260602-000001",
+              "usageType": "VOICE_CALL",
+              "subscriptionId": "SUB-700045",
+              "customerId": "CUS-100045",
+              "accountId": "ACC-900045",
+              "serviceRef": "svc_VOIP_STD",
+              "packageRef": "pkg_INET_VOICE_STD",
+              "calledNumberNormalized": "+254711222333",
+              "callDirection": "OUTBOUND",
+              "callStartedAt": "2026-06-02T10:15:00+03:00",
+              "durationSeconds": 75
+          }
+
+ First check idempotency:
+          select *
+          from rated_usage_record
+          where mediated_usage_id = 'med-20260602-000001';
+
+ If a row exists, return or ack without rating again.
+
+
+
+ 3. Step 2 - Resolve Billing Mode
+ RAT-01 needs to know whether the subscription is PREPAID or POSTPAID at usage time.
+
+ Resolution can come from subscription read API or a cached subscription snapshot:
+          {
+              "subscriptionId": "SUB-700045",
+              "billingMode": "PREPAID",
+              "walletId": "WAL-200045",
+              "cycleRef": "2026-06"
+          }
+
+ If billing mode cannot be resolved:
+          reason_code = BILLING_MODE_NOT_FOUND
+
+ Create rating quarantine.
+
+
+
+ 4. Step 3 - Lookup Tariff
+ Call PLM-CFG-07:
+          POST /api/plm/voice-rating/lookup
+          Content-Type: application/json
+
+
+
+
+SOPHIX BSS Design Documents                                                                                                Page 1
+            {
+                "operatorCode": "WIK",
+                "subscriptionId": "SUB-700045",
+                "packageRef": "pkg_INET_VOICE_STD",
+                "serviceRef": "svc_VOIP_STD",
+                "calledNumberNormalized": "+254711222333",
+                "callDirection": "OUTBOUND",
+                "callStartedAt": "2026-06-02T10:15:00+03:00"
+            }
+
+ Response:
+            {
+                "tariffPlanCode": "WIK_RES_VOICE_STD_2026",
+                "zoneCode": "KE_MOBILE",
+                "timeBandCode": "ANYTIME",
+                "chargePolicy": "CHARGEABLE",
+                "unitType": "MINUTE",
+                "unitPrice": 3.0,
+                "currency": "KES",
+                "initialIncrementSeconds": 60,
+                "subsequentIncrementSeconds": 60,
+                "setupFeeAmount": 0.0,
+                "minimumChargeAmount": 0.0,
+                "taxableKind": "SERVICE",
+                "taxableRef": "svc_VOIP_STD"
+            }
+
+ If lookup returns VOICE_RATE_NOT_FOUND or VOICE_DESTINATION_ZONE_NOT_FOUND, quarantine in RAT-01. MED-01
+ did its job; the issue is rating configuration.
+
+
+
+ 5. Step 4 - Apply Charge Policy
+  Charge policy                                                Action
+
+  CHARGEABLE                                                   Continue to allowance, rounding, tax, settlement.
+
+  ZERO_RATED                                                   Store rated usage with zero amounts and settlementStatus =
+                                                               NOT_REQUIRED.
+
+  BLOCKED                                                      Quarantine with USAGE_BLOCKED_BY_TARIFF.
+
+  QUARANTINE                                                   Quarantine with tariff-provided reason.
+
+
+ Zero-rated example:
+            insert into rated_usage_record (
+              rated_usage_id,
+              mediated_usage_id,
+              operator_code,
+              usage_type,
+              billing_mode,
+              subscription_id,
+              customer_id,
+              service_ref,
+              package_ref,
+              tariff_plan_code,
+              zone_code,
+              time_band_code,
+              actual_duration_seconds,
+              allowance_seconds_applied,
+              billable_duration_seconds,
+              unit_price,
+              gross_amount,
+              tax_amount,
+              net_amount,
+              currency_code,
+              rating_status,
+              settlement_status,
+              rated_at
+            ) values (
+              'rated-20260602-000002',
+              'med-20260602-000002',
+              'WIK',
+              'VOICE_CALL',
+              'PREPAID',
+              'SUB-700045',
+              'CUS-100045',
+              'svc_VOIP_STD',
+              'pkg_INET_VOICE_STD',
+
+
+SOPHIX BSS Design Documents                                                                                                 Page 2
+             'WIK_RES_VOICE_STD_2026',
+             'EMERGENCY',
+             'ANYTIME',
+             30,
+             0,
+             0,
+             0,
+             0,
+             0,
+             0,
+             'KES',
+             'ZERO_RATED',
+             'NOT_REQUIRED',
+             now()
+          );
+
+
+
+
+ 6. Step 5 - Apply Allowance
+ Load eligible allowances from PLM-CFG-07 response or allowance config cache.
+
+ If an allowance applies, lock bucket:
+          select *
+          from usage_allowance_bucket
+          where operator_code = 'WIK'
+            and subscription_id = 'SUB-700045'
+            and allowance_code = 'ONNET_100_MIN'
+            and cycle_ref = '2026-06'
+          for update;
+
+ If bucket does not exist, create it from PLM-CFG-07 allowance definition.
+
+ Example:
+          insert into usage_allowance_bucket (
+             bucket_id,
+             operator_code,
+             subscription_id,
+             tariff_plan_code,
+             allowance_code,
+             cycle_ref,
+             included_seconds,
+             consumed_seconds,
+             remaining_seconds,
+             status,
+             created_at,
+             updated_at
+          ) values (
+             'uab-202606-sub700045-onnet',
+             'WIK',
+             'SUB-700045',
+             'WIK_RES_VOICE_STD_2026',
+             'ONNET_100_MIN',
+             '2026-06',
+             6000,
+             0,
+             6000,
+             'ACTIVE',
+             now(),
+             now()
+          );
+
+ Consumption example:
+          actual duration = 75 seconds
+          allowance remaining = 60 seconds
+          allowance applied = 60 seconds
+          paid seconds before rounding = 15 seconds
+
+ Update bucket:
+          update usage_allowance_bucket
+          set consumed_seconds = consumed_seconds + 60,
+              remaining_seconds = remaining_seconds - 60,
+              status = case when remaining_seconds - 60 <= 0 then 'EXHAUSTED' else status end,
+              updated_at = now()
+          where bucket_id = 'uab-202606-sub700045-onnet';
+
+ Allowance consumption must happen in the same transaction as rated usage creation or with a compensating rollback if
+ settlement fails before final commit.
+
+
+SOPHIX BSS Design Documents                                                                                             Page 3
+ 7. Step 6 - Round Billable Duration
+ Use tariff increment fields.
+
+ For 75 seconds with 60/60 increment and no allowance:
+          first 60 seconds -> 60 billed
+          remaining 15 seconds -> round to next 60
+          billable duration = 120 seconds
+
+ Pseudo-code:
+          function billableSeconds(int $paidActualSeconds, int $initialIncrement, int $subsequentIncrement): int
+          {
+              if ($paidActualSeconds <= 0) {
+                  return 0;
+              }
+
+                if ($paidActualSeconds <= $initialIncrement) {
+                    return $initialIncrement;
+                }
+
+                $remaining = $paidActualSeconds - $initialIncrement;
+                $roundedRemaining = (int) ceil($remaining / $subsequentIncrement) * $subsequentIncrement;
+
+                return $initialIncrement + $roundedRemaining;
+          }
+
+
+
+
+ 8. Step 7 - Calculate Gross Amount
+ For unit type MINUTE:
+          billable_seconds = 120
+          unit_price = 3.00 KES per minute
+          billed_minutes = 120 / 60 = 2
+          gross_amount = 2 * 3.00 = 6.00 KES
+
+ Then apply setup fee and minimum charge:
+          gross_amount = max(gross_amount + setup_fee_amount, minimum_charge_amount)
+
+
+
+
+ 9. Step 8 - Compute Tax
+ If gross_amount > 0, call PLM-CFG-02:
+          POST /api/tax/compute
+          Content-Type: application/json
+
+          {
+              "operatorCode": "WIK",
+              "taxableKind": "SERVICE",
+              "taxableRef": "svc_VOIP_STD",
+              "baseAmount": 6.00,
+              "currency": "KES",
+              "customerId": "CUS-100045",
+              "subscriptionId": "SUB-700045",
+              "taxableAt": "2026-06-02T10:15:00+03:00"
+          }
+
+ Example response:
+          {
+              "taxAmount": 0.96,
+              "totalAmount": 6.96,
+              "taxLines": [
+                {
+                  "taxType": "VAT",
+                  "rate": 0.16,
+                  "baseAmount": 6.00,
+                  "taxAmount": 0.96
+                }
+              ]
+          }
+
+ Store the full tax breakdown in rated_usage_record.tax_breakdown_json.
+
+SOPHIX BSS Design Documents                                                                                        Page 4
+ 10. Step 9 - Store Rated Usage
+ Insert immutable rated usage:
+          insert into rated_usage_record (
+             rated_usage_id,
+             mediated_usage_id,
+             operator_code,
+             usage_type,
+             billing_mode,
+             subscription_id,
+             customer_id,
+             account_id,
+             service_ref,
+             package_ref,
+             tariff_plan_code,
+             zone_code,
+             time_band_code,
+             actual_duration_seconds,
+             allowance_seconds_applied,
+             billable_duration_seconds,
+             unit_price,
+             gross_amount,
+             tax_amount,
+             net_amount,
+             currency_code,
+             tax_breakdown_json,
+             rating_status,
+             settlement_status,
+             rated_at
+          ) values (
+             'rated-20260602-000001',
+             'med-20260602-000001',
+             'WIK',
+             'VOICE_CALL',
+             'PREPAID',
+             'SUB-700045',
+             'CUS-100045',
+             'ACC-900045',
+             'svc_VOIP_STD',
+             'pkg_INET_VOICE_STD',
+             'WIK_RES_VOICE_STD_2026',
+             'KE_MOBILE',
+             'ANYTIME',
+             75,
+             0,
+             120,
+             3.000000,
+             6.000000,
+             0.960000,
+             6.960000,
+             'KES',
+             '[{"taxType":"VAT","rate":0.16,"baseAmount":6.00,"taxAmount":0.96}]',
+             'RATED',
+             'PENDING',
+             now()
+          );
+
+ Emit UsageRated.
+
+
+
+ 11. Step 10 - PREPAID Wallet Settlement
+ If billing mode is PREPAID and net_amount > 0, call BIL-05:
+          POST /api/wallets/WAL-200045/debit
+          Authorization: Bearer <internal-service-token>
+          Idempotency-Key: RAT:med-20260602-000001
+          Content-Type: application/json
+
+          {
+              "amount": 6.96,
+              "type": "DEBIT_USAGE_VOICE",
+              "idempotencyKey": "RAT:med-20260602-000001",
+              "reference": "rated-20260602-000001",
+              "actor": "service:rat-01",
+              "metadata": {
+                "mediatedUsageId": "med-20260602-000001",
+
+
+SOPHIX BSS Design Documents                                                          Page 5
+                  "usageType": "VOICE_CALL",
+                  "calledNumberMasked": "+254711***333",
+                  "billableDurationSeconds": 120
+              }
+          }
+
+ Success response:
+          {
+              "walletTransactionId": "wtx-20260602-000001",
+              "walletId": "WAL-200045",
+              "newBalance": 993.04,
+              "status": "POSTED"
+          }
+
+ Update rated usage:
+          update rated_usage_record
+          set settlement_status = 'SETTLED',
+              settlement_ref_id = 'wtx-20260602-000001'
+          where rated_usage_id = 'rated-20260602-000001';
+
+ Record settlement attempt in usage_settlement_attempt.
+
+
+
+ 12. Step 11 - Handle PREPAID Insufficient Balance
+ If BIL-05 returns:
+          {
+              "errorCode": "INSUFFICIENT_BALANCE",
+              "currentBalance": 3.00,
+              "shortfall": 3.96
+          }
+
+ Do not delete the rated usage. Update:
+          update rated_usage_record
+          set settlement_status = 'FAILED'
+          where rated_usage_id = 'rated-20260602-000001';
+
+ Record attempt:
+          target_module = BIL-05
+          status = FAILED_FINAL
+          error_code = INSUFFICIENT_BALANCE
+
+ Emit PrepaidUsageDebitFailed.
+
+ Downstream dunning/restriction policy should consume this event or read wallet state. RAT-01 does not decide service
+ restriction.
+
+
+
+ 13. Step 12 - POSTPAID Rated Usage
+ If billing mode is POSTPAID, do not debit wallet.
+
+ Store:
+          settlement_status = POSTPAID_PENDING_INVOICE
+
+ Emit PostpaidUsageReadyForInvoice.
+
+ Invoice generation reads:
+          GET /api/usage-rating/postpaid-usage?subscriptionId=SUB-700045&cycleRef=2026-06
+
+ Example response:
+          {
+              "items": [
+                {
+                  "ratedUsageId": "rated-20260602-000010",
+                  "serviceRef": "svc_VOIP_STD",
+                  "zoneCode": "KE_MOBILE",
+                  "billableDurationSeconds": 120,
+                  "grossAmount": 6.00,
+                  "taxAmount": 0.96,
+                  "netAmount": 6.96,
+                  "currency": "KES"
+                }
+
+
+SOPHIX BSS Design Documents                                                                                             Page 6
+                ],
+                "totals": {
+                   "grossAmount": 6.00,
+                   "taxAmount": 0.96,
+                   "netAmount": 6.96,
+                   "currency": "KES"
+                }
+            }
+
+ After invoice generation includes these records:
+            POST /api/usage-rating/postpaid-usage/mark-invoiced
+            Content-Type: application/json
+
+            {
+                "invoiceId": "INV-2026-06-000045",
+                "ratedUsageIds": ["rated-20260602-000010"]
+            }
+
+ RAT-01 updates those rows to INVOICED.
+
+
+
+ 14. Step 13 - Rating Quarantine
+ If tariff lookup fails:
+            insert into usage_rating_quarantine (
+               rating_quarantine_id,
+               mediated_usage_id,
+               operator_code,
+               reason_code,
+               severity,
+               status,
+               context_json,
+               created_at
+            ) values (
+               'urq-20260602-000001',
+               'med-20260602-000099',
+               'WIK',
+               'VOICE_RATE_NOT_FOUND',
+               'HIGH',
+               'OPEN',
+               '{"calledNumber":"+998123456","packageRef":"pkg_INET_VOICE_STD"}',
+               now()
+            );
+
+ After catalog config is fixed, Backoffice calls:
+            POST /api/usage-rating/quarantine/urq-20260602-000001/replay
+
+ RAT-01 re-runs rating using the same mediated_usage_id.
+
+
+
+ 15. Suggested Worker Commands
+ These are Laravel commands or queue jobs and can be consolidated into billing worker pods.
+            rat:consume-mediated-usage
+            rat:rate-pending
+            rat:retry-settlement
+            rat:replay-quarantine --id=urq-20260602-000001
+            rat:expire-allowance-buckets
+            rat:postpaid-cycle-readiness-check --cycle=2026-06
+
+ Recommended schedule:
+
+  Command                                                         Frequency
+
+  rat:consume-mediated-usage                                      Continuous Kafka consumer.
+
+  rat:rate-pending                                                Every minute if polling MED-01.
+
+  rat:retry-settlement                                            Every 5 minutes for retryable target failures.
+
+  rat:replay-quarantine                                           Manual or event-driven after catalog repair.
+
+  rat:expire-allowance-buckets                                    Daily.
+
+  rat:postpaid-cycle-readiness-check                              Before invoice generation.
+
+
+
+
+SOPHIX BSS Design Documents                                                                                        Page 7
+ 16. Error Codes
+  Error code                                                      Meaning
+
+  RAT_MEDIATED_USAGE_NOT_FOUND                                    MED-01 record cannot be loaded.
+
+  RAT_DUPLICATE_MEDIATED_USAGE                                    Record already rated.
+
+  RAT_BILLING_MODE_NOT_FOUND                                      Subscription billing mode cannot be resolved.
+
+  RAT_TARIFF_LOOKUP_FAILED                                        PLM-CFG-07 lookup failed.
+
+  RAT_RATE_NOT_FOUND                                              No applicable rate exists.
+
+  RAT_TAX_COMPUTE_FAILED                                          PLM-CFG-02 tax compute failed.
+
+  RAT_WALLET_NOT_FOUND                                            PREPAID subscription has no wallet.
+
+  RAT_WALLET_DEBIT_FAILED                                         BIL-05 debit failed.
+
+  RAT_INSUFFICIENT_BALANCE                                        BIL-05 returned insufficient balance.
+
+  RAT_POSTPAID_ALREADY_INVOICED                                   Attempt to mark usage invoiced twice.
+
+
+
+
+ 17. Minimum Implementation Order
+ Build in this order:
+
+   1. Migrations for rated usage, allowance bucket, allowance consumption, rating quarantine, settlement attempt, rating job.
+
+   2. Consumer for UsageMediated.
+
+   3. Idempotency check on mediated_usage_id.
+
+   4. Subscription billing-mode resolver.
+
+   5. PLM-CFG-07 rating lookup client.
+
+   6. Duration rounding calculator.
+
+   7. Allowance bucket create/consume logic.
+
+   8. PLM-CFG-02 tax compute client.
+
+   9. Rated usage writer.
+
+   10. PREPAID BIL-05 debit client.
+
+   11. POSTPAID usage read and mark-invoiced APIs.
+
+   12. Rating quarantine and replay APIs.
+
+   13. Settlement retry worker.
+
+   14. Backoffice read APIs.
+
+
+
+ 18. Test Scenarios
+ 18.1 Prepaid Voice Call
+ Input:
+
+   - Mediated record duration 75 seconds.
+
+   - Rate 3 KES/minute, 60/60.
+
+   - Tax 16%.
+
+   - Wallet has enough balance.
+
+ Expected:
+
+   - Rated gross 6.00.
+
+   - Tax 0.96.
+
+   - Net 6.96.
+
+
+SOPHIX BSS Design Documents                                                                                                Page 8
+   - BIL-05 debit called once.
+
+   - Rated usage SETTLED.
+
+ 18.2 Duplicate Mediated Event
+ Input:
+
+   - Same mediatedUsageId received twice.
+
+ Expected:
+
+   - One rated usage record.
+
+   - One wallet debit.
+
+ 18.3 Allowance Applies
+ Input:
+
+   - 75-second call.
+
+   - Remaining allowance 60 seconds.
+
+ Expected:
+
+   - Allowance consumption 60 seconds.
+
+   - Paid actual seconds 15.
+
+   - Billable paid seconds 60 with 60/60 increment.
+
+ 18.4 Zero-Rated Emergency Call
+ Input:
+
+   - Tariff lookup returns ZERO_RATED.
+
+ Expected:
+
+   - Rated usage stored with zero amounts.
+
+   - No wallet debit.
+
+ 18.5 Missing Tariff
+ Input:
+
+   - PLM-CFG-07 returns no rate.
+
+ Expected:
+
+   - Rating quarantine RAT_RATE_NOT_FOUND.
+
+   - No wallet debit.
+
+ 18.6 Insufficient Wallet Balance
+ Input:
+
+   - Wallet balance below net amount.
+
+ Expected:
+
+   - Rated usage exists.
+
+   - Settlement status FAILED.
+
+   - PrepaidUsageDebitFailed emitted.
+
+ 18.7 Postpaid Usage
+ Input:
+
+   - POSTPAID subscription.
+
+ Expected:
+
+
+SOPHIX BSS Design Documents                           Page 9
+   - Rated usage POSTPAID_PENDING_INVOICE.
+
+   - Invoice generation can read it.
+
+   - Mark-invoiced changes status to INVOICED.
+
+
+
+ 19. Developer Checklist
+ Before marking RAT-01 complete:
+
+   - No raw CDR parsing exists in RAT-01.
+
+   - Rates are looked up from PLM-CFG-07.
+
+   - Tax is computed by PLM-CFG-02.
+
+   - mediated_usage_id uniqueness prevents double rating.
+
+   - Allowance bucket updates are locked and atomic.
+
+   - Rated usage is immutable after creation.
+
+   - Wallet debit uses stable idempotency key.
+
+   - Settlement attempts are recorded.
+
+   - Postpaid invoice handoff prevents double invoicing.
+
+   - Rating quarantine and replay work.
+
+
+
+
+SOPHIX BSS Design Documents                                 Page 10
+
