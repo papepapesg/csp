@@ -25,7 +25,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | Approval workflow catalog (EM-CFG-04) | ⬜ | |
 | File storage foundation API (FOUNDATION_FILE_STORAGE) | ⬜ | |
 
-## Wave 1 — Revenue-Critical Core ⬜
+## Wave 1 — Revenue-Critical Core 🚧 (11/14 core capabilities done)
 
 | Order | Capability | Key DDs | Status |
 | ----- | ---------- | ------- | ------ |
@@ -42,7 +42,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 11 | Notifications/internal tasks | NOT-01, ICN-01 | ✅ `Modules/Notification`: multi-channel notifications (queue→send) + internal messages; provider stub, events, 3 tests, Postman bundle |
 | 12 | Basic ticketing | TCK-01 | ✅ `Modules/Ticketing`: case lifecycle (open→assign→comment→resolve→close), SLA by priority, timeline, ticket→WO linkage (ASR as categories); 3 tests, Postman bundle |
 | 13 | Essential frontends | FE-APP-00/01/02/03 | ⬜ |
-| 14 | Minimal reporting | REP-01, FE-APP-05 | ⬜ |
+| 14 | Minimal reporting | REP-01, FE-APP-05 | ✅ `Modules/Reporting`: event-sourced reporting mart (outbox→inbox projector), operations + revenue dashboards, metric time-series API; 4 tests, Postman bundle |
 
 ## Wave 2 — Operational Hardening ⬜
 
