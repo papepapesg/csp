@@ -35,7 +35,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 4 | Subscription workflow framework | SUB-WF-FRAMEWORK-01 | ✅ operation ledger + idempotency/concurrency + native workflow engine (activate/terminate); 5 tests, Postman bundle |
 | 5 | Billing/payment basics | BIL-01, BIL-01-PAY-01, BIL-02, BIL-02-READ-01, BIL-05 | ✅ `Modules/Billing`: invoice generation + read, payment application (FIFO/targeted + surplus credit), wallet topup/debit; events, 5 tests, Postman bundle |
 | 6 | First payment provider | PAY-GW-01 | ⬜ |
-| 7 | Work order & workforce basics | WO-01(+FRAMEWORK, FLOW-INSTALLATION), EM-02 | ⬜ |
+| 7 | Work order & workforce basics | WO-01(+FRAMEWORK, FLOW-INSTALLATION), EM-02 | 🚧 `Modules/WorkOrder`: WO lifecycle create→assign→start→finalize/cancel + status history + events, 3 tests, Postman bundle. EM-02 registry pending |
 | 8 | Stock/equipment basics | OSR-01, OSR-INSTANCE-01, PLM-CFG-06 | ⬜ |
 | 9 | Fulfillment happy path | FUL-02 framework + WIK steps | ⬜ |
 | 10 | Service activation | SUB-WF-ACTIVATE-01, FUL-03 | 🚧 ActivateSubscriptionWorkflow done (SUB-WF side); FUL-03 pending |
