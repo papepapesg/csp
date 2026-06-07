@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use Modules\Billing\Http\Controllers\DunningController;
 use Modules\Billing\Http\Controllers\InvoiceController;
 use Modules\Billing\Http\Controllers\PaymentController;
+use Modules\Billing\Http\Controllers\UsageController;
 use Modules\Billing\Http\Controllers\WalletController;
 
 /*
@@ -30,4 +31,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('wallets/{subscriptionId}/balance', [WalletController::class, 'balance'])->middleware('permission:wallet.read');
     Route::post('wallets/{subscriptionId}/topup', [WalletController::class, 'topup'])->middleware(['permission:wallet.manage', 'idempotency']);
     Route::post('wallets/{subscriptionId}/debit', [WalletController::class, 'debit'])->middleware('permission:wallet.manage');
+
+    // MED-01 mediation + RAT-01 rating
+    Route::get('usage', [UsageController::class, 'index'])->middleware('permission:invoice.read');
+    Route::post('usage', [UsageController::class, 'ingest'])->middleware(['permission:invoice.manage', 'idempotency']);
+    Route::post('usage/rate-run', [UsageController::class, 'rateRun'])->middleware('permission:invoice.manage');
+    Route::get('rated-events', [UsageController::class, 'ratedEvents'])->middleware('permission:invoice.read');
 });

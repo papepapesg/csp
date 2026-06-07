@@ -1,0 +1,125 @@
+<?php
+
+namespace Modules\Billing\Services;
+
+use App\Foundation\Events\DomainEvent;
+use App\Foundation\Events\EventBus;
+use App\Foundation\Support\Context;
+use App\Foundation\Support\Id;
+use Illuminate\Support\Facades\DB;
+use Modules\Billing\Models\RatedEvent;
+use Modules\Billing\Models\UsageRecord;
+use Modules\Catalog\Models\VoiceTariff;
+
+/**
+ * MED-01 mediation + RAT-01 rating. ingest() deduplicates raw usage by source_ref
+ * (idempotent CDR intake). rate() prices RECEIVED records: voice resolves a
+ * PLM-CFG-07 voice_tariff by destination (per-minute + setup fee, min-charge
+ * applied), data/SMS use a flat per-unit rate, producing a rated_event BIL-01 bills.
+ */
+class MediationRatingService
+{
+    private const DATA_RATE_PER_MB = 0.50;
+
+    private const SMS_RATE = 1.00;
+
+    public function __construct(private readonly EventBus $events) {}
+
+    /**
+     * @param  array<int,array<string,mixed>>  $batch  records with usage_type, quantity, source_ref, ...
+     * @return array{ingested:int, duplicates:int}
+     */
+    public function ingest(array $batch): array
+    {
+        $operator = Context::operatorCode();
+        $ingested = 0;
+        $duplicates = 0;
+        foreach ($batch as $r) {
+            $exists = UsageRecord::query()->where('operator_code', $operator)->where('source_ref', $r['source_ref'])->exists();
+            if ($exists) {
+                $duplicates++;
+
+                continue;
+            }
+            UsageRecord::query()->create([
+                'usage_id' => Id::make('use'),
+                'subscription_id' => $r['subscription_id'] ?? null,
+                'account_id' => $r['account_id'] ?? null,
+                'usage_type' => $r['usage_type'],
+                'destination' => $r['destination'] ?? null,
+                'quantity' => (float) $r['quantity'],
+                'source_ref' => $r['source_ref'],
+                'occurred_at' => $r['occurred_at'] ?? now(),
+                'status' => 'RECEIVED',
+                'raw' => $r['raw'] ?? null,
+            ]);
+            $ingested++;
+        }
+
+        return ['ingested' => $ingested, 'duplicates' => $duplicates];
+    }
+
+    /** Rate all RECEIVED usage (RAT-01). @return array{rated:int} */
+    public function ratePending(?string $operator = null): array
+    {
+        $operator ??= Context::operatorCode();
+        $rated = 0;
+        UsageRecord::query()->where('operator_code', $operator)->where('status', 'RECEIVED')->chunkById(500, function ($records) use (&$rated) {
+            foreach ($records as $record) {
+                $this->rate($record);
+                $rated++;
+            }
+        }, 'usage_id');
+
+        return ['rated' => $rated];
+    }
+
+    public function rate(UsageRecord $record): RatedEvent
+    {
+        return DB::transaction(function () use ($record) {
+            [$rate, $amount, $tariffCode] = $this->price($record);
+
+            $event = RatedEvent::query()->create([
+                'rated_id' => Id::make('rat'),
+                'operator_code' => $record->operator_code,
+                'usage_id' => $record->usage_id,
+                'subscription_id' => $record->subscription_id,
+                'tariff_code' => $tariffCode,
+                'rate' => $rate,
+                'amount' => round($amount, 4),
+            ]);
+            $record->update(['status' => 'RATED']);
+
+            $this->events->publish(new DomainEvent(
+                type: 'UsageRated',
+                topic: 'billing.usage',
+                payload: ['ratedId' => $event->rated_id, 'usageId' => $record->usage_id, 'amount' => (string) $event->amount, 'type' => $record->usage_type],
+                aggregateType: 'RatedEvent',
+                aggregateId: $event->rated_id,
+            ));
+
+            return $event;
+        });
+    }
+
+    /** @return array{0:float,1:float,2:?string} [rate, amount, tariffCode] */
+    private function price(UsageRecord $record): array
+    {
+        if ($record->usage_type === 'VOICE') {
+            $tariff = VoiceTariff::query()->where('operator_code', $record->operator_code)
+                ->where('destination', $record->destination ?? 'ONNET')->first();
+            $rate = (float) ($tariff->rate_per_min ?? 0);
+            $setup = (float) ($tariff->setup_fee ?? 0);
+            $seconds = max((float) $record->quantity, (float) ($tariff->min_charge_seconds ?? 0));
+            $amount = $setup + ($seconds / 60) * $rate;
+
+            return [$rate, $amount, $tariff->code ?? null];
+        }
+        if ($record->usage_type === 'DATA') {
+            return [self::DATA_RATE_PER_MB, (float) $record->quantity * self::DATA_RATE_PER_MB, 'DATA_FLAT'];
+        }
+
+        // SMS
+        return [self::SMS_RATE, (float) $record->quantity * self::SMS_RATE, 'SMS_FLAT'];
+    }
+}
