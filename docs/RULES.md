@@ -31,7 +31,7 @@ Engine: `Modules/Rules/app/Engine/DataDrivenRuleEngine.php` (bound to
 | `rules.wallet` / `rules.wallet-catalog` | BIL-05 / PLM-CFG-03 | ⬜ |
 | `rules.discount-catalog` / `rules.commercial.discount_assignment` / `.bundle` / `.campaign` | PLM-CFG-04 / SIP / commercial (Wave 3) | ⬜ |
 | `rules.cvm.activity` / `.approval` / `.offer` / `.segmentation` | EM-03 CVM (Wave 3) | ⬜ |
-| `rules.field_audit.{equipment,kyc,network}.{approval,routing,scope,severity}` | FA-01/02/03 (Wave 3) | ⬜ |
+| `rules.field_audit.{equipment,network,kyc}.severity` | FA-01/02/03 field audits | ✅ seeded + wired (FieldAuditService) |
 | `rules.fulfillment.technology_migration.{eligibility,cutover,equipment,exception}` | FUL-10 (Wave 3) | ⬜ |
 | `rules.asr.service_request` | ASR-04 (Wave 3) | ⬜ |
 | `rules.service-catalog` / `rules.homepass-status-code-catalog` / `rules.house-type-catalog` / `rules.network-node-catalog` / `rules.tech-region-catalog` / `rules.tech-contractor-catalog` / `rules.tech-contractor-skill-catalog` / `rules.franchise-catalog` | catalog config validation | 🚧 service + homepass done; rest seed with their catalogs |

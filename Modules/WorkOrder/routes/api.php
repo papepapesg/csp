@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\WorkOrder\Http\Controllers\FieldAuditController;
 use Modules\WorkOrder\Http\Controllers\WorkOrderController;
 
 /*
@@ -24,4 +25,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // WO-01-FLOW-SHIFTING orchestration
     Route::post('work-orders/{workOrder}/shifting-flow', [WorkOrderController::class, 'startShiftingFlow'])->middleware('permission:workorder.assign');
     Route::post('work-orders/{workOrder}/advance-phase', [WorkOrderController::class, 'advancePhase'])->middleware('permission:workorder.execute');
+
+    // FA-01/02/03 field audits
+    Route::get('field-audits', [FieldAuditController::class, 'index'])->middleware('permission:workorder.read');
+    Route::post('field-audits', [FieldAuditController::class, 'store'])->middleware('permission:workorder.assign');
+    Route::get('field-audits/{fieldAudit}', [FieldAuditController::class, 'show'])->middleware('permission:workorder.read');
+    Route::post('field-audits/{fieldAudit}/findings', [FieldAuditController::class, 'submitFindings'])->middleware('permission:workorder.execute');
 });
