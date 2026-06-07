@@ -24,6 +24,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/tickets', fn () => Inertia::render('Tickets/Index'))->name('tickets.index');
     Route::get('/reports', fn () => Inertia::render('Reports/Dashboard'))->name('reports.index');
     Route::get('/workflow/studio', fn () => Inertia::render('Workflow/Studio'))->name('workflow.studio');
+    Route::get('/rules/studio', fn () => Inertia::render('Rules/Studio'))->name('rules.studio');
     Route::get('/workflow/ops', fn () => Inertia::render('Workflow/Operations'))->name('workflow.ops');
     Route::get('/itops', fn () => Inertia::render('ItOps/Console'))->name('itops.console');
 });

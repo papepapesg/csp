@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
 use Modules\Provisioning\Services\ProvisioningService;
 use Modules\Subscription\Models\Subscription;
+use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
 use Tests\TestCase;
 
@@ -21,6 +22,7 @@ class ProvisioningTest extends TestCase
         parent::setUp();
         $this->seed(RbacSeeder::class);
         $this->seed(ProcessDefinitionSeeder::class);
+        $this->seed(DecisionTableSeeder::class);
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('SUPER_ADMIN');
         Sanctum::actingAs($user);

@@ -64,6 +64,12 @@ const showingNavigationDropdown = ref(false);
                                     Studio
                                 </NavLink>
                                 <NavLink
+                                    :href="route('rules.studio')"
+                                    :active="route().current('rules.studio')"
+                                >
+                                    Rules
+                                </NavLink>
+                                <NavLink
                                     :href="route('workflow.ops')"
                                     :active="route().current('workflow.ops')"
                                 >

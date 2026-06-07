@@ -2,11 +2,15 @@
 
 namespace Modules\Subscription\Tests\Feature;
 
+use App\Foundation\Support\Id;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
+use Modules\Billing\Models\Invoice;
+use Modules\Rules\Database\Seeders\DecisionTableSeeder;
+use Modules\Rules\Models\DecisionTable;
 use Modules\Subscription\Models\Subscription;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
 use Tests\TestCase;
@@ -20,6 +24,7 @@ class SubscriptionApiTest extends TestCase
         parent::setUp();
         $this->seed(RbacSeeder::class);
         $this->seed(ProcessDefinitionSeeder::class);
+        $this->seed(DecisionTableSeeder::class);
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('SUPER_ADMIN');
         Sanctum::actingAs($user);
@@ -108,5 +113,39 @@ class SubscriptionApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('current_state', 'COMPLETED')
             ->assertJsonPath('final_state', 'ACTIVE');
+    }
+
+    public function test_activation_is_gated_by_the_eligibility_decision_table(): void
+    {
+        $id = $this->makeSubscription(); // account_id = acct_test
+
+        // An outstanding balance on the account. The seeded 'activation.eligibility'
+        // decision table (default policy) blocks activation when balance > 0 — this
+        // is the DROOLS-equivalent rule driving the live flow's 'eligible?' gateway.
+        Invoice::query()->create([
+            'operator_code' => 'WIK', 'account_id' => 'acct_test', 'currency' => 'KES',
+            'status' => 'OPEN', 'issue_date' => now(), 'due_date' => now()->addDays(7),
+            'subtotal_amount' => 1500, 'total_amount' => 1500, 'amount_due' => 1500,
+        ]);
+
+        $this->postJson("/api/subscriptions/{$id}/activate", [], ['Idempotency-Key' => 'gated'])->assertStatus(202);
+        $this->drainWorkflows();
+
+        // Gateway took the rejected branch — subscription is NOT activated.
+        $this->assertSame('PENDING_ACTIVATION', Subscription::find($id)->status_code);
+        $this->assertDatabaseMissing('outbox_events', ['event_type' => 'SubscriptionActivated']);
+
+        // Now an operator deploys a lenient policy for WIK (allow despite balance) —
+        // no code change — and a fresh activation succeeds.
+        DecisionTable::query()->create([
+            'table_id' => Id::make('dt'),
+            'rule_set' => 'activation.eligibility', 'version' => 2, 'operator_code' => 'WIK',
+            'name' => 'WIK lenient', 'hit_policy' => 'FIRST', 'rules' => [],
+            'default_output' => ['eligible' => true], 'status' => 'DEPLOYED',
+        ]);
+
+        $this->postJson("/api/subscriptions/{$id}/activate", [], ['Idempotency-Key' => 'gated-2'])->assertStatus(202);
+        $this->drainWorkflows();
+        $this->assertSame('ACTIVE', Subscription::find($id)->status_code);
     }
 }

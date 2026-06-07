@@ -2,17 +2,26 @@
 
 namespace Modules\Subscription\Workflow;
 
+use App\Foundation\Rules\RuleEngine;
+use Modules\Billing\Models\Invoice;
 use Modules\Subscription\Models\Subscription;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
 use Modules\Workflow\Contracts\TaskResult;
 
 /**
- * Toolbox step: validate that a subscription may be activated. Side-effect free;
- * returns `eligible` for a downstream gateway to branch on.
+ * Toolbox step: decide whether a subscription may be activated.
+ *
+ * Fixed guards (terminated subscription) stay in code, but the configurable
+ * POLICY — eligibility given the account's financial state — is delegated to the
+ * data-driven rule engine (the 'activation.eligibility' decision table). The
+ * gateway in the sub-activate flow branches on the `eligible` it returns, so an
+ * operator can change activation policy in the Rules Studio with no code change.
  */
 class ValidateActivationHandler implements TaskHandler
 {
+    public function __construct(private readonly RuleEngine $rules) {}
+
     public function topic(): string
     {
         return 'sub.validate-activation';
@@ -30,10 +39,30 @@ class ValidateActivationHandler implements TaskHandler
             return TaskResult::fail('Subscription not found', retryable: false);
         }
 
-        $eligible = ! $subscription->isTerminal();
+        // Fixed validation: a terminated subscription can never activate.
+        if ($subscription->isTerminal()) {
+            return TaskResult::success(['eligible' => false, 'eligibilityReason' => 'TERMINATED']);
+        }
+
+        // Gather facts for the policy decision. (The outstanding balance would be
+        // read through the BIL read API in a split deployment; in the monolith we
+        // read BIL's invoice projection directly.)
+        $outstanding = (float) Invoice::query()
+            ->where('account_id', $subscription->account_id)
+            ->whereIn('status', [Invoice::OPEN, Invoice::PARTIALLY_PAID, Invoice::OVERDUE])
+            ->sum('amount_due');
+
+        // DROOLS-equivalent: evaluate the configurable decision table.
+        $decision = $this->rules->evaluate('activation.eligibility', [
+            'outstandingBalance' => $outstanding,
+            'billingMode' => $subscription->billing_mode,
+            'operatorCode' => $subscription->operator_code,
+        ]);
 
         return TaskResult::success([
-            'eligible' => $eligible,
+            'eligible' => $decision['eligible'] ?? true,
+            'eligibilityReason' => $decision['reason'] ?? null,
+            'outstandingBalance' => $outstanding,
             'recipient' => $context->var('recipient'),
         ]);
     }

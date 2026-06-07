@@ -57,7 +57,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | NMS/provisioning stub adapter (PROV-INT-01) | ✅ | `Modules/Provisioning`: command ledger + swappable adapter; activation flow drives the NMS end-to-end, failure gates activation |
 | Tax gateway stub adapter (BIL-02-TAX-01) | ✅ | TaxGateway interface + StubTaxGateway (KRA-style fiscalisation); issue tax-invoice endpoint, swappable via SOPHIX_TAX_DRIVER |
 | De-hardcode catalogs → data | ✅ | rules + RBAC + SLA now runtime catalogs (operator-overridable). WO/OSR status transitions are deliberate guard-validation in code (per MVP baseline: Drools only for configurable policy, not fixed validation) |
-| Data-driven rules (decision tables) | ✅ | `Modules/Rules`: decision tables as DATA, operator override with zero code (proven); rules.evaluate toolbox step |
+| Data-driven rules (decision tables, Drools-equivalent) | ✅ | `Modules/Rules` engine + **Rules Studio UI** (`/rules/studio`) + WIRED into the live activation gateway (ValidateActivationHandler evaluates `activation.eligibility`); operator override proven by test |
 | PWA mobile frontends (sales, contractor) | ✅ | `SOPHIX Field` installable PWA at `/m`: token auth, contractor job execution (claim/start/finalize) + sales quick-capture, offline action queue + service-worker shell |
 
 ## Wave 2 — Operational Hardening ⬜
