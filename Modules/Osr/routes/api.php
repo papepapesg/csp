@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\Osr\Http\Controllers\EquipmentInstanceController;
+use Modules\Osr\Http\Controllers\ProcurementController;
 use Modules\Osr\Http\Controllers\StockController;
 use Modules\Osr\Http\Controllers\SwapRequestController;
 
@@ -32,4 +33,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('swap-requests/{swapRequest}', [SwapRequestController::class, 'show'])->middleware('permission:stock.read');
     Route::post('swap-requests/{swapRequest}/field-visit', [SwapRequestController::class, 'fieldVisit'])->middleware('permission:stock.manage');
     Route::post('swap-requests/{kind}', [SwapRequestController::class, 'store'])->middleware(['permission:stock.manage', 'idempotency']);
+
+    // OSR-02 procurement
+    Route::get('purchase-orders', [ProcurementController::class, 'index'])->middleware('permission:stock.read');
+    Route::post('purchase-orders', [ProcurementController::class, 'store'])->middleware('permission:stock.manage');
+    Route::post('purchase-orders/{purchaseOrder}/approve', [ProcurementController::class, 'approve'])->middleware('permission:stock.manage');
+    Route::post('purchase-orders/{purchaseOrder}/receive', [ProcurementController::class, 'receive'])->middleware('permission:stock.manage');
+    // OSR-05 inventory audit
+    Route::post('stock-counts', [ProcurementController::class, 'openCount'])->middleware('permission:stock.manage');
+    Route::post('stock-counts/{stockCountSession}/count', [ProcurementController::class, 'count'])->middleware('permission:stock.manage');
+    Route::post('stock-counts/{stockCountSession}/reconcile', [ProcurementController::class, 'reconcile'])->middleware('permission:stock.manage');
 });
