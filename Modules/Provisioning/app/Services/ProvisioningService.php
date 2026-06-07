@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Modules\Provisioning\Contracts\ProvisioningAdapter;
 use Modules\Provisioning\Events\ProvisioningEvents;
 use Modules\Provisioning\Models\ProvisioningCommand;
+use Modules\Provisioning\Models\ProvisioningDesiredState;
 
 /**
  * PROV-INT-01 command dispatch + reconciliation. Owns the command ledger; turns
@@ -73,6 +74,7 @@ class ProvisioningService
                     'confirmed_at' => now(),
                     'last_error' => null,
                 ]);
+                $this->recordDesiredState($command);
                 $this->emit(ProvisioningEvents::COMMAND_CONFIRMED, $command);
             } else {
                 $command->update(['status' => ProvisioningCommand::FAILED, 'last_error' => $result->error]);
@@ -102,6 +104,34 @@ class ProvisioningService
         }
 
         return $mismatches;
+    }
+
+    /**
+     * Snapshot BSS desired technical state from a confirmed command, so the
+     * reconciliation run has a comparison base (PROV-INT-01 §10.5, R-PROV-10).
+     */
+    public function recordDesiredState(ProvisioningCommand $command): void
+    {
+        $desired = $command->desired_state ?? [];
+        $subscriberKey = ($command->subscription_id ?? 'unknown').':'.($command->service_ref ?? 'DEFAULT');
+
+        ProvisioningDesiredState::query()->updateOrCreate(
+            [
+                'operator_code' => $command->operator_code,
+                'subscription_id' => $command->subscription_id,
+                'service_ref' => $command->service_ref,
+                'target_code' => $command->target_code,
+            ],
+            [
+                'desired_state_id' => Id::make('pds'),
+                'subscriber_key' => $subscriberKey,
+                'desired_status' => $desired['desiredStatus'] ?? 'ACTIVE',
+                'desired_profile' => $desired,
+                'source_module' => 'PROV-INT',
+                'source_ref' => $command->command_id,
+                'effective_from' => now(),
+            ],
+        );
     }
 
     private function emit(string $type, ProvisioningCommand $command): void

@@ -13,3 +13,6 @@ Schedule::command('sophix:outbox:dispatch')->everyMinute()->withoutOverlapping()
 
 // BIL-04 dunning scanner (daily).
 Schedule::command('sophix:billing:dunning-run')->daily();
+
+// PROV-INT-01 reconciliation worker (hourly polling of network vs desired state).
+Schedule::command('sophix:provisioning:reconcile')->hourly()->withoutOverlapping();

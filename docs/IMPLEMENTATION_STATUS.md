@@ -54,7 +54,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | Workflow Studio (Vue Flow drag-and-drop) | ✅ | `/workflow/studio` — author/deploy flows from the toolbox |
 | IT-Ops console (process trace, worker/incident monitor) | ✅ | `/workflow/ops` |
 | IT-Ops log search + service control | ✅ | `Modules/ItOps` + `/itops`: searchable DB logs, worker heartbeats up/down + queue depths, graceful restart control |
-| NMS/provisioning stub adapter (PROV-INT-01) | ✅ | `Modules/Provisioning`: command ledger + swappable adapter; activation flow drives the NMS end-to-end, failure gates activation |
+| NMS/provisioning stub adapter (PROV-INT-01) | ✅ | `Modules/Provisioning`: command ledger + swappable adapter; activation flow drives the NMS end-to-end, failure gates activation; **desired/observed reconciliation + polling worker + NOC force-sync** (Wave 2) |
 | Tax gateway stub adapter (BIL-02-TAX-01) | ✅ | TaxGateway interface + StubTaxGateway (KRA-style fiscalisation); issue tax-invoice endpoint, swappable via SOPHIX_TAX_DRIVER |
 | De-hardcode catalogs → data | ✅ | rules + RBAC + SLA now runtime catalogs (operator-overridable). WO/OSR status transitions are deliberate guard-validation in code (per MVP baseline: Drools only for configurable policy, not fixed validation) |
 | Data-driven rules (decision tables, Drools-equivalent) | ✅ | `Modules/Rules` engine + **Rules Studio UI** (`/rules/studio`) + WIRED into the live activation gateway (ValidateActivationHandler evaluates `activation.eligibility`); operator override proven by test |
@@ -89,8 +89,16 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   master_wo_id) / AREA_OUTAGE → finalize + warranty window + WorkOrderSupportCompleted.
   `wo_job_type_catalog` + `wo_flow_config` per operator; REST start-flow + resolve.
 
+- **provisioning reconciliation** (PROV-INT-01 §7.3) — desired/observed state model:
+  a confirmed command snapshots `provisioning_desired_state`; the
+  `sophix:provisioning:reconcile` polling worker (hourly) fetches observed state per
+  target via the swappable adapter, records `provisioning_observed_state`, and opens
+  `provisioning_reconciliation_item` mismatches (no auto-fix, R-PROV-08). NOC API:
+  runs/items list, manual run, permission-gated + audited force-sync (R-PROV-07/09).
+  Stub adapter simulates clean/drift/not-present for end-to-end testing.
+
 **Pending:** WO shifting · OSR-RMA/swap ·
-provisioning reconciliation · customer self-care · reporting exports/reconciliation ·
+customer self-care · reporting exports/reconciliation ·
 upgrade/downgrade/relocation/migration.
 
 ## Wave 3 — Advanced Commercial, Assurance & Audit ⬜

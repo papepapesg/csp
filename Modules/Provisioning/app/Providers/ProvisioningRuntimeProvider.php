@@ -4,6 +4,7 @@ namespace Modules\Provisioning\Providers;
 
 use Illuminate\Support\ServiceProvider;
 use Modules\Provisioning\Adapters\StubProvisioningAdapter;
+use Modules\Provisioning\Console\ReconcileCommand;
 use Modules\Provisioning\Contracts\ProvisioningAdapter;
 use Modules\Provisioning\Workflow\ActivateServiceHandler;
 use Modules\Workflow\Engine\TaskRegistry;
@@ -27,5 +28,9 @@ class ProvisioningRuntimeProvider extends ServiceProvider
     public function boot(): void
     {
         $this->app->make(TaskRegistry::class)->register(ActivateServiceHandler::class);
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([ReconcileCommand::class]);
+        }
     }
 }

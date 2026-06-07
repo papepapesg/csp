@@ -13,4 +13,14 @@ use Modules\Provisioning\Models\ProvisioningCommand;
 interface ProvisioningAdapter
 {
     public function dispatch(ProvisioningCommand $command): ProvisioningResult;
+
+    /**
+     * Poll a target for the observed state of one subscriber key (PROV-INT-01
+     * §7.3 reconciliation). Returns the observed status + profile, or null when
+     * the subscriber is not present on the target.
+     *
+     * @param  array<string,mixed>  $desiredProfile  hint for the lookup/simulation
+     * @return array{observedStatus:?string,observedProfile:array<string,mixed>}|null
+     */
+    public function fetchObserved(string $targetCode, string $subscriberKey, string $desiredStatus, array $desiredProfile = []): ?array;
 }

@@ -13,4 +13,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('provisioning/commands/{provisioningCommand}', [ProvisioningController::class, 'show'])->middleware('permission:provisioning.view');
     Route::post('provisioning/commands/{provisioningCommand}/retry', [ProvisioningController::class, 'retry'])->middleware('permission:provisioning.manage');
     Route::post('provisioning/reconcile', [ProvisioningController::class, 'reconcile'])->middleware('permission:provisioning.manage');
+
+    // PROV-INT-01 §7.3 desired-vs-observed reconciliation (NOC review + force-sync).
+    Route::get('provisioning/reconciliation/runs', [ProvisioningController::class, 'reconciliationRuns'])->middleware('permission:provisioning.view');
+    Route::get('provisioning/reconciliation/items', [ProvisioningController::class, 'reconciliationItems'])->middleware('permission:provisioning.view');
+    Route::post('provisioning/reconciliation/run', [ProvisioningController::class, 'reconciliationRun'])->middleware('permission:provisioning.manage');
+    Route::post('provisioning/reconciliation/items/{item}/force-sync', [ProvisioningController::class, 'forceSync'])->middleware('permission:provisioning.manage');
 });

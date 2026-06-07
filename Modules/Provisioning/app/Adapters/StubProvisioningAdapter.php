@@ -38,4 +38,22 @@ class StubProvisioningAdapter implements ProvisioningAdapter
             response: ['accepted' => true, 'observedStatus' => $command->desired_state['desiredStatus'] ?? 'ACTIVE'],
         );
     }
+
+    /**
+     * Simulated poll: the stub network mirrors the desired state (so a healthy
+     * network reconciles clean), unless the desired profile carries a test hint:
+     *   simulateObservedStatus -> return that status (drift)
+     *   simulateNotPresent     -> return null (subscriber missing on target)
+     */
+    public function fetchObserved(string $targetCode, string $subscriberKey, string $desiredStatus, array $desiredProfile = []): ?array
+    {
+        if (($desiredProfile['simulateNotPresent'] ?? false) === true) {
+            return null;
+        }
+
+        return [
+            'observedStatus' => $desiredProfile['simulateObservedStatus'] ?? $desiredStatus,
+            'observedProfile' => $desiredProfile,
+        ];
+    }
 }

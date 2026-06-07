@@ -14,4 +14,10 @@ final class ProvisioningEvents
     public const COMMAND_FAILED = 'ProvisioningCommandFailed';
 
     public const RECONCILE_MISMATCH = 'ProvisioningReconcileMismatch';
+
+    public const RECONCILE_RUN_COMPLETED = 'ProvisioningReconciliationRunCompleted';
+
+    public const RECONCILE_ITEM_OPENED = 'ProvisioningReconciliationItemOpened';
+
+    public const FORCE_SYNC_REQUESTED = 'ProvisioningForceSyncRequested';
 }

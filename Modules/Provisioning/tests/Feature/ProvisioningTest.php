@@ -8,8 +8,8 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
 use Modules\Provisioning\Services\ProvisioningService;
-use Modules\Subscription\Models\Subscription;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
+use Modules\Subscription\Models\Subscription;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
 use Tests\TestCase;
 
