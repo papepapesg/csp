@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Modules\Subscription\Workflow\ActivateHandler;
 use Modules\Subscription\Workflow\PauseHandler;
+use Modules\Subscription\Workflow\PutActiveRestrictionsHandler;
 use Modules\Subscription\Workflow\ResumeHandler;
 use Modules\Subscription\Workflow\SuspendHandler;
 use Modules\Subscription\Workflow\SyncOperationFromProcess;
@@ -28,6 +29,7 @@ class SubscriptionWorkflowProvider extends ServiceProvider
         $registry->register(PauseHandler::class);
         $registry->register(ResumeHandler::class);
         $registry->register(SuspendHandler::class);
+        $registry->register(PutActiveRestrictionsHandler::class);
 
         Event::listen(ProcessInstanceEnded::class, [SyncOperationFromProcess::class, 'handle']);
     }

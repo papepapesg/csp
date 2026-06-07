@@ -13,6 +13,7 @@ use Modules\Billing\Models\Invoice;
 use Modules\Notification\Services\NotificationService;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Services\OperationFramework;
+use Modules\Subscription\Services\RestrictionService;
 
 /**
  * BIL-04 Dunning Engine. Detects unpaid debt past grace and drives the
@@ -36,6 +37,7 @@ class DunningService
         private readonly RuleEngine $rules,
         private readonly OperationFramework $operations,
         private readonly NotificationService $notifications,
+        private readonly RestrictionService $restrictions,
     ) {}
 
     /**
@@ -114,23 +116,41 @@ class DunningService
                 aggregateId: $state->dunning_id,
             ));
 
-            $this->applyAction($nextLevel, $subscription, $state);
+            $this->applyAction($nextLevel, $subscription, $state, $decision);
 
             return true;
         });
     }
 
-    private function applyAction(int $level, ?Subscription $subscription, DunningState $state): void
+    /** @param array<string,mixed> $decision */
+    private function applyAction(int $level, ?Subscription $subscription, DunningState $state, array $decision = []): void
     {
+        if (! $subscription) {
+            return;
+        }
         $action = self::LEVEL_ACTION[$level] ?? 'NONE';
+        $dunningRef = "dunning-{$state->account_id}-L{$level}";
 
-        if ($action === 'WARN' || ! $subscription) {
-            if ($subscription) {
-                $this->notifications->send([
-                    'channel' => 'SMS', 'recipient' => $subscription->customer_id, 'template_code' => 'DUNNING_WARNING',
-                    'reference' => $state->account_id, 'body' => 'Your account has an overdue balance.',
-                ]);
-            }
+        if ($action === 'WARN') {
+            $this->notifications->send([
+                'channel' => 'SMS', 'recipient' => $subscription->customer_id, 'template_code' => 'DUNNING_WARNING',
+                'reference' => $state->account_id, 'body' => 'Your account has an overdue balance.',
+            ]);
+
+            return;
+        }
+
+        // Dunning-driven partial restriction (SUB-WF-RESTRICT-01, DUNNING_DRIVEN).
+        if ($action === 'RESTRICT') {
+            $code = $decision['restrictionCode'] ?? 'OUTGOING_VOICE_BARRED';
+            $this->restrictions->add($subscription, $code, [
+                'activationTrigger' => RestrictionService::TRIGGER_DUNNING,
+                'dunningReference' => $dunningRef,
+                'actorRole' => 'BILLING_INTERNAL',
+                'actorUserId' => 'bil04-svc-account',
+                'notes' => "Dunning level {$level}",
+                'idempotencyKey' => "restrict-add-{$subscription->subscription_id}-{$code}-{$dunningRef}",
+            ]);
 
             return;
         }
@@ -141,7 +161,7 @@ class DunningService
                 subscription: $subscription,
                 kind: $action,
                 input: ['reasonCode' => 'NON_PAYMENT', 'dunningLevel' => $level],
-                idempotencyKey: "dunning-{$state->account_id}-L{$level}",
+                idempotencyKey: $dunningRef,
             );
 
             if ($action === 'SUSPEND') {
@@ -163,6 +183,13 @@ class DunningService
         if (! $state) {
             return;
         }
+
+        // R-DM-4: BIL-04 resume-after-payment lifts any dunning-marked restrictions.
+        $subscription = Subscription::query()->where('account_id', $accountId)->first();
+        if ($subscription) {
+            $this->restrictions->removeDunningMarked($subscription);
+        }
+
         $state->update(['current_level' => DunningState::LEVEL_NONE, 'status' => 'CLEARED', 'outstanding_debt_amount' => 0, 'entered_level_at' => now()]);
         $this->events->publish(new DomainEvent(
             type: BillingEvents::DUNNING_CLEARED,

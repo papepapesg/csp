@@ -78,7 +78,6 @@ class ProcessDefinitionSeeder extends Seeder
             ],
         ]);
 
-
         $this->deploy('sub-suspend', 'Subscription Suspend (non-payment)', [
             'nodes' => [
                 ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
@@ -95,6 +94,29 @@ class ProcessDefinitionSeeder extends Seeder
                 ['id' => 'e3', 'source' => 'gw', 'target' => 'suspend', 'data' => ['condition' => ['var' => 'eligible', 'op' => 'truthy']]],
                 ['id' => 'e4', 'source' => 'gw', 'target' => 'end_rejected', 'data' => ['default' => true]],
                 ['id' => 'e5', 'source' => 'suspend', 'target' => 'notify'],
+                ['id' => 'e6', 'source' => 'notify', 'target' => 'end_ok'],
+            ],
+        ]);
+
+        // SUB-WF-RESTRICT-01: shared ADD/REMOVE shape; intent carried as a process
+        // variable. Validate (rules.subscription.restrict) -> put-active-restrictions
+        // (FUL-04 enforcement via emitted event) -> notify. Does NOT touch status.
+        $this->deploy('sub-restrict', 'Subscription Restriction', [
+            'nodes' => [
+                ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
+                ['id' => 'validate', 'type' => 'serviceTask', 'position' => ['x' => 180, 'y' => 80], 'data' => ['label' => 'Validate restriction (rules)', 'topic' => 'sub.validate-operation', 'config' => ['ruleSet' => 'rules.subscription.restrict', 'requiredStatus' => 'ACTIVE']]],
+                ['id' => 'gw', 'type' => 'exclusiveGateway', 'position' => ['x' => 380, 'y' => 80], 'data' => ['label' => 'Eligible?']],
+                ['id' => 'mutate', 'type' => 'serviceTask', 'position' => ['x' => 560, 'y' => 20], 'data' => ['label' => 'Put active restrictions', 'topic' => 'sub.put-active-restrictions']],
+                ['id' => 'notify', 'type' => 'serviceTask', 'position' => ['x' => 740, 'y' => 20], 'data' => ['label' => 'Notify', 'topic' => 'notify.send', 'config' => ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_RESTRICTION_CHANGED']]],
+                ['id' => 'end_ok', 'type' => 'endEvent', 'position' => ['x' => 920, 'y' => 20], 'data' => ['label' => 'Applied']],
+                ['id' => 'end_rejected', 'type' => 'endEvent', 'position' => ['x' => 560, 'y' => 160], 'data' => ['label' => 'Rejected']],
+            ],
+            'edges' => [
+                ['id' => 'e1', 'source' => 'start', 'target' => 'validate'],
+                ['id' => 'e2', 'source' => 'validate', 'target' => 'gw'],
+                ['id' => 'e3', 'source' => 'gw', 'target' => 'mutate', 'data' => ['condition' => ['var' => 'eligible', 'op' => 'truthy']]],
+                ['id' => 'e4', 'source' => 'gw', 'target' => 'end_rejected', 'data' => ['default' => true]],
+                ['id' => 'e5', 'source' => 'mutate', 'target' => 'notify'],
                 ['id' => 'e6', 'source' => 'notify', 'target' => 'end_ok'],
             ],
         ]);

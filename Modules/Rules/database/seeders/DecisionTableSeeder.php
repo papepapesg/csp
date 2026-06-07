@@ -36,6 +36,14 @@ class DecisionTableSeeder extends Seeder
         $this->deploy('rules.subscription.suspend-np', 'Non-payment suspension policy', 'FIRST',
             [], ['eligible' => true], ['statusCode', 'outstandingBalance']);
 
+        // rules.subscription.restrict — restriction workflow policy (R-RG-2). The
+        // operator-scoped package enforces role-gating + may add operator-specific
+        // rules (reactivation-fee triggers, etc.); KE v1.0 has no extra policy, so
+        // the default is eligible. Catalog/state/dunning gating is validated
+        // synchronously by RestrictionService (the DD's documented 4xx rejections).
+        $this->deploy('rules.subscription.restrict', 'Subscription restriction policy', 'FIRST',
+            [], ['eligible' => true], ['statusCode', 'operationKind', 'reasonCode', 'restrictionCode', 'activationTrigger', 'intent']);
+
         // rules.subscription.terminate — termination policy (default: allowed).
         $this->deploy('rules.subscription.terminate', 'Subscription termination policy', 'FIRST',
             [], ['eligible' => true], ['statusCode', 'reasonCode']);

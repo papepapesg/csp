@@ -5,10 +5,11 @@ namespace Database\Seeders;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
-use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
 use Modules\Billing\Database\Seeders\DunningPolicySeeder;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
+use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
+use Modules\Subscription\Database\Seeders\RestrictionCatalogSeeder;
 use Modules\Ticketing\Database\Seeders\SlaPolicySeeder;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
 
@@ -26,6 +27,7 @@ class DatabaseSeeder extends Seeder
             DecisionTableSeeder::class,
             CatalogPolicySeeder::class,
             DunningPolicySeeder::class,
+            RestrictionCatalogSeeder::class,
             SlaPolicySeeder::class,
         ]);
 

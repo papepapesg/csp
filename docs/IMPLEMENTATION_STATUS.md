@@ -71,10 +71,19 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   (`rules.billing.dunning`: warn→restrict→suspend→terminate) via a per-account level
   and the owning SUB-WF operations; `sub-suspend` flow + `rules.subscription.suspend-np`;
   daily `sophix:billing:dunning-run`; payment settlement de-escalates.
+- **subscription restriction** (SUB-WF-RESTRICT-01) — the one operation that does NOT
+  mutate status_code: ADD/REMOVE mutate `active_restrictions[]` only, via the
+  `sub-restrict` flow (intent as a process variable) + `sub.put-active-restrictions`
+  step. SUB-LM restriction catalog + per-operator `subscription_restrict_config`;
+  synchronous DD rejections (ALREADY_RESTRICTED / UNKNOWN_RESTRICTION_CODE /
+  INVALID_STATE_FOR_RESTRICTION / SYSTEM_MANAGED_RESTRICTION) + dunning-marker
+  protection (R-DM-2/3/4); non-exclusive per R-FW-1. Sub-resource REST
+  (POST/DELETE/GET `/restrictions`). Dunning L2 drives a DUNNING_DRIVEN restriction;
+  resume-after-payment lifts dunning-marked restrictions.
 
 **Pending:** WO support/shifting · OSR-RMA/swap ·
 provisioning reconciliation · customer self-care · reporting exports/reconciliation ·
-upgrade/downgrade/relocation/migration/restrict.
+upgrade/downgrade/relocation/migration.
 
 ## Wave 3 — Advanced Commercial, Assurance & Audit ⬜
 

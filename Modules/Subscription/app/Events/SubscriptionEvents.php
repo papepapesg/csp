@@ -28,4 +28,13 @@ final class SubscriptionEvents
     public const OPERATION_COMPLETED = 'SubscriptionOperationCompleted';
 
     public const OPERATION_FAILED = 'SubscriptionOperationFailed';
+
+    // SUB-WF-RESTRICT-01 partial-service restriction events.
+    public const RESTRICTION_ADDED = 'SubscriptionRestrictionAdded';
+
+    public const RESTRICTION_REMOVED = 'SubscriptionRestrictionRemoved';
+
+    public const RESTRICTION_ADD_REJECTED = 'SubscriptionRestrictionAddRejected';
+
+    public const RESTRICTION_REMOVE_REJECTED = 'SubscriptionRestrictionRemoveRejected';
 }

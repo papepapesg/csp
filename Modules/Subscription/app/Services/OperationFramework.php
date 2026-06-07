@@ -48,6 +48,7 @@ class OperationFramework
         ?string $requestHash = null,
         ?string $actorUserId = null,
         ?string $actorRole = null,
+        bool $exclusive = true,
     ): SubscriptionOperation {
         $idempotencyKey ??= Id::make('idem');
 
@@ -60,9 +61,12 @@ class OperationFramework
             return $existing;
         }
 
-        // Concurrency: refuse a second in-flight operation on the same subscription.
-        $inflight = SubscriptionOperation::query()
+        // Concurrency: refuse a second in-flight EXCLUSIVE operation on the same
+        // subscription. RESTRICT is non-exclusive (R-FW-1 / R-SUB-WF-RESTRICT-01-S-3):
+        // it does not mutate status_code so it may run alongside other operations.
+        $inflight = $exclusive && SubscriptionOperation::query()
             ->where('subscription_id', $subscription->subscription_id)
+            ->where('operation_kind', '!=', 'RESTRICT')
             ->whereIn('current_state', [SubscriptionOperation::PENDING, SubscriptionOperation::RUNNING])
             ->exists();
         if ($inflight) {
