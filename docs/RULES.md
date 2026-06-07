@@ -24,7 +24,7 @@ Engine: `Modules/Rules/app/Engine/DataDrivenRuleEngine.php` (bound to
 | `rules.billing.dunning` | BIL-04 escalation policy | ✅ seeded + wired (DunningService) |
 | `rules.workorder.site-visit-decision` / `.resolution-gate` | WO-01-FLOW-SUPPORT gateways | ✅ seeded + wired (wo-support flow) |
 | `rules.subscription.upgrade` / `.downgrade` | SUB-WF-UPGRADE/DOWNGRADE-01 target-package validation | ✅ seeded + wired (sub-upgrade/sub-downgrade flows) |
-| `rules.subscription.relocation` / `.migration` | SUB-WF (Wave 3) | ⬜ |
+| `rules.subscription.relocation` / `.migration` | SUB-WF-RELOCATION/MIGRATION-01 target-HomePass validation | ✅ seeded + wired (sub-relocation/sub-migration flows) |
 | `rules.subscription.common` | shared subscription policy | ⬜ |
 | `rules.tax` | PLM-CFG-02 / BIL tax applicability | ⬜ (tax fiscalisation stub exists) |
 | `rules.wallet` / `rules.wallet-catalog` | BIL-05 / PLM-CFG-03 | ⬜ |

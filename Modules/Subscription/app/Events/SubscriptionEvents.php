@@ -38,6 +38,15 @@ final class SubscriptionEvents
 
     public const DOWNGRADE_REJECTED = 'SubscriptionDowngradeRejected';
 
+    // SUB-WF-RELOCATION-01 / MIGRATION-01 events.
+    public const RELOCATED = 'SubscriptionRelocated';
+
+    public const RELOCATION_REJECTED = 'SubscriptionRelocationRejected';
+
+    public const MIGRATED = 'SubscriptionMigrated';
+
+    public const MIGRATION_REJECTED = 'SubscriptionMigrationRejected';
+
     // SUB-WF-RESTRICT-01 partial-service restriction events.
     public const RESTRICTION_ADDED = 'SubscriptionRestrictionAdded';
 

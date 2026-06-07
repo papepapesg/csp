@@ -104,9 +104,15 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   sets new package_ref/version + transition type, stays ACTIVE) → notify.
   `subscription_upgrade_config` per operator+kind; REST `/upgrade` + `/downgrade`.
 
+- **subscription relocation / migration** (SUB-WF-RELOCATION-01 / MIGRATION-01) —
+  `sub-relocation` / `sub-migration` flows: validate target HomePass
+  (`rules.subscription.relocation` / `.migration`: target SERVICEABLE, differs from
+  source; migration requires a technology change) → commit HomePass change (pins
+  previous_homepass_id; migration also changes the package) → notify. REST
+  `/relocate` + `/migrate`. The full SUB-WF MACD set is now config-driven.
+
 **Pending:** WO shifting · OSR-RMA/swap ·
-customer self-care · reporting exports/reconciliation ·
-relocation/migration.
+customer self-care · reporting exports/reconciliation.
 
 ## Wave 3 — Advanced Commercial, Assurance & Audit ⬜
 

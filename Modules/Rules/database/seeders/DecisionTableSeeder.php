@@ -61,6 +61,24 @@ class DecisionTableSeeder extends Seeder
                 'then' => ['eligible' => false, 'decisionCode' => 'NOT_A_DOWNGRADE', 'error' => ['field' => 'targetPackageRef', 'message' => 'Target package price must be <= current package (use upgrade)']]],
         ], ['eligible' => true], ['statusCode', 'sourceCurrency', 'targetCurrency', 'sourcePrice', 'targetPrice', 'priceDelta', 'targetPackageStatus', 'sameHomePass']);
 
+        // rules.subscription.relocation — target-HomePass validation
+        // (SUB-WF-RELOCATION-01 §4.3): target must be SERVICEABLE and differ from source.
+        $this->deploy('rules.subscription.relocation', 'Subscription relocation target validation', 'FIRST', [
+            ['ruleId' => 'R-SUB-REL-TH-1', 'when' => [['var' => 'targetHomepassStatus', 'op' => 'neq', 'value' => 'SERVICEABLE']],
+                'then' => ['eligible' => false, 'decisionCode' => 'TARGET_HOMEPASS_NOT_SELLABLE', 'error' => ['field' => 'targetHomepassId', 'message' => 'Target HomePass must be SERVICEABLE']]],
+            ['ruleId' => 'R-SUB-REL-TH-2', 'when' => [['var' => 'sameHomePass', 'op' => 'truthy']],
+                'then' => ['eligible' => false, 'decisionCode' => 'SAME_HOMEPASS', 'error' => ['field' => 'targetHomepassId', 'message' => 'Target HomePass must differ from the current one']]],
+        ], ['eligible' => true], ['statusCode', 'targetHomepassStatus', 'sameHomePass', 'sourceTechnology', 'targetTechnology', 'sameTechnology']);
+
+        // rules.subscription.migration — like relocation but the technology must change
+        // (MIGRATION changes both HomePass and Package/technology).
+        $this->deploy('rules.subscription.migration', 'Subscription migration target validation', 'FIRST', [
+            ['ruleId' => 'R-SUB-MIG-TH-1', 'when' => [['var' => 'targetHomepassStatus', 'op' => 'neq', 'value' => 'SERVICEABLE']],
+                'then' => ['eligible' => false, 'decisionCode' => 'TARGET_HOMEPASS_NOT_SELLABLE', 'error' => ['field' => 'targetHomepassId', 'message' => 'Target HomePass must be SERVICEABLE']]],
+            ['ruleId' => 'R-SUB-MIG-TH-2', 'when' => [['var' => 'sameTechnology', 'op' => 'truthy']],
+                'then' => ['eligible' => false, 'decisionCode' => 'NOT_A_MIGRATION', 'error' => ['field' => 'targetHomepassId', 'message' => 'Migration must change the access technology']]],
+        ], ['eligible' => true], ['statusCode', 'targetHomepassStatus', 'sameHomePass', 'sourceTechnology', 'targetTechnology', 'sameTechnology']);
+
         // rules.subscription.terminate — termination policy (default: allowed).
         $this->deploy('rules.subscription.terminate', 'Subscription termination policy', 'FIRST',
             [], ['eligible' => true], ['statusCode', 'reasonCode']);

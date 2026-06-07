@@ -72,6 +72,30 @@ class OperationController extends ApiController
         return $this->trigger($request, $subscription, 'DOWNGRADE', $data);
     }
 
+    /** POST /api/subscriptions/{subscription}/relocate */
+    public function relocate(Request $request, Subscription $subscription): JsonResponse
+    {
+        $data = $request->validate([
+            'targetHomepassId' => ['required', 'string', 'max:64'],
+            'relocationTrigger' => ['nullable', 'string', 'max:48'],
+            'effectiveTiming' => ['nullable', 'in:IMMEDIATE,END_OF_CURRENT_CYCLE,SCHEDULED_AT'],
+        ]);
+
+        return $this->trigger($request, $subscription, 'RELOCATION', $data);
+    }
+
+    /** POST /api/subscriptions/{subscription}/migrate */
+    public function migrate(Request $request, Subscription $subscription): JsonResponse
+    {
+        $data = $request->validate([
+            'targetHomepassId' => ['required', 'string', 'max:64'],
+            'targetPackageRef' => ['nullable', 'string', 'max:64'],
+            'effectiveTiming' => ['nullable', 'in:IMMEDIATE,END_OF_CURRENT_CYCLE,SCHEDULED_AT'],
+        ]);
+
+        return $this->trigger($request, $subscription, 'MIGRATION', $data);
+    }
+
     /** GET /api/subscriptions/{subscription}/operations */
     public function index(Subscription $subscription): JsonResponse
     {
