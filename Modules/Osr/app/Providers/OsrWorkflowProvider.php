@@ -4,6 +4,7 @@ namespace Modules\Osr\Providers;
 
 use Illuminate\Support\ServiceProvider;
 use Modules\Osr\Workflow\CompleteSwapHandler;
+use Modules\Osr\Workflow\CompleteWithoutRecoveryHandler;
 use Modules\Osr\Workflow\CreateSwapWorkOrderHandler;
 use Modules\Osr\Workflow\FailSwapHandler;
 use Modules\Osr\Workflow\ProvisionSwapHandler;
@@ -24,6 +25,7 @@ class OsrWorkflowProvider extends ServiceProvider
         $registry->register(RecoverSourceHandler::class);
         $registry->register(ProvisionSwapHandler::class);
         $registry->register(CompleteSwapHandler::class);
+        $registry->register(CompleteWithoutRecoveryHandler::class);
         $registry->register(FailSwapHandler::class);
     }
 }

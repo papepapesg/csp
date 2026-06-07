@@ -83,6 +83,49 @@ class SwapRequestTest extends TestCase
         $this->assertDatabaseHas('vendor_rma_stub', ['swap_id' => $swapId]);
     }
 
+    public function test_eqp_pickup_recovers_equipment_at_termination(): void
+    {
+        $van = $this->contractorVan('ctr_eqp');
+        $source = $this->fieldInstance();
+
+        $resp = $this->postJson('/api/swap-requests/eqp', [
+            'source_instance_id' => $source->instance_id, 'subscription_id' => 'sub_1',
+            'recovery_contractor_id' => 'ctr_eqp',
+        ], ['Idempotency-Key' => 'eqp-1'])->assertStatus(202);
+        $swapId = $resp->json('entityId');
+        $this->assertSame('EQP', EquipmentSwapRequest::find($swapId)->kind);
+
+        $this->drain();
+        $this->postJson("/api/swap-requests/{$swapId}/field-visit", ['recovered' => true])->assertStatus(202);
+        $this->drain();
+
+        $swap = EquipmentSwapRequest::find($swapId);
+        $this->assertSame('COMPLETED', $swap->status);
+        $this->assertSame(EquipmentInstance::IN_CONTRACTOR_STOCK, $source->refresh()->state);
+        $this->assertSame($van, $source->location_id);
+    }
+
+    public function test_eqr_customer_refuses_return_forfeits_deposit(): void
+    {
+        $this->contractorVan('ctr_eqr');
+        $source = $this->fieldInstance();
+
+        $resp = $this->postJson('/api/swap-requests/eqp', [
+            'source_instance_id' => $source->instance_id, 'recovery_contractor_id' => 'ctr_eqr',
+        ], ['Idempotency-Key' => 'eqr-1'])->assertStatus(202);
+        $swapId = $resp->json('entityId');
+
+        $this->drain();
+        // Customer refuses to return the equipment.
+        $this->postJson("/api/swap-requests/{$swapId}/field-visit", ['recovered' => false])->assertStatus(202);
+        $this->drain();
+
+        $swap = EquipmentSwapRequest::find($swapId);
+        $this->assertSame('COMPLETED_WITHOUT_RECOVERY', $swap->status);
+        // Equipment never recovered — stays in the field.
+        $this->assertSame(EquipmentInstance::IN_FIELD_ACTIVE, $source->refresh()->state);
+    }
+
     public function test_ineligible_swap_fails_without_truck_roll(): void
     {
         $this->contractorVan('ctr_1');

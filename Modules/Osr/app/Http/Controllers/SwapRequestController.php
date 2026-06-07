@@ -61,8 +61,15 @@ class SwapRequestController extends ApiController
     /** POST /api/swap-requests/{swapRequest}/field-visit */
     public function fieldVisit(Request $request, EquipmentSwapRequest $swapRequest): JsonResponse
     {
-        $data = $request->validate(['defect_confirmed' => ['nullable', 'boolean']]);
-        $this->swaps->confirmFieldVisit($swapRequest, (bool) ($data['defect_confirmed'] ?? true));
+        $data = $request->validate([
+            'defect_confirmed' => ['nullable', 'boolean'],
+            'recovered' => ['nullable', 'boolean'],
+        ]);
+        $this->swaps->confirmFieldVisit(
+            $swapRequest,
+            (bool) ($data['defect_confirmed'] ?? true),
+            (bool) ($data['recovered'] ?? true),
+        );
 
         return ApiResponse::accepted(entityId: $swapRequest->swap_id, nextAction: 'TRACK_OPERATION');
     }

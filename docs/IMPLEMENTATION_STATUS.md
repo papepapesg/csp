@@ -120,7 +120,9 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   gap — proven by test (writes the OSR-INSTANCE lifecycle + OSR-01 stock movement to
   the contractor van). `equipment_swap_request` root + `vendor_rma_stub`; new
   instance states (IN_FIELD_DEFECTIVE/RECOVERED_BY_CONTRACTOR/RESERVED_FOR_WO).
-  REST `/swap-requests/{kind}` + field-visit. (EQP/EQU pickup/upgrade flows pending.)
+  REST `/swap-requests/{kind}` + field-visit. **EQP** (equipment pickup at
+  termination) reuses the flow with a recovery gateway; **EQR** (customer refuses
+  return) closes COMPLETED_WITHOUT_RECOVERY + deposit-forfeit event — both tested.
 
 - **reporting exports + reconciliation** (REP-01) — CSV export of a dashboard's
   metric mart (`/reports/export/{code}`) + a mart-vs-event-log integrity check
@@ -135,7 +137,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   REST `/shifting-flow` + `/advance-phase`. The WO flow family (install/support/
   shifting) is now config-driven.
 
-**Pending:** OSR-RMA EQP/EQU · customer self-care.
+**Pending:** OSR-RMA EQU (equipment upgrade) · customer self-care.
 
 ## Wave 3 — Advanced Commercial, Assurance & Audit ⬜
 

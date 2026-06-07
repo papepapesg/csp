@@ -68,8 +68,8 @@ class SwapRequestService
         return $swap->refresh();
     }
 
-    /** Field tech confirms the visit outcome (defect confirmed / recovery). */
-    public function confirmFieldVisit(EquipmentSwapRequest $swap, bool $defectConfirmed = true): void
+    /** Field tech confirms the visit outcome (defect confirmed / recovered). */
+    public function confirmFieldVisit(EquipmentSwapRequest $swap, bool $defectConfirmed = true, bool $recovered = true): void
     {
         $instance = ProcessInstance::query()
             ->where('business_key', $swap->swap_id)
@@ -90,6 +90,6 @@ class SwapRequestService
         }
 
         $swap->update(['status' => EquipmentSwapRequest::FIELD_VISIT_IN_PROGRESS]);
-        $this->engine->completeUserTask($task, ['defectConfirmed' => $defectConfirmed]);
+        $this->engine->completeUserTask($task, ['defectConfirmed' => $defectConfirmed, 'recovered' => $recovered]);
     }
 }
