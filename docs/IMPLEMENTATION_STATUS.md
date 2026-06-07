@@ -33,7 +33,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 2 | Catalog & serviceability basics | PLM-CFG-01, SIP-01, RLM-CFG-01, ILM-CFG-02 | ✅ `Modules/Catalog`: service-class/service, package + versions + activate, tech-region, HomePass serviceability; events, 5 tests, Postman bundle |
 | 3 | Subscription master | SUB-LM-01 | ✅ `Modules/Subscription`: subscription master, status state machine, events |
 | 4 | Subscription workflow framework | SUB-WF-FRAMEWORK-01 | ✅ operation ledger + idempotency/concurrency + native workflow engine (activate/terminate); 5 tests, Postman bundle |
-| 5 | Billing/payment basics | BIL-01, BIL-01-PAY-01, BIL-02, BIL-02-READ-01, BIL-05 | ⬜ |
+| 5 | Billing/payment basics | BIL-01, BIL-01-PAY-01, BIL-02, BIL-02-READ-01, BIL-05 | ✅ `Modules/Billing`: invoice generation + read, payment application (FIFO/targeted + surplus credit), wallet topup/debit; events, 5 tests, Postman bundle |
 | 6 | First payment provider | PAY-GW-01 | ⬜ |
 | 7 | Work order & workforce basics | WO-01(+FRAMEWORK, FLOW-INSTALLATION), EM-02 | ⬜ |
 | 8 | Stock/equipment basics | OSR-01, OSR-INSTANCE-01, PLM-CFG-06 | ⬜ |
