@@ -62,11 +62,17 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 
 ## Wave 2 — Operational Hardening ⬜
 
-**Done:** terminate, **pause, resume** (SUB-WF-PAUSE/RESUME-01 — data-defined flows
-`sub-pause`/`sub-resume` + `rules.subscription.pause`/`.resume`, generic
-`sub.validate-operation` step).
+**Done:**
+- terminate, **pause, resume** (SUB-WF-PAUSE/RESUME-01 — data-defined flows
+  `sub-pause`/`sub-resume` + `rules.subscription.pause`/`.resume`, generic
+  `sub.validate-operation` step).
+- **dunning & non-payment suspension** (BIL-04 + SUB-WF-SUSPEND-NP) — `DunningService`
+  scans overdue debt, drives a configurable escalation policy
+  (`rules.billing.dunning`: warn→restrict→suspend→terminate) via a per-account level
+  and the owning SUB-WF operations; `sub-suspend` flow + `rules.subscription.suspend-np`;
+  daily `sophix:billing:dunning-run`; payment settlement de-escalates.
 
-**Pending:** dunning & non-payment suspension · WO support/shifting · OSR-RMA/swap ·
+**Pending:** WO support/shifting · OSR-RMA/swap ·
 provisioning reconciliation · customer self-care · reporting exports/reconciliation ·
 upgrade/downgrade/relocation/migration/restrict.
 

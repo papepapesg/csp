@@ -7,6 +7,7 @@ use Illuminate\Support\ServiceProvider;
 use Modules\Subscription\Workflow\ActivateHandler;
 use Modules\Subscription\Workflow\PauseHandler;
 use Modules\Subscription\Workflow\ResumeHandler;
+use Modules\Subscription\Workflow\SuspendHandler;
 use Modules\Subscription\Workflow\SyncOperationFromProcess;
 use Modules\Subscription\Workflow\TerminateHandler;
 use Modules\Subscription\Workflow\ValidateActivationHandler;
@@ -26,6 +27,7 @@ class SubscriptionWorkflowProvider extends ServiceProvider
         $registry->register(ValidateOperationHandler::class);
         $registry->register(PauseHandler::class);
         $registry->register(ResumeHandler::class);
+        $registry->register(SuspendHandler::class);
 
         Event::listen(ProcessInstanceEnded::class, [SyncOperationFromProcess::class, 'handle']);
     }

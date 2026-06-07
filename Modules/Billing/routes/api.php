@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Billing\Http\Controllers\DunningController;
 use Modules\Billing\Http\Controllers\InvoiceController;
 use Modules\Billing\Http\Controllers\PaymentController;
 use Modules\Billing\Http\Controllers\WalletController;
@@ -11,6 +12,10 @@ use Modules\Billing\Http\Controllers\WalletController;
 */
 
 Route::middleware('auth:sanctum')->group(function () {
+    // BIL-04 dunning
+    Route::get('dunning', [DunningController::class, 'index'])->middleware('permission:invoice.read');
+    Route::post('dunning/run', [DunningController::class, 'run'])->middleware('permission:invoice.manage');
+    Route::post('dunning/{account}/clear', [DunningController::class, 'clear'])->middleware('permission:invoice.manage');
     // BIL-02 — Invoices
     Route::get('invoices', [InvoiceController::class, 'index'])->middleware('permission:invoice.read');
     Route::get('invoices/{invoice}', [InvoiceController::class, 'show'])->middleware('permission:invoice.read');

@@ -6,6 +6,7 @@ use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
+use Modules\Billing\Database\Seeders\DunningPolicySeeder;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Ticketing\Database\Seeders\SlaPolicySeeder;
@@ -24,6 +25,7 @@ class DatabaseSeeder extends Seeder
             ProvisioningTargetSeeder::class,
             DecisionTableSeeder::class,
             CatalogPolicySeeder::class,
+            DunningPolicySeeder::class,
             SlaPolicySeeder::class,
         ]);
 

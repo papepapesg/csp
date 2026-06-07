@@ -24,4 +24,10 @@ final class BillingEvents
     public const WALLET_TOPPED_UP = 'WalletToppedUp';
 
     public const TAX_INVOICE_ISSUED = 'TaxInvoiceIssued';
+
+    public const DUNNING_STAGE_ADVANCED = 'DunningStageAdvanced';
+
+    public const DUNNING_CLEARED = 'DunningCleared';
+
+    public const SUBSCRIPTION_SUSPENDED_NP = 'SubscriptionSuspendedForNonPayment';
 }

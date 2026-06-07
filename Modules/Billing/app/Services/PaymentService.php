@@ -18,7 +18,10 @@ use Modules\Billing\Models\PaymentLedger;
  */
 class PaymentService
 {
-    public function __construct(private readonly EventBus $events) {}
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly DunningService $dunning,
+    ) {}
 
     /**
      * @param  array<string,mixed>  $data  account_id, paid_amount, method, currency?, gateway_ref?, target_invoice_id?
@@ -100,6 +103,14 @@ class PaymentService
                 $credit->currency = $payment->currency;
                 $credit->balance = (float) ($credit->balance ?? 0) + $remaining;
                 $credit->save();
+            }
+
+            // BIL-04: settling debt de-escalates dunning.
+            $stillOwed = Invoice::query()->where('account_id', $data['account_id'])
+                ->whereIn('status', [Invoice::OPEN, Invoice::PARTIALLY_PAID, Invoice::OVERDUE])
+                ->where('amount_due', '>', 0)->exists();
+            if (! $stillOwed) {
+                $this->dunning->clear($data['account_id']);
             }
 
             $payment->update([

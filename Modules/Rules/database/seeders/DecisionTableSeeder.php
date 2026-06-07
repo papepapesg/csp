@@ -33,6 +33,9 @@ class DecisionTableSeeder extends Seeder
         $this->deploy('rules.subscription.resume', 'Subscription resume policy', 'FIRST',
             [], ['eligible' => true], ['statusCode']);
 
+        $this->deploy('rules.subscription.suspend-np', 'Non-payment suspension policy', 'FIRST',
+            [], ['eligible' => true], ['statusCode', 'outstandingBalance']);
+
         // rules.subscription.terminate — termination policy (default: allowed).
         $this->deploy('rules.subscription.terminate', 'Subscription termination policy', 'FIRST',
             [], ['eligible' => true], ['statusCode', 'reasonCode']);
