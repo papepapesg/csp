@@ -5,8 +5,10 @@ namespace Modules\Subscription\Tests\Feature;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
 use Modules\Subscription\Models\Subscription;
+use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
 use Tests\TestCase;
 
 class SubscriptionApiTest extends TestCase
@@ -17,9 +19,16 @@ class SubscriptionApiTest extends TestCase
     {
         parent::setUp();
         $this->seed(RbacSeeder::class);
+        $this->seed(ProcessDefinitionSeeder::class);
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('SUPER_ADMIN');
         Sanctum::actingAs($user);
+    }
+
+    /** Drive the workflow engine to completion (drains external tasks). */
+    private function drainWorkflows(): void
+    {
+        Artisan::call('sophix:workflow:work', ['--once' => true]);
     }
 
     private function makeSubscription(): string
@@ -43,15 +52,22 @@ class SubscriptionApiTest extends TestCase
     {
         $id = $this->makeSubscription();
 
-        $response = $this->postJson("/api/subscriptions/{$id}/activate", [], ['Idempotency-Key' => 'act-1']);
+        $response = $this->postJson("/api/subscriptions/{$id}/activate", ['recipient' => '+254712345678'], ['Idempotency-Key' => 'act-1']);
         $response->assertStatus(202)
             ->assertJsonPath('status', 'ACCEPTED')
             ->assertJsonStructure(['operationId', 'statusUrl', 'correlationId']);
 
-        // Sync queue => workflow ran inline.
+        // Async: subscription is still pending until the engine workers run the flow.
+        $this->assertSame('PENDING_ACTIVATION', Subscription::find($id)->status_code);
+
+        $this->drainWorkflows();
+
+        // After the sub-activate flow (validate -> gateway -> set active -> notify):
         $this->assertSame('ACTIVE', Subscription::find($id)->status_code);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionActivated']);
         $this->assertDatabaseHas('subscription_operation', ['operation_kind' => 'ACTIVATE', 'current_state' => 'COMPLETED']);
+        // The flow's notify.send step produced a notification (config-driven, no code).
+        $this->assertDatabaseHas('notification', ['template_code' => 'SUBSCRIPTION_ACTIVATED']);
     }
 
     public function test_activation_is_idempotent_by_key(): void
@@ -69,7 +85,9 @@ class SubscriptionApiTest extends TestCase
     {
         $id = $this->makeSubscription();
         $this->postJson("/api/subscriptions/{$id}/activate", [], ['Idempotency-Key' => 'a'])->assertStatus(202);
+        $this->drainWorkflows();
         $this->postJson("/api/subscriptions/{$id}/terminate", ['reasonCode' => 'CUSTOMER_REQUEST'], ['Idempotency-Key' => 't'])->assertStatus(202);
+        $this->drainWorkflows();
 
         $this->assertSame('TERMINATED', Subscription::find($id)->status_code);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionTerminated']);
@@ -80,6 +98,12 @@ class SubscriptionApiTest extends TestCase
         $id = $this->makeSubscription();
         $op = $this->postJson("/api/subscriptions/{$id}/activate", [], ['Idempotency-Key' => 'track'])->json('operationId');
 
+        // Immediately the operation is RUNNING (tracked via its status URL)...
+        $this->getJson("/api/subscriptions/{$id}/operations/{$op}")->assertOk()->assertJsonPath('current_state', 'RUNNING');
+
+        $this->drainWorkflows();
+
+        // ...and COMPLETED once the workflow finishes (ledger reconciled from the engine).
         $this->getJson("/api/subscriptions/{$id}/operations/{$op}")
             ->assertOk()
             ->assertJsonPath('current_state', 'COMPLETED')

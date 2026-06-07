@@ -21,7 +21,9 @@ class OperationController extends ApiController
     /** POST /api/subscriptions/{subscription}/activate */
     public function activate(Request $request, Subscription $subscription): JsonResponse
     {
-        return $this->trigger($request, $subscription, 'ACTIVATE');
+        $request->validate(['recipient' => ['nullable', 'string', 'max:32']]);
+
+        return $this->trigger($request, $subscription, 'ACTIVATE', $request->only('recipient'));
     }
 
     /** POST /api/subscriptions/{subscription}/terminate */

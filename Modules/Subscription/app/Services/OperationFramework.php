@@ -8,29 +8,34 @@ use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Modules\Subscription\Events\SubscriptionEvents;
-use Modules\Subscription\Jobs\RunSubscriptionOperation;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Models\SubscriptionOperation;
-use Modules\Subscription\Workflows\ActivateSubscriptionWorkflow;
-use Modules\Subscription\Workflows\TerminateSubscriptionWorkflow;
+use Modules\Workflow\Engine\WorkflowEngine;
 
 /**
  * SUB-WF-FRAMEWORK — starts and tracks subscription operations.
  *
- * Enforces idempotency (operator + key), single-in-flight concurrency, and the
- * "return an operation id, track asynchronously" contract (DD_API-00 §7). The
- * registry maps each operation kind to its native workflow.
+ * Enforces idempotency (operator + key) and single-in-flight concurrency, then
+ * hands orchestration to the config-driven workflow engine. The flow shape lives
+ * in a process_definition (data, authored in the studio), NOT in code — so a new
+ * operator/market is a new definition row. Operation kind maps to a process key
+ * by convention (ACTIVATE -> sub-activate); the operation ledger is reconciled
+ * from the engine's ProcessInstanceEnded event.
  */
 class OperationFramework
 {
-    /** Operation kind -> workflow class (SUB-WF flow satellites). */
-    public const REGISTRY = [
-        'ACTIVATE' => ActivateSubscriptionWorkflow::class,
-        'TERMINATE' => TerminateSubscriptionWorkflow::class,
-    ];
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly WorkflowEngine $engine,
+    ) {}
 
-    public function __construct(private readonly EventBus $events) {}
+    /** Convention: operation kind -> process definition key. */
+    public static function processKeyFor(string $kind): string
+    {
+        return 'sub-'.Str::slug(strtolower($kind));
+    }
 
     /**
      * @param  array<string,mixed>  $input
@@ -44,10 +49,6 @@ class OperationFramework
         ?string $actorUserId = null,
         ?string $actorRole = null,
     ): SubscriptionOperation {
-        if (! isset(self::REGISTRY[$kind])) {
-            throw DomainException::ruleRejected('UNKNOWN_OPERATION', "Unknown operation kind [{$kind}].");
-        }
-
         $idempotencyKey ??= Id::make('idem');
 
         // Idempotent replay: same operator + key returns the original operation.
@@ -71,13 +72,15 @@ class OperationFramework
             );
         }
 
-        $operation = DB::transaction(function () use ($subscription, $kind, $input, $idempotencyKey, $requestHash, $actorUserId, $actorRole) {
+        $processKey = self::processKeyFor($kind);
+
+        $operation = DB::transaction(function () use ($subscription, $kind, $input, $idempotencyKey, $requestHash, $actorUserId, $actorRole, $processKey) {
             $operation = SubscriptionOperation::query()->create([
                 'operation_id' => Id::operation(),
                 'operator_code' => $subscription->operator_code,
                 'subscription_id' => $subscription->subscription_id,
                 'operation_kind' => $kind,
-                'bpmn_process_key' => self::REGISTRY[$kind],
+                'bpmn_process_key' => $processKey,
                 'initiating_actor_user_id' => $actorUserId,
                 'initiating_actor_role' => $actorRole,
                 'idempotency_key' => $idempotencyKey,
@@ -99,8 +102,25 @@ class OperationFramework
             return $operation;
         });
 
-        RunSubscriptionOperation::dispatch($operation->operation_id);
+        // Start the data-defined workflow; variables carry IDs + control flags only.
+        $instance = $this->engine->start(
+            processKey: $processKey,
+            businessKey: $subscription->subscription_id,
+            variables: array_merge($input, [
+                'subscriptionId' => $subscription->subscription_id,
+                'operationId' => $operation->operation_id,
+                'operationKind' => $kind,
+                'customerId' => $subscription->customer_id,
+            ]),
+            operator: $subscription->operator_code,
+        );
 
-        return $operation;
+        $operation->update([
+            'bpmn_process_instance_id' => $instance->instance_id,
+            'current_state' => SubscriptionOperation::RUNNING,
+            'started_at' => now(),
+        ]);
+
+        return $operation->refresh();
     }
 }

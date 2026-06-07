@@ -21,7 +21,7 @@ These are enforced across the codebase (HLD §2.1, MVP baseline §1):
 | Design-doc component        | Laravel-native implementation                                              | Swap-in path |
 | --------------------------- | -------------------------------------------------------------------------- | ------------ |
 | Keycloak (OIDC/JWT)         | Sanctum (SPA session + API tokens) + `spatie/laravel-permission` RBAC      | OIDC adapter on the `web` guard |
-| Camunda (orchestration)     | `domain_operations` ledger + `OperationManager` + queued `RunOperation` + `Workflow` interface | `SOPHIX_WORKFLOW_DRIVER=camunda` + Camunda REST client |
+| Camunda (orchestration)     | **Config-driven workflow engine** (`Modules/Workflow`): process_definition graphs (data, React-Flow authored) + external-task workers + topic→handler toolbox. Flows are config, NOT code — operator override = a definition row | Real Camunda via external-task REST (same worker pattern) |
 | Drools (decisions)          | `RuleEngine` contract + `NativeRuleEngine` (registered side-effect-free rule sets) | `SOPHIX_RULES_DRIVER=drools` + KIE server client |
 | Kafka (events)              | `EventBus` → `OutboxEventBus` (outbox table) + `DispatchOutboxCommand` → in-process `OutboxEventPublished` | `SOPHIX_EVENT_BUS=kafka` + `KafkaEventBus::produce()` |
 | PostgreSQL                  | PostgreSQL 16 (`pgsql` connection)                                          | — |

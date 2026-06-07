@@ -30,6 +30,8 @@ class RbacSeeder extends Seeder
         'notification.read', 'notification.send', 'ticket.read', 'ticket.create', 'ticket.assign', 'ticket.manage',
         'franchise.manage', 'rbac.manage',
         'workforce.read', 'workforce.manage',
+        'workflow.view', 'workflow.manage',
+        'itops.view', 'itops.manage',
     ];
 
     /** Role -> granted permissions (DD_EM-CFG-03 role-permission matrix). */

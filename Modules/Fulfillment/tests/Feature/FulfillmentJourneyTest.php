@@ -5,13 +5,15 @@ namespace Modules\Fulfillment\Tests\Feature;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
 use Modules\Subscription\Models\Subscription;
+use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
 use Tests\TestCase;
 
 /**
  * End-to-end Wave-1 revenue journey: capture -> subscription + install WO ->
- * activate. Exercises ILM-less ids but real SUB/WO/FUL orchestration.
+ * activate. Exercises real SUB/WO/FUL orchestration + the workflow engine.
  */
 class FulfillmentJourneyTest extends TestCase
 {
@@ -21,9 +23,15 @@ class FulfillmentJourneyTest extends TestCase
     {
         parent::setUp();
         $this->seed(RbacSeeder::class);
+        $this->seed(ProcessDefinitionSeeder::class);
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('SUPER_ADMIN');
         Sanctum::actingAs($user);
+    }
+
+    private function drainWorkflows(): void
+    {
+        Artisan::call('sophix:workflow:work', ['--once' => true]);
     }
 
     public function test_capture_creates_subscription_and_install_work_order(): void
@@ -56,7 +64,8 @@ class FulfillmentJourneyTest extends TestCase
             ->assertOk()
             ->assertJsonPath('status', 'COMPLETED');
 
-        // Sync queue => SUB-WF activation ran inline.
+        // FUL-03 started the SUB-WF activation workflow; the engine workers run it.
+        $this->drainWorkflows();
         $this->assertSame('ACTIVE', Subscription::find($order['subscription_id'])->status_code);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'OrderCompleted']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionActivated']);
