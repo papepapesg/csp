@@ -21,9 +21,43 @@ class WoSupportSeeder extends Seeder
         $operator = config('sophix.default_operator', 'WIK');
 
         $this->deployFlow();
+        $this->deployShiftingFlow();
         $this->seedJobTypes($operator);
         $this->seedFlowConfig($operator);
         $this->seedRules();
+    }
+
+    private function deployShiftingFlow(): void
+    {
+        // WO-01-FLOW-SHIFTING: disconnect at source -> reconnect at target (multi-phase).
+        ProcessDefinition::query()->updateOrCreate(
+            ['process_key' => 'wo-shifting', 'version' => 1, 'operator_code' => null],
+            [
+                'definition_id' => Id::make('pdef'),
+                'name' => 'Work Order — Shifting',
+                'graph' => [
+                    'nodes' => [
+                        ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 100], 'data' => ['label' => 'Start']],
+                        ['id' => 'mark_disc', 'type' => 'serviceTask', 'position' => ['x' => 160, 'y' => 100], 'data' => ['label' => 'Phase: Disconnect', 'topic' => 'wo.mark-phase', 'config' => ['phase' => 'DISCONNECT']]],
+                        ['id' => 'await_disc', 'type' => 'userTask', 'position' => ['x' => 340, 'y' => 100], 'data' => ['label' => 'Disconnect at source', 'name' => 'Disconnect at source', 'candidateGroup' => 'FIELD']],
+                        ['id' => 'mark_recon', 'type' => 'serviceTask', 'position' => ['x' => 520, 'y' => 100], 'data' => ['label' => 'Phase: Reconnect', 'topic' => 'wo.mark-phase', 'config' => ['phase' => 'RECONNECT']]],
+                        ['id' => 'await_recon', 'type' => 'userTask', 'position' => ['x' => 700, 'y' => 100], 'data' => ['label' => 'Reconnect at target', 'name' => 'Reconnect at target', 'candidateGroup' => 'FIELD']],
+                        ['id' => 'finalize', 'type' => 'serviceTask', 'position' => ['x' => 880, 'y' => 100], 'data' => ['label' => 'Finalize shifting', 'topic' => 'wo.finalize-shifting']],
+                        ['id' => 'end', 'type' => 'endEvent', 'position' => ['x' => 1060, 'y' => 100], 'data' => ['label' => 'Completed']],
+                    ],
+                    'edges' => [
+                        ['id' => 'e1', 'source' => 'start', 'target' => 'mark_disc'],
+                        ['id' => 'e2', 'source' => 'mark_disc', 'target' => 'await_disc'],
+                        ['id' => 'e3', 'source' => 'await_disc', 'target' => 'mark_recon'],
+                        ['id' => 'e4', 'source' => 'mark_recon', 'target' => 'await_recon'],
+                        ['id' => 'e5', 'source' => 'await_recon', 'target' => 'finalize'],
+                        ['id' => 'e6', 'source' => 'finalize', 'target' => 'end'],
+                    ],
+                ],
+                'status' => ProcessDefinition::DEPLOYED,
+                'deployed_at' => now(),
+            ],
+        );
     }
 
     private function deployFlow(): void

@@ -27,4 +27,9 @@ final class WorkOrderEvents
     public const RPT_LINKAGE_RECORDED = 'WorkOrderRPTLinkageRecorded';
 
     public const EQUIPMENT_BINDINGS_RECORDED = 'WorkOrderEquipmentBindingsRecorded';
+
+    // WO-01-FLOW-SHIFTING events.
+    public const PHASE_TRANSITIONED = 'WorkOrderPhaseTransitioned';
+
+    public const SHIFTING_COMPLETED = 'WorkOrderShiftingCompleted';
 }

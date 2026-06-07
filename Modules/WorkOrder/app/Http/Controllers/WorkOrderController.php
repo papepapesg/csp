@@ -8,6 +8,7 @@ use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\WorkOrder\Models\WorkOrder;
+use Modules\WorkOrder\Services\ShiftingFlowService;
 use Modules\WorkOrder\Services\SupportFlowService;
 use Modules\WorkOrder\Services\WorkOrderService;
 
@@ -20,6 +21,7 @@ class WorkOrderController extends ApiController
     public function __construct(
         private readonly WorkOrderService $service,
         private readonly SupportFlowService $supportFlow,
+        private readonly ShiftingFlowService $shiftingFlow,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -119,6 +121,26 @@ class WorkOrderController extends ApiController
             'bindings' => ['nullable', 'array'],
         ]);
         $this->supportFlow->resolve($workOrder, $data['final_reason'], $data['bindings'] ?? []);
+
+        return ApiResponse::accepted(entityId: $workOrder->work_order_id, nextAction: 'TRACK_OPERATION');
+    }
+
+    /** POST /work-orders/{wo}/shifting-flow — start the WO-01-FLOW-SHIFTING process. */
+    public function startShiftingFlow(WorkOrder $workOrder): JsonResponse
+    {
+        $instance = $this->shiftingFlow->start($workOrder);
+
+        return ApiResponse::accepted(
+            entityId: $workOrder->work_order_id,
+            extra: ['processInstanceId' => $instance->instance_id, 'processKey' => $instance->process_key],
+        );
+    }
+
+    /** POST /work-orders/{wo}/advance-phase — field tech completes the current phase. */
+    public function advancePhase(Request $request, WorkOrder $workOrder): JsonResponse
+    {
+        $data = $request->validate(['notes' => ['nullable', 'string', 'max:255']]);
+        $this->shiftingFlow->advance($workOrder, $data);
 
         return ApiResponse::accepted(entityId: $workOrder->work_order_id, nextAction: 'TRACK_OPERATION');
     }

@@ -128,7 +128,14 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   shared `MetricMap` and diffs against the stored daily metrics, flagging any
   missed/double-counted projection — staying within the event/mart boundary.
 
-**Pending:** WO shifting · OSR-RMA EQP/EQU · customer self-care.
+- **WO shifting flow** (WO-01-FLOW-SHIFTING) — multi-phase `wo-shifting` flow:
+  mark DISCONNECT → disconnect-at-source user task → mark RECONNECT →
+  reconnect-at-target user task → finalize, emitting WorkOrderPhaseTransitioned
+  (the real framework event SUB-WF-RELOCATION parks on) + WorkOrderShiftingCompleted.
+  REST `/shifting-flow` + `/advance-phase`. The WO flow family (install/support/
+  shifting) is now config-driven.
+
+**Pending:** OSR-RMA EQP/EQU · customer self-care.
 
 ## Wave 3 — Advanced Commercial, Assurance & Audit ⬜
 
