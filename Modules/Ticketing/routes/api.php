@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Ticketing\Http\Controllers\AsrController;
 use Modules\Ticketing\Http\Controllers\TicketController;
 
 /*
@@ -20,4 +21,5 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('tickets/{ticket}/work-orders', [TicketController::class, 'createWorkOrder'])->middleware('permission:ticket.manage');
     Route::post('tickets/{ticket}/resolve', [TicketController::class, 'resolve'])->middleware('permission:ticket.manage');
     Route::post('tickets/{ticket}/close', [TicketController::class, 'close'])->middleware('permission:ticket.manage');
+    Route::post('asr', [AsrController::class, 'store'])->middleware(['permission:ticket.create', 'idempotency']);
 });

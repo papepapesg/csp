@@ -8,11 +8,13 @@ use Illuminate\Support\Facades\Hash;
 use Modules\Billing\Database\Seeders\DunningPolicySeeder;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
 use Modules\Catalog\Database\Seeders\TaxCatalogSeeder;
+use Modules\Ilm\Database\Seeders\CvmPolicySeeder;
 use Modules\Osr\Database\Seeders\OsrRmaSeeder;
 use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Subscription\Database\Seeders\RestrictionCatalogSeeder;
 use Modules\Subscription\Database\Seeders\UpgradeConfigSeeder;
+use Modules\Ticketing\Database\Seeders\AsrPolicySeeder;
 use Modules\Ticketing\Database\Seeders\SlaPolicySeeder;
 use Modules\WorkOrder\Database\Seeders\FieldAuditPolicySeeder;
 use Modules\WorkOrder\Database\Seeders\WoSupportSeeder;
@@ -38,7 +40,9 @@ class DatabaseSeeder extends Seeder
             WoSupportSeeder::class,
             FieldAuditPolicySeeder::class,
             OsrRmaSeeder::class,
+            CvmPolicySeeder::class,
             SlaPolicySeeder::class,
+            AsrPolicySeeder::class,
         ]);
 
         $admin = User::query()->firstOrCreate(

@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use Modules\Ilm\Http\Controllers\CustomerAccountController;
 use Modules\Ilm\Http\Controllers\CustomerController;
 use Modules\Ilm\Http\Controllers\CustomerSubResourceController;
+use Modules\Ilm\Http\Controllers\CvmController;
 use Modules\Ilm\Http\Controllers\KycController;
 
 /*
@@ -38,4 +39,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('customer-accounts', [CustomerAccountController::class, 'store'])->middleware(['permission:customer.create', 'idempotency']);
     Route::get('customer-accounts/{account}', [CustomerAccountController::class, 'show'])->middleware('permission:customer.read');
     Route::patch('customer-accounts/{account}', [CustomerAccountController::class, 'update'])->middleware('permission:customer.update');
+
+    // EM-03 CVM
+    Route::get('cvm-activities', [CvmController::class, 'index'])->middleware('permission:customer.read');
+    Route::post('cvm-activities', [CvmController::class, 'store'])->middleware('permission:customer.update');
+    Route::post('cvm-activities/{cvmActivity}/decide', [CvmController::class, 'decide'])->middleware('permission:customer.update');
 });
