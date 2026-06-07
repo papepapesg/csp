@@ -22,6 +22,7 @@ Engine: `Modules/Rules/app/Engine/DataDrivenRuleEngine.php` (bound to
 | `rules.subscription.pause` / `.resume` / `.suspend-np` | SUB-WF-PAUSE/RESUME-01, SUB-WF-SUSPEND-NP-01 | ✅ seeded + wired (validate-operation gateway) |
 | `rules.subscription.restrict` | SUB-WF-RESTRICT-01 (R-RG-2 policy layer) | ✅ seeded + wired (`sub-restrict` flow; catalog/state/dunning gating in RestrictionService) |
 | `rules.billing.dunning` | BIL-04 escalation policy | ✅ seeded + wired (DunningService) |
+| `rules.workorder.site-visit-decision` / `.resolution-gate` | WO-01-FLOW-SUPPORT gateways | ✅ seeded + wired (wo-support flow) |
 | `rules.subscription.upgrade` / `.downgrade` / `.relocation` / `.migration` | SUB-WF (Wave 3) | ⬜ |
 | `rules.subscription.common` | shared subscription policy | ⬜ |
 | `rules.tax` | PLM-CFG-02 / BIL tax applicability | ⬜ (tax fiscalisation stub exists) |

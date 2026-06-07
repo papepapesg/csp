@@ -65,6 +65,32 @@ class WorkOrderService
     }
 
     /**
+     * WO-01-FLOW-SUPPORT close: the support flow's enforce-checklist + state-event
+     * steps drive the WO to its terminal state irrespective of the lean
+     * desk-resolution path (which may not pass through ASSIGNED/IN_PROGRESS). Sets
+     * the final_reason + phase, records history, and emits Finalized.
+     *
+     * @param  array<string,mixed>  $attrs
+     */
+    public function completeSupport(WorkOrder $wo, array $attrs = [], ?string $actor = null): WorkOrder
+    {
+        return DB::transaction(function () use ($wo, $attrs, $actor) {
+            $from = $wo->status;
+            $wo->update($attrs + ['status' => WorkOrder::FINALIZED, 'finalized_at' => now()]);
+            $this->recordHistory($wo, $from, WorkOrder::FINALIZED, $actor, $attrs['final_reason'] ?? null);
+            $this->emit(WorkOrderEvents::FINALIZED, $wo, ['from' => $from, 'to' => WorkOrder::FINALIZED, 'finalReason' => $wo->final_reason]);
+
+            return $wo->refresh();
+        });
+    }
+
+    /** Emit a WO domain event (used by the support-flow step handlers). */
+    public function publish(string $type, WorkOrder $wo, array $payload = []): void
+    {
+        $this->emit($type, $wo, $payload);
+    }
+
+    /**
      * @param  array<string,mixed>  $attrs
      */
     private function transition(WorkOrder $wo, string $to, ?string $actor, array $attrs, string $event, ?string $reason = null): WorkOrder

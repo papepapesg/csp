@@ -11,6 +11,7 @@ use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Subscription\Database\Seeders\RestrictionCatalogSeeder;
 use Modules\Ticketing\Database\Seeders\SlaPolicySeeder;
+use Modules\WorkOrder\Database\Seeders\WoSupportSeeder;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
 
 class DatabaseSeeder extends Seeder
@@ -28,6 +29,7 @@ class DatabaseSeeder extends Seeder
             CatalogPolicySeeder::class,
             DunningPolicySeeder::class,
             RestrictionCatalogSeeder::class,
+            WoSupportSeeder::class,
             SlaPolicySeeder::class,
         ]);
 

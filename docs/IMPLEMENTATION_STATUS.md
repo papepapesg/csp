@@ -81,7 +81,15 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   (POST/DELETE/GET `/restrictions`). Dunning L2 drives a DUNNING_DRIVEN restriction;
   resume-after-payment lifts dunning-marked restrictions.
 
-**Pending:** WO support/shifting · OSR-RMA/swap ·
+- **WO support flow** (WO-01-FLOW-SUPPORT) — config-driven `wo-support` engine flow:
+  warranty-linkage (RPT spawn) → site-visit-decision (`rules.workorder.site-visit-decision`
+  reads the job-type catalog) → await-resolution user task → resolution-gate
+  (`rules.workorder.resolution-gate`) → RESOLVED (capture bindings) /
+  NOT_RESOLVED_ESCALATE (Pattern A: finalize + spawn QCS WO for NOC, linked by
+  master_wo_id) / AREA_OUTAGE → finalize + warranty window + WorkOrderSupportCompleted.
+  `wo_job_type_catalog` + `wo_flow_config` per operator; REST start-flow + resolve.
+
+**Pending:** WO shifting · OSR-RMA/swap ·
 provisioning reconciliation · customer self-care · reporting exports/reconciliation ·
 upgrade/downgrade/relocation/migration.
 

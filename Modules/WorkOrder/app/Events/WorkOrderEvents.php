@@ -18,4 +18,13 @@ final class WorkOrderEvents
     public const FINALIZED = 'WorkOrderFinalized';
 
     public const CANCELLED = 'WorkOrderCancelled';
+
+    // WO-01-FLOW-SUPPORT events.
+    public const SUPPORT_COMPLETED = 'WorkOrderSupportCompleted';
+
+    public const ESCALATION_CANDIDATE = 'WorkOrderEscalationCandidate';
+
+    public const RPT_LINKAGE_RECORDED = 'WorkOrderRPTLinkageRecorded';
+
+    public const EQUIPMENT_BINDINGS_RECORDED = 'WorkOrderEquipmentBindingsRecorded';
 }

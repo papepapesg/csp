@@ -8,6 +8,7 @@ use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\WorkOrder\Models\WorkOrder;
+use Modules\WorkOrder\Services\SupportFlowService;
 use Modules\WorkOrder\Services\WorkOrderService;
 
 /**
@@ -16,7 +17,10 @@ use Modules\WorkOrder\Services\WorkOrderService;
  */
 class WorkOrderController extends ApiController
 {
-    public function __construct(private readonly WorkOrderService $service) {}
+    public function __construct(
+        private readonly WorkOrderService $service,
+        private readonly SupportFlowService $supportFlow,
+    ) {}
 
     public function index(Request $request): JsonResponse
     {
@@ -39,6 +43,8 @@ class WorkOrderController extends ApiController
     {
         $data = $request->validate([
             'type' => ['required', 'in:INSTALLATION,SUPPORT,SHIFTING,RELOCATION,EQUIPMENT,NOC'],
+            'kind' => ['nullable', 'in:SUPPORT,SHIFTING,INSTALLATION'],
+            'job_type_code' => ['nullable', 'string', 'max:32'],
             'priority' => ['nullable', 'in:LOW,NORMAL,HIGH,URGENT'],
             'account_id' => ['nullable', 'string'],
             'subscription_id' => ['nullable', 'string'],
@@ -47,6 +53,8 @@ class WorkOrderController extends ApiController
             'tech_region_id' => ['nullable', 'string'],
             'source_type' => ['nullable', 'in:TICKET,SUBSCRIPTION_OP,FULFILLMENT,MANUAL'],
             'source_ref' => ['nullable', 'string'],
+            'originating_context_type' => ['nullable', 'string', 'max:32'],
+            'initial_reason' => ['nullable', 'string', 'max:500'],
             'scheduled_at' => ['nullable', 'date'],
         ]);
         $data['created_by'] = $request->user()?->uid;
@@ -90,5 +98,28 @@ class WorkOrderController extends ApiController
         $data = $request->validate(['reason' => ['nullable', 'string', 'max:255']]);
 
         return ApiResponse::item($this->service->cancel($workOrder, $data['reason'] ?? null, $request->user()?->uid));
+    }
+
+    /** POST /work-orders/{wo}/support-flow — start the WO-01-FLOW-SUPPORT process. */
+    public function startSupportFlow(WorkOrder $workOrder): JsonResponse
+    {
+        $instance = $this->supportFlow->start($workOrder);
+
+        return ApiResponse::accepted(
+            entityId: $workOrder->work_order_id,
+            extra: ['processInstanceId' => $instance->instance_id, 'processKey' => $instance->process_key],
+        );
+    }
+
+    /** POST /work-orders/{wo}/resolve — field/desk agent supplies the resolution. */
+    public function resolve(Request $request, WorkOrder $workOrder): JsonResponse
+    {
+        $data = $request->validate([
+            'final_reason' => ['required', 'string', 'max:64'],
+            'bindings' => ['nullable', 'array'],
+        ]);
+        $this->supportFlow->resolve($workOrder, $data['final_reason'], $data['bindings'] ?? []);
+
+        return ApiResponse::accepted(entityId: $workOrder->work_order_id, nextAction: 'TRACK_OPERATION');
     }
 }

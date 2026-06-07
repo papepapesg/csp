@@ -37,10 +37,12 @@ class WorkOrder extends Model
 
     protected $casts = [
         'findings' => 'array',
+        'escalation_candidate' => 'boolean',
         'scheduled_at' => 'datetime',
         'assigned_at' => 'datetime',
         'started_at' => 'datetime',
         'finalized_at' => 'datetime',
+        'warranty_until' => 'datetime',
     ];
 
     protected static function booted(): void

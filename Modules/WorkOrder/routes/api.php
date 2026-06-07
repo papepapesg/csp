@@ -16,4 +16,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('work-orders/{workOrder}/start', [WorkOrderController::class, 'start'])->middleware('permission:workorder.execute');
     Route::post('work-orders/{workOrder}/finalize', [WorkOrderController::class, 'finalize'])->middleware('permission:workorder.execute');
     Route::post('work-orders/{workOrder}/cancel', [WorkOrderController::class, 'cancel'])->middleware('permission:workorder.assign');
+
+    // WO-01-FLOW-SUPPORT orchestration
+    Route::post('work-orders/{workOrder}/support-flow', [WorkOrderController::class, 'startSupportFlow'])->middleware('permission:workorder.assign');
+    Route::post('work-orders/{workOrder}/resolve', [WorkOrderController::class, 'resolve'])->middleware('permission:workorder.execute');
 });
