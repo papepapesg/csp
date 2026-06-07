@@ -14,4 +14,13 @@ final class OsrEvents
     public const INSTANCE_REGISTERED = 'EquipmentInstanceRegistered';
 
     public const INSTANCE_STATE_CHANGED = 'EquipmentInstanceStateChanged';
+
+    // OSR-RMA-01 swap events (topic sophix.osr.rma.*).
+    public const SWAP_REQUESTED = 'EquipmentSwapRequested';
+
+    public const SWAP_REJECTED = 'EquipmentSwapRejected';
+
+    public const SOURCE_RECOVERED = 'EquipmentSourceRecovered';
+
+    public const SWAP_COMPLETED = 'EquipmentSwapCompleted';
 }

@@ -23,6 +23,13 @@ class EquipmentInstance extends Model
 
     public const IN_FIELD_ACTIVE = 'IN_FIELD_ACTIVE';
 
+    // OSR-RMA-01 swap lifecycle states.
+    public const IN_FIELD_DEFECTIVE = 'IN_FIELD_DEFECTIVE';
+
+    public const RECOVERED_BY_CONTRACTOR = 'RECOVERED_BY_CONTRACTOR';
+
+    public const RESERVED_FOR_WO = 'RESERVED_FOR_WO';
+
     public const RETURNED = 'RETURNED';
 
     public const FAULTY = 'FAULTY';

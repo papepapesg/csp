@@ -32,6 +32,7 @@ class OsrServiceProvider extends ModuleServiceProvider
     protected array $providers = [
         EventServiceProvider::class,
         RouteServiceProvider::class,
+        OsrWorkflowProvider::class,
     ];
 
     /**

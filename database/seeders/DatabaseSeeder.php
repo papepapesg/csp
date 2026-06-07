@@ -7,6 +7,7 @@ use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Modules\Billing\Database\Seeders\DunningPolicySeeder;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
+use Modules\Osr\Database\Seeders\OsrRmaSeeder;
 use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Subscription\Database\Seeders\RestrictionCatalogSeeder;
@@ -32,6 +33,7 @@ class DatabaseSeeder extends Seeder
             RestrictionCatalogSeeder::class,
             UpgradeConfigSeeder::class,
             WoSupportSeeder::class,
+            OsrRmaSeeder::class,
             SlaPolicySeeder::class,
         ]);
 

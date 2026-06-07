@@ -23,6 +23,7 @@ Engine: `Modules/Rules/app/Engine/DataDrivenRuleEngine.php` (bound to
 | `rules.subscription.restrict` | SUB-WF-RESTRICT-01 (R-RG-2 policy layer) | ✅ seeded + wired (`sub-restrict` flow; catalog/state/dunning gating in RestrictionService) |
 | `rules.billing.dunning` | BIL-04 escalation policy | ✅ seeded + wired (DunningService) |
 | `rules.workorder.site-visit-decision` / `.resolution-gate` | WO-01-FLOW-SUPPORT gateways | ✅ seeded + wired (wo-support flow) |
+| `rules.osr.swap.eligibility` / `rules.osr.recovered-routing` | OSR-RMA-01 swap eligibility + recovered-instance routing fix | ✅ seeded + wired (osr-swap flow) |
 | `rules.subscription.upgrade` / `.downgrade` | SUB-WF-UPGRADE/DOWNGRADE-01 target-package validation | ✅ seeded + wired (sub-upgrade/sub-downgrade flows) |
 | `rules.subscription.relocation` / `.migration` | SUB-WF-RELOCATION/MIGRATION-01 target-HomePass validation | ✅ seeded + wired (sub-relocation/sub-migration flows) |
 | `rules.subscription.common` | shared subscription policy | ⬜ |

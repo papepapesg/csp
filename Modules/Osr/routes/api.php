@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use Modules\Osr\Http\Controllers\EquipmentInstanceController;
 use Modules\Osr\Http\Controllers\StockController;
+use Modules\Osr\Http\Controllers\SwapRequestController;
 
 /*
 | OSR / equipment API (PLM-CFG-06, OSR-01, OSR-INSTANCE-01).
@@ -25,4 +26,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('equipment-instances', [EquipmentInstanceController::class, 'store'])->middleware(['permission:stock.manage', 'idempotency']);
     Route::get('equipment-instances/{equipmentInstance}', [EquipmentInstanceController::class, 'show'])->middleware('permission:stock.read');
     Route::post('equipment-instances/{equipmentInstance}/transition', [EquipmentInstanceController::class, 'transition'])->middleware('permission:stock.manage');
+
+    // OSR-RMA-01 equipment swap & RMA
+    Route::get('swap-requests', [SwapRequestController::class, 'index'])->middleware('permission:stock.read');
+    Route::get('swap-requests/{swapRequest}', [SwapRequestController::class, 'show'])->middleware('permission:stock.read');
+    Route::post('swap-requests/{swapRequest}/field-visit', [SwapRequestController::class, 'fieldVisit'])->middleware('permission:stock.manage');
+    Route::post('swap-requests/{kind}', [SwapRequestController::class, 'store'])->middleware(['permission:stock.manage', 'idempotency']);
 });

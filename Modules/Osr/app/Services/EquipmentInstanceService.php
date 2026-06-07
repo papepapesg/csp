@@ -19,8 +19,11 @@ class EquipmentInstanceService
     /** Allowed state transitions. */
     private const TRANSITIONS = [
         EquipmentInstance::IN_MAIN_WAREHOUSE => [EquipmentInstance::IN_CONTRACTOR_STOCK, EquipmentInstance::RETIRED, EquipmentInstance::FAULTY],
-        EquipmentInstance::IN_CONTRACTOR_STOCK => [EquipmentInstance::IN_FIELD_ACTIVE, EquipmentInstance::IN_MAIN_WAREHOUSE, EquipmentInstance::FAULTY],
-        EquipmentInstance::IN_FIELD_ACTIVE => [EquipmentInstance::RETURNED, EquipmentInstance::FAULTY],
+        EquipmentInstance::IN_CONTRACTOR_STOCK => [EquipmentInstance::IN_FIELD_ACTIVE, EquipmentInstance::RESERVED_FOR_WO, EquipmentInstance::IN_MAIN_WAREHOUSE, EquipmentInstance::FAULTY],
+        EquipmentInstance::RESERVED_FOR_WO => [EquipmentInstance::IN_FIELD_ACTIVE, EquipmentInstance::IN_CONTRACTOR_STOCK],
+        EquipmentInstance::IN_FIELD_ACTIVE => [EquipmentInstance::IN_FIELD_DEFECTIVE, EquipmentInstance::RECOVERED_BY_CONTRACTOR, EquipmentInstance::RETURNED, EquipmentInstance::FAULTY],
+        EquipmentInstance::IN_FIELD_DEFECTIVE => [EquipmentInstance::RECOVERED_BY_CONTRACTOR, EquipmentInstance::FAULTY],
+        EquipmentInstance::RECOVERED_BY_CONTRACTOR => [EquipmentInstance::IN_CONTRACTOR_STOCK, EquipmentInstance::FAULTY, EquipmentInstance::RETIRED],
         EquipmentInstance::RETURNED => [EquipmentInstance::IN_MAIN_WAREHOUSE, EquipmentInstance::FAULTY, EquipmentInstance::RETIRED],
         EquipmentInstance::FAULTY => [EquipmentInstance::RETIRED, EquipmentInstance::IN_MAIN_WAREHOUSE],
     ];

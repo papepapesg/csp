@@ -111,7 +111,18 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   previous_homepass_id; migration also changes the package) → notify. REST
   `/relocate` + `/migrate`. The full SUB-WF MACD set is now config-driven.
 
-**Pending:** WO shifting · OSR-RMA/swap ·
+- **equipment swap & RMA** (OSR-RMA-01) — config-driven `osr-swap` flow: validate
+  eligibility (`rules.osr.swap.eligibility`: billing/source-state gating, no truck
+  roll on failure) → reserve slot → create WO → field-visit user task → recover
+  source → provision OSS (stub) → complete. The signature value: recovered units
+  route back to the **recovering contractor's** warehouse, not main
+  (`rules.osr.recovered-routing`), closing the documented ~40-unit stale-equipment
+  gap — proven by test (writes the OSR-INSTANCE lifecycle + OSR-01 stock movement to
+  the contractor van). `equipment_swap_request` root + `vendor_rma_stub`; new
+  instance states (IN_FIELD_DEFECTIVE/RECOVERED_BY_CONTRACTOR/RESERVED_FOR_WO).
+  REST `/swap-requests/{kind}` + field-visit. (EQP/EQU pickup/upgrade flows pending.)
+
+**Pending:** WO shifting · OSR-RMA EQP/EQU ·
 customer self-care · reporting exports/reconciliation.
 
 ## Wave 3 — Advanced Commercial, Assurance & Audit ⬜
