@@ -1,6 +1,7 @@
 <?php
 
 use App\Foundation\Http\PlatformController;
+use App\Http\Controllers\Api\AuthTokenController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -16,6 +17,13 @@ use Illuminate\Support\Facades\Route;
 // --- Platform / foundation ---
 Route::get('/health', [PlatformController::class, 'health']);
 Route::get('/platform/config', [PlatformController::class, 'runtimeConfig']);
+
+// --- Mobile token auth (FE-APP-02/03 PWAs) ---
+Route::post('/auth/token', [AuthTokenController::class, 'token']);
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/auth/me', [AuthTokenController::class, 'me']);
+    Route::post('/auth/logout', [AuthTokenController::class, 'logout']);
+});
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', fn (Request $request) => $request->user());

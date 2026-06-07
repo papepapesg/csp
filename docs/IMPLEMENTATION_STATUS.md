@@ -41,7 +41,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 10 | Service activation | SUB-WF-ACTIVATE-01, FUL-03 | ✅ FUL-03 completion triggers SUB-WF activation end-to-end (order complete -> subscription ACTIVE) |
 | 11 | Notifications/internal tasks | NOT-01, ICN-01 | ✅ `Modules/Notification`: multi-channel notifications (queue→send) + internal messages; provider stub, events, 3 tests, Postman bundle |
 | 12 | Basic ticketing | TCK-01 | ✅ `Modules/Ticketing`: case lifecycle (open→assign→comment→resolve→close), SLA by priority, timeline, ticket→WO linkage (ASR as categories); 3 tests, Postman bundle |
-| 13 | Essential frontends | FE-APP-00/01/02/03 | 🚧 FE-APP-01 Backoffice: Inertia+Vue Customers, Tickets, Reporting dashboard pages (client-side against module APIs); FE-APP-02/03 mobile apps pending |
+| 13 | Essential frontends | FE-APP-00/01/02/03 | ✅ FE-APP-01 Backoffice (Customers, Tickets, Reports, Workflow Studio, IT-Ops) + FE-APP-02/03 SOPHIX Field PWA (offline-capable) |
 | 14 | Minimal reporting | REP-01, FE-APP-05 | ✅ `Modules/Reporting`: event-sourced reporting mart (outbox→inbox projector), operations + revenue dashboards, metric time-series API; 4 tests, Postman bundle |
 
 
@@ -57,7 +57,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | Tax gateway stub adapter (BIL-02-TAX-01) | ✅ | TaxGateway interface + StubTaxGateway (KRA-style fiscalisation); issue tax-invoice endpoint, swappable via SOPHIX_TAX_DRIVER |
 | De-hardcode catalogs → data | 🚧 | rules ✅ + RBAC ✅ runtime-managed; SLA/status-transition catalogs next |
 | Data-driven rules (decision tables) | ✅ | `Modules/Rules`: decision tables as DATA, operator override with zero code (proven); rules.evaluate toolbox step |
-| PWA mobile frontends (sales, contractor) | ⬜ | |
+| PWA mobile frontends (sales, contractor) | ✅ | `SOPHIX Field` installable PWA at `/m`: token auth, contractor job execution (claim/start/finalize) + sales quick-capture, offline action queue + service-worker shell |
 
 ## Wave 2 — Operational Hardening ⬜
 

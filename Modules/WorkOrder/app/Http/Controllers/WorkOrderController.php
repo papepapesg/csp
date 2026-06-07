@@ -27,6 +27,8 @@ class WorkOrderController extends ApiController
             ->when($request->query('accountId'), fn ($q, $a) => $q->where('account_id', $a))
             ->when($request->query('type'), fn ($q, $t) => $q->where('type', $t))
             ->when($request->query('techRegionId'), fn ($q, $r) => $q->where('tech_region_id', $r))
+            ->when($request->query('assignedTechnicianId'), fn ($q, $t) => $q->where('assigned_technician_id', $t))
+            ->when($request->query('contractorId'), fn ($q, $c) => $q->where('contractor_id', $c))
             ->orderByDesc('created_at')
             ->paginate(perPage: $params['size'], page: $params['page'] + 1);
 

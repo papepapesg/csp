@@ -5,7 +5,8 @@ import vue from '@vitejs/plugin-vue';
 export default defineConfig({
     plugins: [
         laravel({
-            input: 'resources/js/app.js',
+            // Backoffice (Inertia) + the SOPHIX Field mobile PWA entry.
+            input: ['resources/js/app.js', 'resources/mobile/main.js'],
             refresh: true,
         }),
         vue({

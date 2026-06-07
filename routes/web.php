@@ -33,4 +33,7 @@ Route::middleware('auth')->group(function () {
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 });
 
+// SOPHIX Field — installable mobile PWA (FE-APP-02/03). Auth handled in-app via tokens.
+Route::get('/m', fn () => view('mobile'))->name('mobile');
+
 require __DIR__.'/auth.php';
