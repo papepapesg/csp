@@ -97,9 +97,16 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   runs/items list, manual run, permission-gated + audited force-sync (R-PROV-07/09).
   Stub adapter simulates clean/drift/not-present for end-to-end testing.
 
+- **subscription upgrade / downgrade** (SUB-WF-UPGRADE-01 / DOWNGRADE-01) —
+  config-driven `sub-upgrade` / `sub-downgrade` flows: validate target package
+  (`rules.subscription.upgrade` / `.downgrade`: currency match, target ACTIVE, price
+  delta direction) → gateway → commit package change (pins previous_package_ref,
+  sets new package_ref/version + transition type, stays ACTIVE) → notify.
+  `subscription_upgrade_config` per operator+kind; REST `/upgrade` + `/downgrade`.
+
 **Pending:** WO shifting · OSR-RMA/swap ·
 customer self-care · reporting exports/reconciliation ·
-upgrade/downgrade/relocation/migration.
+relocation/migration.
 
 ## Wave 3 — Advanced Commercial, Assurance & Audit ⬜
 

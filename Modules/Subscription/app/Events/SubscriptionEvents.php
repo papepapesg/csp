@@ -29,6 +29,15 @@ final class SubscriptionEvents
 
     public const OPERATION_FAILED = 'SubscriptionOperationFailed';
 
+    // SUB-WF-UPGRADE-01 / DOWNGRADE-01 package-change events.
+    public const UPGRADED = 'SubscriptionUpgraded';
+
+    public const UPGRADE_REJECTED = 'SubscriptionUpgradeRejected';
+
+    public const DOWNGRADED = 'SubscriptionDowngraded';
+
+    public const DOWNGRADE_REJECTED = 'SubscriptionDowngradeRejected';
+
     // SUB-WF-RESTRICT-01 partial-service restriction events.
     public const RESTRICTION_ADDED = 'SubscriptionRestrictionAdded';
 

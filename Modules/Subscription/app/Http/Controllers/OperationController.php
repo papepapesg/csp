@@ -48,6 +48,30 @@ class OperationController extends ApiController
         return $this->trigger($request, $subscription, 'TERMINATE', $request->only('reasonCode'));
     }
 
+    /** POST /api/subscriptions/{subscription}/upgrade */
+    public function upgrade(Request $request, Subscription $subscription): JsonResponse
+    {
+        $data = $request->validate([
+            'targetPackageRef' => ['required', 'string', 'max:64'],
+            'effectiveTiming' => ['nullable', 'in:IMMEDIATE,END_OF_CURRENT_CYCLE,SCHEDULED_AT'],
+            'cycleAnchorPolicy' => ['nullable', 'in:PRESERVE,RESET_TO_UPGRADE_DATE'],
+        ]);
+
+        return $this->trigger($request, $subscription, 'UPGRADE', $data);
+    }
+
+    /** POST /api/subscriptions/{subscription}/downgrade */
+    public function downgrade(Request $request, Subscription $subscription): JsonResponse
+    {
+        $data = $request->validate([
+            'targetPackageRef' => ['required', 'string', 'max:64'],
+            'effectiveTiming' => ['nullable', 'in:IMMEDIATE,END_OF_CURRENT_CYCLE,SCHEDULED_AT'],
+            'cycleAnchorPolicy' => ['nullable', 'in:PRESERVE,RESET_TO_UPGRADE_DATE'],
+        ]);
+
+        return $this->trigger($request, $subscription, 'DOWNGRADE', $data);
+    }
+
     /** GET /api/subscriptions/{subscription}/operations */
     public function index(Subscription $subscription): JsonResponse
     {

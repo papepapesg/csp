@@ -121,6 +121,33 @@ class ProcessDefinitionSeeder extends Seeder
             ],
         ]);
 
+        // SUB-WF-UPGRADE-01 / DOWNGRADE-01: validate target package (rules) ->
+        // gateway -> commit package change -> notify. IMMEDIATE effective timing.
+        foreach ([
+            ['sub-upgrade', 'Subscription Upgrade', 'rules.subscription.upgrade', 'UPGRADE', 'SubscriptionUpgraded', 'SUBSCRIPTION_UPGRADED'],
+            ['sub-downgrade', 'Subscription Downgrade', 'rules.subscription.downgrade', 'DOWNGRADE', 'SubscriptionDowngraded', 'SUBSCRIPTION_DOWNGRADED'],
+        ] as [$key, $name, $ruleSet, $transition, $event, $template]) {
+            $this->deploy($key, $name, [
+                'nodes' => [
+                    ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
+                    ['id' => 'validate', 'type' => 'serviceTask', 'position' => ['x' => 180, 'y' => 80], 'data' => ['label' => 'Validate target package', 'topic' => 'sub.validate-package-change', 'config' => ['ruleSet' => $ruleSet]]],
+                    ['id' => 'gw', 'type' => 'exclusiveGateway', 'position' => ['x' => 380, 'y' => 80], 'data' => ['label' => 'Eligible?']],
+                    ['id' => 'commit', 'type' => 'serviceTask', 'position' => ['x' => 560, 'y' => 20], 'data' => ['label' => 'Commit package change', 'topic' => 'sub.change-package', 'config' => ['transition' => $transition, 'event' => $event]]],
+                    ['id' => 'notify', 'type' => 'serviceTask', 'position' => ['x' => 740, 'y' => 20], 'data' => ['label' => 'Notify', 'topic' => 'notify.send', 'config' => ['channel' => 'SMS', 'template' => $template]]],
+                    ['id' => 'end_ok', 'type' => 'endEvent', 'position' => ['x' => 920, 'y' => 20], 'data' => ['label' => 'Committed']],
+                    ['id' => 'end_rejected', 'type' => 'endEvent', 'position' => ['x' => 560, 'y' => 160], 'data' => ['label' => 'Rejected']],
+                ],
+                'edges' => [
+                    ['id' => 'e1', 'source' => 'start', 'target' => 'validate'],
+                    ['id' => 'e2', 'source' => 'validate', 'target' => 'gw'],
+                    ['id' => 'e3', 'source' => 'gw', 'target' => 'commit', 'data' => ['condition' => ['var' => 'eligible', 'op' => 'truthy']]],
+                    ['id' => 'e4', 'source' => 'gw', 'target' => 'end_rejected', 'data' => ['default' => true]],
+                    ['id' => 'e5', 'source' => 'commit', 'target' => 'notify'],
+                    ['id' => 'e6', 'source' => 'notify', 'target' => 'end_ok'],
+                ],
+            ]);
+        }
+
         $this->deploy('sub-terminate', 'Subscription Termination', [
             'nodes' => [
                 ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],

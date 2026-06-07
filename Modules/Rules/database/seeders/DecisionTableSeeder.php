@@ -44,6 +44,23 @@ class DecisionTableSeeder extends Seeder
         $this->deploy('rules.subscription.restrict', 'Subscription restriction policy', 'FIRST',
             [], ['eligible' => true], ['statusCode', 'operationKind', 'reasonCode', 'restrictionCode', 'activationTrigger', 'intent']);
 
+        // rules.subscription.upgrade — target-package validation (SUB-WF-UPGRADE-01
+        // §4): currency match, target ACTIVE, target price >= source (it's an upgrade).
+        $this->deploy('rules.subscription.upgrade', 'Subscription upgrade target validation', 'FIRST', [
+            ['ruleId' => 'R-SUB-UPG-VAL-002', 'when' => [['var' => 'targetPackageStatus', 'op' => 'neq', 'value' => 'ACTIVE']],
+                'then' => ['eligible' => false, 'decisionCode' => 'TARGET_NOT_ACTIVE', 'error' => ['field' => 'targetPackageRef', 'message' => 'Target package must be ACTIVE']]],
+            ['ruleId' => 'R-SUB-UPG-VAL-003', 'when' => [['var' => 'priceDelta', 'op' => 'lt', 'value' => 0]],
+                'then' => ['eligible' => false, 'decisionCode' => 'NOT_AN_UPGRADE', 'error' => ['field' => 'targetPackageRef', 'message' => 'Target package price must be >= current package (use downgrade)']]],
+        ], ['eligible' => true], ['statusCode', 'sourceCurrency', 'targetCurrency', 'sourcePrice', 'targetPrice', 'priceDelta', 'targetPackageStatus', 'sameHomePass']);
+
+        // rules.subscription.downgrade — mirror of upgrade (target price <= source).
+        $this->deploy('rules.subscription.downgrade', 'Subscription downgrade target validation', 'FIRST', [
+            ['ruleId' => 'R-SUB-DWN-VAL-002', 'when' => [['var' => 'targetPackageStatus', 'op' => 'neq', 'value' => 'ACTIVE']],
+                'then' => ['eligible' => false, 'decisionCode' => 'TARGET_NOT_ACTIVE', 'error' => ['field' => 'targetPackageRef', 'message' => 'Target package must be ACTIVE']]],
+            ['ruleId' => 'R-SUB-DWN-VAL-003', 'when' => [['var' => 'priceDelta', 'op' => 'gt', 'value' => 0]],
+                'then' => ['eligible' => false, 'decisionCode' => 'NOT_A_DOWNGRADE', 'error' => ['field' => 'targetPackageRef', 'message' => 'Target package price must be <= current package (use upgrade)']]],
+        ], ['eligible' => true], ['statusCode', 'sourceCurrency', 'targetCurrency', 'sourcePrice', 'targetPrice', 'priceDelta', 'targetPackageStatus', 'sameHomePass']);
+
         // rules.subscription.terminate — termination policy (default: allowed).
         $this->deploy('rules.subscription.terminate', 'Subscription termination policy', 'FIRST',
             [], ['eligible' => true], ['statusCode', 'reasonCode']);
