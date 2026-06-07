@@ -53,9 +53,10 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | PostgreSQL everywhere incl. tests (drop SQLite) | ✅ | caught a real concurrency bug SQLite masked |
 | Workflow Studio (Vue Flow drag-and-drop) | ✅ | `/workflow/studio` — author/deploy flows from the toolbox |
 | IT-Ops console (live process trace + worker/incident monitor) | ✅ | `/workflow/ops` — replay execution on the graph, retry incidents |
-| NMS/provisioning + tax stub adapters | ⬜ | SMS already stubbed; provisioning/tax next |
-| De-hardcode catalogs (RBAC/SLA/transitions) → data | ⬜ | |
-| Data-driven rules (decision tables) | ⬜ | addresses Drools doubt |
+| NMS/provisioning stub adapter (PROV-INT-01) | ✅ | `Modules/Provisioning`: command ledger + swappable adapter; activation flow drives the NMS end-to-end, failure gates activation |
+| Tax gateway stub adapter | ⬜ | next |
+| De-hardcode catalogs (RBAC/SLA/transitions) → data | ⬜ | rules now data-driven; RBAC/SLA next |
+| Data-driven rules (decision tables) | ✅ | `Modules/Rules`: decision tables as DATA, operator override with zero code (proven); rules.evaluate toolbox step |
 | PWA mobile frontends (sales, contractor) | ⬜ | |
 
 ## Wave 2 — Operational Hardening ⬜

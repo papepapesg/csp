@@ -27,7 +27,9 @@ class FoundationServiceProvider extends ServiceProvider
                 : new OutboxEventBus;
         });
 
-        $this->app->singleton(RuleEngine::class, NativeRuleEngine::class);
+        // Default rule engine; the Rules module rebinds this to the data-driven
+        // (decision-table) engine. singletonIf so module order doesn't clobber it.
+        $this->app->singletonIf(RuleEngine::class, NativeRuleEngine::class);
         $this->app->singleton(OperationManager::class);
     }
 

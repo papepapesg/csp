@@ -33,6 +33,7 @@ class RbacSeeder extends Seeder
         'workflow.view', 'workflow.manage',
         'itops.view', 'itops.manage',
         'provisioning.view', 'provisioning.manage',
+        'rules.view', 'rules.manage',
     ];
 
     /** Role -> granted permissions (DD_EM-CFG-03 role-permission matrix). */
