@@ -103,4 +103,16 @@ class BillingApiTest extends TestCase
         $this->postJson('/api/payments', ['account_id' => 'a', 'paid_amount' => 1, 'method' => 'MPESA'])
             ->assertForbidden();
     }
+
+    public function test_issue_tax_invoice_fiscalises_via_gateway(): void
+    {
+        $invoice = $this->makeInvoice(2000.0);
+
+        $this->postJson("/api/invoices/{$invoice['invoice_id']}/tax-invoice", [], ['Idempotency-Key' => 'tax-1'])
+            ->assertCreated()
+            ->assertJsonPath('status', 'FISCALISED');
+
+        $this->assertDatabaseHas('tax_invoice', ['invoice_id' => $invoice['invoice_id'], 'status' => 'FISCALISED']);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'TaxInvoiceIssued']);
+    }
 }

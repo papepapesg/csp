@@ -54,7 +54,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | Workflow Studio (Vue Flow drag-and-drop) | ✅ | `/workflow/studio` — author/deploy flows from the toolbox |
 | IT-Ops console (live process trace + worker/incident monitor) | ✅ | `/workflow/ops` — replay execution on the graph, retry incidents |
 | NMS/provisioning stub adapter (PROV-INT-01) | ✅ | `Modules/Provisioning`: command ledger + swappable adapter; activation flow drives the NMS end-to-end, failure gates activation |
-| Tax gateway stub adapter | ⬜ | next |
+| Tax gateway stub adapter (BIL-02-TAX-01) | ✅ | TaxGateway interface + StubTaxGateway (KRA-style fiscalisation); issue tax-invoice endpoint, swappable via SOPHIX_TAX_DRIVER |
 | De-hardcode catalogs → data | 🚧 | rules ✅ + RBAC ✅ runtime-managed; SLA/status-transition catalogs next |
 | Data-driven rules (decision tables) | ✅ | `Modules/Rules`: decision tables as DATA, operator override with zero code (proven); rules.evaluate toolbox step |
 | PWA mobile frontends (sales, contractor) | ⬜ | |

@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Services\InvoiceService;
+use Modules\Billing\Services\TaxService;
 
 /**
  * BIL-02 invoicing API (generate + read; BIL-02-READ-01).
@@ -59,5 +60,11 @@ class InvoiceController extends ApiController
         $invoice = $this->invoices->generate($data, $data['lines']);
 
         return ApiResponse::created($invoice->load('lines'));
+    }
+
+    /** POST /api/invoices/{invoice}/tax-invoice — fiscalise via the tax gateway. */
+    public function issueTaxInvoice(Invoice $invoice, TaxService $tax): JsonResponse
+    {
+        return ApiResponse::created($tax->issue($invoice));
     }
 }

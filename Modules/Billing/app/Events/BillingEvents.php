@@ -22,4 +22,6 @@ final class BillingEvents
     public const WALLET_DEBITED = 'WalletDebited';
 
     public const WALLET_TOPPED_UP = 'WalletToppedUp';
+
+    public const TAX_INVOICE_ISSUED = 'TaxInvoiceIssued';
 }

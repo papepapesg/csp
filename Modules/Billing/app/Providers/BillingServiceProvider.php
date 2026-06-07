@@ -32,6 +32,7 @@ class BillingServiceProvider extends ModuleServiceProvider
     protected array $providers = [
         EventServiceProvider::class,
         RouteServiceProvider::class,
+        BillingRuntimeProvider::class,
     ];
 
     /**
