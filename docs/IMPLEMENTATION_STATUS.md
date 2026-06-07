@@ -44,6 +44,20 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 13 | Essential frontends | FE-APP-00/01/02/03 | 🚧 FE-APP-01 Backoffice: Inertia+Vue Customers, Tickets, Reporting dashboard pages (client-side against module APIs); FE-APP-02/03 mobile apps pending |
 | 14 | Minimal reporting | REP-01, FE-APP-05 | ✅ `Modules/Reporting`: event-sourced reporting mart (outbox→inbox projector), operations + revenue dashboards, metric time-series API; 4 tests, Postman bundle |
 
+
+## Architecture corrections (post-Wave-1 review)
+
+| Item | Status | Notes |
+| ---- | ------ | ----- |
+| Config-driven workflow engine (flows as DATA, not code) | ✅ | `Modules/Workflow`: process_definition graphs, external-task workers, topic→handler toolbox; operator override with zero code (proven by test) |
+| PostgreSQL everywhere incl. tests (drop SQLite) | ✅ | caught a real concurrency bug SQLite masked |
+| Workflow Studio (Vue Flow drag-and-drop) | ✅ | `/workflow/studio` — author/deploy flows from the toolbox |
+| IT-Ops console (live process trace + worker/incident monitor) | ✅ | `/workflow/ops` — replay execution on the graph, retry incidents |
+| NMS/provisioning + tax stub adapters | ⬜ | SMS already stubbed; provisioning/tax next |
+| De-hardcode catalogs (RBAC/SLA/transitions) → data | ⬜ | |
+| Data-driven rules (decision tables) | ⬜ | addresses Drools doubt |
+| PWA mobile frontends (sales, contractor) | ⬜ | |
+
 ## Wave 2 — Operational Hardening ⬜
 
 pause/resume/terminate · dunning & non-payment suspension · WO support/shifting ·

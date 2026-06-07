@@ -57,6 +57,18 @@ const showingNavigationDropdown = ref(false);
                                 >
                                     Reports
                                 </NavLink>
+                                <NavLink
+                                    :href="route('workflow.studio')"
+                                    :active="route().current('workflow.studio')"
+                                >
+                                    Studio
+                                </NavLink>
+                                <NavLink
+                                    :href="route('workflow.ops')"
+                                    :active="route().current('workflow.ops')"
+                                >
+                                    Ops
+                                </NavLink>
                             </div>
                         </div>
 

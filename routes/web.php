@@ -23,6 +23,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/customers', fn () => Inertia::render('Ilm/Customers/Index'))->name('customers.index');
     Route::get('/tickets', fn () => Inertia::render('Tickets/Index'))->name('tickets.index');
     Route::get('/reports', fn () => Inertia::render('Reports/Dashboard'))->name('reports.index');
+    Route::get('/workflow/studio', fn () => Inertia::render('Workflow/Studio'))->name('workflow.studio');
+    Route::get('/workflow/ops', fn () => Inertia::render('Workflow/Operations'))->name('workflow.ops');
 });
 
 Route::middleware('auth')->group(function () {
