@@ -30,6 +30,9 @@ return [
     'event_bus' => env('SOPHIX_EVENT_BUS', 'outbox'),
     'workflow_driver' => env('SOPHIX_WORKFLOW_DRIVER', 'native'),
     'rules_driver' => env('SOPHIX_RULES_DRIVER', 'native'),
+    'provisioning_driver' => env('SOPHIX_PROVISIONING_DRIVER', 'stub'),
+    'tax_driver' => env('SOPHIX_TAX_DRIVER', 'stub'),
+    'sms_driver' => env('SOPHIX_SMS_DRIVER', 'stub'),
 
     'kafka' => [
         'brokers' => env('KAFKA_BROKERS', 'kafka:9092'),
