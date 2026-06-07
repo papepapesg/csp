@@ -17,6 +17,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // SUB-WF operation triggers
     Route::post('subscriptions/{subscription}/activate', [OperationController::class, 'activate'])->middleware('permission:subscription.activate');
+    Route::post('subscriptions/{subscription}/pause', [OperationController::class, 'pause'])->middleware('permission:subscription.manage');
+    Route::post('subscriptions/{subscription}/resume', [OperationController::class, 'resume'])->middleware('permission:subscription.manage');
     Route::post('subscriptions/{subscription}/terminate', [OperationController::class, 'terminate'])->middleware('permission:subscription.manage');
 
     // SUB-WF operation tracking

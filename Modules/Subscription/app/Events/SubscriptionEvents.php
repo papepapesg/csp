@@ -15,6 +15,8 @@ final class SubscriptionEvents
 
     public const SUSPENDED = 'SubscriptionSuspended';
 
+    public const PAUSED = 'SubscriptionPaused';
+
     public const RESUMED = 'SubscriptionResumed';
 
     public const TERMINATED = 'SubscriptionTerminated';

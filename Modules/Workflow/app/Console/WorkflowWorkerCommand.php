@@ -6,6 +6,7 @@ use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
+use Modules\ItOps\Support\Heartbeat;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Engine\TaskRegistry;
 use Modules\Workflow\Engine\WorkflowEngine;
@@ -41,7 +42,7 @@ class WorkflowWorkerCommand extends Command
             $processed = $this->drainOnce($registry, $engine, $workerId, $topics, (int) $this->option('max'));
 
             // IT-Ops liveness + restart control.
-            \Modules\ItOps\Support\Heartbeat::ping('workflow-worker', $workerId, ['lastBatch' => $processed]);
+            Heartbeat::ping('workflow-worker', $workerId, ['lastBatch' => $processed]);
 
             if ($this->option('once')) {
                 if ($processed === 0) {
@@ -50,7 +51,7 @@ class WorkflowWorkerCommand extends Command
 
                 continue;
             }
-            if (\Modules\ItOps\Support\Heartbeat::shouldStop('workflow-worker')) {
+            if (Heartbeat::shouldStop('workflow-worker')) {
                 $this->info('Restart requested via IT-Ops — exiting for supervisor restart.');
                 break;
             }

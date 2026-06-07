@@ -3,6 +3,7 @@
 namespace Modules\Workflow\Console;
 
 use Illuminate\Console\Command;
+use Modules\ItOps\Support\Heartbeat;
 use Modules\Workflow\Engine\WorkflowEngine;
 use Modules\Workflow\Models\ExternalTask;
 
@@ -25,7 +26,7 @@ class WorkflowTickCommand extends Command
             ->where('locked_until', '<', now())
             ->update(['status' => ExternalTask::CREATED, 'worker_id' => null, 'locked_until' => null]);
 
-        \Modules\ItOps\Support\Heartbeat::ping('scheduler', null, ['timersFired' => $fired, 'locksReleased' => $released]);
+        Heartbeat::ping('scheduler', null, ['timersFired' => $fired, 'locksReleased' => $released]);
 
         $this->info("timers fired: {$fired}, locks released: {$released}");
 

@@ -26,6 +26,20 @@ class OperationController extends ApiController
         return $this->trigger($request, $subscription, 'ACTIVATE', $request->only('recipient'));
     }
 
+    /** POST /api/subscriptions/{subscription}/pause */
+    public function pause(Request $request, Subscription $subscription): JsonResponse
+    {
+        $request->validate(['reasonCode' => ['nullable', 'string', 'max:64']]);
+
+        return $this->trigger($request, $subscription, 'PAUSE', $request->only('reasonCode'));
+    }
+
+    /** POST /api/subscriptions/{subscription}/resume */
+    public function resume(Request $request, Subscription $subscription): JsonResponse
+    {
+        return $this->trigger($request, $subscription, 'RESUME');
+    }
+
     /** POST /api/subscriptions/{subscription}/terminate */
     public function terminate(Request $request, Subscription $subscription): JsonResponse
     {

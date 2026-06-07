@@ -41,9 +41,9 @@ class SubscriptionService
      *
      * @param  array<string,mixed>  $extra
      */
-    public function transitionStatus(Subscription $subscription, string $status, array $extra = []): Subscription
+    public function transitionStatus(Subscription $subscription, string $status, array $extra = [], ?string $eventType = null): Subscription
     {
-        return DB::transaction(function () use ($subscription, $status, $extra) {
+        return DB::transaction(function () use ($subscription, $status, $extra, $eventType) {
             $attrs = array_merge([
                 'status_code' => $status,
                 'last_status_changed_at' => now(),
@@ -51,16 +51,17 @@ class SubscriptionService
 
             $attrs += match ($status) {
                 Subscription::ACTIVE => ['activated_at' => $subscription->activated_at ?? now()],
-                Subscription::SUSPENDED => ['suspended_at' => now()],
+                Subscription::SUSPENDED, Subscription::PAUSED => ['suspended_at' => now()],
                 Subscription::TERMINATED => ['terminated_at' => now()],
                 default => [],
             };
 
             $subscription->update($attrs);
 
-            $type = match ($status) {
+            $type = $eventType ?? match ($status) {
                 Subscription::ACTIVE => SubscriptionEvents::ACTIVATED,
                 Subscription::SUSPENDED => SubscriptionEvents::SUSPENDED,
+                Subscription::PAUSED => SubscriptionEvents::PAUSED,
                 Subscription::TERMINATED => SubscriptionEvents::TERMINATED,
                 default => SubscriptionEvents::STATUS_CHANGED,
             };

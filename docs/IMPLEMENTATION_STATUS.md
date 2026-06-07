@@ -62,9 +62,13 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 
 ## Wave 2 — Operational Hardening ⬜
 
-pause/resume/terminate · dunning & non-payment suspension · WO support/shifting ·
-OSR-RMA/swap · provisioning reconciliation · customer self-care ·
-reporting exports/reconciliation.
+**Done:** terminate, **pause, resume** (SUB-WF-PAUSE/RESUME-01 — data-defined flows
+`sub-pause`/`sub-resume` + `rules.subscription.pause`/`.resume`, generic
+`sub.validate-operation` step).
+
+**Pending:** dunning & non-payment suspension · WO support/shifting · OSR-RMA/swap ·
+provisioning reconciliation · customer self-care · reporting exports/reconciliation ·
+upgrade/downgrade/relocation/migration/restrict.
 
 ## Wave 3 — Advanced Commercial, Assurance & Audit ⬜
 

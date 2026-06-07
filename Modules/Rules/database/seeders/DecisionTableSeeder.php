@@ -27,6 +27,12 @@ class DecisionTableSeeder extends Seeder
                     'error' => ['field' => 'outstandingBalance', 'message' => 'Outstanding balance must be cleared before activation']]],
         ], ['eligible' => true], ['statusCode', 'outstandingBalance', 'packageStatus', 'homepassStatus', 'role']);
 
+        $this->deploy('rules.subscription.pause', 'Subscription pause policy', 'FIRST',
+            [], ['eligible' => true], ['statusCode', 'reasonCode']);
+
+        $this->deploy('rules.subscription.resume', 'Subscription resume policy', 'FIRST',
+            [], ['eligible' => true], ['statusCode']);
+
         // rules.subscription.terminate — termination policy (default: allowed).
         $this->deploy('rules.subscription.terminate', 'Subscription termination policy', 'FIRST',
             [], ['eligible' => true], ['statusCode', 'reasonCode']);

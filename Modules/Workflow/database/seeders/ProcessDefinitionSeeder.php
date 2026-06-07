@@ -38,6 +38,46 @@ class ProcessDefinitionSeeder extends Seeder
             ],
         ]);
 
+        $this->deploy('sub-pause', 'Subscription Pause', [
+            'nodes' => [
+                ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
+                ['id' => 'validate', 'type' => 'serviceTask', 'position' => ['x' => 180, 'y' => 80], 'data' => ['label' => 'Validate pause', 'topic' => 'sub.validate-operation', 'config' => ['ruleSet' => 'rules.subscription.pause', 'requiredStatus' => 'ACTIVE']]],
+                ['id' => 'gw', 'type' => 'exclusiveGateway', 'position' => ['x' => 380, 'y' => 80], 'data' => ['label' => 'Eligible?']],
+                ['id' => 'pause', 'type' => 'serviceTask', 'position' => ['x' => 560, 'y' => 20], 'data' => ['label' => 'Set paused', 'topic' => 'sub.pause']],
+                ['id' => 'notify', 'type' => 'serviceTask', 'position' => ['x' => 740, 'y' => 20], 'data' => ['label' => 'Notify', 'topic' => 'notify.send', 'config' => ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_PAUSED']]],
+                ['id' => 'end_ok', 'type' => 'endEvent', 'position' => ['x' => 920, 'y' => 20], 'data' => ['label' => 'Paused']],
+                ['id' => 'end_rejected', 'type' => 'endEvent', 'position' => ['x' => 560, 'y' => 160], 'data' => ['label' => 'Rejected']],
+            ],
+            'edges' => [
+                ['id' => 'e1', 'source' => 'start', 'target' => 'validate'],
+                ['id' => 'e2', 'source' => 'validate', 'target' => 'gw'],
+                ['id' => 'e3', 'source' => 'gw', 'target' => 'pause', 'data' => ['condition' => ['var' => 'eligible', 'op' => 'truthy']]],
+                ['id' => 'e4', 'source' => 'gw', 'target' => 'end_rejected', 'data' => ['default' => true]],
+                ['id' => 'e5', 'source' => 'pause', 'target' => 'notify'],
+                ['id' => 'e6', 'source' => 'notify', 'target' => 'end_ok'],
+            ],
+        ]);
+
+        $this->deploy('sub-resume', 'Subscription Resume', [
+            'nodes' => [
+                ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
+                ['id' => 'validate', 'type' => 'serviceTask', 'position' => ['x' => 180, 'y' => 80], 'data' => ['label' => 'Validate resume', 'topic' => 'sub.validate-operation', 'config' => ['ruleSet' => 'rules.subscription.resume', 'requiredStatus' => 'PAUSED']]],
+                ['id' => 'gw', 'type' => 'exclusiveGateway', 'position' => ['x' => 380, 'y' => 80], 'data' => ['label' => 'Eligible?']],
+                ['id' => 'resume', 'type' => 'serviceTask', 'position' => ['x' => 560, 'y' => 20], 'data' => ['label' => 'Set active', 'topic' => 'sub.resume']],
+                ['id' => 'notify', 'type' => 'serviceTask', 'position' => ['x' => 740, 'y' => 20], 'data' => ['label' => 'Notify', 'topic' => 'notify.send', 'config' => ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_RESUMED']]],
+                ['id' => 'end_ok', 'type' => 'endEvent', 'position' => ['x' => 920, 'y' => 20], 'data' => ['label' => 'Resumed']],
+                ['id' => 'end_rejected', 'type' => 'endEvent', 'position' => ['x' => 560, 'y' => 160], 'data' => ['label' => 'Rejected']],
+            ],
+            'edges' => [
+                ['id' => 'e1', 'source' => 'start', 'target' => 'validate'],
+                ['id' => 'e2', 'source' => 'validate', 'target' => 'gw'],
+                ['id' => 'e3', 'source' => 'gw', 'target' => 'resume', 'data' => ['condition' => ['var' => 'eligible', 'op' => 'truthy']]],
+                ['id' => 'e4', 'source' => 'gw', 'target' => 'end_rejected', 'data' => ['default' => true]],
+                ['id' => 'e5', 'source' => 'resume', 'target' => 'notify'],
+                ['id' => 'e6', 'source' => 'notify', 'target' => 'end_ok'],
+            ],
+        ]);
+
         $this->deploy('sub-terminate', 'Subscription Termination', [
             'nodes' => [
                 ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
