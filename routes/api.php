@@ -3,6 +3,10 @@
 use App\Foundation\Http\PlatformController;
 use App\Http\Controllers\Api\AuthTokenController;
 use App\Http\Controllers\ApprovalController;
+use App\Http\Controllers\CustomerTimelineController;
+use App\Http\Controllers\FranchiseController;
+use App\Http\Controllers\LeadController;
+use App\Http\Controllers\UssdController;
 use App\Http\Controllers\FileController;
 use App\Http\Controllers\SelfCareController;
 use Illuminate\Http\Request;
@@ -23,6 +27,7 @@ Route::get('/platform/config', [PlatformController::class, 'runtimeConfig']);
 
 // --- Mobile token auth (FE-APP-02/03 PWAs) ---
 Route::post('/auth/token', [AuthTokenController::class, 'token']);
+Route::post('/ussd', [UssdController::class, 'handle']); // USSD gateway webhook
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me', [AuthTokenController::class, 'me']);
     Route::post('/auth/logout', [AuthTokenController::class, 'logout']);
@@ -55,4 +60,19 @@ Route::middleware(['auth:sanctum', 'permission:selfcare.access'])->prefix('selfc
     Route::post('payments', [SelfCareController::class, 'pay'])->middleware('idempotency');
     Route::get('tickets', [SelfCareController::class, 'ticketIndex']);
     Route::post('tickets', [SelfCareController::class, 'raiseTicket'])->middleware('idempotency');
+});
+
+
+// --- EM-01 franchise + SALES-01 leads + CUST-INT-01 timeline ---
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/franchises', [FranchiseController::class, 'index'])->middleware('permission:franchise.manage');
+    Route::post('/franchises', [FranchiseController::class, 'store'])->middleware('permission:franchise.manage');
+
+    Route::get('/leads', [LeadController::class, 'index'])->middleware('permission:customer.read');
+    Route::post('/leads', [LeadController::class, 'store'])->middleware(['permission:customer.create', 'idempotency']);
+    Route::post('/leads/{lead}/qualify', [LeadController::class, 'qualify'])->middleware('permission:customer.create');
+    Route::post('/leads/{lead}/convert', [LeadController::class, 'convert'])->middleware('permission:customer.create');
+    Route::post('/leads/{lead}/lose', [LeadController::class, 'lose'])->middleware('permission:customer.create');
+
+    Route::get('/customers/{customerId}/timeline', [CustomerTimelineController::class, 'show'])->middleware('permission:customer.read');
 });

@@ -148,8 +148,32 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 
 **Wave 2 complete.**
 
-## Wave 3 — Advanced Commercial, Assurance & Audit ⬜
+## Wave 3 — Advanced Commercial, Assurance & Audit ✅
 
-upgrade/downgrade/relocation/migration · FUL-09/10 · campaigns/discounts/CVM ·
-ASR specialised flows · procurement & inventory audit · field audits · USSD ·
-offline mediation/rating · advanced franchise/sales attribution.
+**Complete.** All Wave 3 capabilities landed as faithful, tested vertical slices:
+
+- **PLM-CFG-02 tax compute** — stateless cascading tax (tax_rule + tax_group +
+  rules.tax-applicability; BASE / BASE_PLUS_PRIOR), POST /tax/compute.
+- **PLM-CFG-04 / SIP-03 / SIP-05 / DIS-OP-01 discounts** — catalog + assignment +
+  campaign + runtime compute (stackable priority, non-stackable wins alone).
+- **PLM config catalogs** (PLM-CFG-03/05/06/07/08) — wallet / adjustment-type /
+  voice-tariff / equipment-type via a generic /config/{catalog}.
+- **FOUNDATION_FILE_STORAGE** — file_object registry + swappable-disk service.
+- **EM-CFG-04 approval workflow catalog** — data-driven definitions + request
+  lifecycle (auto-approve below threshold).
+- **FA-01/02/03 field audits** — equipment/network/KYC severity rules + photo
+  attachments + approval routing.
+- **OSR-02 procurement** (PO → goods receipt → stock) + **OSR-05 inventory audit**
+  (count → variance → reconcile).
+- **MED-01 mediation + RAT-01 rating** — CDR intake (dedupe) → rated_event via
+  voice tariffs / flat rates; offline sophix:billing:rate-usage worker.
+- **EM-03 CVM** — retention/recovery/win-back offers via rules.cvm.offer.
+- **ASR-01..04** — ASR-typed ticket intake + rules.asr.routing (Technical Trouble
+  auto-raises a Work Order).
+- **EM-01 franchise + SALES-01 leads** — franchise registry + lead funnel
+  (capture → qualify → convert to customer / lose) with franchise/agent attribution.
+- **USSD channel** — stateless menu self-care (balance / last invoice / callback).
+- **CUST-INT-01 timeline** — unified event-sourced customer interaction timeline.
+
+The whole BSS now spans Waves 0–3. 156 feature tests green; per-bundle Postman
+collections regenerated.
