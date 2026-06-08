@@ -13,6 +13,7 @@ use Modules\Osr\Database\Seeders\OsrRmaSeeder;
 use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Subscription\Database\Seeders\RestrictionCatalogSeeder;
+use Modules\Subscription\Database\Seeders\OperationConfigSeeder;
 use Modules\Subscription\Database\Seeders\StatusCatalogSeeder;
 use Modules\Subscription\Database\Seeders\UpgradeConfigSeeder;
 use Modules\Ticketing\Database\Seeders\AsrPolicySeeder;
@@ -31,6 +32,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             RbacSeeder::class,
             StatusCatalogSeeder::class,
+            OperationConfigSeeder::class,
             ProcessDefinitionSeeder::class,
             ProvisioningTargetSeeder::class,
             DecisionTableSeeder::class,

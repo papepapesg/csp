@@ -12,7 +12,9 @@ use Illuminate\Support\Str;
 use Modules\Subscription\Events\SubscriptionEvents;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Models\SubscriptionOperation;
+use Modules\Subscription\Models\SubscriptionOperationConfig;
 use Modules\Workflow\Engine\WorkflowEngine;
+use Modules\Workflow\Models\ProcessInstance;
 
 /**
  * SUB-WF-FRAMEWORK — starts and tracks subscription operations.
@@ -31,10 +33,25 @@ class OperationFramework
         private readonly WorkflowEngine $engine,
     ) {}
 
-    /** Convention: operation kind -> process definition key. */
+    /** Convention fallback: operation kind -> process definition key. */
     public static function processKeyFor(string $kind): string
     {
         return 'sub-'.Str::slug(strtolower($kind));
+    }
+
+    /**
+     * R-SUB-WF-FW-7: resolve the BPMN/process key from subscription_operation_config
+     * for the (operator, kind); fall back to the naming convention. Rejects when the
+     * kind is disabled for the operator.
+     */
+    private function resolveProcessKey(string $operator, string $kind): string
+    {
+        $config = SubscriptionOperationConfig::resolve($operator, $kind);
+        if ($config && ! $config->enabled) {
+            throw DomainException::conflict("Operation {$kind} is disabled for operator {$operator}.");
+        }
+
+        return $config?->default_bpmn_process_key ?? self::processKeyFor($kind);
     }
 
     /**
@@ -61,13 +78,14 @@ class OperationFramework
             return $existing;
         }
 
-        // Concurrency: refuse a second in-flight EXCLUSIVE operation on the same
-        // subscription. RESTRICT is non-exclusive (R-FW-1 / R-SUB-WF-RESTRICT-01-S-3):
-        // it does not mutate status_code so it may run alongside other operations.
+        // Concurrency (R-SUB-WF-FW-1): at most one in-flight state-changing
+        // (non-RESTRICT) operation per subscription. RESTRICT is non-exclusive
+        // (R-SUB-WF-FW-2). In-flight == final_state IS NULL (matches the partial
+        // unique indexes that also enforce this at the DB level).
         $inflight = $exclusive && SubscriptionOperation::query()
             ->where('subscription_id', $subscription->subscription_id)
             ->where('operation_kind', '!=', 'RESTRICT')
-            ->whereIn('current_state', [SubscriptionOperation::PENDING, SubscriptionOperation::RUNNING])
+            ->whereNull('final_state')
             ->exists();
         if ($inflight) {
             throw DomainException::conflict(
@@ -76,7 +94,7 @@ class OperationFramework
             );
         }
 
-        $processKey = self::processKeyFor($kind);
+        $processKey = $this->resolveProcessKey($subscription->operator_code, $kind);
 
         $operation = DB::transaction(function () use ($subscription, $kind, $input, $idempotencyKey, $requestHash, $actorUserId, $actorRole, $processKey) {
             $operation = SubscriptionOperation::query()->create([
@@ -91,7 +109,7 @@ class OperationFramework
                 'idempotency_request_hash' => $requestHash ?? hash('sha256', json_encode($input)),
                 'correlation_id' => Context::correlationId(),
                 'prior_subscription_status' => $subscription->status_code,
-                'current_state' => SubscriptionOperation::PENDING,
+                'current_state' => SubscriptionOperation::INITIATED,
                 'input' => $input,
             ]);
 
@@ -121,10 +139,52 @@ class OperationFramework
 
         $operation->update([
             'bpmn_process_instance_id' => $instance->instance_id,
-            'current_state' => SubscriptionOperation::RUNNING,
+            'current_state' => SubscriptionOperation::VALIDATING,
             'started_at' => now(),
         ]);
 
         return $operation->refresh();
+    }
+
+    /**
+     * SUB-WF-FRAMEWORK-01 §8.2 cancel an in-flight operation. Marks the operation
+     * CANCELLED, cancels its workflow instance, and reverts the subscription master
+     * to its prior status if a transient PENDING_* flip had been applied
+     * (R-SUB-WF-FW-3 compensation).
+     */
+    public function cancel(SubscriptionOperation $operation, string $reason, ?string $actorId = null): SubscriptionOperation
+    {
+        if (! $operation->isInFlight()) {
+            throw DomainException::conflict('Operation is already terminal.', nextAction: 'NONE');
+        }
+
+        return DB::transaction(function () use ($operation, $reason, $actorId) {
+            // Cancel the workflow instance if still running.
+            if ($operation->bpmn_process_instance_id) {
+                ProcessInstance::query()->whereKey($operation->bpmn_process_instance_id)
+                    ->where('status', ProcessInstance::RUNNING)
+                    ->update(['status' => ProcessInstance::CANCELLED, 'ended_at' => now()]);
+            }
+
+            // Compensation: if the master is sitting in a transient PENDING_* state,
+            // revert it to the prior status.
+            $subscription = Subscription::query()->find($operation->subscription_id);
+            if ($subscription && str_starts_with((string) $subscription->status_code, 'PENDING_')
+                && $operation->prior_subscription_status) {
+                $subscription->update(['status_code' => $operation->prior_subscription_status, 'last_status_changed_at' => now()]);
+            }
+
+            $operation->markCancelled($reason, $actorId);
+
+            $this->events->publish(new DomainEvent(
+                type: SubscriptionEvents::OPERATION_CANCELLED,
+                topic: SubscriptionEvents::TOPIC,
+                payload: ['operationId' => $operation->operation_id, 'reason' => $reason, 'revertedTo' => $subscription?->status_code],
+                aggregateType: 'SubscriptionOperation',
+                aggregateId: $operation->operation_id,
+            ));
+
+            return $operation->refresh();
+        });
     }
 }

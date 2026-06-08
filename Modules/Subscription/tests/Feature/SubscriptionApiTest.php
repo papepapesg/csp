@@ -103,8 +103,8 @@ class SubscriptionApiTest extends TestCase
         $id = $this->makeSubscription();
         $op = $this->postJson("/api/subscriptions/{$id}/activate", [], ['Idempotency-Key' => 'track'])->json('operationId');
 
-        // Immediately the operation is RUNNING (tracked via its status URL)...
-        $this->getJson("/api/subscriptions/{$id}/operations/{$op}")->assertOk()->assertJsonPath('current_state', 'RUNNING');
+        // Immediately the operation is in-flight (framework §5 vocabulary)...
+        $this->getJson("/api/subscriptions/{$id}/operations/{$op}")->assertOk()->assertJsonPath('current_state', 'VALIDATING');
 
         $this->drainWorkflows();
 

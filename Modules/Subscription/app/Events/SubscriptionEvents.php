@@ -29,6 +29,8 @@ final class SubscriptionEvents
 
     public const OPERATION_FAILED = 'SubscriptionOperationFailed';
 
+    public const OPERATION_CANCELLED = 'SubscriptionOperationCancelled';
+
     // SUB-WF-UPGRADE-01 / DOWNGRADE-01 package-change events.
     public const UPGRADED = 'SubscriptionUpgraded';
 

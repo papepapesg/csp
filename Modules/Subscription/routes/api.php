@@ -34,4 +34,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // SUB-WF operation tracking
     Route::get('subscriptions/{subscription}/operations', [OperationController::class, 'index'])->middleware('permission:subscription.read');
     Route::get('subscriptions/{subscription}/operations/{operation}', [OperationController::class, 'show'])->middleware('permission:subscription.read');
+    Route::get('subscriptions/{subscription}/in-flight-operation', [OperationController::class, 'inFlight'])->middleware('permission:subscription.read');
+
+    // SUB-WF-FRAMEWORK-01 cross-operation APIs (§8.2/8.3)
+    Route::get('subscription-operations/{operation}', [OperationController::class, 'status'])->middleware('permission:subscription.read');
+    Route::post('subscription-operations/{operation}/cancel', [OperationController::class, 'cancel'])->middleware('permission:subscription.manage');
 });

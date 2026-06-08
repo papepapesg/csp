@@ -26,7 +26,8 @@ class SyncOperationFromProcess
         }
 
         $operation = SubscriptionOperation::query()->find($operationId);
-        if (! $operation || in_array($operation->current_state, [SubscriptionOperation::COMPLETED, SubscriptionOperation::FAILED], true)) {
+        // Skip if already terminal (COMPLETED/FAILED/CANCELLED) — final_state is set.
+        if (! $operation || ! $operation->isInFlight()) {
             return;
         }
 

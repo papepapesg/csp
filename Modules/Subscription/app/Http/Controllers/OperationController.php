@@ -110,6 +110,32 @@ class OperationController extends ApiController
         return ApiResponse::item($operation);
     }
 
+    /** GET /api/subscription-operations/{operation} — framework operation status (§8.3). */
+    public function status(SubscriptionOperation $operation): JsonResponse
+    {
+        return ApiResponse::item($operation);
+    }
+
+    /** POST /api/subscription-operations/{operation}/cancel — cancel in-flight (§8.2). */
+    public function cancel(Request $request, SubscriptionOperation $operation): JsonResponse
+    {
+        $data = $request->validate(['cancelReason' => ['required', 'string', 'max:64']]);
+        $cancelled = $this->framework->cancel($operation, $data['cancelReason'], $request->user()?->uid);
+
+        return ApiResponse::item($cancelled);
+    }
+
+    /** GET /api/subscriptions/{subscription}/in-flight-operation (§8.4). */
+    public function inFlight(Subscription $subscription): JsonResponse
+    {
+        $op = $subscription->operations()->whereNull('final_state')->latest('created_at')->first();
+        if (! $op) {
+            return response()->json(null, 204);
+        }
+
+        return ApiResponse::item($op);
+    }
+
     /**
      * @param  array<string,mixed>  $input
      */
