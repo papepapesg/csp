@@ -15,6 +15,12 @@ final class SubscriptionEvents
 
     public const SUSPENDED = 'SubscriptionSuspended';
 
+    // SUB-WF-SUSPEND-NP-01 §6: non-payment suspension uses its own event so consumers
+    // (BIL-04, CVM, finance write-off) can distinguish it from a voluntary pause.
+    public const SUSPENDED_NON_PAYMENT = 'SubscriptionSuspendedForNonPayment';
+
+    public const SUSPEND_NP_REJECTED = 'SubscriptionSuspendNPRejected';
+
     public const PAUSED = 'SubscriptionPaused';
 
     public const RESUMED = 'SubscriptionResumed';

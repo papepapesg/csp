@@ -45,6 +45,9 @@ class RbacSeeder extends Seeder
         'CUSTOMER_CARE_SUPERVISOR' => ['customer.read', 'customer.update', 'ticket.create', 'ticket.read', 'ticket.assign', 'ticket.manage', 'notification.read', 'notification.send', 'subscription.read', 'invoice.read'],
         'BILLING_OPERATOR' => ['invoice.read', 'invoice.manage', 'payment.read', 'payment.apply', 'wallet.read', 'wallet.manage', 'adjustment.create', 'customer.read', 'subscription.read'],
         'BILLING_LEAD' => ['invoice.read', 'invoice.manage', 'payment.read', 'payment.apply', 'wallet.read', 'wallet.manage', 'adjustment.create', 'adjustment.approve', 'customer.read', 'subscription.read', 'report.view'],
+        // BIL-04 dunning service account. The only role allowed to trigger non-payment
+        // suspension (DD_SUB-WF-SUSPEND-NP-01 R-T-1); also drives dunning restrictions.
+        'BILLING_INTERNAL' => ['invoice.read', 'payment.read', 'subscription.read', 'subscription.manage'],
         'PRODUCT_MANAGER' => ['catalog.read', 'catalog.manage'],
         'CATALOG_ADMIN' => ['catalog.read', 'catalog.manage'],
         'OSR_OPERATOR' => ['stock.read', 'stock.manage'],

@@ -20,7 +20,7 @@ class OperationConfigSeeder extends Seeder
             'ACTIVATE' => 'sub-activate',
             'PAUSE' => 'sub-pause',
             'RESUME' => 'sub-resume',
-            'SUSPEND_NP' => 'sub-suspend',
+            'SUSPEND_NP' => 'sub-suspend-np',
             'UPGRADE' => 'sub-upgrade',
             'DOWNGRADE' => 'sub-downgrade',
             'RELOCATION' => 'sub-relocation',

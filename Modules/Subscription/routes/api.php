@@ -25,6 +25,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('subscriptions/{subscription}/downgrade', [OperationController::class, 'downgrade'])->middleware('permission:subscription.manage');
     Route::post('subscriptions/{subscription}/relocate', [OperationController::class, 'relocate'])->middleware('permission:subscription.manage');
     Route::post('subscriptions/{subscription}/migrate', [OperationController::class, 'migrate'])->middleware('permission:subscription.manage');
+    Route::post('subscriptions/{subscription}/suspend-np', [OperationController::class, 'suspendNp'])->middleware('permission:subscription.manage');
 
     // SUB-WF-RESTRICT-01 partial-service restriction sub-resource (ADD/REMOVE/LIST)
     Route::get('subscriptions/{subscription}/restrictions', [RestrictionController::class, 'index'])->middleware('permission:subscription.read');

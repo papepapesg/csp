@@ -28,7 +28,7 @@ class DunningService
     private const LEVEL_ACTION = [
         DunningState::LEVEL_WARNING => 'WARN',
         DunningState::LEVEL_RESTRICTED => 'RESTRICT',
-        DunningState::LEVEL_SUSPENDED => 'SUSPEND',
+        DunningState::LEVEL_SUSPENDED => 'SUSPEND_NP',
         DunningState::LEVEL_TERMINATED => 'TERMINATE',
     ];
 
@@ -155,16 +155,27 @@ class DunningService
             return;
         }
 
-        // Drive the owning SUB-WF operation (idempotent by dunning level).
-        if (in_array($action, ['SUSPEND', 'TERMINATE'], true)) {
+        // Drive the owning SUB-WF operation (idempotent by dunning level). Non-payment
+        // suspension runs as SUSPEND_NP and carries the dunning context the operation
+        // records on the pause-history row + the SuspendedForNonPayment event.
+        if (in_array($action, ['SUSPEND_NP', 'TERMINATE'], true)) {
             $this->operations->trigger(
                 subscription: $subscription,
                 kind: $action,
-                input: ['reasonCode' => 'NON_PAYMENT', 'dunningLevel' => $level],
+                input: [
+                    'reasonCode' => 'NON_PAYMENT',
+                    'dunningLevel' => $level,
+                    'dunningReasonCode' => $decision['dunningReasonCode'] ?? 'DUNNING_ESCALATION',
+                    'dunningCycleReference' => $dunningRef,
+                    'dunningEscalationLevel' => $level,
+                    'outstandingDebtAmount' => (float) $state->outstanding_debt_amount,
+                    'outstandingDebtCurrency' => $subscription->currency ?? 'KES',
+                ],
                 idempotencyKey: $dunningRef,
+                actorRole: 'BILLING_INTERNAL',
             );
 
-            if ($action === 'SUSPEND') {
+            if ($action === 'SUSPEND_NP') {
                 $this->events->publish(new DomainEvent(
                     type: BillingEvents::SUBSCRIPTION_SUSPENDED_NP,
                     topic: BillingEvents::TOPIC,

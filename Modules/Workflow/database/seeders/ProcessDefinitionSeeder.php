@@ -58,7 +58,7 @@ class ProcessDefinitionSeeder extends Seeder
             'sub.resume', [], 'SUBSCRIPTION_RESUMED',
             ['intentType' => 'RECONNECTION_FEE', 'payFirst' => false, 'amountVar' => 'reconnectionFee']);
 
-        $this->stateOp('sub-suspend', 'Subscription Suspend (non-payment)', 'sub.validate-operation',
+        $this->stateOp('sub-suspend-np', 'Subscription Suspend (non-payment)', 'sub.validate-operation',
             ['ruleSet' => 'rules.subscription.suspend-np', 'requiredStatus' => 'ACTIVE'],
             'PENDING_SUSPEND_NP', 'SUSPEND_NP',
             ['action' => 'SUSPEND', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'SUSPENDED'],

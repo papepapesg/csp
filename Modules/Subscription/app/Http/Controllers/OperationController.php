@@ -96,6 +96,34 @@ class OperationController extends ApiController
         return $this->trigger($request, $subscription, 'MIGRATION', $data);
     }
 
+    /**
+     * POST /api/subscriptions/{subscription}/suspend-np
+     *
+     * DD_SUB-WF-SUSPEND-NP-01: system-driven non-payment suspension. R-T-1 gates the
+     * trigger to the BILLING_INTERNAL role only (BIL-04's service account) — any other
+     * actor gets 403 UNAUTHORIZED_TRIGGER. R-T-2 requires the dunning context.
+     */
+    public function suspendNp(Request $request, Subscription $subscription): JsonResponse
+    {
+        if (! $request->user()?->hasRole('BILLING_INTERNAL')) {
+            throw new \App\Foundation\Errors\DomainException(
+                'UNAUTHORIZED_TRIGGER',
+                'Non-payment suspension may only be triggered by the BILLING_INTERNAL role.',
+                403,
+            );
+        }
+
+        $data = $request->validate([
+            'dunningReasonCode' => ['required', 'string', 'max:64'],
+            'dunningCycleReference' => ['required', 'string', 'max:128'],
+            'outstandingDebtAmount' => ['required', 'numeric'],
+            'outstandingDebtCurrency' => ['required', 'string', 'size:3'],
+            'dunningEscalationLevel' => ['nullable', 'integer'],
+        ]);
+
+        return $this->trigger($request, $subscription, 'SUSPEND_NP', $data);
+    }
+
     /** GET /api/subscriptions/{subscription}/operations */
     public function index(Subscription $subscription): JsonResponse
     {
