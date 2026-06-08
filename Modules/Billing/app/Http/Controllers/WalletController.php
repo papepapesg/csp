@@ -16,14 +16,21 @@ class WalletController extends ApiController
 {
     public function __construct(private readonly WalletService $wallets) {}
 
-    /** GET /api/wallets/{subscriptionId}/balance */
-    public function balance(string $subscriptionId): JsonResponse
+    /** The PLM-CFG-03 walletRef being addressed; defaults to the money wallet. */
+    private function walletCode(Request $request): string
     {
-        $wallet = $this->wallets->ensureWallet($subscriptionId);
+        return $request->query('walletCode', $request->input('walletCode', WalletService::DEFAULT_WALLET_CODE));
+    }
+
+    /** GET /api/wallets/{subscriptionId}/balance?walletCode=MONEY_KES */
+    public function balance(Request $request, string $subscriptionId): JsonResponse
+    {
+        $wallet = $this->wallets->ensureWallet($subscriptionId, $this->walletCode($request));
 
         return ApiResponse::item([
             'walletId' => $wallet->wallet_id,
             'subscriptionId' => $wallet->subscription_id,
+            'walletCode' => $wallet->wallet_code,
             'currency' => $wallet->currency,
             'balance' => $wallet->balance,
             'status' => $wallet->status,
@@ -35,10 +42,11 @@ class WalletController extends ApiController
     {
         $data = $request->validate([
             'amount' => ['required', 'numeric', 'gt:0'],
+            'walletCode' => ['nullable', 'string', 'max:64'],
             'reference' => ['nullable', 'string'],
         ]);
 
-        $wallet = $this->wallets->ensureWallet($subscriptionId);
+        $wallet = $this->wallets->ensureWallet($subscriptionId, $this->walletCode($request));
         $txn = $this->wallets->credit($wallet, (float) $data['amount'], 'TOPUP', $data['reference'] ?? null);
 
         return ApiResponse::created($txn);
@@ -50,10 +58,11 @@ class WalletController extends ApiController
         $data = $request->validate([
             'amount' => ['required', 'numeric', 'gt:0'],
             'reason' => ['nullable', 'string', 'max:64'],
+            'walletCode' => ['nullable', 'string', 'max:64'],
             'reference' => ['nullable', 'string'],
         ]);
 
-        $wallet = $this->wallets->ensureWallet($subscriptionId);
+        $wallet = $this->wallets->ensureWallet($subscriptionId, $this->walletCode($request));
         $txn = $this->wallets->debit($wallet, (float) $data['amount'], $data['reason'] ?? 'CYCLE_CHARGE', $data['reference'] ?? null);
 
         return ApiResponse::item($txn);

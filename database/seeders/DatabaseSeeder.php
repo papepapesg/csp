@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Hash;
 use Modules\Billing\Database\Seeders\DunningPolicySeeder;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
 use Modules\Catalog\Database\Seeders\TaxCatalogSeeder;
+use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
 use Modules\Ilm\Database\Seeders\CvmPolicySeeder;
 use Modules\Osr\Database\Seeders\OsrRmaSeeder;
 use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
@@ -39,6 +40,7 @@ class DatabaseSeeder extends Seeder
             ProvisioningTargetSeeder::class,
             DecisionTableSeeder::class,
             CatalogPolicySeeder::class,
+            WalletCatalogSeeder::class,
             TaxCatalogSeeder::class,
             DunningPolicySeeder::class,
             RestrictionCatalogSeeder::class,

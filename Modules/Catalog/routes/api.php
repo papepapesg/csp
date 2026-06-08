@@ -9,6 +9,7 @@ use Modules\Catalog\Http\Controllers\ServiceClassController;
 use Modules\Catalog\Http\Controllers\ServiceController;
 use Modules\Catalog\Http\Controllers\TaxController;
 use Modules\Catalog\Http\Controllers\TechRegionController;
+use Modules\Catalog\Http\Controllers\WalletCatalogController;
 
 /*
 | Catalog & reference-data API (PLM-CFG-01, SIP-01, RLM-CFG-01, ILM-CFG-02).
@@ -54,6 +55,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('discounts', [DiscountController::class, 'store'])->middleware('permission:catalog.manage');
     Route::post('discounts/assign', [DiscountController::class, 'assign'])->middleware('permission:catalog.manage');
     Route::post('discounts/compute', [DiscountController::class, 'compute'])->middleware('permission:catalog.read');
+
+    // PLM-CFG-03 wallet catalog (the rich `wallet` entity: applicability, precedence, lifecycle)
+    Route::get('wallet-catalog', [WalletCatalogController::class, 'index'])->middleware('permission:catalog.read');
+    Route::post('wallet-catalog', [WalletCatalogController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
+    Route::get('wallet-catalog/{wallet}', [WalletCatalogController::class, 'show'])->middleware('permission:catalog.read');
+    Route::patch('wallet-catalog/{wallet}', [WalletCatalogController::class, 'update'])->middleware('permission:catalog.manage');
+    Route::post('wallet-catalog/{wallet}/activate', [WalletCatalogController::class, 'activate'])->middleware('permission:catalog.manage');
+    Route::post('wallet-catalog/{wallet}/retire', [WalletCatalogController::class, 'retire'])->middleware('permission:catalog.manage');
 
     // PLM config catalogs (wallet / adjustment-type / voice-tariff / equipment-type)
     Route::get('config/{catalog}', [ConfigCatalogController::class, 'index'])->middleware('permission:catalog.read');

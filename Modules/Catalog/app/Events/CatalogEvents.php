@@ -22,4 +22,13 @@ final class CatalogEvents
     public const HOMEPASS_CREATED = 'HomePassCreated';
 
     public const HOMEPASS_STATUS_CHANGED = 'HomePassStatusChanged';
+
+    // PLM-CFG-03 wallet catalog lifecycle.
+    public const WALLET_CREATED = 'WalletCreated';
+
+    public const WALLET_UPDATED = 'WalletUpdated';
+
+    public const WALLET_ACTIVATED = 'WalletActivated';
+
+    public const WALLET_RETIRED = 'WalletRetired';
 }
