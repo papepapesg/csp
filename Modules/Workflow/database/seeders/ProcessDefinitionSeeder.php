@@ -78,11 +78,15 @@ class ProcessDefinitionSeeder extends Seeder
             'sub.change-package', ['transition' => 'DOWNGRADE', 'event' => 'SubscriptionDowngraded'], 'SUBSCRIPTION_DOWNGRADED',
             ['intentType' => 'PRORATION', 'payFirst' => false, 'amountVar' => 'priceDelta']);
 
+        // Relocation: a physical move, so it raises a WO-01 SHIFTING work order
+        // (disconnect at source / reconnect at target) before the network call.
         $this->stateOp('sub-relocation', 'Subscription Relocation', 'sub.validate-homepass-change',
             ['ruleSet' => 'rules.subscription.relocation'],
             'PENDING_RELOCATION', 'RELOCATION',
             ['action' => 'MODIFY', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'ACTIVE'],
-            'sub.change-homepass', ['transition' => 'RELOCATION', 'event' => 'SubscriptionRelocated'], 'SUBSCRIPTION_RELOCATED');
+            'sub.change-homepass', ['transition' => 'RELOCATION', 'event' => 'SubscriptionRelocated'], 'SUBSCRIPTION_RELOCATED',
+            null,
+            ['id' => 'shifting_wo', 'topic' => 'sub.create-shifting-wo', 'label' => 'Create SHIFTING work order']);
 
         $this->stateOp('sub-migration', 'Subscription Migration', 'sub.validate-homepass-change',
             ['ruleSet' => 'rules.subscription.migration'],
@@ -90,22 +94,26 @@ class ProcessDefinitionSeeder extends Seeder
             ['action' => 'MODIFY', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'ACTIVE'],
             'sub.change-homepass', ['transition' => 'MIGRATION', 'event' => 'SubscriptionMigrated'], 'SUBSCRIPTION_MIGRATED');
 
-        // Terminate: ACTIVE -> PENDING_TERMINATION -> (equipment pickup) -> TERMINATED.
+        // Terminate: ACTIVE -> PENDING_TERMINATION -> deprovision -> TERMINATED ->
+        // equipment pickup (OSR-RMA EQP) -> notify. The pickup is raised after the
+        // master is terminated so each field-active device is recovered from the site.
         $this->deploy('sub-terminate', 'Subscription Termination', [
             'nodes' => [
                 $this->n('start', 'startEvent', 0, 'Start'),
                 $this->svc('enter', 180, 'Enter pending termination', 'sub.put-pending-status', ['pendingStatus' => 'PENDING_TERMINATION', 'transitionType' => 'TERMINATE']),
                 $this->svc('fulfil', 360, 'Deprovision network', 'sub.fulfillment-call', ['action' => 'DEACTIVATE', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'NOT_PRESENT']),
                 $this->svc('terminate', 540, 'Commit terminated', 'sub.terminate'),
-                $this->svc('notify', 720, 'Notify', 'notify.send', ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_TERMINATED']),
-                $this->end('end_ok', 900, 'Terminated'),
+                $this->svc('pickup', 720, 'Trigger equipment pickup (EQP)', 'sub.trigger-equipment-pickup', [], 20),
+                $this->svc('notify', 900, 'Notify', 'notify.send', ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_TERMINATED']),
+                $this->end('end_ok', 1080, 'Terminated'),
             ],
             'edges' => [
                 $this->e('e1', 'start', 'enter'),
                 $this->e('e2', 'enter', 'fulfil'),
                 $this->e('e3', 'fulfil', 'terminate'),
-                $this->e('e4', 'terminate', 'notify'),
-                $this->e('e5', 'notify', 'end_ok'),
+                $this->e('e4', 'terminate', 'pickup'),
+                $this->e('e5', 'pickup', 'notify'),
+                $this->e('e6', 'notify', 'end_ok'),
             ],
         ]);
 
@@ -131,8 +139,15 @@ class ProcessDefinitionSeeder extends Seeder
         ]);
     }
 
-    /** Build a standard state-affecting flow: validate -> gw -> enter-pending -> fulfillment -> commit -> notify. */
-    private function stateOp(string $key, string $name, string $validateTopic, array $validateCfg, string $pendingStatus, string $transitionType, array $fulfillment, string $commitTopic, array $commitCfg, string $notifyTemplate, ?array $billing = null): void
+    /**
+     * Build a standard state-affecting flow: validate -> gw -> enter-pending ->
+     * [billing] -> [beforeFulfil] -> fulfillment -> commit -> notify.
+     *
+     * @param  array{id:string,topic:string,config?:array,label?:string}|null  $beforeFulfil
+     *   Optional cross-module service step inserted immediately before the network
+     *   fulfillment (e.g. relocation raising a WO-01 SHIFTING work order).
+     */
+    private function stateOp(string $key, string $name, string $validateTopic, array $validateCfg, string $pendingStatus, string $transitionType, array $fulfillment, string $commitTopic, array $commitCfg, string $notifyTemplate, ?array $billing = null, ?array $beforeFulfil = null): void
     {
         // Without billing: validate -> gw -> enter -> fulfil -> commit -> notify.
         // With billing: enter -> billing-intent -> gw_pay -> [await-payment] -> fulfil -> ...
@@ -170,6 +185,18 @@ class ProcessDefinitionSeeder extends Seeder
             $edges[] = $this->e('e5', 'enter', 'fulfil');
         }
         $edges[] = $this->e('e6', 'fulfil', 'commit');
+
+        // Inject an optional cross-module step just before fulfil: retarget every
+        // edge currently pointing at 'fulfil' to the new node, then chain it on.
+        if ($beforeFulfil) {
+            $nodes[] = $this->svc($beforeFulfil['id'], 940, $beforeFulfil['label'] ?? 'Pre-fulfillment step', $beforeFulfil['topic'], $beforeFulfil['config'] ?? [], 20);
+            foreach ($edges as $i => $edge) {
+                if (($edge['target'] ?? null) === 'fulfil') {
+                    $edges[$i]['target'] = $beforeFulfil['id'];
+                }
+            }
+            $edges[] = $this->e('ebf', $beforeFulfil['id'], 'fulfil');
+        }
 
         $this->deploy($key, $name, ['nodes' => $nodes, 'edges' => $edges]);
     }

@@ -12,6 +12,7 @@ use Modules\Catalog\Models\HomePass;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Subscription\Models\Subscription;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
+use Modules\WorkOrder\Database\Seeders\WoSupportSeeder;
 use Tests\TestCase;
 
 class SubscriptionRelocationTest extends TestCase
@@ -24,6 +25,7 @@ class SubscriptionRelocationTest extends TestCase
         $this->seed(RbacSeeder::class);
         $this->seed(ProcessDefinitionSeeder::class);
         $this->seed(DecisionTableSeeder::class);
+        $this->seed(WoSupportSeeder::class); // wo-shifting flow for the relocation SHIFTING WO
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('SUPER_ADMIN');
         Sanctum::actingAs($user);
@@ -72,6 +74,12 @@ class SubscriptionRelocationTest extends TestCase
         $this->assertNull($sub->current_transition_type); // transient marker cleared on commit
         $this->assertSame('pkg_1', $sub->package_ref); // package unchanged
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionRelocated']);
+
+        // The physical move raised a WO-01 SHIFTING work order (cross-module trigger),
+        // carrying the operation reference as its source.
+        $this->assertDatabaseHas('work_order', [
+            'subscription_id' => $id, 'type' => 'SHIFTING', 'kind' => 'SHIFTING', 'source_type' => 'SUBSCRIPTION_OP',
+        ]);
     }
 
     public function test_relocation_to_non_serviceable_is_rejected(): void

@@ -11,7 +11,9 @@ use Modules\Subscription\Workflow\ActivateHandler;
 use Modules\Subscription\Workflow\BillingIntentHandler;
 use Modules\Subscription\Workflow\ChangeHomePassHandler;
 use Modules\Subscription\Workflow\ChangePackageHandler;
+use Modules\Subscription\Workflow\CreateShiftingWoHandler;
 use Modules\Subscription\Workflow\EnterPendingStatusHandler;
+use Modules\Subscription\Workflow\EquipmentPickupHandler;
 use Modules\Subscription\Workflow\FulfillmentCallHandler;
 use Modules\Subscription\Workflow\PauseHandler;
 use Modules\Subscription\Workflow\PutActiveRestrictionsHandler;
@@ -47,6 +49,8 @@ class SubscriptionWorkflowProvider extends ServiceProvider
         $registry->register(ChangePackageHandler::class);
         $registry->register(ValidateHomePassChangeHandler::class);
         $registry->register(ChangeHomePassHandler::class);
+        $registry->register(EquipmentPickupHandler::class);
+        $registry->register(CreateShiftingWoHandler::class);
 
         Event::listen(ProcessInstanceEnded::class, [SyncOperationFromProcess::class, 'handle']);
         Event::listen(OutboxEventPublished::class, [ConfirmBillingIntentOnPayment::class, 'handle']);
