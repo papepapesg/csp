@@ -39,27 +39,42 @@ Legend: ✅ implemented · ⚠️ partial/divergent (tracked).
 
 | Op | Transition | Status | Remaining gap |
 |---|---|---|---|
-| PAUSE | ACTIVE→PENDING_PAUSE→SUSPENDED(+reason) | ✅ | `subscription_pause_config`; pause fee (BIL) |
-| RESUME | SUSPENDED→PENDING_RESUME→ACTIVE | ✅ | reconnection fee (BIL); admin_force fields |
-| SUSPEND-NP | ACTIVE→PENDING_SUSPEND_NP→SUSPENDED(+clears restrictions) | ✅ | `suspend_np_config`; BILLING_INTERNAL role gate |
-| TERMINATE | ACTIVE→PENDING_TERMINATION→TERMINATED | ✅ | auto EQP equipment-pickup trigger; deposit refund |
-| UPGRADE/DOWNGRADE | ACTIVE→PENDING_UPGRADE/DOWNGRADE→ACTIVE | ✅ | proration/payment gate (BIL); scheduled effective-timing; equipment-bind |
-| RELOCATION/MIGRATION | ACTIVE→PENDING_*→ACTIVE | ✅ | auto WO-01 SHIFTING creation; scheduled effective-timing |
+| PAUSE | ACTIVE→PENDING_PAUSE→SUSPENDED(+reason) | ✅ | `subscription_pause_config` seeded (catalog only — self-service/min-duration gating not yet consumed in validate); pause fee wired (BIL-01 PAUSE_FEE) |
+| RESUME | SUSPENDED→PENDING_RESUME→ACTIVE | ✅ | reconnection fee wired (BIL-01); admin_force fields |
+| SUSPEND-NP | ACTIVE→PENDING_SUSPEND_NP→SUSPENDED(+clears restrictions) | ✅ | `subscription_suspend_np_config` + BILLING_INTERNAL role gate + dunning-context on pause-history + `debtAmountTier` — done |
+| TERMINATE | ACTIVE→PENDING_TERMINATION→TERMINATED | ✅ | auto EQP equipment-pickup wired (OSR-RMA); deposit refund |
+| UPGRADE/DOWNGRADE | ACTIVE→PENDING_UPGRADE/DOWNGRADE→ACTIVE | ✅ | proration/pay-first gate wired (BIL-01); scheduled effective-timing; equipment-bind |
+| RELOCATION/MIGRATION | ACTIVE→PENDING_*→ACTIVE | ✅ | auto WO-01 SHIFTING creation wired (relocation); scheduled effective-timing |
 | RESTRICT | ACTIVE (no transient) | ✅ | — (faithful) |
 
 ## Commit-window sequence (now uniform)
 
 `validate (drools) → gateway → enter-pending (PENDING_*) → fulfillment (FUL/network, gates) → commit (final status + reason) → notify`, with the operation record narrating the §5 `current_state` at each step. Pause/suspend open a `subscription_pause_history` row; resume closes it.
 
+## Billing & cross-module integration layer (now closed)
+
+| Capability | Status | Notes |
+|---|---|---|
+| BIL-01 billing-intent (`billing_intent`) emitted in the commit window | ✅ | `sub.billing-intent` step; fee invoice (>0) or account credit (<0) |
+| Pay-first gate (UPGRADE proration) | ✅ | parks on `AWAITING_PAYMENT` (messageCatch `sub-payment-confirmed`); InvoicePaid → listener confirms intent + correlates → resumes commit |
+| Pause fee / reconnection fee intents | ✅ | PAUSE_FEE (pay-first false), RECONNECTION_FEE |
+| Terminate → OSR-RMA EQP equipment pickup | ✅ | `sub.trigger-equipment-pickup` raises an EQP swap-request per field-active device |
+| Relocation → WO-01 SHIFTING work order | ✅ | `sub.create-shifting-wo` before the network call; `beforeFulfil` hook |
+| Per-operation operator-config tables | ✅ | `subscription_pause_config`, `subscription_suspend_np_config` seeded for all operators |
+
 ## Summary
 
-The **framework + lifecycle state machine is now DD-faithful**: transient PENDING_*
+The **framework + lifecycle state machine is DD-faithful**: transient PENDING_*
 states, the rich operation `current_state`, config-driven process keys, DB-enforced
 concurrency, cancel/timeout/in-flight APIs, pause-history, and a fulfillment gate in
-every commit window.
+every commit window. The **billing + cross-module integration layer is now wired**:
+BIL-01 billing-intents with a pay-first gate, terminate→EQP pickup, relocation→WO
+SHIFTING, and the per-operation operator-config catalogs.
 
-The remaining ⚠️ items are a **separate integration layer** — primarily **billing
-charge integration** (proration, pause/reconnection fees, payment-confirmed gates
-via BIL-01), **cross-module auto-triggers** (terminate→EQP pickup, relocate→WO
-SHIFTING), per-operation **operator-config tables**, and minor **topic/table naming**.
-These are tracked here and do not affect the state-machine fidelity.
+Remaining ⚠️ items are narrow and tracked above: **FOUNDATION_AUTH** (local Sanctum +
+spatie instead of Keycloak — top known divergence), **framework event topic naming**
+(`subscription.lifecycle` vs `sophix.subscription.operation.*`), **`outbox_events` vs
+`kafka_outbox`** (functionally equivalent), R-FW-3 **terminate auto-interrupt** of an
+in-flight op, **scheduled effective-timing** (IMMEDIATE only today), and deeper
+**consumption** of the pause config (self-service / min-duration gating in validate).
+None affect the state-machine fidelity.
