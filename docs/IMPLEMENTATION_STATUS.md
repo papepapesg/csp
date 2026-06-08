@@ -177,3 +177,14 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 
 The whole BSS now spans Waves 0–3. 156 feature tests green; per-bundle Postman
 collections regenerated.
+
+## Subscription workflow fidelity pass (post-review)
+
+Implemented the SUB-WF-FRAMEWORK-01 + SUB-LM-01 state machine faithfully (see
+`docs/SUBSCRIPTION_FIDELITY_AUDIT.md`): transient PENDING_* states held across the
+commit window, the rich operation `current_state` vocabulary, status + reason
+catalogs, `subscription_operation_config` (config-driven process keys), DB-enforced
+single-in-flight concurrency, cancel/in-flight/status APIs, operation timeout sweep,
+`subscription_pause_history`, and a network/fulfillment gate in every commit window.
+Remaining ⚠️ items (billing charge integration, cross-module auto-triggers, per-op
+config tables) are tracked in the audit doc.
