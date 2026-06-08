@@ -18,19 +18,38 @@ class Subscription extends Model
 {
     use HasPrefixedId;
 
+    public const CREATED = 'CREATED';
+
     public const PENDING_ACTIVATION = 'PENDING_ACTIVATION';
 
     public const ACTIVE = 'ACTIVE';
 
+    public const PENDING_PAUSE = 'PENDING_PAUSE';
+
+    public const PENDING_RESUME = 'PENDING_RESUME';
+
+    public const PENDING_SUSPEND_NP = 'PENDING_SUSPEND_NP';
+
     public const SUSPENDED = 'SUSPENDED';
 
+    /** @deprecated SUB-LM-01: pause now resolves to SUSPENDED (with a reason). Kept for back-compat. */
     public const PAUSED = 'PAUSED';
 
     public const RESTRICTED = 'RESTRICTED';
 
+    public const PENDING_UPGRADE = 'PENDING_UPGRADE';
+
+    public const PENDING_DOWNGRADE = 'PENDING_DOWNGRADE';
+
+    public const PENDING_RELOCATION = 'PENDING_RELOCATION';
+
+    public const PENDING_MIGRATION = 'PENDING_MIGRATION';
+
     public const PENDING_TERMINATION = 'PENDING_TERMINATION';
 
     public const TERMINATED = 'TERMINATED';
+
+    public const RETIRED = 'RETIRED';
 
     protected $table = 'subscription';
 
