@@ -4,6 +4,7 @@ namespace Modules\Subscription\Providers;
 
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Modules\Subscription\Console\OperationTimeoutCommand;
 use Modules\Subscription\Workflow\ActivateHandler;
 use Modules\Subscription\Workflow\ChangeHomePassHandler;
 use Modules\Subscription\Workflow\ChangePackageHandler;
@@ -44,5 +45,9 @@ class SubscriptionWorkflowProvider extends ServiceProvider
         $registry->register(ChangeHomePassHandler::class);
 
         Event::listen(ProcessInstanceEnded::class, [SyncOperationFromProcess::class, 'handle']);
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([OperationTimeoutCommand::class]);
+        }
     }
 }

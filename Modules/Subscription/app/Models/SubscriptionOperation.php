@@ -125,6 +125,7 @@ class SubscriptionOperation extends Model
     {
         $this->update([
             'current_state' => self::FAILED,
+            'final_state' => self::FAILED,
             'failure_reason_code' => $code,
             'failure_reason_detail' => $detail,
             'completed_at' => now(),

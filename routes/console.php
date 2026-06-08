@@ -16,3 +16,6 @@ Schedule::command('sophix:billing:dunning-run')->daily();
 
 // PROV-INT-01 reconciliation worker (hourly polling of network vs desired state).
 Schedule::command('sophix:provisioning:reconcile')->hourly()->withoutOverlapping();
+
+// SUB-WF-FRAMEWORK-01 operation timeout sweep (R-SUB-WF-FW-9/10).
+Schedule::command('sophix:subscription:operation-timeouts')->everyMinute()->withoutOverlapping();

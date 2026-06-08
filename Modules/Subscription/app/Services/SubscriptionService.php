@@ -7,6 +7,7 @@ use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
 use Modules\Subscription\Events\SubscriptionEvents;
 use Modules\Subscription\Models\Subscription;
+use Modules\Subscription\Models\SubscriptionPauseHistory;
 
 /**
  * SUB-LM-01 — the only writer of the subscription master row. SUB-WF workflows
@@ -33,6 +34,38 @@ class SubscriptionService
 
             return $subscription;
         });
+    }
+
+    /**
+     * SUB-WF-PAUSE-01 §7.2: open a pause/suspension-history row at commit (one open
+     * row per subscription, R-PAUSE-S-3). Idempotent — reuses the open row if present.
+     *
+     * @param  array<string,mixed>  $data
+     */
+    public function openPausePeriod(Subscription $subscription, array $data): SubscriptionPauseHistory
+    {
+        $open = SubscriptionPauseHistory::open($subscription->subscription_id);
+        if ($open) {
+            return $open;
+        }
+
+        return SubscriptionPauseHistory::query()->create(array_merge([
+            'operator_code' => $subscription->operator_code,
+            'subscription_id' => $subscription->subscription_id,
+            'customer_id' => $subscription->customer_id,
+            'suspended_at' => now(),
+        ], $data));
+    }
+
+    /**
+     * SUB-WF-RESUME-01: close the open pause/suspension-history row on resume.
+     *
+     * @param  array<string,mixed>  $data
+     */
+    public function closePausePeriod(Subscription $subscription, array $data): void
+    {
+        SubscriptionPauseHistory::open($subscription->subscription_id)
+            ?->update(array_merge(['actual_resume_at' => now()], $data));
     }
 
     /**

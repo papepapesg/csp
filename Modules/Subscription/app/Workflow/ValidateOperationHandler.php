@@ -4,6 +4,7 @@ namespace Modules\Subscription\Workflow;
 
 use App\Foundation\Rules\RuleEngine;
 use Modules\Subscription\Models\Subscription;
+use Modules\Subscription\Models\SubscriptionPauseHistory;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
 use Modules\Workflow\Contracts\TaskResult;
@@ -39,6 +40,12 @@ class ValidateOperationHandler implements TaskHandler
         $required = $cfg['requiredStatus'] ?? null;
         if ($required && $subscription->status_code !== $required) {
             return TaskResult::success(['eligible' => false, 'eligibilityReason' => 'INVALID_SOURCE_STATUS']);
+        }
+
+        // R-RESUME-OI-2: resume requires an open pause/suspension-history row.
+        if (($cfg['requireOpenPause'] ?? false)
+            && SubscriptionPauseHistory::open($subscription->subscription_id) === null) {
+            return TaskResult::success(['eligible' => false, 'eligibilityReason' => 'NO_OPEN_PAUSE_HISTORY']);
         }
 
         $result = $this->rules->assess($cfg['ruleSet'] ?? 'rules.subscription.common', [

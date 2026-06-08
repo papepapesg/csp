@@ -41,6 +41,10 @@ class ResumeHandler implements TaskHandler
                 'resumed_at' => now(),
                 'current_transition_reason_code' => $context->var('reasonCode', 'CUSTOMER_REQUESTED_RESUME'),
             ], SubscriptionEvents::RESUMED);
+
+            $this->subscriptions->closePausePeriod($subscription, [
+                'resume_reason_code' => $context->var('reasonCode', 'CUSTOMER_REQUESTED_RESUME'),
+            ]);
         }
 
         return TaskResult::success(['subscriptionStatus' => Subscription::ACTIVE]);

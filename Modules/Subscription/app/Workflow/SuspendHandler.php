@@ -42,6 +42,15 @@ class SuspendHandler implements TaskHandler
                 'current_transition_reason_code' => $context->var('reasonCode', 'DUNNING_LEVEL_3_NON_PAYMENT'),
                 'active_restrictions' => [], // R-SUSPEND-NP-M-3: suspension revokes all service
             ], SubscriptionEvents::SUSPENDED);
+
+            $this->subscriptions->openPausePeriod($subscription, [
+                'origin_intent' => 'SUSPEND_NP',
+                'system_managed' => true,
+                'pause_reason_code' => $context->var('reasonCode', 'DUNNING_LEVEL_3_NON_PAYMENT'),
+                'dunning_reason_code' => $context->var('dunningReasonCode'),
+                'dunning_escalation_level' => $context->var('dunningLevel'),
+                'pause_correlation_id' => $context->var('operationId'),
+            ]);
         }
 
         return TaskResult::success(['subscriptionStatus' => Subscription::SUSPENDED]);

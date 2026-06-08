@@ -9,6 +9,8 @@ use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Subscription\Models\Subscription;
+use Modules\Subscription\Models\SubscriptionOperation;
+use Modules\Subscription\Models\SubscriptionPauseHistory;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
 use Modules\Workflow\Engine\TaskRegistry;
@@ -105,5 +107,51 @@ class SubscriptionPauseResumeTest extends TestCase
         $step(); // fulfillment (network)
         $step(); // commit -> SUSPENDED
         $this->assertSame('SUSPENDED', Subscription::find($id)->status_code);
+    }
+
+    public function test_pause_history_opens_on_pause_and_closes_on_resume(): void
+    {
+        $id = $this->activeSubscription();
+
+        $this->postJson("/api/subscriptions/{$id}/pause", ['reasonCode' => 'CUSTOMER_REQUESTED_PAUSE'], ['Idempotency-Key' => 'ph1'])->assertStatus(202);
+        $this->drain();
+        // An OPEN pause-history row exists (actual_resume_at null).
+        $this->assertDatabaseHas('subscription_pause_history', [
+            'subscription_id' => $id, 'origin_intent' => 'CUSTOMER_REQUESTED_PAUSE', 'actual_resume_at' => null,
+        ]);
+
+        $this->postJson("/api/subscriptions/{$id}/resume", [], ['Idempotency-Key' => 'ph2'])->assertStatus(202);
+        $this->drain();
+        // The row is now closed.
+        $this->assertNull(SubscriptionPauseHistory::open($id));
+    }
+
+    public function test_resume_without_open_pause_history_is_rejected(): void
+    {
+        $id = $this->activeSubscription();
+        // Force the master to SUSPENDED with no pause-history row.
+        Subscription::where('subscription_id', $id)->update(['status_code' => 'SUSPENDED']);
+
+        $this->postJson("/api/subscriptions/{$id}/resume", [], ['Idempotency-Key' => 'ph3'])->assertStatus(202);
+        $this->drain();
+        // R-RESUME-OI-2: no open pause row -> gateway rejects -> stays SUSPENDED.
+        $this->assertSame('SUSPENDED', Subscription::find($id)->status_code);
+    }
+
+    public function test_operation_timeout_sweep_fails_stuck_operation_and_reverts(): void
+    {
+        $id = $this->activeSubscription();
+        // Start the pause but leave it in-flight (do NOT drain). Backdate started_at
+        // past the timeout and park the master in the PENDING_PAUSE transient.
+        $op = $this->postJson("/api/subscriptions/{$id}/pause", [], ['Idempotency-Key' => 'to1'])->json('operationId');
+        SubscriptionOperation::where('operation_id', $op)->update(['started_at' => now()->subSeconds(1000)]);
+        Subscription::where('subscription_id', $id)->update(['status_code' => 'PENDING_PAUSE']);
+
+        Artisan::call('sophix:subscription:operation-timeouts');
+
+        $this->assertSame('FAILED', SubscriptionOperation::find($op)->final_state);
+        $this->assertSame('OPERATION_TIMEOUT', SubscriptionOperation::find($op)->failure_reason_code);
+        // Reverted from the transient back to ACTIVE (prior status).
+        $this->assertSame('ACTIVE', Subscription::find($id)->status_code);
     }
 }

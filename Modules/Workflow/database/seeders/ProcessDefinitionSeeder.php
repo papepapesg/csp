@@ -51,7 +51,7 @@ class ProcessDefinitionSeeder extends Seeder
             'sub.pause', [], 'SUBSCRIPTION_PAUSED');
 
         $this->stateOp('sub-resume', 'Subscription Resume', 'sub.validate-operation',
-            ['ruleSet' => 'rules.subscription.resume', 'requiredStatus' => 'SUSPENDED'],
+            ['ruleSet' => 'rules.subscription.resume', 'requiredStatus' => 'SUSPENDED', 'requireOpenPause' => true],
             'PENDING_RESUME', 'RESUME',
             ['action' => 'ACTIVATE', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'ACTIVE'],
             'sub.resume', [], 'SUBSCRIPTION_RESUMED');

@@ -41,6 +41,14 @@ class PauseHandler implements TaskHandler
             $this->subscriptions->transitionStatus($subscription, Subscription::SUSPENDED, [
                 'current_transition_reason_code' => $context->var('reasonCode', 'CUSTOMER_REQUESTED_PAUSE'),
             ], SubscriptionEvents::PAUSED);
+
+            $this->subscriptions->openPausePeriod($subscription, [
+                'origin_intent' => $context->var('originIntent', 'CUSTOMER_REQUESTED_PAUSE'),
+                'system_managed' => false,
+                'pause_reason_code' => $context->var('reasonCode', 'CUSTOMER_REQUESTED_PAUSE'),
+                'duration_mode' => $context->var('durationMode', 'OPEN_ENDED'),
+                'pause_correlation_id' => $context->var('operationId'),
+            ]);
         }
 
         return TaskResult::success(['subscriptionStatus' => Subscription::SUSPENDED]);
