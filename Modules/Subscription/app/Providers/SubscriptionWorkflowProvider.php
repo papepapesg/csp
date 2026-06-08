@@ -7,6 +7,8 @@ use Illuminate\Support\ServiceProvider;
 use Modules\Subscription\Workflow\ActivateHandler;
 use Modules\Subscription\Workflow\ChangeHomePassHandler;
 use Modules\Subscription\Workflow\ChangePackageHandler;
+use Modules\Subscription\Workflow\EnterPendingStatusHandler;
+use Modules\Subscription\Workflow\FulfillmentCallHandler;
 use Modules\Subscription\Workflow\PauseHandler;
 use Modules\Subscription\Workflow\PutActiveRestrictionsHandler;
 use Modules\Subscription\Workflow\ResumeHandler;
@@ -34,6 +36,8 @@ class SubscriptionWorkflowProvider extends ServiceProvider
         $registry->register(ResumeHandler::class);
         $registry->register(SuspendHandler::class);
         $registry->register(PutActiveRestrictionsHandler::class);
+        $registry->register(EnterPendingStatusHandler::class);
+        $registry->register(FulfillmentCallHandler::class);
         $registry->register(ValidatePackageChangeHandler::class);
         $registry->register(ChangePackageHandler::class);
         $registry->register(ValidateHomePassChangeHandler::class);

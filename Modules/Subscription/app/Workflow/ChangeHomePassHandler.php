@@ -4,6 +4,7 @@ namespace Modules\Subscription\Workflow;
 
 use Modules\Subscription\Events\SubscriptionEvents;
 use Modules\Subscription\Models\Subscription;
+use Modules\Subscription\Models\SubscriptionOperation;
 use Modules\Subscription\Services\SubscriptionService;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
@@ -38,14 +39,18 @@ class ChangeHomePassHandler implements TaskHandler
             return TaskResult::fail('Subscription not found', retryable: false);
         }
 
+        SubscriptionOperation::narrate(
+            $context->var('operationId'), SubscriptionOperation::COMMITTING_FINAL_STATE
+        );
+
         $cfg = $context->config();
         $transition = $cfg['transition'] ?? 'RELOCATION';
         $event = $cfg['event'] ?? SubscriptionEvents::RELOCATED;
 
+        // Commit to ACTIVE on the new HomePass; PENDING_* flip set upstream, cleared here.
         $attrs = [
             'previous_homepass_id' => $subscription->homepass_id,
             'homepass_id' => $context->var('targetHomepassId'),
-            'current_transition_type' => $transition,
         ];
 
         // Migration also changes the package.

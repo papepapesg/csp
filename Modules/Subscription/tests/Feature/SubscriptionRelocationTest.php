@@ -69,7 +69,7 @@ class SubscriptionRelocationTest extends TestCase
         $sub = Subscription::find($id);
         $this->assertSame($tgt, $sub->homepass_id);
         $this->assertSame($src, $sub->previous_homepass_id);
-        $this->assertSame('RELOCATION', $sub->current_transition_type);
+        $this->assertNull($sub->current_transition_type); // transient marker cleared on commit
         $this->assertSame('pkg_1', $sub->package_ref); // package unchanged
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionRelocated']);
     }
@@ -99,7 +99,7 @@ class SubscriptionRelocationTest extends TestCase
 
         $sub = Subscription::find($id);
         $this->assertSame($tgt, $sub->homepass_id);
-        $this->assertSame('MIGRATION', $sub->current_transition_type);
+        $this->assertNull($sub->current_transition_type); // transient marker cleared on commit
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionMigrated']);
     }
 

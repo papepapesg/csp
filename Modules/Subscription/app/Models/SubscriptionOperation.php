@@ -87,6 +87,14 @@ class SubscriptionOperation extends Model
         $this->update(['current_state' => $state]);
     }
 
+    /** Narrate by operation id from inside a workflow step (best-effort). */
+    public static function narrate(?string $operationId, string $state): void
+    {
+        if ($operationId) {
+            static::query()->whereKey($operationId)->whereNull('final_state')->update(['current_state' => $state]);
+        }
+    }
+
     public function markRunning(): void
     {
         $this->update(['current_state' => self::VALIDATING, 'started_at' => $this->started_at ?? now()]);

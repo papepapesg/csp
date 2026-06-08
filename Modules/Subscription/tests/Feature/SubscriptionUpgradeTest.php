@@ -77,7 +77,7 @@ class SubscriptionUpgradeTest extends TestCase
         $sub = Subscription::find($id);
         $this->assertSame($tgt, $sub->package_ref);
         $this->assertSame($srcPkg, $sub->previous_package_ref);
-        $this->assertSame('UPGRADE', $sub->current_transition_type);
+        $this->assertNull($sub->current_transition_type); // transient marker cleared on commit
         $this->assertSame('ACTIVE', $sub->status_code);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionUpgraded']);
     }
@@ -110,7 +110,7 @@ class SubscriptionUpgradeTest extends TestCase
 
         $sub = Subscription::find($id);
         $this->assertSame($tgt, $sub->package_ref);
-        $this->assertSame('DOWNGRADE', $sub->current_transition_type);
+        $this->assertNull($sub->current_transition_type); // transient marker cleared on commit
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionDowngraded']);
     }
 }

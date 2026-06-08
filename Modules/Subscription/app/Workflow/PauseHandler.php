@@ -4,12 +4,17 @@ namespace Modules\Subscription\Workflow;
 
 use Modules\Subscription\Events\SubscriptionEvents;
 use Modules\Subscription\Models\Subscription;
+use Modules\Subscription\Models\SubscriptionOperation;
 use Modules\Subscription\Services\SubscriptionService;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
 use Modules\Workflow\Contracts\TaskResult;
 
-/** SUB-WF-PAUSE-01 toolbox step: move an ACTIVE subscription to PAUSED. */
+/**
+ * SUB-WF-PAUSE-01 commit (sub-lm-commit-state). R-PAUSE-S-2: the master commits to
+ * SUSPENDED (with a pause reason) — pause is a SUSPENDED rest state, not a separate
+ * status. Runs after the PENDING_PAUSE flip; narrates COMMITTING_FINAL_STATE.
+ */
 class PauseHandler implements TaskHandler
 {
     public function __construct(private readonly SubscriptionService $subscriptions) {}
@@ -21,7 +26,7 @@ class PauseHandler implements TaskHandler
 
     public function label(): string
     {
-        return 'Subscription: Pause';
+        return 'Subscription: Commit pause (SUSPENDED)';
     }
 
     public function handle(TaskContext $context): TaskResult
@@ -30,12 +35,14 @@ class PauseHandler implements TaskHandler
         if (! $subscription) {
             return TaskResult::fail('Subscription not found', retryable: false);
         }
-        if ($subscription->status_code === Subscription::ACTIVE) {
-            $this->subscriptions->transitionStatus($subscription, Subscription::PAUSED, [
-                'current_transition_reason_code' => $context->var('reasonCode'),
+        SubscriptionOperation::narrate($context->var('operationId'), SubscriptionOperation::COMMITTING_FINAL_STATE);
+
+        if ($subscription->status_code !== Subscription::SUSPENDED && ! $subscription->isTerminal()) {
+            $this->subscriptions->transitionStatus($subscription, Subscription::SUSPENDED, [
+                'current_transition_reason_code' => $context->var('reasonCode', 'CUSTOMER_REQUESTED_PAUSE'),
             ], SubscriptionEvents::PAUSED);
         }
 
-        return TaskResult::success(['subscriptionStatus' => Subscription::PAUSED]);
+        return TaskResult::success(['subscriptionStatus' => Subscription::SUSPENDED]);
     }
 }

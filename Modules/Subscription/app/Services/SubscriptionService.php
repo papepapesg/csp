@@ -36,6 +36,23 @@ class SubscriptionService
     }
 
     /**
+     * SUB-LM-01 sub-lm-put-pending-status: move the master into a transient
+     * PENDING_* state during the commit window. No lifecycle event is emitted —
+     * downstream consumers see only the final commit (the rest state).
+     */
+    public function setPendingStatus(Subscription $subscription, string $pendingStatus, ?string $transitionType, ?string $reasonCode): Subscription
+    {
+        $subscription->update([
+            'status_code' => $pendingStatus,
+            'current_transition_type' => $transitionType,
+            'current_transition_reason_code' => $reasonCode,
+            'last_status_changed_at' => now(),
+        ]);
+
+        return $subscription;
+    }
+
+    /**
      * Apply a status transition + the matching lifecycle timestamp, then emit the
      * status-specific event.
      *
@@ -44,8 +61,10 @@ class SubscriptionService
     public function transitionStatus(Subscription $subscription, string $status, array $extra = [], ?string $eventType = null): Subscription
     {
         return DB::transaction(function () use ($subscription, $status, $extra, $eventType) {
+            // Committing to a rest state clears the transient transition marker.
             $attrs = array_merge([
                 'status_code' => $status,
+                'current_transition_type' => null,
                 'last_status_changed_at' => now(),
             ], $extra);
 

@@ -4,6 +4,7 @@ namespace Modules\Subscription\Workflow;
 
 use Modules\Subscription\Events\SubscriptionEvents;
 use Modules\Subscription\Models\Subscription;
+use Modules\Subscription\Models\SubscriptionOperation;
 use Modules\Subscription\Services\SubscriptionService;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
@@ -38,17 +39,23 @@ class ChangePackageHandler implements TaskHandler
             return TaskResult::fail('Subscription not found', retryable: false);
         }
 
+        SubscriptionOperation::narrate(
+            $context->var('operationId'), SubscriptionOperation::COMMITTING_FINAL_STATE
+        );
+
         $cfg = $context->config();
         $transition = $cfg['transition'] ?? 'UPGRADE';
         $event = $cfg['event'] ?? SubscriptionEvents::UPGRADED;
         $targetPackageRef = $context->var('targetPackageRef');
 
+        // Commit to ACTIVE with the new package; the transient PENDING_UPGRADE flip
+        // + current_transition_type were set by the enter-pending step and are
+        // cleared here (rest state).
         $this->subscriptions->transitionStatus($subscription, Subscription::ACTIVE, [
             'previous_package_ref' => $subscription->package_ref,
             'previous_package_version_id' => $subscription->package_version_id,
             'package_ref' => $targetPackageRef,
             'package_version_id' => $context->var('targetPackageVersionId'),
-            'current_transition_type' => $transition,
         ], $event);
 
         return TaskResult::success([

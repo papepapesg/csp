@@ -7,185 +7,193 @@ use Illuminate\Database\Seeder;
 use Modules\Workflow\Models\ProcessDefinition;
 
 /**
- * Seeds the default (global) subscription workflow definitions AS DATA. These
- * are the flows the SUB-WF framework starts; an operator can override any of
- * them by deploying an operator-scoped definition with the same process_key —
- * no code change (CAM-BPMN-2). Editable in the Backoffice workflow studio.
+ * Seeds the default (global) subscription workflow definitions AS DATA. State-
+ * affecting operations follow the SUB-WF-FRAMEWORK-01 commit-window sequence:
+ *   validate (drools) -> gateway -> enter-pending (PENDING_*) -> fulfillment
+ *   (FUL/network) -> commit (final status) -> notify.
+ * The transient PENDING_* state is held across the fulfillment call, so the master
+ * status reflects "an operation is committing" and the network is gated before the
+ * final status lands. An operator overrides any of these by deploying a same-key
+ * definition with an operator_code (CAM-BPMN-2). Editable in the studio.
  */
 class ProcessDefinitionSeeder extends Seeder
 {
     public function run(): void
     {
+        // Activation keeps its own shape (created PENDING_ACTIVATION; provision gates).
         $this->deploy('sub-activate', 'Subscription Activation', [
             'nodes' => [
-                ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
-                ['id' => 'validate', 'type' => 'serviceTask', 'position' => ['x' => 180, 'y' => 80], 'data' => ['label' => 'Validate activation', 'topic' => 'sub.validate-activation']],
-                ['id' => 'gw', 'type' => 'exclusiveGateway', 'position' => ['x' => 380, 'y' => 80], 'data' => ['label' => 'Eligible?']],
-                ['id' => 'provision', 'type' => 'serviceTask', 'position' => ['x' => 560, 'y' => 20], 'data' => ['label' => 'Provision network', 'topic' => 'provisioning.activate-service', 'config' => ['target' => 'HUAWEI_NCE_GPON_KE', 'speedProfile' => '100M']]],
-                ['id' => 'activate', 'type' => 'serviceTask', 'position' => ['x' => 740, 'y' => 20], 'data' => ['label' => 'Set active', 'topic' => 'sub.activate']],
-                ['id' => 'notify', 'type' => 'serviceTask', 'position' => ['x' => 920, 'y' => 20], 'data' => ['label' => 'Notify customer', 'topic' => 'notify.send', 'config' => ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_ACTIVATED']]],
-                ['id' => 'end_ok', 'type' => 'endEvent', 'position' => ['x' => 1100, 'y' => 20], 'data' => ['label' => 'Activated']],
-                ['id' => 'end_rejected', 'type' => 'endEvent', 'position' => ['x' => 560, 'y' => 160], 'data' => ['label' => 'Rejected']],
+                $this->n('start', 'startEvent', 0, 'Start'),
+                $this->svc('validate', 180, 'Validate activation', 'sub.validate-activation'),
+                $this->gw('gw', 380),
+                $this->svc('provision', 560, 'Provision network', 'provisioning.activate-service', ['target' => 'HUAWEI_NCE_GPON_KE', 'speedProfile' => '100M'], 20),
+                $this->svc('activate', 740, 'Commit active', 'sub.activate', [], 20),
+                $this->svc('notify', 920, 'Notify', 'notify.send', ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_ACTIVATED'], 20),
+                $this->end('end_ok', 1100, 'Activated', 20),
+                $this->end('end_rejected', 560, 'Rejected', 160),
             ],
             'edges' => [
-                ['id' => 'e1', 'source' => 'start', 'target' => 'validate'],
-                ['id' => 'e2', 'source' => 'validate', 'target' => 'gw'],
-                ['id' => 'e3', 'source' => 'gw', 'target' => 'provision', 'data' => ['label' => 'eligible', 'condition' => ['var' => 'eligible', 'op' => 'truthy']]],
-                ['id' => 'e4', 'source' => 'gw', 'target' => 'end_rejected', 'data' => ['label' => 'not eligible', 'default' => true]],
-                ['id' => 'e5', 'source' => 'provision', 'target' => 'activate'],
-                ['id' => 'e6', 'source' => 'activate', 'target' => 'notify'],
-                ['id' => 'e7', 'source' => 'notify', 'target' => 'end_ok'],
+                $this->e('e1', 'start', 'validate'),
+                $this->e('e2', 'validate', 'gw'),
+                $this->cond('e3', 'gw', 'provision', 'eligible'),
+                $this->def('e4', 'gw', 'end_rejected'),
+                $this->e('e5', 'provision', 'activate'),
+                $this->e('e6', 'activate', 'notify'),
+                $this->e('e7', 'notify', 'end_ok'),
             ],
         ]);
 
-        $this->deploy('sub-pause', 'Subscription Pause', [
-            'nodes' => [
-                ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
-                ['id' => 'validate', 'type' => 'serviceTask', 'position' => ['x' => 180, 'y' => 80], 'data' => ['label' => 'Validate pause', 'topic' => 'sub.validate-operation', 'config' => ['ruleSet' => 'rules.subscription.pause', 'requiredStatus' => 'ACTIVE']]],
-                ['id' => 'gw', 'type' => 'exclusiveGateway', 'position' => ['x' => 380, 'y' => 80], 'data' => ['label' => 'Eligible?']],
-                ['id' => 'pause', 'type' => 'serviceTask', 'position' => ['x' => 560, 'y' => 20], 'data' => ['label' => 'Set paused', 'topic' => 'sub.pause']],
-                ['id' => 'notify', 'type' => 'serviceTask', 'position' => ['x' => 740, 'y' => 20], 'data' => ['label' => 'Notify', 'topic' => 'notify.send', 'config' => ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_PAUSED']]],
-                ['id' => 'end_ok', 'type' => 'endEvent', 'position' => ['x' => 920, 'y' => 20], 'data' => ['label' => 'Paused']],
-                ['id' => 'end_rejected', 'type' => 'endEvent', 'position' => ['x' => 560, 'y' => 160], 'data' => ['label' => 'Rejected']],
-            ],
-            'edges' => [
-                ['id' => 'e1', 'source' => 'start', 'target' => 'validate'],
-                ['id' => 'e2', 'source' => 'validate', 'target' => 'gw'],
-                ['id' => 'e3', 'source' => 'gw', 'target' => 'pause', 'data' => ['condition' => ['var' => 'eligible', 'op' => 'truthy']]],
-                ['id' => 'e4', 'source' => 'gw', 'target' => 'end_rejected', 'data' => ['default' => true]],
-                ['id' => 'e5', 'source' => 'pause', 'target' => 'notify'],
-                ['id' => 'e6', 'source' => 'notify', 'target' => 'end_ok'],
-            ],
-        ]);
+        // State-affecting operations — the framework commit-window sequence.
+        $this->stateOp('sub-pause', 'Subscription Pause', 'sub.validate-operation',
+            ['ruleSet' => 'rules.subscription.pause', 'requiredStatus' => 'ACTIVE'],
+            'PENDING_PAUSE', 'PAUSE',
+            ['action' => 'SUSPEND', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'SUSPENDED'],
+            'sub.pause', [], 'SUBSCRIPTION_PAUSED');
 
-        $this->deploy('sub-resume', 'Subscription Resume', [
-            'nodes' => [
-                ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
-                ['id' => 'validate', 'type' => 'serviceTask', 'position' => ['x' => 180, 'y' => 80], 'data' => ['label' => 'Validate resume', 'topic' => 'sub.validate-operation', 'config' => ['ruleSet' => 'rules.subscription.resume', 'requiredStatus' => 'PAUSED']]],
-                ['id' => 'gw', 'type' => 'exclusiveGateway', 'position' => ['x' => 380, 'y' => 80], 'data' => ['label' => 'Eligible?']],
-                ['id' => 'resume', 'type' => 'serviceTask', 'position' => ['x' => 560, 'y' => 20], 'data' => ['label' => 'Set active', 'topic' => 'sub.resume']],
-                ['id' => 'notify', 'type' => 'serviceTask', 'position' => ['x' => 740, 'y' => 20], 'data' => ['label' => 'Notify', 'topic' => 'notify.send', 'config' => ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_RESUMED']]],
-                ['id' => 'end_ok', 'type' => 'endEvent', 'position' => ['x' => 920, 'y' => 20], 'data' => ['label' => 'Resumed']],
-                ['id' => 'end_rejected', 'type' => 'endEvent', 'position' => ['x' => 560, 'y' => 160], 'data' => ['label' => 'Rejected']],
-            ],
-            'edges' => [
-                ['id' => 'e1', 'source' => 'start', 'target' => 'validate'],
-                ['id' => 'e2', 'source' => 'validate', 'target' => 'gw'],
-                ['id' => 'e3', 'source' => 'gw', 'target' => 'resume', 'data' => ['condition' => ['var' => 'eligible', 'op' => 'truthy']]],
-                ['id' => 'e4', 'source' => 'gw', 'target' => 'end_rejected', 'data' => ['default' => true]],
-                ['id' => 'e5', 'source' => 'resume', 'target' => 'notify'],
-                ['id' => 'e6', 'source' => 'notify', 'target' => 'end_ok'],
-            ],
-        ]);
+        $this->stateOp('sub-resume', 'Subscription Resume', 'sub.validate-operation',
+            ['ruleSet' => 'rules.subscription.resume', 'requiredStatus' => 'SUSPENDED'],
+            'PENDING_RESUME', 'RESUME',
+            ['action' => 'ACTIVATE', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'ACTIVE'],
+            'sub.resume', [], 'SUBSCRIPTION_RESUMED');
 
-        $this->deploy('sub-suspend', 'Subscription Suspend (non-payment)', [
-            'nodes' => [
-                ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
-                ['id' => 'validate', 'type' => 'serviceTask', 'position' => ['x' => 180, 'y' => 80], 'data' => ['label' => 'Validate suspend', 'topic' => 'sub.validate-operation', 'config' => ['ruleSet' => 'rules.subscription.suspend-np', 'requiredStatus' => 'ACTIVE']]],
-                ['id' => 'gw', 'type' => 'exclusiveGateway', 'position' => ['x' => 380, 'y' => 80], 'data' => ['label' => 'Eligible?']],
-                ['id' => 'suspend', 'type' => 'serviceTask', 'position' => ['x' => 560, 'y' => 20], 'data' => ['label' => 'Set suspended', 'topic' => 'sub.suspend']],
-                ['id' => 'notify', 'type' => 'serviceTask', 'position' => ['x' => 740, 'y' => 20], 'data' => ['label' => 'Notify', 'topic' => 'notify.send', 'config' => ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_SUSPENDED_NP']]],
-                ['id' => 'end_ok', 'type' => 'endEvent', 'position' => ['x' => 920, 'y' => 20], 'data' => ['label' => 'Suspended']],
-                ['id' => 'end_rejected', 'type' => 'endEvent', 'position' => ['x' => 560, 'y' => 160], 'data' => ['label' => 'Rejected']],
-            ],
-            'edges' => [
-                ['id' => 'e1', 'source' => 'start', 'target' => 'validate'],
-                ['id' => 'e2', 'source' => 'validate', 'target' => 'gw'],
-                ['id' => 'e3', 'source' => 'gw', 'target' => 'suspend', 'data' => ['condition' => ['var' => 'eligible', 'op' => 'truthy']]],
-                ['id' => 'e4', 'source' => 'gw', 'target' => 'end_rejected', 'data' => ['default' => true]],
-                ['id' => 'e5', 'source' => 'suspend', 'target' => 'notify'],
-                ['id' => 'e6', 'source' => 'notify', 'target' => 'end_ok'],
-            ],
-        ]);
+        $this->stateOp('sub-suspend', 'Subscription Suspend (non-payment)', 'sub.validate-operation',
+            ['ruleSet' => 'rules.subscription.suspend-np', 'requiredStatus' => 'ACTIVE'],
+            'PENDING_SUSPEND_NP', 'SUSPEND_NP',
+            ['action' => 'SUSPEND', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'SUSPENDED'],
+            'sub.suspend', [], 'SUBSCRIPTION_SUSPENDED_NP');
 
-        // SUB-WF-RESTRICT-01: shared ADD/REMOVE shape; intent carried as a process
-        // variable. Validate (rules.subscription.restrict) -> put-active-restrictions
-        // (FUL-04 enforcement via emitted event) -> notify. Does NOT touch status.
-        $this->deploy('sub-restrict', 'Subscription Restriction', [
-            'nodes' => [
-                ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
-                ['id' => 'validate', 'type' => 'serviceTask', 'position' => ['x' => 180, 'y' => 80], 'data' => ['label' => 'Validate restriction (rules)', 'topic' => 'sub.validate-operation', 'config' => ['ruleSet' => 'rules.subscription.restrict', 'requiredStatus' => 'ACTIVE']]],
-                ['id' => 'gw', 'type' => 'exclusiveGateway', 'position' => ['x' => 380, 'y' => 80], 'data' => ['label' => 'Eligible?']],
-                ['id' => 'mutate', 'type' => 'serviceTask', 'position' => ['x' => 560, 'y' => 20], 'data' => ['label' => 'Put active restrictions', 'topic' => 'sub.put-active-restrictions']],
-                ['id' => 'notify', 'type' => 'serviceTask', 'position' => ['x' => 740, 'y' => 20], 'data' => ['label' => 'Notify', 'topic' => 'notify.send', 'config' => ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_RESTRICTION_CHANGED']]],
-                ['id' => 'end_ok', 'type' => 'endEvent', 'position' => ['x' => 920, 'y' => 20], 'data' => ['label' => 'Applied']],
-                ['id' => 'end_rejected', 'type' => 'endEvent', 'position' => ['x' => 560, 'y' => 160], 'data' => ['label' => 'Rejected']],
-            ],
-            'edges' => [
-                ['id' => 'e1', 'source' => 'start', 'target' => 'validate'],
-                ['id' => 'e2', 'source' => 'validate', 'target' => 'gw'],
-                ['id' => 'e3', 'source' => 'gw', 'target' => 'mutate', 'data' => ['condition' => ['var' => 'eligible', 'op' => 'truthy']]],
-                ['id' => 'e4', 'source' => 'gw', 'target' => 'end_rejected', 'data' => ['default' => true]],
-                ['id' => 'e5', 'source' => 'mutate', 'target' => 'notify'],
-                ['id' => 'e6', 'source' => 'notify', 'target' => 'end_ok'],
-            ],
-        ]);
+        $this->stateOp('sub-upgrade', 'Subscription Upgrade', 'sub.validate-package-change',
+            ['ruleSet' => 'rules.subscription.upgrade'],
+            'PENDING_UPGRADE', 'UPGRADE',
+            ['action' => 'MODIFY', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'ACTIVE'],
+            'sub.change-package', ['transition' => 'UPGRADE', 'event' => 'SubscriptionUpgraded'], 'SUBSCRIPTION_UPGRADED');
 
-        // SUB-WF-UPGRADE-01 / DOWNGRADE-01: validate target package (rules) ->
-        // gateway -> commit package change -> notify. IMMEDIATE effective timing.
-        foreach ([
-            ['sub-upgrade', 'Subscription Upgrade', 'rules.subscription.upgrade', 'UPGRADE', 'SubscriptionUpgraded', 'SUBSCRIPTION_UPGRADED'],
-            ['sub-downgrade', 'Subscription Downgrade', 'rules.subscription.downgrade', 'DOWNGRADE', 'SubscriptionDowngraded', 'SUBSCRIPTION_DOWNGRADED'],
-        ] as [$key, $name, $ruleSet, $transition, $event, $template]) {
-            $this->deploy($key, $name, [
-                'nodes' => [
-                    ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
-                    ['id' => 'validate', 'type' => 'serviceTask', 'position' => ['x' => 180, 'y' => 80], 'data' => ['label' => 'Validate target package', 'topic' => 'sub.validate-package-change', 'config' => ['ruleSet' => $ruleSet]]],
-                    ['id' => 'gw', 'type' => 'exclusiveGateway', 'position' => ['x' => 380, 'y' => 80], 'data' => ['label' => 'Eligible?']],
-                    ['id' => 'commit', 'type' => 'serviceTask', 'position' => ['x' => 560, 'y' => 20], 'data' => ['label' => 'Commit package change', 'topic' => 'sub.change-package', 'config' => ['transition' => $transition, 'event' => $event]]],
-                    ['id' => 'notify', 'type' => 'serviceTask', 'position' => ['x' => 740, 'y' => 20], 'data' => ['label' => 'Notify', 'topic' => 'notify.send', 'config' => ['channel' => 'SMS', 'template' => $template]]],
-                    ['id' => 'end_ok', 'type' => 'endEvent', 'position' => ['x' => 920, 'y' => 20], 'data' => ['label' => 'Committed']],
-                    ['id' => 'end_rejected', 'type' => 'endEvent', 'position' => ['x' => 560, 'y' => 160], 'data' => ['label' => 'Rejected']],
-                ],
-                'edges' => [
-                    ['id' => 'e1', 'source' => 'start', 'target' => 'validate'],
-                    ['id' => 'e2', 'source' => 'validate', 'target' => 'gw'],
-                    ['id' => 'e3', 'source' => 'gw', 'target' => 'commit', 'data' => ['condition' => ['var' => 'eligible', 'op' => 'truthy']]],
-                    ['id' => 'e4', 'source' => 'gw', 'target' => 'end_rejected', 'data' => ['default' => true]],
-                    ['id' => 'e5', 'source' => 'commit', 'target' => 'notify'],
-                    ['id' => 'e6', 'source' => 'notify', 'target' => 'end_ok'],
-                ],
-            ]);
-        }
+        $this->stateOp('sub-downgrade', 'Subscription Downgrade', 'sub.validate-package-change',
+            ['ruleSet' => 'rules.subscription.downgrade'],
+            'PENDING_DOWNGRADE', 'DOWNGRADE',
+            ['action' => 'MODIFY', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'ACTIVE'],
+            'sub.change-package', ['transition' => 'DOWNGRADE', 'event' => 'SubscriptionDowngraded'], 'SUBSCRIPTION_DOWNGRADED');
 
-        // SUB-WF-RELOCATION-01 / MIGRATION-01: validate target HomePass (rules) ->
-        // gateway -> commit HomePass (+ package for migration) change -> notify.
-        foreach ([
-            ['sub-relocation', 'Subscription Relocation', 'rules.subscription.relocation', 'RELOCATION', 'SubscriptionRelocated', 'SUBSCRIPTION_RELOCATED'],
-            ['sub-migration', 'Subscription Migration', 'rules.subscription.migration', 'MIGRATION', 'SubscriptionMigrated', 'SUBSCRIPTION_MIGRATED'],
-        ] as [$key, $name, $ruleSet, $transition, $event, $template]) {
-            $this->deploy($key, $name, [
-                'nodes' => [
-                    ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
-                    ['id' => 'validate', 'type' => 'serviceTask', 'position' => ['x' => 180, 'y' => 80], 'data' => ['label' => 'Validate target HomePass', 'topic' => 'sub.validate-homepass-change', 'config' => ['ruleSet' => $ruleSet]]],
-                    ['id' => 'gw', 'type' => 'exclusiveGateway', 'position' => ['x' => 380, 'y' => 80], 'data' => ['label' => 'Eligible?']],
-                    ['id' => 'commit', 'type' => 'serviceTask', 'position' => ['x' => 560, 'y' => 20], 'data' => ['label' => 'Commit HomePass change', 'topic' => 'sub.change-homepass', 'config' => ['transition' => $transition, 'event' => $event]]],
-                    ['id' => 'notify', 'type' => 'serviceTask', 'position' => ['x' => 740, 'y' => 20], 'data' => ['label' => 'Notify', 'topic' => 'notify.send', 'config' => ['channel' => 'SMS', 'template' => $template]]],
-                    ['id' => 'end_ok', 'type' => 'endEvent', 'position' => ['x' => 920, 'y' => 20], 'data' => ['label' => 'Committed']],
-                    ['id' => 'end_rejected', 'type' => 'endEvent', 'position' => ['x' => 560, 'y' => 160], 'data' => ['label' => 'Rejected']],
-                ],
-                'edges' => [
-                    ['id' => 'e1', 'source' => 'start', 'target' => 'validate'],
-                    ['id' => 'e2', 'source' => 'validate', 'target' => 'gw'],
-                    ['id' => 'e3', 'source' => 'gw', 'target' => 'commit', 'data' => ['condition' => ['var' => 'eligible', 'op' => 'truthy']]],
-                    ['id' => 'e4', 'source' => 'gw', 'target' => 'end_rejected', 'data' => ['default' => true]],
-                    ['id' => 'e5', 'source' => 'commit', 'target' => 'notify'],
-                    ['id' => 'e6', 'source' => 'notify', 'target' => 'end_ok'],
-                ],
-            ]);
-        }
+        $this->stateOp('sub-relocation', 'Subscription Relocation', 'sub.validate-homepass-change',
+            ['ruleSet' => 'rules.subscription.relocation'],
+            'PENDING_RELOCATION', 'RELOCATION',
+            ['action' => 'MODIFY', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'ACTIVE'],
+            'sub.change-homepass', ['transition' => 'RELOCATION', 'event' => 'SubscriptionRelocated'], 'SUBSCRIPTION_RELOCATED');
 
+        $this->stateOp('sub-migration', 'Subscription Migration', 'sub.validate-homepass-change',
+            ['ruleSet' => 'rules.subscription.migration'],
+            'PENDING_MIGRATION', 'MIGRATION',
+            ['action' => 'MODIFY', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'ACTIVE'],
+            'sub.change-homepass', ['transition' => 'MIGRATION', 'event' => 'SubscriptionMigrated'], 'SUBSCRIPTION_MIGRATED');
+
+        // Terminate: ACTIVE -> PENDING_TERMINATION -> (equipment pickup) -> TERMINATED.
         $this->deploy('sub-terminate', 'Subscription Termination', [
             'nodes' => [
-                ['id' => 'start', 'type' => 'startEvent', 'position' => ['x' => 0, 'y' => 80], 'data' => ['label' => 'Start']],
-                ['id' => 'terminate', 'type' => 'serviceTask', 'position' => ['x' => 200, 'y' => 80], 'data' => ['label' => 'Terminate', 'topic' => 'sub.terminate']],
-                ['id' => 'end_ok', 'type' => 'endEvent', 'position' => ['x' => 420, 'y' => 80], 'data' => ['label' => 'Terminated']],
+                $this->n('start', 'startEvent', 0, 'Start'),
+                $this->svc('enter', 180, 'Enter pending termination', 'sub.put-pending-status', ['pendingStatus' => 'PENDING_TERMINATION', 'transitionType' => 'TERMINATE']),
+                $this->svc('fulfil', 360, 'Deprovision network', 'sub.fulfillment-call', ['action' => 'DEACTIVATE', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'NOT_PRESENT']),
+                $this->svc('terminate', 540, 'Commit terminated', 'sub.terminate'),
+                $this->svc('notify', 720, 'Notify', 'notify.send', ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_TERMINATED']),
+                $this->end('end_ok', 900, 'Terminated'),
             ],
             'edges' => [
-                ['id' => 'e1', 'source' => 'start', 'target' => 'terminate'],
-                ['id' => 'e2', 'source' => 'terminate', 'target' => 'end_ok'],
+                $this->e('e1', 'start', 'enter'),
+                $this->e('e2', 'enter', 'fulfil'),
+                $this->e('e3', 'fulfil', 'terminate'),
+                $this->e('e4', 'terminate', 'notify'),
+                $this->e('e5', 'notify', 'end_ok'),
             ],
         ]);
+
+        // SUB-WF-RESTRICT-01: the one operation with NO transient (stays ACTIVE).
+        $this->deploy('sub-restrict', 'Subscription Restriction', [
+            'nodes' => [
+                $this->n('start', 'startEvent', 0, 'Start'),
+                $this->svc('validate', 180, 'Validate restriction (rules)', 'sub.validate-operation', ['ruleSet' => 'rules.subscription.restrict', 'requiredStatus' => 'ACTIVE']),
+                $this->gw('gw', 380),
+                $this->svc('mutate', 560, 'Put active restrictions', 'sub.put-active-restrictions', [], 20),
+                $this->svc('notify', 740, 'Notify', 'notify.send', ['channel' => 'SMS', 'template' => 'SUBSCRIPTION_RESTRICTION_CHANGED'], 20),
+                $this->end('end_ok', 920, 'Applied', 20),
+                $this->end('end_rejected', 560, 'Rejected', 160),
+            ],
+            'edges' => [
+                $this->e('e1', 'start', 'validate'),
+                $this->e('e2', 'validate', 'gw'),
+                $this->cond('e3', 'gw', 'mutate', 'eligible'),
+                $this->def('e4', 'gw', 'end_rejected'),
+                $this->e('e5', 'mutate', 'notify'),
+                $this->e('e6', 'notify', 'end_ok'),
+            ],
+        ]);
+    }
+
+    /** Build a standard state-affecting flow: validate -> gw -> enter-pending -> fulfillment -> commit -> notify. */
+    private function stateOp(string $key, string $name, string $validateTopic, array $validateCfg, string $pendingStatus, string $transitionType, array $fulfillment, string $commitTopic, array $commitCfg, string $notifyTemplate): void
+    {
+        $this->deploy($key, $name, [
+            'nodes' => [
+                $this->n('start', 'startEvent', 0, 'Start'),
+                $this->svc('validate', 160, 'Validate', $validateTopic, $validateCfg),
+                $this->gw('gw', 340),
+                $this->svc('enter', 520, 'Enter pending status', 'sub.put-pending-status', ['pendingStatus' => $pendingStatus, 'transitionType' => $transitionType], 20),
+                $this->svc('fulfil', 700, 'Fulfillment call (network)', 'sub.fulfillment-call', $fulfillment, 20),
+                $this->svc('commit', 880, 'Commit final state', $commitTopic, $commitCfg, 20),
+                $this->svc('notify', 1060, 'Notify', 'notify.send', ['channel' => 'SMS', 'template' => $notifyTemplate], 20),
+                $this->end('end_ok', 1240, 'Committed', 20),
+                $this->end('end_rejected', 520, 'Rejected', 160),
+            ],
+            'edges' => [
+                $this->e('e1', 'start', 'validate'),
+                $this->e('e2', 'validate', 'gw'),
+                $this->cond('e3', 'gw', 'enter', 'eligible'),
+                $this->def('e4', 'gw', 'end_rejected'),
+                $this->e('e5', 'enter', 'fulfil'),
+                $this->e('e6', 'fulfil', 'commit'),
+                $this->e('e7', 'commit', 'notify'),
+                $this->e('e8', 'notify', 'end_ok'),
+            ],
+        ]);
+    }
+
+    // ---- graph node/edge builders ----
+    private function n(string $id, string $type, int $x, string $label, int $y = 80): array
+    {
+        return ['id' => $id, 'type' => $type, 'position' => ['x' => $x, 'y' => $y], 'data' => ['label' => $label]];
+    }
+
+    private function svc(string $id, int $x, string $label, string $topic, array $config = [], int $y = 80): array
+    {
+        $data = ['label' => $label, 'topic' => $topic];
+        if ($config) {
+            $data['config'] = $config;
+        }
+
+        return ['id' => $id, 'type' => 'serviceTask', 'position' => ['x' => $x, 'y' => $y], 'data' => $data];
+    }
+
+    private function gw(string $id, int $x): array
+    {
+        return ['id' => $id, 'type' => 'exclusiveGateway', 'position' => ['x' => $x, 'y' => 80], 'data' => ['label' => 'Eligible?']];
+    }
+
+    private function end(string $id, int $x, string $label, int $y = 80): array
+    {
+        return ['id' => $id, 'type' => 'endEvent', 'position' => ['x' => $x, 'y' => $y], 'data' => ['label' => $label]];
+    }
+
+    private function e(string $id, string $from, string $to): array
+    {
+        return ['id' => $id, 'source' => $from, 'target' => $to];
+    }
+
+    private function cond(string $id, string $from, string $to, string $var): array
+    {
+        return ['id' => $id, 'source' => $from, 'target' => $to, 'data' => ['condition' => ['var' => $var, 'op' => 'truthy']]];
+    }
+
+    private function def(string $id, string $from, string $to): array
+    {
+        return ['id' => $id, 'source' => $from, 'target' => $to, 'data' => ['default' => true]];
     }
 
     /** @param array<string,mixed> $graph */

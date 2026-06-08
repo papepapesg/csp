@@ -3,13 +3,16 @@
 namespace Modules\Subscription\Workflow;
 
 use Modules\Subscription\Models\Subscription;
+use Modules\Subscription\Models\SubscriptionOperation;
 use Modules\Subscription\Services\SubscriptionService;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
 use Modules\Workflow\Contracts\TaskResult;
 
 /**
- * Toolbox step: drive a subscription to TERMINATED (SUB-WF-TERMINATE-01).
+ * SUB-WF-TERMINATE-01 commit. ACTIVE -> PENDING_TERMINATION -> TERMINATED. Runs
+ * after the PENDING_TERMINATION flip + equipment-pickup/fulfillment; narrates the
+ * commit.
  */
 class TerminateHandler implements TaskHandler
 {
@@ -22,7 +25,7 @@ class TerminateHandler implements TaskHandler
 
     public function label(): string
     {
-        return 'Subscription: Terminate';
+        return 'Subscription: Commit termination (TERMINATED)';
     }
 
     public function handle(TaskContext $context): TaskResult
@@ -31,9 +34,11 @@ class TerminateHandler implements TaskHandler
         if (! $subscription) {
             return TaskResult::fail('Subscription not found', retryable: false);
         }
+        SubscriptionOperation::narrate($context->var('operationId'), SubscriptionOperation::COMMITTING_FINAL_STATE);
+
         if (! $subscription->isTerminal()) {
             $this->subscriptions->transitionStatus($subscription, Subscription::TERMINATED, [
-                'current_transition_reason_code' => $context->var('reasonCode'),
+                'current_transition_reason_code' => $context->var('reasonCode', 'CUSTOMER_REQUESTED_TERMINATION'),
                 'end_date' => now()->toDateString(),
             ]);
         }
