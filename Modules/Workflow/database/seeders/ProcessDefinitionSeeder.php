@@ -48,13 +48,15 @@ class ProcessDefinitionSeeder extends Seeder
             ['ruleSet' => 'rules.subscription.pause', 'requiredStatus' => 'ACTIVE'],
             'PENDING_PAUSE', 'PAUSE',
             ['action' => 'SUSPEND', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'SUSPENDED'],
-            'sub.pause', [], 'SUBSCRIPTION_PAUSED');
+            'sub.pause', [], 'SUBSCRIPTION_PAUSED',
+            ['intentType' => 'PAUSE_FEE', 'payFirst' => false, 'amountVar' => 'pauseFee']);
 
         $this->stateOp('sub-resume', 'Subscription Resume', 'sub.validate-operation',
             ['ruleSet' => 'rules.subscription.resume', 'requiredStatus' => 'SUSPENDED', 'requireOpenPause' => true],
             'PENDING_RESUME', 'RESUME',
             ['action' => 'ACTIVATE', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'ACTIVE'],
-            'sub.resume', [], 'SUBSCRIPTION_RESUMED');
+            'sub.resume', [], 'SUBSCRIPTION_RESUMED',
+            ['intentType' => 'RECONNECTION_FEE', 'payFirst' => false, 'amountVar' => 'reconnectionFee']);
 
         $this->stateOp('sub-suspend', 'Subscription Suspend (non-payment)', 'sub.validate-operation',
             ['ruleSet' => 'rules.subscription.suspend-np', 'requiredStatus' => 'ACTIVE'],
@@ -66,13 +68,15 @@ class ProcessDefinitionSeeder extends Seeder
             ['ruleSet' => 'rules.subscription.upgrade'],
             'PENDING_UPGRADE', 'UPGRADE',
             ['action' => 'MODIFY', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'ACTIVE'],
-            'sub.change-package', ['transition' => 'UPGRADE', 'event' => 'SubscriptionUpgraded'], 'SUBSCRIPTION_UPGRADED');
+            'sub.change-package', ['transition' => 'UPGRADE', 'event' => 'SubscriptionUpgraded'], 'SUBSCRIPTION_UPGRADED',
+            ['intentType' => 'PRORATION', 'payFirst' => true, 'amountVar' => 'priceDelta']);
 
         $this->stateOp('sub-downgrade', 'Subscription Downgrade', 'sub.validate-package-change',
             ['ruleSet' => 'rules.subscription.downgrade'],
             'PENDING_DOWNGRADE', 'DOWNGRADE',
             ['action' => 'MODIFY', 'target' => 'DEFAULT_NMS', 'desiredStatus' => 'ACTIVE'],
-            'sub.change-package', ['transition' => 'DOWNGRADE', 'event' => 'SubscriptionDowngraded'], 'SUBSCRIPTION_DOWNGRADED');
+            'sub.change-package', ['transition' => 'DOWNGRADE', 'event' => 'SubscriptionDowngraded'], 'SUBSCRIPTION_DOWNGRADED',
+            ['intentType' => 'PRORATION', 'payFirst' => false, 'amountVar' => 'priceDelta']);
 
         $this->stateOp('sub-relocation', 'Subscription Relocation', 'sub.validate-homepass-change',
             ['ruleSet' => 'rules.subscription.relocation'],
@@ -128,31 +132,46 @@ class ProcessDefinitionSeeder extends Seeder
     }
 
     /** Build a standard state-affecting flow: validate -> gw -> enter-pending -> fulfillment -> commit -> notify. */
-    private function stateOp(string $key, string $name, string $validateTopic, array $validateCfg, string $pendingStatus, string $transitionType, array $fulfillment, string $commitTopic, array $commitCfg, string $notifyTemplate): void
+    private function stateOp(string $key, string $name, string $validateTopic, array $validateCfg, string $pendingStatus, string $transitionType, array $fulfillment, string $commitTopic, array $commitCfg, string $notifyTemplate, ?array $billing = null): void
     {
-        $this->deploy($key, $name, [
-            'nodes' => [
-                $this->n('start', 'startEvent', 0, 'Start'),
-                $this->svc('validate', 160, 'Validate', $validateTopic, $validateCfg),
-                $this->gw('gw', 340),
-                $this->svc('enter', 520, 'Enter pending status', 'sub.put-pending-status', ['pendingStatus' => $pendingStatus, 'transitionType' => $transitionType], 20),
-                $this->svc('fulfil', 700, 'Fulfillment call (network)', 'sub.fulfillment-call', $fulfillment, 20),
-                $this->svc('commit', 880, 'Commit final state', $commitTopic, $commitCfg, 20),
-                $this->svc('notify', 1060, 'Notify', 'notify.send', ['channel' => 'SMS', 'template' => $notifyTemplate], 20),
-                $this->end('end_ok', 1240, 'Committed', 20),
-                $this->end('end_rejected', 520, 'Rejected', 160),
-            ],
-            'edges' => [
-                $this->e('e1', 'start', 'validate'),
-                $this->e('e2', 'validate', 'gw'),
-                $this->cond('e3', 'gw', 'enter', 'eligible'),
-                $this->def('e4', 'gw', 'end_rejected'),
-                $this->e('e5', 'enter', 'fulfil'),
-                $this->e('e6', 'fulfil', 'commit'),
-                $this->e('e7', 'commit', 'notify'),
-                $this->e('e8', 'notify', 'end_ok'),
-            ],
-        ]);
+        // Without billing: validate -> gw -> enter -> fulfil -> commit -> notify.
+        // With billing: enter -> billing-intent -> gw_pay -> [await-payment] -> fulfil -> ...
+        $nodes = [
+            $this->n('start', 'startEvent', 0, 'Start'),
+            $this->svc('validate', 140, 'Validate', $validateTopic, $validateCfg),
+            $this->gw('gw', 300),
+            $this->svc('enter', 460, 'Enter pending status', 'sub.put-pending-status', ['pendingStatus' => $pendingStatus, 'transitionType' => $transitionType], 20),
+            $this->svc('fulfil', 1020, 'Fulfillment call (network)', 'sub.fulfillment-call', $fulfillment, 20),
+            $this->svc('commit', 1180, 'Commit final state', $commitTopic, $commitCfg, 20),
+            $this->svc('notify', 1340, 'Notify', 'notify.send', ['channel' => 'SMS', 'template' => $notifyTemplate], 20),
+            $this->end('end_ok', 1500, 'Committed', 20),
+            $this->end('end_rejected', 460, 'Rejected', 160),
+        ];
+        $edges = [
+            $this->e('e1', 'start', 'validate'),
+            $this->e('e2', 'validate', 'gw'),
+            $this->cond('e3', 'gw', 'enter', 'eligible'),
+            $this->def('e4', 'gw', 'end_rejected'),
+            $this->e('e7', 'commit', 'notify'),
+            $this->e('e8', 'notify', 'end_ok'),
+        ];
+
+        if ($billing) {
+            // enter -> billing-intent -> gw_pay -> (await-payment ->) fulfil
+            $nodes[] = $this->svc('billing', 620, 'Billing intent (BIL-01)', 'sub.billing-intent', $billing, 20);
+            $nodes[] = $this->gw('gw_pay', 760);
+            $nodes[] = ['id' => 'await_pay', 'type' => 'messageCatch', 'position' => ['x' => 880, 'y' => 110], 'data' => ['label' => 'Await payment', 'messageName' => 'sub-payment-confirmed']];
+            $edges[] = $this->e('eb1', 'enter', 'billing');
+            $edges[] = $this->e('eb2', 'billing', 'gw_pay');
+            $edges[] = $this->cond('eb3', 'gw_pay', 'await_pay', 'paymentRequired');
+            $edges[] = $this->def('eb4', 'gw_pay', 'fulfil');
+            $edges[] = $this->e('eb5', 'await_pay', 'fulfil');
+        } else {
+            $edges[] = $this->e('e5', 'enter', 'fulfil');
+        }
+        $edges[] = $this->e('e6', 'fulfil', 'commit');
+
+        $this->deploy($key, $name, ['nodes' => $nodes, 'edges' => $edges]);
     }
 
     // ---- graph node/edge builders ----

@@ -104,8 +104,9 @@ class SubscriptionPauseResumeTest extends TestCase
         $step(); // enter-pending -> writes the transient PENDING_PAUSE
         $this->assertSame('PENDING_PAUSE', Subscription::find($id)->status_code);
 
-        $step(); // fulfillment (network)
-        $step(); // commit -> SUSPENDED
+        // Drain the remaining steps (billing-intent -> fulfillment -> commit).
+        while (Subscription::find($id)->status_code !== 'SUSPENDED' && $step() !== null) {
+        }
         $this->assertSame('SUSPENDED', Subscription::find($id)->status_code);
     }
 

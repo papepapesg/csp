@@ -8,6 +8,7 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
+use Modules\Billing\Services\PaymentService;
 use Modules\Catalog\Models\Package;
 use Modules\Catalog\Models\PackageVersion;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
@@ -74,11 +75,24 @@ class SubscriptionUpgradeTest extends TestCase
             ->assertStatus(202);
         $this->drain();
 
+        // Upgrade is pay-first: it parks in PENDING_UPGRADE awaiting the proration
+        // payment, with a fee invoice raised for the +1500 delta (BIL-01 intent).
+        $this->assertSame('PENDING_UPGRADE', Subscription::find($id)->status_code);
+        $this->assertDatabaseHas('billing_intent', ['subscription_id' => $id, 'intent_type' => 'PRORATION', 'status' => 'PENDING']);
+
+        // Pay the proration fee -> InvoicePaid -> listener confirms intent + resumes.
+        app(PaymentService::class)->receiveAndApply([
+            'account_id' => 'a1', 'paid_amount' => 1500, 'method' => 'TEST',
+        ]);
+        Artisan::call('sophix:outbox:dispatch');
+        $this->drain(); // resume -> fulfillment -> commit
+
         $sub = Subscription::find($id);
         $this->assertSame($tgt, $sub->package_ref);
         $this->assertSame($srcPkg, $sub->previous_package_ref);
         $this->assertNull($sub->current_transition_type); // transient marker cleared on commit
         $this->assertSame('ACTIVE', $sub->status_code);
+        $this->assertDatabaseHas('billing_intent', ['subscription_id' => $id, 'status' => 'CONFIRMED']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionUpgraded']);
     }
 

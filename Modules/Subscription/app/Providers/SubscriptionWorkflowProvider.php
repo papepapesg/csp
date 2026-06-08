@@ -2,10 +2,13 @@
 
 namespace Modules\Subscription\Providers;
 
+use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Modules\Subscription\Console\OperationTimeoutCommand;
+use Modules\Subscription\Listeners\ConfirmBillingIntentOnPayment;
 use Modules\Subscription\Workflow\ActivateHandler;
+use Modules\Subscription\Workflow\BillingIntentHandler;
 use Modules\Subscription\Workflow\ChangeHomePassHandler;
 use Modules\Subscription\Workflow\ChangePackageHandler;
 use Modules\Subscription\Workflow\EnterPendingStatusHandler;
@@ -39,12 +42,14 @@ class SubscriptionWorkflowProvider extends ServiceProvider
         $registry->register(PutActiveRestrictionsHandler::class);
         $registry->register(EnterPendingStatusHandler::class);
         $registry->register(FulfillmentCallHandler::class);
+        $registry->register(BillingIntentHandler::class);
         $registry->register(ValidatePackageChangeHandler::class);
         $registry->register(ChangePackageHandler::class);
         $registry->register(ValidateHomePassChangeHandler::class);
         $registry->register(ChangeHomePassHandler::class);
 
         Event::listen(ProcessInstanceEnded::class, [SyncOperationFromProcess::class, 'handle']);
+        Event::listen(OutboxEventPublished::class, [ConfirmBillingIntentOnPayment::class, 'handle']);
 
         if ($this->app->runningInConsole()) {
             $this->commands([OperationTimeoutCommand::class]);
