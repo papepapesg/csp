@@ -130,13 +130,18 @@ Open: delivery-provider integration (SMS/email gateways stubbed); per-locale fal
 - Open (L): prefix SCAN invalidation (Redis-driver concern); hit-rate alerting (§13);
   more consumer wirings (e.g. FUL reading service/package defs) as hot paths emerge.
 
-## Rbac (EM-CFG-03) — audited
+## Rbac (EM-CFG-03) — audited 🔁
 - Role + permission catalog (runtime CRUD), role-permission matrix, user role
   assignment, **effective-access API** — ✅ (on the local spatie stack).
+- **RBAC Admin portal** (`/admin/rbac`): role⇄permission matrix editor, runtime
+  role/permission creation, user directory + role assignment with computed effective
+  access, change-audit viewer — ✅ 🔁
+- **`rbac_change_audit`** (§8.8): immutable before/after audit on every catalog edit,
+  matrix sync and user assignment, with the acting admin; queryable feed — ✅ 🔁
 - Open (by decision): the EM-CFG-03 **scope system** (operator/franchise/region/
-  contractor/team/channel) + frontend-action matrix + rbac_change_audit. Part of the
-  **FOUNDATION_AUTH divergence** (local Sanctum/spatie vs Keycloak + the rbac_* scope
-  catalog); scope enforcement touches every endpoint — a deliberate deferral. ⚠️
+  contractor/team/channel) + frontend-action matrix. Part of the **FOUNDATION_AUTH
+  divergence** (local Sanctum/spatie vs Keycloak/OIDC — which is also the designed
+  LDAP/AD federation point); scope enforcement touches every endpoint — deferred. ⚠️
 
 ## Workforce (EM-02) / Reporting (RPT) / ItOps — functional, not deep-diffed
 Registry/platform modules with passing tests: Workforce = contractor/team/staff
@@ -167,6 +172,7 @@ Implemented (`FieldAuditService` + tests); depth not separately diffed. ⚠️ (
 14. FUL-02 STEP-KYC activation gate.
 15. FUL-02 order journey as config (ful-order-capture process + topic handlers + message catches).
 16. FOUNDATION_CACHE (cache-aside foundation, Billing/Rating consumers, event eviction, admin ops).
+17. EM-CFG-03 RBAC Admin portal (/admin/rbac) + rbac_change_audit (§8.8) + user directory.
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.

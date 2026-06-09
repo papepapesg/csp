@@ -14,6 +14,8 @@ Route::middleware(['auth:sanctum', 'permission:rbac.manage'])->group(function ()
     Route::put('rbac/roles/{code}/permissions', [RbacController::class, 'syncPermissions']);
     Route::get('rbac/permissions', [RbacController::class, 'permissions']);
     Route::post('rbac/permissions', [RbacController::class, 'storePermission']);
+    Route::get('rbac/users', [RbacController::class, 'users']);
+    Route::get('rbac/audit', [RbacController::class, 'audit']);
     Route::post('rbac/users/{user}/roles', [RbacController::class, 'assignRoles']);
     Route::get('rbac/users/{user}/effective-access', [RbacController::class, 'effectiveAccess']);
 });
