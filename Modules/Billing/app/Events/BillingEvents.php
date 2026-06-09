@@ -11,6 +11,8 @@ final class BillingEvents
 
     public const INVOICE_GENERATED = 'InvoiceGenerated';
 
+    public const CYCLE_BILLED = 'SubscriptionCycleBilled';
+
     public const INVOICE_PAID = 'InvoicePaid';
 
     public const PAYMENT_RECEIVED = 'PaymentReceived';

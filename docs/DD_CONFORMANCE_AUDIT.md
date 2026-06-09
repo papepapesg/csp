@@ -39,9 +39,10 @@ auto-interrupt, scheduled effective-timing. (M/L)
 ## Billing money path (BIL-01/02/04/05) — audited
 - Invoicing (assembler + gap-free legal number), payments (allocate→PAID, surplus→credit),
   dunning ladder (rules.billing.dunning → SUB-WF ops), billing-intent bridge — ✅
-- Open (M): automatic cycle billing (rated_event→invoice/wallet consumer is unwired);
-  data/SMS rating uses code constants instead of a usage-tariff catalog; payment reversal;
-  account-credit auto-draw. ⚠️
+- **Automatic cycle billing** (`CycleBillingService`: unbilled rated_events settle at
+  cycle close — POSTPAID→invoice, PREPAID→wallet drain) — ✅ 🔁
+- Open (M): data/SMS rating uses code constants instead of a usage-tariff catalog;
+  recurring package-fee generation; payment reversal; account-credit auto-draw. ⚠️
 
 ## Work Order (WO-01-FRAMEWORK) — audited 🔁
 - Ticket source link (`source_type`/`source_ref`; Ticketing creates + waits for finalize) — ✅
@@ -89,11 +90,14 @@ Notification, field-audit policy depth.
 3. Per-target provisioning adapter resolution (PROV-INT-01 §10.2).
 4. WO-01 framework: reassign + assignment history, structured notes + kind registry +
    schema validation, 2-step finalize + config-driven checklist (terminal → COMPLETED).
+5. OSR-01 stock reservation + WO→install consumption.
+6. PROV-INT-01 force-sync approval lifecycle.
+7. BIL-02 automatic cycle billing (rated_event → invoice/wallet).
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.
 2. **Provisioning** force-sync approval ✅ done; remaining §9 status model + async + attempt ledger (M).
-3. **Automatic cycle billing** (rated_event/recurring → invoice or wallet) (M).
+3. ~~Automatic cycle billing~~ — ✅ done (usage). Remaining: recurring package-fee generation (M).
 4. **WO attachments + checklist attachment requirements** (M).
 5. **Per-service wallet routing consumed at charge time** (M).
 6. **Usage-tariff catalog for data/SMS rating** (M).
