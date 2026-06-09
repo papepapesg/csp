@@ -1,13 +1,24 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, computed, watchEffect } from 'vue';
 import ApplicationLogo from '@/Components/ApplicationLogo.vue';
 import Dropdown from '@/Components/Dropdown.vue';
 import DropdownLink from '@/Components/DropdownLink.vue';
 import NavLink from '@/Components/NavLink.vue';
 import ResponsiveNavLink from '@/Components/ResponsiveNavLink.vue';
-import { Link } from '@inertiajs/vue3';
+import { Link, usePage } from '@inertiajs/vue3';
+import { useI18n } from '@/i18n';
 
 const showingNavigationDropdown = ref(false);
+const { t } = useI18n();
+
+// Operator deployment config: brand identity + theme applied at runtime, so the
+// same build skins per operator (display name, primary color, logo, currency).
+const op = computed(() => usePage().props.operatorConfig ?? null);
+watchEffect(() => {
+    if (op.value?.theme_primary_color) {
+        document.documentElement.style.setProperty('--op-primary', op.value.theme_primary_color);
+    }
+});
 </script>
 
 <template>
@@ -22,10 +33,10 @@ const showingNavigationDropdown = ref(false);
                         <div class="flex">
                             <!-- Logo -->
                             <div class="flex shrink-0 items-center">
-                                <Link :href="route('dashboard')">
-                                    <ApplicationLogo
-                                        class="block h-9 w-auto fill-current text-gray-800"
-                                    />
+                                <Link :href="route('dashboard')" class="flex items-center gap-2">
+                                    <img v-if="op?.theme_logo_url" :src="op.theme_logo_url" class="block h-9 w-auto" />
+                                    <ApplicationLogo v-else class="block h-9 w-auto fill-current" :style="{ color: op?.theme_primary_color ?? '#1f2937' }" />
+                                    <span v-if="op" class="font-semibold text-sm" :style="{ color: op.theme_primary_color }">{{ op.display_name }}</span>
                                 </Link>
                             </div>
 
@@ -37,25 +48,25 @@ const showingNavigationDropdown = ref(false);
                                     :href="route('dashboard')"
                                     :active="route().current('dashboard')"
                                 >
-                                    Dashboard
+                                    {{ t('Dashboard') }}
                                 </NavLink>
                                 <NavLink
                                     :href="route('customers.index')"
                                     :active="route().current('customers.index')"
                                 >
-                                    Customers
+                                    {{ t('Customers') }}
                                 </NavLink>
                                 <NavLink
                                     :href="route('tickets.index')"
                                     :active="route().current('tickets.index')"
                                 >
-                                    Tickets
+                                    {{ t('Tickets') }}
                                 </NavLink>
                                 <NavLink
                                     :href="route('reports.index')"
                                     :active="route().current('reports.index')"
                                 >
-                                    Reports
+                                    {{ t('Reports') }}
                                 </NavLink>
                                 <NavLink
                                     :href="route('workflow.studio')"
@@ -67,25 +78,25 @@ const showingNavigationDropdown = ref(false);
                                     :href="route('rules.studio')"
                                     :active="route().current('rules.studio')"
                                 >
-                                    Rules
+                                    {{ t('Rules') }}
                                 </NavLink>
                                 <NavLink
                                     :href="route('commercial.studio')"
                                     :active="route().current('commercial.studio')"
                                 >
-                                    Commercial
+                                    {{ t('Commercial') }}
                                 </NavLink>
                                 <NavLink
                                     :href="route('templates.studio')"
                                     :active="route().current('templates.studio')"
                                 >
-                                    Templates
+                                    {{ t('Templates') }}
                                 </NavLink>
                                 <NavLink
                                     :href="route('rbac.admin')"
                                     :active="route().current('rbac.admin')"
                                 >
-                                    RBAC
+                                    {{ t('RBAC') }}
                                 </NavLink>
                                 <NavLink
                                     :href="route('workflow.ops')"
@@ -97,13 +108,13 @@ const showingNavigationDropdown = ref(false);
                                     :href="route('noc.console')"
                                     :active="route().current('noc.console')"
                                 >
-                                    NOC
+                                    {{ t('NOC') }}
                                 </NavLink>
                                 <NavLink
                                     :href="route('warehouse.console')"
                                     :active="route().current('warehouse.console')"
                                 >
-                                    Warehouse
+                                    {{ t('Warehouse') }}
                                 </NavLink>
                                 <NavLink
                                     :href="route('itops.console')"

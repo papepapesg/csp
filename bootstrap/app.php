@@ -31,6 +31,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->web(append: [
+            \App\Http\Middleware\SetLocaleFromOperator::class,
             HandleInertiaRequests::class,
             AddLinkHeadersForPreloadedAssets::class,
         ]);
@@ -40,6 +41,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->api(prepend: [
             CorrelationId::class,
             ResolveOperatorContext::class,
+        ]);
+        $middleware->api(append: [
+            \App\Http\Middleware\SetLocaleFromOperator::class,
         ]);
 
         $middleware->alias([

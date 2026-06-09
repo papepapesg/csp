@@ -31,6 +31,10 @@ class HandleInertiaRequests extends Middleware
     {
         return [
             ...parent::share($request),
+            // Operator deployment config: views skin/localise per operator at runtime.
+            'operatorConfig' => fn () => $request->user()
+                ? \App\Foundation\Models\OperatorConfig::forOperator($request->user()->operator_code)
+                : null,
             'auth' => [
                 'user' => $request->user(),
             ],

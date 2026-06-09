@@ -1,6 +1,6 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
-import { Head } from '@inertiajs/vue3';
+import { Head, router } from '@inertiajs/vue3';
 import { ref, onMounted } from 'vue';
 
 // ILM-CFG-01 Backoffice Customers screen. Reads/writes go through the ILM API
@@ -93,7 +93,7 @@ onMounted(load);
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100">
-                            <tr v-for="c in customers" :key="c.customerId">
+                            <tr v-for="c in customers" :key="c.customerId" class="cursor-pointer hover:bg-indigo-50" @click="router.visit(`/customers/${c.customerId}`)">
                                 <td class="px-4 py-2 font-mono text-xs">{{ c.customerId }}</td>
                                 <td class="px-4 py-2">{{ c.name }}</td>
                                 <td class="px-4 py-2">{{ c.type }}</td>

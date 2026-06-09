@@ -38,6 +38,7 @@ class DatabaseSeeder extends Seeder
     {
         $this->call([
             RbacSeeder::class,
+            OperatorConfigSeeder::class,
             StatusCatalogSeeder::class,
             OperationConfigSeeder::class,
             PerOperationConfigSeeder::class,

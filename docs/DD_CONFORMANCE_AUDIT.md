@@ -8,6 +8,12 @@ Legend: ✅ conformant · ⚠️ partial (table/scaffold present, behavior incom
 ❌ missing · 🔁 fixed this pass. Severity: **H**igh (framework contract / money / state),
 **M**edium, **L**ow.
 
+> Full corpus coverage: see **`docs/DD_TRACEABILITY.md`** — all 134 design documents
+> (256 PDFs incl. implementation guides) classified: 99 implemented, 9 partial,
+> 10 per-operator variants (delivered by config engine), 2 deferred by decision
+> (FOUNDATION_AUTH/Keycloak; external deep reporting), 2 missing-tracked
+> (BIL-02-ADJ credit notes; billable-event catalog), 12 reference docs.
+>
 > How this was built: each row was checked by reading the governing DD section and
 > grepping the implementation. Modules marked "not yet fully audited" have not had a
 > section-by-section diff and should not be assumed conformant.
@@ -216,6 +222,10 @@ Implemented (`FieldAuditService` + tests); depth not separately diffed. ⚠️ (
 20. SIP-04/05 Commercial Studio UI (campaign designer + launcher + eligibility tester; bundle launch pipeline).
 21. NOC console (/noc): overview + start/stop + logs + end-to-end correlation traces + SLA breaches.
 22. Warehouse backoffice (/warehouse) over the existing OSR services.
+23. Customer 360 (/customers/{id}) + Ticketing cockpit (TCK-01 §13: queues, SLA indicators, timeline, actions).
+24. Operator deployment config (identity/locale/currency/theme/log level) + runtime theming in the shell.
+25. Setup wizard (sophix:setup demo|preprod|prod) incl. demo journey seeder (verified end-to-end).
+26. i18n foundation: per-operator backend locale (Content-Language, X-Locale override), frontend t()/money()/date formatters on en-KE/sw-KE/fr-SN conventions; notification templates already per-locale.
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.

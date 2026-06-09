@@ -51,6 +51,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/approvals/{approvalRequest}/decide', [ApprovalController::class, 'decide']);
 });
 
+// --- Operator deployment configuration (identity/locale/currency/theme/logs) ---
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/operator-config', [\App\Foundation\Http\Controllers\OperatorConfigController::class, 'show']);
+    Route::patch('/operator-config', [\App\Foundation\Http\Controllers\OperatorConfigController::class, 'update'])->middleware('permission:itops.manage');
+});
+
 // --- FOUNDATION_CACHE §11 admin operations ---
 Route::middleware(['auth:sanctum', 'permission:itops.manage'])->group(function () {
     Route::post('/admin/cache/invalidate', [\App\Foundation\Http\Controllers\CacheAdminController::class, 'invalidate']);

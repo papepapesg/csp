@@ -21,6 +21,7 @@ Route::get('/dashboard', function () {
 // Backoffice screens (data loaded client-side from each owning module's API).
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/customers', fn () => Inertia::render('Ilm/Customers/Index'))->name('customers.index');
+    Route::get('/customers/{customerId}', fn (string $customerId) => Inertia::render('Ilm/Customers/Show', ['customerId' => $customerId]))->name('customers.show');
     Route::get('/tickets', fn () => Inertia::render('Tickets/Index'))->name('tickets.index');
     Route::get('/reports', fn () => Inertia::render('Reports/Dashboard'))->name('reports.index');
     Route::get('/workflow/studio', fn () => Inertia::render('Workflow/Studio'))->name('workflow.studio');
