@@ -29,10 +29,12 @@ auto-interrupt, scheduled effective-timing. (M/L)
 
 ## Provisioning (PROV-INT-01) — audited 🔁
 - Per-target adapter resolution (`provisioning_adapter_config` → adapter_class) — ✅ 🔁
-- Command ledger, broadcast/dispatch, desired/observed, reconcile + force-sync — ✅
-- Open (H→M): full §9 status model (`RECEIVED/DISPATCHING/ACCEPTED/…` vs current PENDING/SENT/CONFIRMED);
-  async `ASYNC_ACCEPTED` poll flow; `provisioning_command_attempt` per-attempt ledger;
-  force-sync **approval** model (`provisioning_force_sync_request` + EM-CFG-04). ⚠️
+- Command ledger, broadcast/dispatch, desired/observed, reconcile — ✅
+- **Force-sync approval** model (`provisioning_force_sync_request`: PENDING_APPROVAL →
+  APPROVED → execute; R-PROV-07 approve-before-execute; audited events) — ✅ 🔁
+- Open (M): full §9 status model (`RECEIVED/DISPATCHING/ACCEPTED/…` vs current
+  PENDING/SENT/CONFIRMED); async `ASYNC_ACCEPTED` poll flow; `provisioning_command_attempt`
+  per-attempt ledger. ⚠️
 
 ## Billing money path (BIL-01/02/04/05) — audited
 - Invoicing (assembler + gap-free legal number), payments (allocate→PAID, surplus→credit),
@@ -90,7 +92,7 @@ Notification, field-audit policy depth.
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.
-2. **Provisioning §9 status model + async + force-sync approval** (H→M).
+2. **Provisioning** force-sync approval ✅ done; remaining §9 status model + async + attempt ledger (M).
 3. **Automatic cycle billing** (rated_event/recurring → invoice or wallet) (M).
 4. **WO attachments + checklist attachment requirements** (M).
 5. **Per-service wallet routing consumed at charge time** (M).

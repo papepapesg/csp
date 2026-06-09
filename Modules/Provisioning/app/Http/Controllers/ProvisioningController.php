@@ -8,6 +8,7 @@ use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Provisioning\Models\ProvisioningCommand;
+use Modules\Provisioning\Models\ProvisioningForceSyncRequest;
 use Modules\Provisioning\Models\ProvisioningReconciliationItem;
 use Modules\Provisioning\Models\ProvisioningReconciliationRun;
 use Modules\Provisioning\Services\ProvisioningService;
@@ -90,9 +91,39 @@ class ProvisioningController extends ApiController
         return ApiResponse::paginated($page);
     }
 
-    /** POST /api/provisioning/reconciliation/items/{item}/force-sync — NOC force-sync. */
+    /** POST .../items/{item}/force-sync — raise a force-sync REQUEST (PENDING_APPROVAL). */
     public function forceSync(Request $request, ProvisioningReconciliationItem $item): JsonResponse
     {
-        return ApiResponse::item($this->reconciliation->forceSync($item, $request->user()?->uid));
+        $data = $request->validate(['reason' => ['nullable', 'string', 'max:255']]);
+
+        return ApiResponse::created($this->reconciliation->requestForceSync($item, $request->user()?->uid, $data['reason'] ?? null));
+    }
+
+    /** GET /api/provisioning/force-sync-requests */
+    public function forceSyncRequests(Request $request): JsonResponse
+    {
+        $params = $this->pageParams($request);
+        $page = ProvisioningForceSyncRequest::query()
+            ->where('operator_code', $request->query('operatorCode', Context::operatorCode()))
+            ->when($request->query('status'), fn ($q, $s) => $q->where('status', $s))
+            ->orderByDesc('created_at')
+            ->paginate(perPage: $params['size'], page: $params['page'] + 1);
+
+        return ApiResponse::paginated($page);
+    }
+
+    public function approveForceSync(Request $request, ProvisioningForceSyncRequest $forceSync): JsonResponse
+    {
+        return ApiResponse::item($this->reconciliation->approveForceSync($forceSync, $request->user()?->uid));
+    }
+
+    public function executeForceSync(Request $request, ProvisioningForceSyncRequest $forceSync): JsonResponse
+    {
+        return ApiResponse::item($this->reconciliation->executeForceSync($forceSync, $request->user()?->uid));
+    }
+
+    public function cancelForceSync(Request $request, ProvisioningForceSyncRequest $forceSync): JsonResponse
+    {
+        return ApiResponse::item($this->reconciliation->cancelForceSync($forceSync, $request->user()?->uid));
     }
 }

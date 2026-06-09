@@ -2,12 +2,14 @@
 
 namespace Modules\Provisioning\Services;
 
+use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Provisioning\Events\ProvisioningEvents;
 use Modules\Provisioning\Models\ProvisioningDesiredState;
+use Modules\Provisioning\Models\ProvisioningForceSyncRequest;
 use Modules\Provisioning\Models\ProvisioningObservedState;
 use Modules\Provisioning\Models\ProvisioningReconciliationItem;
 use Modules\Provisioning\Models\ProvisioningReconciliationRun;
@@ -93,41 +95,106 @@ class ReconciliationService
     }
 
     /**
-     * NOC force-sync of a mismatch: re-issue the desired state to the target to
-     * bring the network back in line, then resolve the item. Permission-gated by
-     * the caller (R-PROV-07) and audited via the emitted event (R-PROV-09).
+     * R-PROV-07/08: a mismatch does NOT auto-fix. NOC raises a force-sync REQUEST
+     * (PENDING_APPROVAL) from the item; it is approved, then executed. This is the
+     * request step — it does not touch the network.
      */
-    public function forceSync(ProvisioningReconciliationItem $item, ?string $actor = null): ProvisioningReconciliationItem
+    public function requestForceSync(ProvisioningReconciliationItem $item, ?string $requestedBy = null, ?string $reason = null): ProvisioningForceSyncRequest
     {
-        $desired = ProvisioningDesiredState::query()
-            ->where('subscriber_key', $item->subscriber_key)
-            ->where('target_code', $item->target_code)
-            ->first();
+        $request = ProvisioningForceSyncRequest::query()->create([
+            'operator_code' => $item->operator_code,
+            'source_item_id' => $item->item_id,
+            'subscription_id' => $item->subscription_id,
+            'service_ref' => $item->service_ref,
+            'target_code' => $item->target_code,
+            'requested_action' => 'REAPPLY_PROFILE',
+            'status' => ProvisioningForceSyncRequest::PENDING_APPROVAL,
+            'requested_by_user_id' => $requestedBy,
+            'reason' => $reason,
+        ]);
+        $item->update(['status' => ProvisioningReconciliationItem::IN_REVIEW]);
+        $this->emitForceSync(ProvisioningEvents::FORCE_SYNC_REQUESTED, $request);
 
-        $this->events->publish(new DomainEvent(
-            type: ProvisioningEvents::FORCE_SYNC_REQUESTED,
-            topic: ProvisioningEvents::TOPIC,
-            payload: ['itemId' => $item->item_id, 'target' => $item->target_code, 'subscriberKey' => $item->subscriber_key, 'actor' => $actor],
-            aggregateType: 'ProvisioningReconciliationItem',
-            aggregateId: $item->item_id,
-        ));
+        return $request;
+    }
 
-        if ($desired) {
-            $this->provisioning->broadcast($desired->subscription_id, 'FORCE_SYNC', [[
-                'target_code' => $desired->target_code,
-                'service_ref' => $desired->service_ref,
-                'desired_state' => $desired->desired_profile ?? ['desiredStatus' => $desired->desired_status],
-            ]]);
+    /** R-PROV-07: approve a pending force-sync (the EM-CFG-04 approval step). */
+    public function approveForceSync(ProvisioningForceSyncRequest $request, ?string $approver = null): ProvisioningForceSyncRequest
+    {
+        if ($request->status !== ProvisioningForceSyncRequest::PENDING_APPROVAL) {
+            throw DomainException::conflict('Only a PENDING_APPROVAL force-sync can be approved.');
+        }
+        $request->update(['status' => ProvisioningForceSyncRequest::APPROVED, 'approved_by_user_id' => $approver]);
+        $this->emitForceSync(ProvisioningEvents::FORCE_SYNC_APPROVED, $request);
+
+        return $request->refresh();
+    }
+
+    /**
+     * Execute an APPROVED force-sync: re-issue the desired state to the target via a
+     * normal provisioning command (R-PROV-08 — audit consistent), then resolve the
+     * source item. Rejects execution before approval (R-PROV-07).
+     */
+    public function executeForceSync(ProvisioningForceSyncRequest $request, ?string $actor = null): ProvisioningForceSyncRequest
+    {
+        if ($request->status !== ProvisioningForceSyncRequest::APPROVED) {
+            throw DomainException::conflict('Force-sync must be APPROVED before execution.', nextAction: 'APPROVE_FIRST');
         }
 
-        $item->update([
-            'status' => ProvisioningReconciliationItem::RESOLVED,
-            'resolution' => 'FORCE_SYNCED',
-            'resolved_by' => $actor,
-            'resolved_at' => now(),
-        ]);
+        return DB::transaction(function () use ($request, $actor) {
+            $request->update(['status' => ProvisioningForceSyncRequest::RUNNING]);
 
-        return $item->refresh();
+            $desired = ProvisioningDesiredState::query()
+                ->where('subscription_id', $request->subscription_id)
+                ->where('target_code', $request->target_code)
+                ->first();
+
+            $commandId = null;
+            if ($desired) {
+                $command = $this->provisioning->broadcast($desired->subscription_id, 'FORCE_SYNC', [[
+                    'target_code' => $desired->target_code,
+                    'service_ref' => $desired->service_ref,
+                    'desired_state' => $desired->desired_profile ?? ['desiredStatus' => $desired->desired_status],
+                ]])[0] ?? null;
+                $commandId = $command?->command_id;
+            }
+
+            if ($request->source_item_id) {
+                ProvisioningReconciliationItem::query()->whereKey($request->source_item_id)->update([
+                    'status' => ProvisioningReconciliationItem::RESOLVED,
+                    'resolution' => 'FORCE_SYNCED',
+                    'resolved_by' => $actor,
+                    'resolved_at' => now(),
+                ]);
+            }
+
+            $request->update(['status' => ProvisioningForceSyncRequest::COMPLETED, 'command_id' => $commandId]);
+            $this->emitForceSync(ProvisioningEvents::FORCE_SYNC_COMPLETED, $request);
+
+            return $request->refresh();
+        });
+    }
+
+    public function cancelForceSync(ProvisioningForceSyncRequest $request, ?string $actor = null): ProvisioningForceSyncRequest
+    {
+        if (in_array($request->status, [ProvisioningForceSyncRequest::COMPLETED, ProvisioningForceSyncRequest::CANCELLED], true)) {
+            throw DomainException::conflict('Force-sync is already terminal.');
+        }
+        $request->update(['status' => ProvisioningForceSyncRequest::CANCELLED]);
+        $this->emitForceSync(ProvisioningEvents::FORCE_SYNC_CANCELLED, $request);
+
+        return $request->refresh();
+    }
+
+    private function emitForceSync(string $type, ProvisioningForceSyncRequest $request): void
+    {
+        $this->events->publish(new DomainEvent(
+            type: $type,
+            topic: ProvisioningEvents::TOPIC,
+            payload: ['forceSyncId' => $request->force_sync_id, 'itemId' => $request->source_item_id, 'target' => $request->target_code, 'status' => $request->status],
+            aggregateType: 'ProvisioningForceSyncRequest',
+            aggregateId: $request->force_sync_id,
+        ));
     }
 
     private function isMismatch(string $desiredStatus, ?string $observedStatus): bool

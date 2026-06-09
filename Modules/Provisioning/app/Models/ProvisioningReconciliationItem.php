@@ -12,6 +12,8 @@ class ProvisioningReconciliationItem extends Model
 
     public const OPEN = 'OPEN';
 
+    public const IN_REVIEW = 'IN_REVIEW';
+
     public const RESOLVED = 'RESOLVED';
 
     public const IGNORED = 'IGNORED';

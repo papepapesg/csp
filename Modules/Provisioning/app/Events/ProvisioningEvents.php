@@ -20,4 +20,10 @@ final class ProvisioningEvents
     public const RECONCILE_ITEM_OPENED = 'ProvisioningReconciliationItemOpened';
 
     public const FORCE_SYNC_REQUESTED = 'ProvisioningForceSyncRequested';
+
+    public const FORCE_SYNC_APPROVED = 'ProvisioningForceSyncApproved';
+
+    public const FORCE_SYNC_COMPLETED = 'ProvisioningForceSyncCompleted';
+
+    public const FORCE_SYNC_CANCELLED = 'ProvisioningForceSyncCancelled';
 }

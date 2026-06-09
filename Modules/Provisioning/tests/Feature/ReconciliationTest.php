@@ -58,9 +58,25 @@ class ReconciliationTest extends TestCase
         $this->assertSame('SUSPENDED', $item->observed_status);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'ProvisioningReconciliationItemOpened']);
 
-        $this->postJson("/api/provisioning/reconciliation/items/{$item->item_id}/force-sync")
-            ->assertOk()->assertJsonPath('status', 'RESOLVED');
+        // Force-sync is approval-gated (R-PROV-07): raising it creates a PENDING_APPROVAL
+        // request and moves the item to IN_REVIEW — the network is NOT touched yet.
+        $fs = $this->postJson("/api/provisioning/reconciliation/items/{$item->item_id}/force-sync", ['reason' => 'wrong profile'])
+            ->assertCreated()->assertJsonPath('status', 'PENDING_APPROVAL')->json();
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'ProvisioningForceSyncRequested']);
+        $this->assertSame('IN_REVIEW', $item->refresh()->status);
+
+        // Cannot execute before approval.
+        $this->postJson("/api/provisioning/force-sync-requests/{$fs['force_sync_id']}/execute")
+            ->assertStatus(409);
+
+        // Approve, then execute -> item resolved.
+        $this->postJson("/api/provisioning/force-sync-requests/{$fs['force_sync_id']}/approve")
+            ->assertOk()->assertJsonPath('status', 'APPROVED');
+        $this->postJson("/api/provisioning/force-sync-requests/{$fs['force_sync_id']}/execute")
+            ->assertOk()->assertJsonPath('status', 'COMPLETED');
+
+        $this->assertSame('RESOLVED', $item->refresh()->status);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'ProvisioningForceSyncCompleted']);
     }
 
     /** The polling worker reconciles all active targets. */
