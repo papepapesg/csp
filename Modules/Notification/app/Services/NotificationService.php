@@ -16,18 +16,33 @@ use Modules\Notification\Models\Notification;
  */
 class NotificationService
 {
-    public function __construct(private readonly EventBus $events) {}
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly TemplateService $templates,
+    ) {}
 
     /** @param array<string,mixed> $data */
     public function send(array $data): Notification
     {
         return DB::transaction(function () use ($data) {
+            // Resolve the per-channel template for template_code when no inline body is
+            // supplied; {{placeholders}} fill from payload (NOT-01 template studio).
+            $subject = $data['subject'] ?? null;
+            $body = $data['body'] ?? null;
+            if (($body === null || $body === '') && ! empty($data['template_code'])) {
+                $rendered = $this->templates->render($data['template_code'], $data['channel'], $data['payload'] ?? []);
+                if ($rendered) {
+                    $subject ??= $rendered['subject'];
+                    $body = $rendered['body'];
+                }
+            }
+
             $notification = Notification::query()->create([
                 'channel' => $data['channel'],
                 'recipient' => $data['recipient'],
                 'template_code' => $data['template_code'] ?? null,
-                'subject' => $data['subject'] ?? null,
-                'body' => $data['body'] ?? null,
+                'subject' => $subject,
+                'body' => $body,
                 'payload' => $data['payload'] ?? null,
                 'customer_id' => $data['customer_id'] ?? null,
                 'reference' => $data['reference'] ?? null,

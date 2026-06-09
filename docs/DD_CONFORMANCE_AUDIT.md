@@ -81,9 +81,15 @@ not constants) — ✅ 🔁. Per-service wallet routing consumed at charge time 
 Local Sanctum + spatie/laravel-permission instead of Keycloak/OIDC. Acknowledged top
 divergence; documented in CODE_TOUR.md. ⚠️ (by decision)
 
+## Notification (NOT-01) — partially audited 🔁
+Send + internal comms present. **Template studio** added: per-channel
+`notification_template` catalog + `{{var}}` rendering wired into send, `invoice_template`
+layouts, CRUD/preview API, and a Vue studio page (`/templates/studio`) — ✅ 🔁
+Open: delivery-provider integration (SMS/email gateways stubbed); per-locale fallbacks. ⚠️
+
 ## Not yet audited (no DD diff run)
 Ilm/CVM, Workforce, Reporting, ItOps, Rbac admin, Fulfillment order-capture,
-Notification, field-audit policy depth.
+field-audit policy depth.
 
 ---
 
@@ -99,6 +105,7 @@ Notification, field-audit policy depth.
 8. PLM-CFG-07 usage_tariff catalog (data/SMS rating is config, not constants).
 9. WO-01 attachments + checklist attachment enforcement.
 10. PROV-INT-01 per-attempt ledger (§10.4).
+11. NOT-01 template studio (per-channel notification templates + invoice layouts + UI).
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.

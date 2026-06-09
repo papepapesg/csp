@@ -21,6 +21,7 @@ use Modules\Subscription\Database\Seeders\UpgradeConfigSeeder;
 use Modules\Ticketing\Database\Seeders\AsrPolicySeeder;
 use Modules\Ticketing\Database\Seeders\SlaPolicySeeder;
 use Modules\WorkOrder\Database\Seeders\FieldAuditPolicySeeder;
+use Modules\Notification\Database\Seeders\TemplateCatalogSeeder;
 use Modules\WorkOrder\Database\Seeders\WoFrameworkSeeder;
 use Modules\WorkOrder\Database\Seeders\WoSupportSeeder;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
@@ -53,6 +54,7 @@ class DatabaseSeeder extends Seeder
             CvmPolicySeeder::class,
             SlaPolicySeeder::class,
             AsrPolicySeeder::class,
+            TemplateCatalogSeeder::class,
         ]);
 
         $admin = User::query()->firstOrCreate(
