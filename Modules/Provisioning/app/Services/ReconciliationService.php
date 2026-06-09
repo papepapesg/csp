@@ -6,7 +6,6 @@ use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
-use Modules\Provisioning\Contracts\ProvisioningAdapter;
 use Modules\Provisioning\Events\ProvisioningEvents;
 use Modules\Provisioning\Models\ProvisioningDesiredState;
 use Modules\Provisioning\Models\ProvisioningObservedState;
@@ -23,7 +22,7 @@ class ReconciliationService
 {
     public function __construct(
         private readonly EventBus $events,
-        private readonly ProvisioningAdapter $adapter,
+        private readonly ProvisioningAdapterRegistry $adapters,
         private readonly ProvisioningService $provisioning,
     ) {}
 
@@ -52,7 +51,8 @@ class ReconciliationService
         $mismatchCount = 0;
 
         foreach ($desiredStates as $desired) {
-            $observed = $this->adapter->fetchObserved(
+            // Poll each target through ITS adapter (PROV-INT-01 §10.2).
+            $observed = $this->adapters->forTarget((string) $desired->operator_code, (string) $desired->target_code)->fetchObserved(
                 $desired->target_code,
                 $desired->subscriber_key,
                 $desired->desired_status,

@@ -7,7 +7,6 @@ use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
-use Modules\Provisioning\Contracts\ProvisioningAdapter;
 use Modules\Provisioning\Events\ProvisioningEvents;
 use Modules\Provisioning\Models\ProvisioningCommand;
 use Modules\Provisioning\Models\ProvisioningDesiredState;
@@ -22,7 +21,7 @@ class ProvisioningService
 {
     public function __construct(
         private readonly EventBus $events,
-        private readonly ProvisioningAdapter $adapter,
+        private readonly ProvisioningAdapterRegistry $adapters,
     ) {}
 
     /**
@@ -63,7 +62,8 @@ class ProvisioningService
             $command->update(['status' => ProvisioningCommand::SENT, 'attempts' => $command->attempts + 1, 'sent_at' => now()]);
             $this->emit(ProvisioningEvents::COMMAND_SENT, $command);
 
-            $result = $this->adapter->dispatch($command);
+            // Resolve the vendor adapter for THIS command's target (PROV-INT-01 §10.2).
+            $result = $this->adapters->forCommand($command)->dispatch($command);
 
             if ($result->ok) {
                 $command->update([
