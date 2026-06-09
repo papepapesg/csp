@@ -23,6 +23,8 @@ final class WorkOrderEvents
 
     public const NOTE_APPENDED = 'WorkOrderNoteAppended';
 
+    public const ATTACHMENT_ADDED = 'WorkOrderAttachmentAdded';
+
     public const CANCELLED = 'WorkOrderCancelled';
 
     // WO-01-FLOW-SUPPORT events.

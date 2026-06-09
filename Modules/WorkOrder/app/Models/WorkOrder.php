@@ -75,4 +75,9 @@ class WorkOrder extends Model
     {
         return $this->hasMany(WoAssignmentHistory::class, 'work_order_id', 'work_order_id');
     }
+
+    public function attachments(): HasMany
+    {
+        return $this->hasMany(WoAttachment::class, 'work_order_id', 'work_order_id');
+    }
 }

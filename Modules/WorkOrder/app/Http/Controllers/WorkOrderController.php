@@ -115,6 +115,20 @@ class WorkOrderController extends ApiController
         return ApiResponse::item($this->service->reassign($workOrder, $data, $data['reason'] ?? null, $request->user()?->uid));
     }
 
+    /** POST /work-orders/{wo}/attachments — WO-01 §1.4 attach a categorised file. */
+    public function addAttachment(Request $request, WorkOrder $workOrder): JsonResponse
+    {
+        $data = $request->validate([
+            'category' => ['required', 'string', 'max:64'],
+            'file_uri' => ['required', 'string', 'max:1024'],
+            'description' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        return ApiResponse::created($this->service->addAttachment(
+            $workOrder, $data['category'], $data['file_uri'], $data['description'] ?? null, $request->user()?->uid,
+        ));
+    }
+
     /** POST /work-orders/{wo}/notes — WO-01 §1.3 append a structured note. */
     public function addNote(Request $request, WorkOrder $workOrder): JsonResponse
     {

@@ -50,9 +50,10 @@ auto-interrupt, scheduled effective-timing. (M/L)
 - **Structured notes + `wo_note_kind_registry`** schema validation (§1.3/§4.3) — ✅ 🔁 (was ⚠️ table-only)
 - **2-step finalize** `IN_PROGRESS→FINALIZATION_PENDING→COMPLETED` + config-driven
   **finalize checklist** (`wo_finalization_requirements`, §3/§4.4) — ✅ 🔁 (was ❌; terminal renamed FINALIZED→COMPLETED)
-- Open (M/L): attachments (`wo_attachment` + per-category min counts in the checklist);
-  master/sub linkage (`master_wo_id`/`link_type`) actively used; SLA timestamp capture;
-  skills-filtered auto-assign worker. ⚠️
+- **Attachments** (`wo_attachment` + per-category min counts enforced in the finalize
+  checklist, §1.4/§4.4) — ✅ 🔁
+- Open (M/L): master/sub linkage (`master_wo_id`/`link_type`) actively used; SLA
+  timestamp capture; skills-filtered auto-assign worker. ⚠️
 
 ## OSR — Stock & Equipment (OSR-01 / OSR-INSTANCE-01 / OSR-RMA-01) — audited
 - Equipment vs material distinction (`equipment_sku.is_serialized` + `ownership_semantics`
@@ -95,12 +96,13 @@ Notification, field-audit policy depth.
 6. PROV-INT-01 force-sync approval lifecycle.
 7. BIL-02 automatic cycle billing (rated_event → invoice/wallet).
 8. PLM-CFG-07 usage_tariff catalog (data/SMS rating is config, not constants).
+9. WO-01 attachments + checklist attachment enforcement.
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.
 2. **Provisioning** force-sync approval ✅ done; remaining §9 status model + async + attempt ledger (M).
 3. ~~Automatic cycle billing~~ — ✅ done (usage). Remaining: recurring package-fee generation (M).
-4. **WO attachments + checklist attachment requirements** (M).
+4. ~~WO attachments + checklist attachment requirements~~ — ✅ done.
 5. **Per-service wallet routing consumed at charge time** (M).
 6. ~~Usage-tariff catalog for data/SMS rating~~ — ✅ done.
 7. Full DD diff for Ticketing, Catalog depth, Ilm/CVM, Fulfillment (unknown).

@@ -2,11 +2,13 @@
 
 namespace Modules\WorkOrder\Tests\Feature;
 
+use App\Foundation\Support\Id;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\WorkOrder\Database\Seeders\WoFrameworkSeeder;
+use Modules\WorkOrder\Models\WoFinalizationRequirement;
 use Modules\WorkOrder\Models\WorkOrder;
 use Tests\TestCase;
 
@@ -92,5 +94,30 @@ class WorkOrderFrameworkTest extends TestCase
             ->assertOk()->assertJsonPath('status', 'COMPLETED');
         $this->assertSame('COMPLETED', WorkOrder::find($id)->status);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'WorkOrderFinalized']);
+    }
+
+    public function test_finalize_checklist_enforces_required_attachments(): void
+    {
+        // A checklist requiring a setup_photo attachment for this kind/job_type.
+        WoFinalizationRequirement::query()->create([
+            'id' => Id::make('wofr'), 'operator_code' => 'WIK', 'kind' => 'SUPPORT', 'job_type_code' => 'PHOTO_JOB',
+            'required_note_kinds' => [], 'required_attachment_categories' => ['setup_photo'],
+            'min_attachments_per_category' => ['setup_photo' => 1],
+        ]);
+
+        $id = $this->postJson('/api/work-orders', ['type' => 'SUPPORT', 'kind' => 'SUPPORT', 'job_type_code' => 'PHOTO_JOB'])
+            ->assertCreated()->json('work_order_id');
+        $this->postJson("/api/work-orders/{$id}/assign", ['contractor_id' => 'con_1'])->assertOk();
+        $this->postJson("/api/work-orders/{$id}/start")->assertOk();
+        $this->postJson("/api/work-orders/{$id}/finalize-first-confirm")->assertOk();
+
+        // Missing the setup_photo -> checklist fails.
+        $this->postJson("/api/work-orders/{$id}/finalize-second-confirm")
+            ->assertStatus(422)->assertJsonPath('errorCode', 'FINALIZATION_CHECKLIST_FAILED');
+
+        // Attach it, then it completes.
+        $this->postJson("/api/work-orders/{$id}/attachments", ['category' => 'setup_photo', 'file_uri' => 's3://wo/photo.jpg'])
+            ->assertCreated();
+        $this->postJson("/api/work-orders/{$id}/finalize-second-confirm")->assertOk()->assertJsonPath('status', 'COMPLETED');
     }
 }

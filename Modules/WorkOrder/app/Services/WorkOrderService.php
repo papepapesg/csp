@@ -7,6 +7,7 @@ use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
 use Modules\WorkOrder\Events\WorkOrderEvents;
+use Modules\WorkOrder\Models\WoAttachment;
 use Modules\WorkOrder\Models\WoFinalizationRequirement;
 use Modules\WorkOrder\Models\WoNote;
 use Modules\WorkOrder\Models\WoNoteKind;
@@ -122,6 +123,17 @@ class WorkOrderService
         return $note;
     }
 
+    /** WO-01 §1.4 attach a categorised file to the work order. */
+    public function addAttachment(WorkOrder $wo, string $category, string $fileUri, ?string $description = null, ?string $uploader = null): WoAttachment
+    {
+        $attachment = $wo->attachments()->create([
+            'category' => $category, 'file_uri' => $fileUri, 'description' => $description, 'uploaded_by' => $uploader,
+        ]);
+        $this->emit(WorkOrderEvents::ATTACHMENT_ADDED, $wo, ['attachmentId' => $attachment->id, 'category' => $category]);
+
+        return $attachment;
+    }
+
     /**
      * WO-01 §3 2-step finalize, first confirm: IN_PROGRESS → FINALIZATION_PENDING.
      * Saves the final reason + evidence; the checklist is enforced at second confirm.
@@ -171,12 +183,25 @@ class WorkOrderService
             return; // no configured checklist for this (operator, kind, job_type)
         }
         $present = $wo->notes()->pluck('note_kind')->unique()->all();
-        $missing = array_values(array_diff($req->required_note_kinds ?? [], $present));
-        if ($missing) {
-            throw DomainException::ruleRejected(
-                'FINALIZATION_CHECKLIST_FAILED',
-                'Missing required notes before finalization: '.implode(', ', $missing),
+        $missingNotes = array_values(array_diff($req->required_note_kinds ?? [], $present));
+
+        // §4.4 attachment categories: each required category needs >= its min count.
+        $counts = $wo->attachments()->get()->groupBy('category')->map->count();
+        $minPer = $req->min_attachments_per_category ?? [];
+        $missingAttachments = [];
+        foreach ($req->required_attachment_categories ?? [] as $category) {
+            $need = (int) ($minPer[$category] ?? 1);
+            if ((int) ($counts[$category] ?? 0) < $need) {
+                $missingAttachments[] = "{$category} (need {$need})";
+            }
+        }
+
+        if ($missingNotes || $missingAttachments) {
+            $parts = array_merge(
+                $missingNotes ? ['notes: '.implode(', ', $missingNotes)] : [],
+                $missingAttachments ? ['attachments: '.implode(', ', $missingAttachments)] : [],
             );
+            throw DomainException::ruleRejected('FINALIZATION_CHECKLIST_FAILED', 'Finalization blocked — '.implode('; ', $parts));
         }
     }
 
