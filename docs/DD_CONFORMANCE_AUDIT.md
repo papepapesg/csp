@@ -92,9 +92,40 @@ Send + internal comms present. **Template studio** added: per-channel
 layouts, CRUD/preview API, and a Vue studio page (`/templates/studio`) — ✅ 🔁
 Open: delivery-provider integration (SMS/email gateways stubbed); per-locale fallbacks. ⚠️
 
-## Not yet audited (no DD diff run)
-Ilm/CVM, Workforce, Reporting, ItOps, Rbac admin, Fulfillment order-capture,
-field-audit policy depth.
+## Ilm / Customer (ILM-CFG-01) — audited 🔁
+- Customer/Account separation, KYC two-level approval, account_number + payment ref,
+  service_class / attention_banner, CVM activity — ✅
+- **Account flag system** (`customer_account_flag_catalog` + `customer_account_flag`,
+  §3.5): operator-extensible NPD/churn/fraud flags; NPD surfaces the attention banner;
+  set/clear API + events — ✅ 🔁
+- **Sub-status registry** (`customer_sub_status_catalog`): sub-status validated against
+  the operator catalog — ✅ 🔁
+- Open (M/L): daily Drools flag-evaluator worker; account_status_history; multi-slot ID
+  search. ⚠️
+
+## Fulfillment (FUL-02) — audited 🔁
+- Order-capture journey (CAPTURE → VALIDATE → PAYMENT → SUBSCRIPTION → INSTALL →
+  ACTIVATION → CANCELLATION) orchestrating SUB/WO/BIL — ✅
+- **STEP-KYC activation gate** (an order cannot activate until the customer's KYC is
+  APPROVED, ILM-CFG-01) — ✅ 🔁
+- Open (L): explicit per-step failure rows; install-equipment reservation at capture.
+
+## Rbac (EM-CFG-03) — audited
+- Role + permission catalog (runtime CRUD), role-permission matrix, user role
+  assignment, **effective-access API** — ✅ (on the local spatie stack).
+- Open (by decision): the EM-CFG-03 **scope system** (operator/franchise/region/
+  contractor/team/channel) + frontend-action matrix + rbac_change_audit. Part of the
+  **FOUNDATION_AUTH divergence** (local Sanctum/spatie vs Keycloak + the rbac_* scope
+  catalog); scope enforcement touches every endpoint — a deliberate deferral. ⚠️
+
+## Workforce (EM-02) / Reporting (RPT) / ItOps — functional, not deep-diffed
+Registry/platform modules with passing tests: Workforce = contractor/team/staff
+registry; Reporting = daily-metric CSV export + reconciliation; ItOps = service
+control / heartbeat / system-log. No section-by-section DD diff; no obvious behavioral
+gaps surfaced. ⚠️ (low risk)
+
+## Field audit (FA-01/02/03)
+Implemented (`FieldAuditService` + tests); depth not separately diffed. ⚠️ (low)
 
 ---
 
@@ -112,6 +143,8 @@ field-audit policy depth.
 10. PROV-INT-01 per-attempt ledger (§10.4).
 11. NOT-01 template studio (per-channel notification templates + invoice layouts + UI).
 12. TCK-01 category catalog + WO-gating + WO-finalized loop + reopen.
+13. ILM-CFG-01 account flag system (§3.5) + sub-status registry.
+14. FUL-02 STEP-KYC activation gate.
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.
