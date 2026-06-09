@@ -66,9 +66,9 @@ class WalletService
      *
      * @return Collection<int,Wallet>
      */
-    public function resolveChargingWallets(string $subscriptionId, string $billingMode = 'PREPAID'): Collection
+    public function resolveChargingWallets(string $subscriptionId, string $billingMode = 'PREPAID', ?string $operator = null): Collection
     {
-        $operator = Context::operatorCode();
+        $operator ??= Context::operatorCode();
         $catalog = WalletCatalog::query()
             ->where('operator_code', $operator)
             ->where('status', WalletCatalog::STATUS_ACTIVE)
@@ -83,6 +83,40 @@ class WalletService
                 && $catalog[$w->wallet_code]->appliesToBillingMode($billingMode))
             ->sortBy(fn (Wallet $w) => $catalog[$w->wallet_code]->charging_precedence)
             ->values();
+    }
+
+    /**
+     * Settle a positive charge from the subscription's prepaid wallets, draining by
+     * charging_precedence (lowest first). Atomic: only debits when the eligible
+     * balance fully covers the amount — a partial balance settles nothing (the
+     * caller parks/tops up). Returns whether it settled and how much was debited.
+     *
+     * @return array{settled:bool, debited:float, available:float}
+     */
+    public function settleFromWallets(string $subscriptionId, float $amount, string $reason, ?string $operator = null, ?string $reference = null): array
+    {
+        $amount = round($amount, 2);
+        $wallets = $this->resolveChargingWallets($subscriptionId, 'PREPAID', $operator);
+        $available = (float) $wallets->sum(fn (Wallet $w) => (float) $w->balance);
+
+        if ($available + 0.0001 < $amount) {
+            return ['settled' => false, 'debited' => 0.0, 'available' => $available];
+        }
+
+        $remaining = $amount;
+        foreach ($wallets as $wallet) {
+            if ($remaining <= 0.0001) {
+                break;
+            }
+            $take = min($remaining, (float) $wallet->balance);
+            if ($take <= 0) {
+                continue;
+            }
+            $this->debit($wallet, $take, $reason, $reference);
+            $remaining -= $take;
+        }
+
+        return ['settled' => true, 'debited' => $amount, 'available' => $available];
     }
 
     public function credit(Wallet $wallet, float $amount, string $reason = 'TOPUP', ?string $reference = null): WalletTransaction
@@ -142,7 +176,7 @@ class WalletService
             $this->events->publish(new DomainEvent(
                 type: $type,
                 topic: BillingEvents::TOPIC,
-                payload: ['walletId' => $wallet->wallet_id, 'walletCode' => $wallet->wallet_code, 'amount' => (string) $amount, 'balance' => (string) $newBalance, 'reason' => $reason],
+                payload: ['walletId' => $wallet->wallet_id, 'walletCode' => $wallet->wallet_code, 'subscriptionId' => $wallet->subscription_id, 'amount' => (string) $amount, 'balance' => (string) $newBalance, 'reason' => $reason],
                 aggregateType: 'Wallet',
                 aggregateId: $wallet->wallet_id,
             ));

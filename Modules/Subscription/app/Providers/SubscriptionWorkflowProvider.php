@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Modules\Subscription\Console\OperationTimeoutCommand;
 use Modules\Subscription\Listeners\ConfirmBillingIntentOnPayment;
+use Modules\Subscription\Listeners\ConfirmPrepaidIntentOnTopup;
 use Modules\Subscription\Workflow\ActivateHandler;
 use Modules\Subscription\Workflow\BillingIntentHandler;
 use Modules\Subscription\Workflow\ChangeHomePassHandler;
@@ -54,6 +55,7 @@ class SubscriptionWorkflowProvider extends ServiceProvider
 
         Event::listen(ProcessInstanceEnded::class, [SyncOperationFromProcess::class, 'handle']);
         Event::listen(OutboxEventPublished::class, [ConfirmBillingIntentOnPayment::class, 'handle']);
+        Event::listen(OutboxEventPublished::class, [ConfirmPrepaidIntentOnTopup::class, 'handle']);
 
         if ($this->app->runningInConsole()) {
             $this->commands([OperationTimeoutCommand::class]);

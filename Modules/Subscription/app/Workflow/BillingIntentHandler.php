@@ -48,6 +48,8 @@ class BillingIntentHandler implements TaskHandler
         $intent = $this->intents->emit([
             'subscription_id' => $subscription->subscription_id,
             'account_id' => $subscription->account_id,
+            'operator_code' => $subscription->operator_code,
+            'billing_mode' => $subscription->billing_mode,   // PREPAID settles from the wallet, POSTPAID raises an invoice
             'operation_id' => $operationId,
             'intent_type' => $cfg['intentType'] ?? 'PRORATION',
             'amount' => $amount,
