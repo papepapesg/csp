@@ -73,6 +73,30 @@ class FulfillmentJourneyTest extends TestCase
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionActivated']);
     }
 
+    public function test_activation_is_gated_on_customer_kyc(): void
+    {
+        // A real customer whose KYC is still pending.
+        $custId = \App\Foundation\Support\Id::make('cust');
+        \Modules\Ilm\Models\Customer::query()->create([
+            'customer_id' => $custId, 'operator_code' => 'WIK', 'type' => 'RES', 'name' => 'Pending KYC',
+            'primary_msisdn' => '+254700111222', 'kyc_status' => 'PENDING',
+        ]);
+
+        $order = $this->postJson('/api/fulfillment-orders', [
+            'customer_id' => $custId, 'account_id' => 'acct_k', 'homepass_id' => 'hp_k', 'package_ref' => 'pkg_x',
+        ], ['Idempotency-Key' => 'order-k'])->json('order');
+
+        // Cannot complete (activate) while KYC is not APPROVED.
+        $this->postJson("/api/fulfillment-orders/{$order['order_id']}/complete", [], ['Idempotency-Key' => 'complete-k'])
+            ->assertStatus(409)->assertJsonPath('errorCode', 'KYC_NOT_APPROVED');
+
+        // Approve KYC, then completion proceeds.
+        \Modules\Ilm\Models\Customer::where('customer_id', $custId)->update(['kyc_status' => 'APPROVED']);
+        $this->postJson("/api/fulfillment-orders/{$order['order_id']}/complete", [], ['Idempotency-Key' => 'complete-k2'])
+            ->assertOk()->assertJsonPath('status', 'COMPLETED');
+        $this->assertDatabaseHas('fulfillment_order_step', ['order_id' => $order['order_id'], 'step' => 'KYC']);
+    }
+
     public function test_capture_requires_permission(): void
     {
         $user = User::factory()->create();

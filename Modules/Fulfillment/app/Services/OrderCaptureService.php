@@ -8,6 +8,7 @@ use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
 use Modules\Fulfillment\Events\FulfillmentEvents;
 use Modules\Fulfillment\Models\FulfillmentOrder;
+use Modules\Ilm\Models\Customer;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Services\OperationFramework;
 use Modules\Subscription\Services\SubscriptionService;
@@ -114,6 +115,14 @@ class OrderCaptureService
         }
 
         $subscription = Subscription::query()->findOrFail($order->subscription_id);
+
+        // FUL-02 STEP-KYC gate: an order cannot activate until the customer's KYC is
+        // APPROVED (ILM-CFG-01 — the dummy-to-real account conversion gate).
+        $customer = Customer::query()->find($order->customer_id);
+        if ($customer && $customer->kyc_status !== 'APPROVED') {
+            throw new DomainException('KYC_NOT_APPROVED', "Customer KYC is {$customer->kyc_status}; activation requires APPROVED.", 409);
+        }
+        $this->completeStep($order, 'KYC', ['kycStatus' => $customer?->kyc_status ?? 'UNVERIFIED']);
 
         $this->completeStep($order, 'INSTALL');
         $order->update(['status' => FulfillmentOrder::ACTIVATING, 'current_step' => 'ACTIVATION']);
