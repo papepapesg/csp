@@ -21,6 +21,8 @@ class FulfillmentOrder extends Model
 
     public const AWAITING_INSTALL = 'AWAITING_INSTALL';
 
+    public const AWAITING_KYC = 'AWAITING_KYC';
+
     public const ACTIVATING = 'ACTIVATING';
 
     public const COMPLETED = 'COMPLETED';

@@ -9,6 +9,7 @@ use Modules\Billing\Database\Seeders\DunningPolicySeeder;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
 use Modules\Catalog\Database\Seeders\TaxCatalogSeeder;
 use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
+use Modules\Fulfillment\Database\Seeders\FulfillmentFlowSeeder;
 use Modules\Ilm\Database\Seeders\AccountFlagCatalogSeeder;
 use Modules\Ilm\Database\Seeders\CvmPolicySeeder;
 use Modules\Osr\Database\Seeders\OsrRmaSeeder;
@@ -41,6 +42,7 @@ class DatabaseSeeder extends Seeder
             OperationConfigSeeder::class,
             PerOperationConfigSeeder::class,
             ProcessDefinitionSeeder::class,
+            FulfillmentFlowSeeder::class,
             ProvisioningTargetSeeder::class,
             DecisionTableSeeder::class,
             CatalogPolicySeeder::class,

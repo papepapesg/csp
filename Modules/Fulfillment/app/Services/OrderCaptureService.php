@@ -8,40 +8,33 @@ use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
 use Modules\Fulfillment\Events\FulfillmentEvents;
 use Modules\Fulfillment\Models\FulfillmentOrder;
-use Modules\Ilm\Models\Customer;
-use Modules\Subscription\Models\Subscription;
-use Modules\Subscription\Services\OperationFramework;
-use Modules\Subscription\Services\SubscriptionService;
-use Modules\WorkOrder\Services\WorkOrderService;
+use Modules\Workflow\Engine\WorkflowEngine;
+use Modules\Workflow\Models\ProcessInstance;
 
 /**
- * FUL-02 onboarding orchestration (happy path). Coordinates fulfillment
- * readiness before activation, then hands ownership back to each owning module:
- * SUB-LM owns the subscription, WO owns field execution, BIL owns payment.
- *
- * Cross-module coordination is via the owning modules' SERVICES (not their
- * tables) — the modular-monolith equivalent of calling owning-module APIs.
+ * FUL-02 order capture. The journey itself is CONFIG, not code: capture() creates
+ * the order row and starts the `ful-order-capture` process definition (FUL-02-
+ * FRAMEWORK §1.1); the steps — validate, create-subscription, create-install-wo,
+ * await-install, KYC gate, trigger-activation, complete — run as external-task
+ * topics seeded as data and editable in the Workflow Studio. This service only
+ * owns the order row and the desk-facing signals (manual install confirm, cancel).
  */
 class OrderCaptureService
 {
     public function __construct(
         private readonly EventBus $events,
-        private readonly SubscriptionService $subscriptions,
-        private readonly OperationFramework $operations,
-        private readonly WorkOrderService $workOrders,
+        private readonly WorkflowEngine $engine,
     ) {}
 
     /**
-     * Capture an order and provision its happy path: create the (pending)
-     * subscription and an installation work order. Activation eligibility
-     * (package/HomePass/role preconditions) is decided later by the
-     * rules.subscription.activate package at the SUB-WF activation gateway.
+     * Capture an order and start its journey flow. The flow's workers create the
+     * subscription + install WO; the order returns immediately as CAPTURED.
      *
      * @param  array<string,mixed>  $data
      */
     public function capture(array $data): FulfillmentOrder
     {
-        return DB::transaction(function () use ($data) {
+        $order = DB::transaction(function () use ($data) {
             $order = FulfillmentOrder::query()->create([
                 'customer_id' => $data['customer_id'],
                 'account_id' => $data['account_id'],
@@ -55,97 +48,52 @@ class OrderCaptureService
                 'created_by' => $data['created_by'] ?? null,
             ]);
 
-            $this->completeStep($order, 'CAPTURE');
-            $this->completeStep($order, 'VALIDATE');
+            $this->recordStep($order, 'CAPTURE');
             if (! empty($data['payment_ref'])) {
-                $this->completeStep($order, 'PAYMENT', ['paymentRef' => $data['payment_ref']]);
+                $this->recordStep($order, 'PAYMENT', ['paymentRef' => $data['payment_ref']]);
             }
 
-            // STEP-SUBSCRIPTION — create the subscription (SUB-LM owns it).
-            $subscription = $this->subscriptions->create([
-                'customer_id' => $order->customer_id,
-                'account_id' => $order->account_id,
-                'homepass_id' => $order->homepass_id ?? 'hp_unknown',
-                'package_ref' => $order->package_ref,
-                'package_version_id' => $order->package_version_id,
-                'billing_mode' => $order->billing_mode,
-                'created_by' => $order->created_by,
-            ]);
-            $this->completeStep($order, 'SUBSCRIPTION', ['subscriptionId' => $subscription->subscription_id]);
+            $this->publish(FulfillmentEvents::ORDER_CAPTURED, $order, []);
 
-            // STEP-INSTALL — raise an installation work order (WO owns field exec).
-            $workOrder = $this->workOrders->create([
-                'type' => 'INSTALLATION',
-                'account_id' => $order->account_id,
-                'customer_id' => $order->customer_id,
-                'subscription_id' => $subscription->subscription_id,
-                'homepass_id' => $order->homepass_id,
-                'source_type' => 'FULFILLMENT',
-                'source_ref' => $order->order_id,
-                'created_by' => $order->created_by,
-            ]);
-
-            $order->update([
-                'subscription_id' => $subscription->subscription_id,
-                'work_order_id' => $workOrder->work_order_id,
-                'status' => FulfillmentOrder::AWAITING_INSTALL,
-                'current_step' => 'INSTALL',
-            ]);
-
-            $this->emit(FulfillmentEvents::ORDER_CAPTURED, $order, [
-                'subscriptionId' => $subscription->subscription_id,
-                'workOrderId' => $workOrder->work_order_id,
-            ]);
-
-            return $order->refresh()->load('steps');
+            return $order;
         });
+
+        // Start the data-defined journey (FUL-02-FRAMEWORK §1.1); store the instance id.
+        $instance = $this->engine->start(
+            processKey: 'ful-order-capture',
+            businessKey: $order->order_id,
+            variables: [
+                'orderId' => $order->order_id,
+                'customerId' => $order->customer_id,
+                'accountId' => $order->account_id,
+                'packageRef' => $order->package_ref,
+                'homepassId' => $order->homepass_id,
+                'billingMode' => $order->billing_mode,
+            ],
+            operator: $order->operator_code,
+        );
+        $order->update(['process_instance_id' => $instance->instance_id]);
+
+        return $order->refresh()->load('steps');
     }
 
     /**
-     * FUL-03 service activation: once install is done, activate the subscription
-     * via SUB-WF and complete the order.
+     * Desk confirmation that the install is done: correlates the flow's
+     * 'ful-install-finalized' message catch (the WorkOrderFinalized event does the
+     * same automatically). The journey then runs the KYC gate + activation.
      */
     public function complete(FulfillmentOrder $order): FulfillmentOrder
     {
         if ($order->status === FulfillmentOrder::COMPLETED) {
             return $order; // idempotent
         }
-        if (! $order->subscription_id) {
-            throw DomainException::conflict('Order has no subscription to activate.');
+        if (! in_array($order->status, [FulfillmentOrder::AWAITING_INSTALL, FulfillmentOrder::CAPTURED], true)) {
+            throw DomainException::conflict("Order is {$order->status}; nothing to confirm.");
         }
 
-        $subscription = Subscription::query()->findOrFail($order->subscription_id);
+        $this->engine->correlateMessage('ful-install-finalized', $order->order_id, ['installConfirmed' => true]);
 
-        // FUL-02 STEP-KYC gate: an order cannot activate until the customer's KYC is
-        // APPROVED (ILM-CFG-01 — the dummy-to-real account conversion gate).
-        $customer = Customer::query()->find($order->customer_id);
-        if ($customer && $customer->kyc_status !== 'APPROVED') {
-            throw new DomainException('KYC_NOT_APPROVED', "Customer KYC is {$customer->kyc_status}; activation requires APPROVED.", 409);
-        }
-        $this->completeStep($order, 'KYC', ['kycStatus' => $customer?->kyc_status ?? 'UNVERIFIED']);
-
-        $this->completeStep($order, 'INSTALL');
-        $order->update(['status' => FulfillmentOrder::ACTIVATING, 'current_step' => 'ACTIVATION']);
-
-        // STEP-ACTIVATION — trigger SUB-WF activation (idempotent by order id).
-        $this->operations->trigger(
-            subscription: $subscription,
-            kind: 'ACTIVATE',
-            input: ['orderId' => $order->order_id],
-            idempotencyKey: 'ful-activate-'.$order->order_id,
-        );
-
-        return DB::transaction(function () use ($order) {
-            $this->completeStep($order, 'ACTIVATION');
-            $order->update([
-                'status' => FulfillmentOrder::COMPLETED,
-                'current_step' => null,
-                'completed_at' => now(),
-            ]);
-            $this->emit(FulfillmentEvents::ORDER_COMPLETED, $order, ['subscriptionId' => $order->subscription_id]);
-
-            return $order->refresh()->load('steps');
-        });
+        return $order->refresh()->load('steps');
     }
 
     public function cancel(FulfillmentOrder $order, ?string $reason = null): FulfillmentOrder
@@ -154,26 +102,31 @@ class OrderCaptureService
             throw DomainException::conflict('Order can no longer be cancelled.');
         }
 
+        // FUL-02-FRAMEWORK §1.8: cancellation interrupts the journey wherever it is.
+        ProcessInstance::query()->where('business_key', $order->order_id)
+            ->where('status', ProcessInstance::RUNNING)
+            ->update(['status' => ProcessInstance::CANCELLED, 'ended_at' => now()]);
+
         $order->update(['status' => FulfillmentOrder::CANCELLED, 'current_step' => null]);
-        $this->emit(FulfillmentEvents::ORDER_CANCELLED, $order, ['reason' => $reason]);
+        $this->publish(FulfillmentEvents::ORDER_CANCELLED, $order, ['reason' => $reason]);
 
         return $order;
     }
 
-    /** @param array<string,mixed> $result */
-    private function completeStep(FulfillmentOrder $order, string $step, array $result = []): void
+    /** Step ledger writer used by the journey's task handlers. @param array<string,mixed> $result */
+    public function recordStep(FulfillmentOrder $order, string $step, array $result = [], string $status = 'DONE'): void
     {
         $order->steps()->create([
             'step' => $step,
-            'status' => 'DONE',
+            'status' => $status,
             'result' => $result ?: null,
             'completed_at' => now(),
         ]);
-        $this->emit(FulfillmentEvents::ORDER_STEP_COMPLETED, $order, ['step' => $step]);
+        $this->publish(FulfillmentEvents::ORDER_STEP_COMPLETED, $order, ['step' => $step, 'stepStatus' => $status]);
     }
 
     /** @param array<string,mixed> $payload */
-    private function emit(string $type, FulfillmentOrder $order, array $payload): void
+    public function publish(string $type, FulfillmentOrder $order, array $payload): void
     {
         $this->events->publish(new DomainEvent(
             type: $type,
