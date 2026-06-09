@@ -16,5 +16,5 @@ class StockBalance extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['quantity' => 'decimal:2'];
+    protected $casts = ['quantity' => 'decimal:2', 'qty_reserved' => 'decimal:2'];
 }

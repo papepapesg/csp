@@ -2,7 +2,9 @@
 
 namespace Modules\Osr\Providers;
 
+use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
+use Modules\Osr\Listeners\ConsumeReservationOnWoLifecycle;
 
 class EventServiceProvider extends ServiceProvider
 {
@@ -11,7 +13,10 @@ class EventServiceProvider extends ServiceProvider
      *
      * @var array<string, array<int, string>>
      */
-    protected $listen = [];
+    protected $listen = [
+        // OSR-01 §2.3: a completed/cancelled WO consumes/releases its stock reservations.
+        OutboxEventPublished::class => [ConsumeReservationOnWoLifecycle::class],
+    ];
 
     /**
      * Indicates if events should be discovered.

@@ -55,11 +55,12 @@ auto-interrupt, scheduled effective-timing. (M/L)
 - Equipment vs material distinction (`equipment_sku.is_serialized` + `ownership_semantics`
   RETURNABLE/CONSUMABLE/RENTED; serialized→instance registry, non-serialized→quantity) — ✅
 - Serialized instance lifecycle + RMA/EQP swap flow — ✅
-- Open (**H**): OSR-01 stock chain is a subset — `StockService` exposes only `move()`.
-  Missing the **reservation lifecycle** (reserve-on-WO-assign → consume-on-finalize →
-  release-on-cancel), **stock availability** API, **cycle counts/adjustments**, and the
-  `stock_reason_code` catalog as first-class. The **WO→install-movement consumption**
-  (materials deducted from the van on a job) is not wired. ❌
+- **Reservation lifecycle** (reserve → consume-as-INSTALL-movement → release) +
+  **availability** API + event-driven **WO→install consumption** (WorkOrderFinalized
+  consumes, WorkOrderCancelled releases) — ✅ 🔁 (was ❌). Cycle counts already present
+  via `InventoryAuditService`.
+- Open (M/L): `stock_reason_code` catalog as a first-class table; two-tier transfer
+  helper; WO bill-of-materials (auto-reserve qty from the job's required SKUs).
 
 ## Ticketing (TCK-01) — not yet fully audited
 WO creation + link + wait-for-finalize is implemented (`TicketService`, `AsrService`).
@@ -88,8 +89,7 @@ Notification, field-audit policy depth.
    schema validation, 2-step finalize + config-driven checklist (terminal → COMPLETED).
 
 ## Remaining gaps, prioritized
-1. **OSR-01 stock reservation + WO→install consumption** (H) — materials/equipment
-   reserved on WO assign, consumed on finalize; availability + cycle counts.
+1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.
 2. **Provisioning §9 status model + async + force-sync approval** (H→M).
 3. **Automatic cycle billing** (rated_event/recurring → invoice or wallet) (M).
 4. **WO attachments + checklist attachment requirements** (M).

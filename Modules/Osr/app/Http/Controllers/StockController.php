@@ -95,4 +95,40 @@ class StockController extends ApiController
 
         return ApiResponse::item(['items' => $items]);
     }
+
+    // --- OSR-01 §1.5 reservation lifecycle ---
+    public function availability(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'sku_id' => ['required', 'string'],
+            'location_id' => ['required', 'string'],
+        ]);
+
+        return ApiResponse::item($this->stock->availability($data['sku_id'], $data['location_id']));
+    }
+
+    public function reserve(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'sku_id' => ['required', 'string', 'exists:equipment_sku,sku_id'],
+            'location_id' => ['required', 'string', 'exists:stock_location,location_id'],
+            'qty' => ['required', 'numeric', 'gt:0'],
+            'wo_id' => ['nullable', 'string'],
+            'reference' => ['nullable', 'string'],
+        ]);
+
+        return ApiResponse::created($this->stock->reserve($data['sku_id'], $data['location_id'], (float) $data['qty'], $data['wo_id'] ?? null, $data['reference'] ?? null));
+    }
+
+    /** Consume a WO's reservations on install (posts INSTALL movements). */
+    public function consumeReservation(string $woId): JsonResponse
+    {
+        return ApiResponse::item(['woId' => $woId, 'consumed' => $this->stock->consumeReservation($woId)]);
+    }
+
+    /** Release a WO's reservations (e.g. cancellation). */
+    public function releaseReservation(string $woId): JsonResponse
+    {
+        return ApiResponse::item(['woId' => $woId, 'released' => $this->stock->releaseReservation($woId)]);
+    }
 }

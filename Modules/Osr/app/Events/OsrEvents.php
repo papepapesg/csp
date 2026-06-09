@@ -11,6 +11,13 @@ final class OsrEvents
 
     public const STOCK_MOVED = 'StockMoved';
 
+    // OSR-01 §1.5 reservation lifecycle.
+    public const STOCK_RESERVED = 'StockReserved';
+
+    public const STOCK_RESERVATION_CONSUMED = 'StockReservationConsumed';
+
+    public const STOCK_RESERVATION_RELEASED = 'StockReservationReleased';
+
     public const INSTANCE_REGISTERED = 'EquipmentInstanceRegistered';
 
     public const INSTANCE_STATE_CHANGED = 'EquipmentInstanceStateChanged';
