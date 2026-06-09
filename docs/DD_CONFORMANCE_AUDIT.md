@@ -242,7 +242,7 @@ Implemented (`FieldAuditService` + tests); depth not separately diffed. ⚠️ (
 23. Customer 360 (/customers/{id}) + Ticketing cockpit (TCK-01 §13: queues, SLA indicators, timeline, actions).
 24. Operator deployment config (identity/locale/currency/theme/log level) + runtime theming in the shell.
 25. Setup wizard (sophix:setup demo|preprod|prod) incl. demo journey seeder (verified end-to-end).
-26. i18n foundation: per-operator backend locale (Content-Language, X-Locale override), frontend t()/money()/date formatters on en-KE/sw-KE/fr-SN conventions; notification templates already per-locale.
+26. i18n foundation: per-operator backend locale (Content-Language, X-Locale override), frontend t()/money()/date formatters on en-KE/sw-KE/fr-SN conventions; notification templates already per-locale. Extended with the **i18n resource catalog + Localization Studio** (`/i18n/studio`): ui_translation rows addressed by (culture, domain, section, key), global or per-operator scope (operator overrides global), new cultures addable from the UI (e.g. fr-SN, en-UG), missing-key worklist per culture, cached merged map consumed by frontend t() (shared as i18nResources) AND merged into Laravel's translator per request so backend __() strings honour studio edits without a deploy.
 27. BIL-02-ADJ-01 + BIL-01-CN-01: governed adjustment pipeline (proposal → audited approval → credit/debit-note issuance → application across POSTPAID invoices/credit balance and PREPAID wallets, append-only ledger, failed-application retry).
 28. BIL-CFG-01 BillableEvent catalog (event + category tables, admin API, runtime intent enforcement) — last MISSING corpus items closed; zero tracked-missing DDs remain.
 

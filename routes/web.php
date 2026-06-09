@@ -27,6 +27,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/workflow/studio', fn () => Inertia::render('Workflow/Studio'))->name('workflow.studio');
     Route::get('/rules/studio', fn () => Inertia::render('Rules/Studio'))->name('rules.studio');
     Route::get('/templates/studio', fn () => Inertia::render('Notification/Studio'))->name('templates.studio');
+    Route::get('/i18n/studio', fn () => Inertia::render('I18n/Studio'))->name('i18n.studio');
     Route::get('/admin/rbac', fn () => Inertia::render('Rbac/Admin'))->name('rbac.admin');
     Route::get('/commercial/studio', fn () => Inertia::render('Catalog/Commercial'))->name('commercial.studio');
     Route::get('/workflow/ops', fn () => Inertia::render('Workflow/Operations'))->name('workflow.ops');

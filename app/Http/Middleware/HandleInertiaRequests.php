@@ -35,6 +35,10 @@ class HandleInertiaRequests extends Middleware
             'operatorConfig' => fn () => $request->user()
                 ? \App\Foundation\Models\OperatorConfig::forOperator($request->user()->operator_code)
                 : null,
+            // i18n resources for the request locale (studio-managed, cached merge
+            // of global + operator rows) — consumed by useI18n().t().
+            'i18nResources' => fn () => app(\App\Foundation\I18n\TranslationService::class)
+                ->resources(app()->getLocale(), $request->user()?->operator_code),
             'auth' => [
                 'user' => $request->user(),
             ],

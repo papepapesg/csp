@@ -41,6 +41,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             RbacSeeder::class,
             OperatorConfigSeeder::class,
+            UiTranslationSeeder::class,
             StatusCatalogSeeder::class,
             OperationConfigSeeder::class,
             PerOperationConfigSeeder::class,

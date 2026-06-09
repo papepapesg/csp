@@ -57,6 +57,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/operator-config', [\App\Foundation\Http\Controllers\OperatorConfigController::class, 'update'])->middleware('permission:itops.manage');
 });
 
+// --- i18n resource catalog (Localization Studio) ---
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/i18n/resources', [\App\Foundation\Http\Controllers\I18nController::class, 'resources']);
+    Route::get('/i18n/meta', [\App\Foundation\Http\Controllers\I18nController::class, 'meta']);
+    Route::get('/i18n/translations', [\App\Foundation\Http\Controllers\I18nController::class, 'index']);
+    Route::post('/i18n/translations', [\App\Foundation\Http\Controllers\I18nController::class, 'upsert'])->middleware('permission:itops.manage');
+    Route::delete('/i18n/translations/{translation}', [\App\Foundation\Http\Controllers\I18nController::class, 'destroy'])->middleware('permission:itops.manage');
+});
+
 // --- FOUNDATION_CACHE §11 admin operations ---
 Route::middleware(['auth:sanctum', 'permission:itops.manage'])->group(function () {
     Route::post('/admin/cache/invalidate', [\App\Foundation\Http\Controllers\CacheAdminController::class, 'invalidate']);

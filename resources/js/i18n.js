@@ -23,12 +23,17 @@ const dictionaries = {
 const intlLocale = { en: 'en-KE', sw: 'sw-KE', fr: 'fr-SN' };
 
 export function useI18n() {
-    const op = usePage().props.operatorConfig ?? {};
+    const page = usePage();
+    const op = page.props.operatorConfig ?? {};
     const locale = op.default_locale ?? 'en';
     const region = intlLocale[locale] ?? 'en-KE';
     const currency = op.currency_code ?? 'KES';
 
-    const t = (key) => dictionaries[locale]?.[key] ?? key;
+    // Resolution order: studio-managed resources (ui_translation catalog, merged
+    // global + operator rows for this culture) → built-in fallback dictionary →
+    // the key itself (en is the source language).
+    const resources = page.props.i18nResources ?? {};
+    const t = (key) => resources[key] ?? dictionaries[locale]?.[key] ?? key;
     const money = (amount) => new Intl.NumberFormat(region, { style: 'currency', currency }).format(Number(amount ?? 0));
     const dateFmt = (d, opts = { dateStyle: 'medium', timeStyle: 'short' }) =>
         d ? new Intl.DateTimeFormat(region, opts).format(new Date(d)) : '—';

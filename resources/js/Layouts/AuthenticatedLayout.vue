@@ -99,6 +99,12 @@ watchEffect(() => {
                                     {{ t('RBAC') }}
                                 </NavLink>
                                 <NavLink
+                                    :href="route('i18n.studio')"
+                                    :active="route().current('i18n.studio')"
+                                >
+                                    {{ t('Localization') }}
+                                </NavLink>
+                                <NavLink
                                     :href="route('workflow.ops')"
                                     :active="route().current('workflow.ops')"
                                 >
