@@ -83,6 +83,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('campaigns', [CampaignController::class, 'index'])->middleware('permission:catalog.read');
     Route::post('campaigns', [CampaignController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
     Route::post('campaigns/{campaign}/activate', [CampaignController::class, 'activate'])->middleware('permission:catalog.manage');
+    Route::post('campaigns/{campaign}/pause', [CampaignController::class, 'pause'])->middleware('permission:catalog.manage');
+    Route::post('campaigns/{campaign}/end', [CampaignController::class, 'end'])->middleware('permission:catalog.manage');
     Route::post('campaigns/{campaign}/check-eligibility', [CampaignController::class, 'checkEligibility'])->middleware('permission:catalog.read');
     Route::post('campaigns/{campaign}/participate', [CampaignController::class, 'participate'])->middleware(['permission:catalog.manage', 'idempotency']);
 

@@ -61,6 +61,16 @@ class CampaignController extends ApiController
         return ApiResponse::item($this->campaigns->activate($campaign));
     }
 
+    public function pause(PromoCampaign $campaign): JsonResponse
+    {
+        return ApiResponse::item($this->campaigns->pause($campaign));
+    }
+
+    public function end(PromoCampaign $campaign): JsonResponse
+    {
+        return ApiResponse::item($this->campaigns->end($campaign));
+    }
+
     /** POST /api/campaigns/{campaign}/check-eligibility */
     public function checkEligibility(Request $request, PromoCampaign $campaign): JsonResponse
     {

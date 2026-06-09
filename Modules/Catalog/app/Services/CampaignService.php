@@ -78,6 +78,26 @@ class CampaignService
         return $campaign->refresh();
     }
 
+    public function pause(PromoCampaign $campaign): PromoCampaign
+    {
+        if ($campaign->status !== PromoCampaign::ACTIVE) {
+            throw DomainException::conflict("Campaign is {$campaign->status}; only ACTIVE can be paused.");
+        }
+        $campaign->update(['status' => PromoCampaign::PAUSED]);
+
+        return $campaign->refresh();
+    }
+
+    public function end(PromoCampaign $campaign): PromoCampaign
+    {
+        if (! in_array($campaign->status, [PromoCampaign::ACTIVE, PromoCampaign::PAUSED], true)) {
+            throw DomainException::conflict("Campaign is {$campaign->status}; cannot end.");
+        }
+        $campaign->update(['status' => PromoCampaign::ENDED, 'ends_at' => now()]);
+
+        return $campaign->refresh();
+    }
+
     /**
      * §7 eligibility: status + window + channel governance + target rules. A failed
      * rule with hard_exclusion blocks; soft failures are returned as warnings.

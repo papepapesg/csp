@@ -70,6 +70,24 @@ const showingNavigationDropdown = ref(false);
                                     Rules
                                 </NavLink>
                                 <NavLink
+                                    :href="route('commercial.studio')"
+                                    :active="route().current('commercial.studio')"
+                                >
+                                    Commercial
+                                </NavLink>
+                                <NavLink
+                                    :href="route('templates.studio')"
+                                    :active="route().current('templates.studio')"
+                                >
+                                    Templates
+                                </NavLink>
+                                <NavLink
+                                    :href="route('rbac.admin')"
+                                    :active="route().current('rbac.admin')"
+                                >
+                                    RBAC
+                                </NavLink>
+                                <NavLink
                                     :href="route('workflow.ops')"
                                     :active="route().current('workflow.ops')"
                                 >

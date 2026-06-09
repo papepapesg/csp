@@ -93,7 +93,11 @@ auto-interrupt, scheduled effective-timing. (M/L)
 - **SIP-05 Promotional Campaigns (MVP per DD)** — ✅ 🔁 (was a dead scaffold): offers /
   target rules / channels / participation tables; lifecycle; eligibility evaluation
   (window + channel governance + hard/soft target rules + participant cap); unique
-  redemption binding a SIP-03 discount assignment.
+  redemption binding a SIP-03 discount assignment. **Commercial Studio UI**
+  (`/commercial/studio`): campaign designer (offers/targeting/channels/window/caps)
+  with launcher (launch/pause/end) + live eligibility tester, and the bundle
+  composer + launch pipeline (validate→review→approve→activate with the auditable
+  checks displayed). 🔁
 - Open (M): **BIL-02-ADJ-01 / BIL-01-CN-01 invoice adjustments** — adjustment_type
   catalog + permissions exist but credit/debit-note issuance behavior is missing
   (next money-path item). SIP-02 launch-lifecycle depth (launch windows, EM-CFG-04
@@ -194,6 +198,7 @@ Implemented (`FieldAuditService` + tests); depth not separately diffed. ⚠️ (
 17. EM-CFG-03 RBAC Admin portal (/admin/rbac) + rbac_change_audit (§8.8) + user directory.
 18. SIP-04 Bundle Launch (full: lifecycle, launch checks, availability, migration paths).
 19. SIP-05 Promotional Campaigns MVP (eligibility, channels, unique redemption → SIP-03 binding).
+20. SIP-04/05 Commercial Studio UI (campaign designer + launcher + eligibility tester; bundle launch pipeline).
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.

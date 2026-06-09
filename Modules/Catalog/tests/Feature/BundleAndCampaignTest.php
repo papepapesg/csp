@@ -124,6 +124,19 @@ class BundleAndCampaignTest extends TestCase
         ])->assertOk()->assertJsonPath('reason', 'NO_ACTIVE_MIGRATION_RULE');
     }
 
+    public function test_campaign_pause_and_end_lifecycle(): void
+    {
+        $c = $this->postJson('/api/campaigns', ['code' => 'LC_TEST', 'name' => 'Lifecycle'], ['Idempotency-Key' => 'camp-lc'])
+            ->assertCreated()->json();
+        $this->postJson("/api/campaigns/{$c['campaign_id']}/activate")->assertOk()->assertJsonPath('status', 'ACTIVE');
+        $this->postJson("/api/campaigns/{$c['campaign_id']}/pause")->assertOk()->assertJsonPath('status', 'PAUSED');
+        $this->postJson("/api/campaigns/{$c['campaign_id']}/activate")->assertOk()->assertJsonPath('status', 'ACTIVE');
+        $this->postJson("/api/campaigns/{$c['campaign_id']}/end")->assertOk()->assertJsonPath('status', 'ENDED');
+        // Ended campaigns are no longer eligible.
+        $this->postJson("/api/campaigns/{$c['campaign_id']}/check-eligibility", ['channelCode' => 'SALES_APP'])
+            ->assertOk()->assertJsonPath('eligible', false);
+    }
+
     public function test_campaign_eligibility_and_unique_redemption_with_discount_binding(): void
     {
         Discount::query()->create([
