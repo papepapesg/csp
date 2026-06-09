@@ -52,6 +52,16 @@ class AdapterRoutingTest extends TestCase
         $this->assertStringStartsWith('NMS-', (string) $data->external_ref);
     }
 
+    public function test_each_dispatch_records_an_attempt(): void
+    {
+        $svc = app(ProvisioningService::class);
+        $svc->broadcast('sub_ok', 'ACTIVATE', [['target_code' => 'DEFAULT_NMS', 'desired_state' => ['desiredStatus' => 'ACTIVE']]]);
+        $this->assertDatabaseHas('provisioning_command_attempt', ['status' => 'SUCCESS', 'attempt_no' => 1, 'vendor_status_code' => 'OK']);
+
+        $svc->broadcast('sub_bad', 'ACTIVATE', [['target_code' => 'DEFAULT_NMS', 'desired_state' => ['desiredStatus' => 'ACTIVE', 'forceFail' => true]]]);
+        $this->assertDatabaseHas('provisioning_command_attempt', ['status' => 'FAILED_RETRYABLE', 'error_code' => 'ADAPTER_REJECTED']);
+    }
+
     public function test_a_suspended_binding_falls_back_to_the_default_driver(): void
     {
         ProvisioningAdapterConfig::query()->create([

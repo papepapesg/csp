@@ -9,6 +9,7 @@ use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Provisioning\Events\ProvisioningEvents;
 use Modules\Provisioning\Models\ProvisioningCommand;
+use Modules\Provisioning\Models\ProvisioningCommandAttempt;
 use Modules\Provisioning\Models\ProvisioningDesiredState;
 
 /**
@@ -59,11 +60,27 @@ class ProvisioningService
     public function dispatch(ProvisioningCommand $command): ProvisioningCommand
     {
         return DB::transaction(function () use ($command) {
-            $command->update(['status' => ProvisioningCommand::SENT, 'attempts' => $command->attempts + 1, 'sent_at' => now()]);
+            $attemptNo = $command->attempts + 1;
+            $command->update(['status' => ProvisioningCommand::SENT, 'attempts' => $attemptNo, 'sent_at' => now()]);
             $this->emit(ProvisioningEvents::COMMAND_SENT, $command);
 
             // Resolve the vendor adapter for THIS command's target (PROV-INT-01 §10.2).
-            $result = $this->adapters->forCommand($command)->dispatch($command);
+            $adapter = $this->adapters->forCommand($command);
+            $startedAt = microtime(true);
+            $result = $adapter->dispatch($command);
+
+            // §10.4 record the attempt (adapter, outcome, duration) for audit/retry.
+            ProvisioningCommandAttempt::query()->create([
+                'operator_code' => $command->operator_code,
+                'command_id' => $command->command_id,
+                'attempt_no' => $attemptNo,
+                'adapter_class' => $adapter::class,
+                'status' => $result->ok ? 'SUCCESS' : 'FAILED_RETRYABLE',
+                'response_payload' => $result->ok ? $result->response : ['error' => $result->error],
+                'vendor_status_code' => $result->ok ? 'OK' : null,
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+                'error_code' => $result->ok ? null : 'ADAPTER_REJECTED',
+            ]);
 
             if ($result->ok) {
                 $command->update([

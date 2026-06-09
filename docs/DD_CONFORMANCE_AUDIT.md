@@ -32,9 +32,10 @@ auto-interrupt, scheduled effective-timing. (M/L)
 - Command ledger, broadcast/dispatch, desired/observed, reconcile — ✅
 - **Force-sync approval** model (`provisioning_force_sync_request`: PENDING_APPROVAL →
   APPROVED → execute; R-PROV-07 approve-before-execute; audited events) — ✅ 🔁
-- Open (M): full §9 status model (`RECEIVED/DISPATCHING/ACCEPTED/…` vs current
-  PENDING/SENT/CONFIRMED); async `ASYNC_ACCEPTED` poll flow; `provisioning_command_attempt`
-  per-attempt ledger. ⚠️
+- **Per-attempt ledger** (`provisioning_command_attempt`, §10.4: adapter, outcome,
+  duration recorded per dispatch) — ✅ 🔁
+- Open (M): full §9 status model (`RECEIVED/DISPATCHING/…/SUCCEEDED` vs current
+  PENDING/SENT/CONFIRMED) + async `ASYNC_ACCEPTED` poll flow (coupled; deferred). ⚠️
 
 ## Billing money path (BIL-01/02/04/05) — audited
 - Invoicing (assembler + gap-free legal number), payments (allocate→PAID, surplus→credit),
@@ -97,6 +98,7 @@ Notification, field-audit policy depth.
 7. BIL-02 automatic cycle billing (rated_event → invoice/wallet).
 8. PLM-CFG-07 usage_tariff catalog (data/SMS rating is config, not constants).
 9. WO-01 attachments + checklist attachment enforcement.
+10. PROV-INT-01 per-attempt ledger (§10.4).
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.
