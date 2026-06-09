@@ -40,10 +40,10 @@ class WorkOrderApiTest extends TestCase
             ->assertOk()->assertJsonPath('status', 'ASSIGNED');
         $this->postJson("/api/work-orders/{$id}/start")->assertOk()->assertJsonPath('status', 'IN_PROGRESS');
         $this->postJson("/api/work-orders/{$id}/finalize", ['resolution_code' => 'INSTALL_OK', 'findings' => ['ont' => 'SN123']])
-            ->assertOk()->assertJsonPath('status', 'FINALIZED');
+            ->assertOk()->assertJsonPath('status', 'COMPLETED');
 
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'WorkOrderFinalized']);
-        $this->assertDatabaseHas('wo_status_history', ['work_order_id' => $id, 'new_status' => 'FINALIZED']);
+        $this->assertDatabaseHas('wo_status_history', ['work_order_id' => $id, 'new_status' => 'COMPLETED']);
     }
 
     public function test_invalid_transition_is_rejected(): void

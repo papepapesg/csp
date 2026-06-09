@@ -55,7 +55,7 @@ class WorkOrderSupportFlowTest extends TestCase
         $this->drain(); // resolution gate -> bindings -> finalize -> end
 
         $wo = WorkOrder::find($id);
-        $this->assertSame('FINALIZED', $wo->status);
+        $this->assertSame('COMPLETED', $wo->status);
         $this->assertSame('RESOLVED', $wo->final_reason);
         $this->assertNotNull($wo->warranty_until);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'WorkOrderSupportCompleted']);
@@ -72,7 +72,7 @@ class WorkOrderSupportFlowTest extends TestCase
         $this->drain();
 
         $wo = WorkOrder::find($id);
-        $this->assertSame('FINALIZED', $wo->status);
+        $this->assertSame('COMPLETED', $wo->status);
         $this->assertTrue($wo->escalation_candidate);
 
         // A QCS WO was spawned, linked to the original via master_wo_id.
@@ -91,6 +91,6 @@ class WorkOrderSupportFlowTest extends TestCase
         $this->postJson("/api/work-orders/{$id}/resolve", ['final_reason' => 'RESOLVED'])->assertStatus(202);
         $this->drain();
 
-        $this->assertSame('FINALIZED', WorkOrder::find($id)->status);
+        $this->assertSame('COMPLETED', WorkOrder::find($id)->status);
     }
 }

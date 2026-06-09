@@ -21,6 +21,7 @@ use Modules\Subscription\Database\Seeders\UpgradeConfigSeeder;
 use Modules\Ticketing\Database\Seeders\AsrPolicySeeder;
 use Modules\Ticketing\Database\Seeders\SlaPolicySeeder;
 use Modules\WorkOrder\Database\Seeders\FieldAuditPolicySeeder;
+use Modules\WorkOrder\Database\Seeders\WoFrameworkSeeder;
 use Modules\WorkOrder\Database\Seeders\WoSupportSeeder;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
 
@@ -46,6 +47,7 @@ class DatabaseSeeder extends Seeder
             RestrictionCatalogSeeder::class,
             UpgradeConfigSeeder::class,
             WoSupportSeeder::class,
+            WoFrameworkSeeder::class,
             FieldAuditPolicySeeder::class,
             OsrRmaSeeder::class,
             CvmPolicySeeder::class,

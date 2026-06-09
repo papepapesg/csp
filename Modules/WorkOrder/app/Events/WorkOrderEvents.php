@@ -15,7 +15,13 @@ final class WorkOrderEvents
 
     public const STARTED = 'WorkOrderStarted';
 
+    public const FINALIZATION_PENDING = 'WorkOrderFinalizationPending';
+
     public const FINALIZED = 'WorkOrderFinalized';
+
+    public const REASSIGNED = 'WorkOrderReassigned';
+
+    public const NOTE_APPENDED = 'WorkOrderNoteAppended';
 
     public const CANCELLED = 'WorkOrderCancelled';
 

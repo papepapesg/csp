@@ -50,7 +50,7 @@ class WorkOrderShiftingFlowTest extends TestCase
         $this->drain(); // finalize
 
         $wo = WorkOrder::find($id);
-        $this->assertSame('FINALIZED', $wo->status);
+        $this->assertSame('COMPLETED', $wo->status);
         $this->assertSame('RECONNECTED', $wo->final_reason);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'WorkOrderShiftingCompleted']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'WorkOrderPhaseTransitioned']);

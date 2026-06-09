@@ -23,7 +23,13 @@ class WorkOrder extends Model
 
     public const IN_PROGRESS = 'IN_PROGRESS';
 
-    public const FINALIZED = 'FINALIZED';
+    // WO-01 §3 2-step finalize: first-confirm parks here, second-confirm completes.
+    public const FINALIZATION_PENDING = 'FINALIZATION_PENDING';
+
+    public const COMPLETED = 'COMPLETED';
+
+    /** @deprecated DD terminal status is COMPLETED; kept as an alias for back-compat. */
+    public const FINALIZED = 'COMPLETED';
 
     public const CANCELLED = 'CANCELLED';
 
@@ -58,5 +64,15 @@ class WorkOrder extends Model
     public function statusHistory(): HasMany
     {
         return $this->hasMany(WorkOrderStatusHistory::class, 'work_order_id', 'work_order_id');
+    }
+
+    public function notes(): HasMany
+    {
+        return $this->hasMany(WoNote::class, 'work_order_id', 'work_order_id');
+    }
+
+    public function assignmentHistory(): HasMany
+    {
+        return $this->hasMany(WoAssignmentHistory::class, 'work_order_id', 'work_order_id');
     }
 }

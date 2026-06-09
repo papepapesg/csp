@@ -102,6 +102,51 @@ class WorkOrderController extends ApiController
         return ApiResponse::item($this->service->cancel($workOrder, $data['reason'] ?? null, $request->user()?->uid));
     }
 
+    /** POST /work-orders/{wo}/reassign — WO-01 §1.7 change contractor/team/tech (status unchanged). */
+    public function reassign(Request $request, WorkOrder $workOrder): JsonResponse
+    {
+        $data = $request->validate([
+            'contractor_id' => ['nullable', 'string'],
+            'team_id' => ['nullable', 'string'],
+            'assigned_technician_id' => ['nullable', 'string'],
+            'reason' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        return ApiResponse::item($this->service->reassign($workOrder, $data, $data['reason'] ?? null, $request->user()?->uid));
+    }
+
+    /** POST /work-orders/{wo}/notes — WO-01 §1.3 append a structured note. */
+    public function addNote(Request $request, WorkOrder $workOrder): JsonResponse
+    {
+        $data = $request->validate([
+            'note_kind' => ['required', 'string', 'max:64'],
+            'payload' => ['nullable', 'array'],
+            'body' => ['nullable', 'string'],
+        ]);
+
+        return ApiResponse::created($this->service->addNote(
+            $workOrder, $data['note_kind'], $data['payload'] ?? [], $data['body'] ?? null, $request->user()?->uid,
+        ));
+    }
+
+    /** POST /work-orders/{wo}/finalize-first-confirm — WO-01 §3 save evidence, park in FINALIZATION_PENDING. */
+    public function finalizeFirstConfirm(Request $request, WorkOrder $workOrder): JsonResponse
+    {
+        $data = $request->validate([
+            'final_reason' => ['nullable', 'string', 'max:64'],
+            'resolution_code' => ['nullable', 'string', 'max:64'],
+            'findings' => ['nullable', 'array'],
+        ]);
+
+        return ApiResponse::item($this->service->finalizeFirstConfirm($workOrder, $data, $request->user()?->uid));
+    }
+
+    /** POST /work-orders/{wo}/finalize-second-confirm — WO-01 §4.4 run checklist, COMPLETE. */
+    public function finalizeSecondConfirm(Request $request, WorkOrder $workOrder): JsonResponse
+    {
+        return ApiResponse::item($this->service->finalizeSecondConfirm($workOrder, $request->user()?->uid));
+    }
+
     /** POST /work-orders/{wo}/support-flow — start the WO-01-FLOW-SUPPORT process. */
     public function startSupportFlow(WorkOrder $workOrder): JsonResponse
     {
