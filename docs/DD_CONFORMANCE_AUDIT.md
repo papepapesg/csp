@@ -172,6 +172,21 @@ registry; Reporting = daily-metric CSV export + reconciliation; ItOps = service
 control / heartbeat / system-log. No section-by-section DD diff; no obvious behavioral
 gaps surfaced. ⚠️ (low risk)
 
+## NOC console + Warehouse backoffice — added 🔁
+- **NOC console** (`/noc`): single-pane overview (service heartbeats with
+  start/stop/restart via service_control, running flows, workflow incidents,
+  provisioning mismatches, outbox backlog, SLA-overdue tickets), system-log viewer
+  with level/channel filters, **end-to-end trace** — one key (subscription/order/
+  operation/correlation id) reconstructs the time-ordered journey across outbox
+  events, workflow instances + tasks, provisioning commands, notifications and
+  logs (every record carries correlation_id by foundation design). ✅ 🔁
+- **Warehouse backoffice** (`/warehouse`): stock balances (on-hand/reserved/available)
+  + movement posting, PO approve/receive pipeline, serialized-equipment state
+  transitions (full RMA state set now accepted by the API), swap/RMA list. ✅ 🔁
+- SLA: ticket SLA is data-driven (sla_policy + sla_due_at) and breaches now surface
+  in the NOC (count + list). WO-level SLA = timestamp capture only; calculation is
+  the future FUL-OPS-SLA DD per WO-01 — unchanged deferral. ⚠️
+
 ## Field audit (FA-01/02/03)
 Implemented (`FieldAuditService` + tests); depth not separately diffed. ⚠️ (low)
 
@@ -199,6 +214,8 @@ Implemented (`FieldAuditService` + tests); depth not separately diffed. ⚠️ (
 18. SIP-04 Bundle Launch (full: lifecycle, launch checks, availability, migration paths).
 19. SIP-05 Promotional Campaigns MVP (eligibility, channels, unique redemption → SIP-03 binding).
 20. SIP-04/05 Commercial Studio UI (campaign designer + launcher + eligibility tester; bundle launch pipeline).
+21. NOC console (/noc): overview + start/stop + logs + end-to-end correlation traces + SLA breaches.
+22. Warehouse backoffice (/warehouse) over the existing OSR services.
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.

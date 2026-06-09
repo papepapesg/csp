@@ -55,7 +55,7 @@ class EquipmentInstanceController extends ApiController
     public function transition(Request $request, EquipmentInstance $equipmentInstance): JsonResponse
     {
         $data = $request->validate([
-            'state' => ['required', 'in:IN_MAIN_WAREHOUSE,IN_CONTRACTOR_STOCK,IN_FIELD_ACTIVE,RETURNED,FAULTY,RETIRED'],
+            'state' => ['required', 'in:IN_MAIN_WAREHOUSE,IN_CONTRACTOR_STOCK,IN_FIELD_ACTIVE,IN_FIELD_DEFECTIVE,RECOVERED_BY_CONTRACTOR,RESERVED_FOR_WO,RETURNED,FAULTY,RETIRED'],
             'location_id' => ['nullable', 'string'],
             'customer_id' => ['nullable', 'string'],
             'subscription_id' => ['nullable', 'string'],

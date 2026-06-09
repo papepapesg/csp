@@ -30,6 +30,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/commercial/studio', fn () => Inertia::render('Catalog/Commercial'))->name('commercial.studio');
     Route::get('/workflow/ops', fn () => Inertia::render('Workflow/Operations'))->name('workflow.ops');
     Route::get('/itops', fn () => Inertia::render('ItOps/Console'))->name('itops.console');
+    Route::get('/noc', fn () => Inertia::render('ItOps/Noc'))->name('noc.console');
+    Route::get('/warehouse', fn () => Inertia::render('Osr/Warehouse'))->name('warehouse.console');
 });
 
 Route::middleware('auth')->group(function () {
