@@ -73,4 +73,30 @@ class CustomerAccountController extends ApiController
 
         return ApiResponse::item(new CustomerAccountResource($account));
     }
+
+    /** GET /api/customer-accounts/{account}/flags — active account flags (§3.5). */
+    public function flags(CustomerAccount $account): JsonResponse
+    {
+        return ApiResponse::item(['items' => $this->accounts->activeFlags($account)]);
+    }
+
+    /** PUT /api/customer-accounts/{account}/flags/{flagCode} — raise/update a flag. */
+    public function setFlag(Request $request, CustomerAccount $account, string $flagCode): JsonResponse
+    {
+        $data = $request->validate([
+            'bool' => ['nullable', 'boolean'],
+            'score' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'text' => ['nullable', 'string', 'max:64'],
+        ]);
+
+        return ApiResponse::item($this->accounts->setFlag($account, $flagCode, $data, 'MANUAL', $request->user()?->uid));
+    }
+
+    /** DELETE /api/customer-accounts/{account}/flags/{flagCode} — clear a flag. */
+    public function clearFlag(Request $request, CustomerAccount $account, string $flagCode): JsonResponse
+    {
+        $this->accounts->clearFlag($account, $flagCode, $request->user()?->uid);
+
+        return ApiResponse::item(['accountId' => $account->account_id, 'flagCode' => $flagCode, 'state' => 'CLEARED']);
+    }
 }

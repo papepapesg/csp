@@ -21,4 +21,8 @@ final class IlmEvents
     public const CUSTOMER_ACCOUNT_CREATED = 'CustomerAccountCreated';
 
     public const CUSTOMER_ACCOUNT_STATUS_CHANGED = 'CustomerAccountStatusChanged';
+
+    public const ACCOUNT_FLAG_SET = 'CustomerAccountFlagSet';
+
+    public const ACCOUNT_FLAG_CLEARED = 'CustomerAccountFlagCleared';
 }

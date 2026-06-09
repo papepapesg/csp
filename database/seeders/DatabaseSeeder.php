@@ -9,6 +9,7 @@ use Modules\Billing\Database\Seeders\DunningPolicySeeder;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
 use Modules\Catalog\Database\Seeders\TaxCatalogSeeder;
 use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
+use Modules\Ilm\Database\Seeders\AccountFlagCatalogSeeder;
 use Modules\Ilm\Database\Seeders\CvmPolicySeeder;
 use Modules\Osr\Database\Seeders\OsrRmaSeeder;
 use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
@@ -53,6 +54,7 @@ class DatabaseSeeder extends Seeder
             FieldAuditPolicySeeder::class,
             OsrRmaSeeder::class,
             CvmPolicySeeder::class,
+            AccountFlagCatalogSeeder::class,
             SlaPolicySeeder::class,
             AsrPolicySeeder::class,
             TicketCategorySeeder::class,

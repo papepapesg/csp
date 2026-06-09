@@ -2,11 +2,15 @@
 
 namespace Modules\Ilm\Services;
 
+use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
 use Modules\Ilm\Events\IlmEvents;
 use Modules\Ilm\Models\CustomerAccount;
+use Modules\Ilm\Models\CustomerAccountFlag;
+use Modules\Ilm\Models\CustomerAccountFlagCatalog;
+use Modules\Ilm\Models\CustomerSubStatusCatalog;
 
 /**
  * Authoritative writes for Customer Accounts (ILM-CFG-01 §2.2).
@@ -47,6 +51,13 @@ class AccountService
      */
     public function update(CustomerAccount $account, array $data): CustomerAccount
     {
+        // Sub-status must come from the operator's registry when one is configured.
+        if (isset($data['sub_status'])
+            && CustomerSubStatusCatalog::query()->where('operator_code', $account->operator_code)->exists()
+            && ! CustomerSubStatusCatalog::exists($account->operator_code, $data['sub_status'])) {
+            throw DomainException::ruleRejected('UNKNOWN_SUB_STATUS', "Sub-status {$data['sub_status']} is not in the operator's registry.");
+        }
+
         return DB::transaction(function () use ($account, $data) {
             $statusChanged = (isset($data['status']) && $data['status'] !== $account->status)
                 || (isset($data['sub_status']) && $data['sub_status'] !== $account->sub_status);
@@ -73,5 +84,70 @@ class AccountService
 
             return $account;
         });
+    }
+
+    /**
+     * ILM-CFG-01 §3.5 set (raise/update) an account flag. The flag must exist in the
+     * operator catalog. A flag that surfaces attention also writes the account's
+     * attention_banner. @param array{bool?:bool,score?:int,text?:string} $value
+     */
+    public function setFlag(CustomerAccount $account, string $flagCode, array $value = [], ?string $source = 'MANUAL', ?string $actor = null): CustomerAccountFlag
+    {
+        $catalog = CustomerAccountFlagCatalog::resolve($account->operator_code, $flagCode);
+        if (! $catalog || ! $catalog->active) {
+            throw DomainException::ruleRejected('UNKNOWN_FLAG', "Flag {$flagCode} is not in the operator catalog.");
+        }
+
+        return DB::transaction(function () use ($account, $flagCode, $value, $source, $actor, $catalog) {
+            $flag = CustomerAccountFlag::query()->updateOrCreate(
+                ['account_id' => $account->account_id, 'flag_code' => $flagCode],
+                [
+                    'operator_code' => $account->operator_code,
+                    'bool_value' => $value['bool'] ?? ($catalog->value_kind === 'BOOLEAN' ? true : null),
+                    'score_value' => $value['score'] ?? null,
+                    'text_value' => $value['text'] ?? null,
+                    'state' => CustomerAccountFlag::ACTIVE,
+                    'source' => $source,
+                    'set_by' => $actor,
+                    'set_at' => now(),
+                ],
+            );
+
+            if ($catalog->surfaces_attention && ! $account->attention_banner) {
+                $account->update(['attention_banner' => $catalog->name]);
+            }
+
+            $this->events->publish(new DomainEvent(
+                type: IlmEvents::ACCOUNT_FLAG_SET,
+                topic: IlmEvents::TOPIC,
+                payload: ['accountId' => $account->account_id, 'flagCode' => $flagCode, 'source' => $source],
+                aggregateType: 'CustomerAccount',
+                aggregateId: $account->account_id,
+            ));
+
+            return $flag;
+        });
+    }
+
+    public function clearFlag(CustomerAccount $account, string $flagCode, ?string $actor = null): void
+    {
+        $flag = CustomerAccountFlag::query()->where('account_id', $account->account_id)->where('flag_code', $flagCode)->first();
+        if (! $flag || $flag->state === CustomerAccountFlag::CLEARED) {
+            return;
+        }
+        $flag->update(['state' => CustomerAccountFlag::CLEARED, 'set_by' => $actor, 'set_at' => now()]);
+        $this->events->publish(new DomainEvent(
+            type: IlmEvents::ACCOUNT_FLAG_CLEARED,
+            topic: IlmEvents::TOPIC,
+            payload: ['accountId' => $account->account_id, 'flagCode' => $flagCode],
+            aggregateType: 'CustomerAccount',
+            aggregateId: $account->account_id,
+        ));
+    }
+
+    /** @return \Illuminate\Support\Collection<int,CustomerAccountFlag> active flags. */
+    public function activeFlags(CustomerAccount $account): \Illuminate\Support\Collection
+    {
+        return CustomerAccountFlag::query()->where('account_id', $account->account_id)->where('state', CustomerAccountFlag::ACTIVE)->get();
     }
 }

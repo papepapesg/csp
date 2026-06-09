@@ -39,6 +39,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('customer-accounts', [CustomerAccountController::class, 'store'])->middleware(['permission:customer.create', 'idempotency']);
     Route::get('customer-accounts/{account}', [CustomerAccountController::class, 'show'])->middleware('permission:customer.read');
     Route::patch('customer-accounts/{account}', [CustomerAccountController::class, 'update'])->middleware('permission:customer.update');
+    Route::get('customer-accounts/{account}/flags', [CustomerAccountController::class, 'flags'])->middleware('permission:customer.read');
+    Route::put('customer-accounts/{account}/flags/{flagCode}', [CustomerAccountController::class, 'setFlag'])->middleware('permission:customer.update');
+    Route::delete('customer-accounts/{account}/flags/{flagCode}', [CustomerAccountController::class, 'clearFlag'])->middleware('permission:customer.update');
 
     // EM-03 CVM
     Route::get('cvm-activities', [CvmController::class, 'index'])->middleware('permission:customer.read');
