@@ -104,11 +104,31 @@ Open: delivery-provider integration (SMS/email gateways stubbed); per-locale fal
   search. ⚠️
 
 ## Fulfillment (FUL-02) — audited 🔁
-- Order-capture journey (CAPTURE → VALIDATE → PAYMENT → SUBSCRIPTION → INSTALL →
-  ACTIVATION → CANCELLATION) orchestrating SUB/WO/BIL — ✅
-- **STEP-KYC activation gate** (an order cannot activate until the customer's KYC is
-  APPROVED, ILM-CFG-01) — ✅ 🔁
-- Open (L): explicit per-step failure rows; install-equipment reservation at capture.
+- **Order journey AS CONFIG** (FUL-02-FRAMEWORK §1.1): capture starts the seeded
+  `ful-order-capture` process (order stores `process_instance_id`); steps are
+  external-task topics (order-validate / create-subscription / create-install-wo /
+  kyc-gate / trigger-activation / complete); install + KYC are message catches
+  correlated by WorkOrderFinalized / final CustomerKycApproved (or the desk API);
+  cancel interrupts the instance (§1.8). Extension = editing the flow in the
+  Workflow Studio, not code — ✅ 🔁 (was hardcoded orchestration)
+- **STEP-KYC activation gate** (order cannot activate until KYC APPROVED) — ✅ 🔁
+- Open (L/M): wait-payment messageCatch + payment-timeout boundary (PaymentReceived
+  correlation for pay-first orders); explicit per-step failure rows.
+
+## FOUNDATION_CACHE — audited 🔁
+- **Cache-aside foundation** (`SophixCache`): `sophix:{module}:{aggregate}:{id}` keys
+  (CACHE-KEY-1..4), TTL on every value (catalog 24h / pricing 1h), store errors are
+  cache MISSES — a business request never fails on cache (CACHE-READ-1/2), only
+  successful source results cached (CACHE-READ-4). Store swappable via Laravel cache
+  config (array/file dev, Redis cluster per §4 in prod) — ✅ 🔁 (was entirely missing)
+- **Consumers** (a module never caches its OWN data): Billing←PLM wallet catalog
+  (per-charge `sophix:plm:wallet:{op}:{code}` + catalog set, 24h) and Rating←PLM
+  voice/usage tariffs (1h pricing) — ✅ 🔁
+- **Event-driven invalidation** (§9): Wallet* events evict the consumer's copies
+  (lazy evict; TTL safety net) — ✅ 🔁
+- **Admin ops** (§11): POST /admin/cache/invalidate + GET /admin/cache/stats — ✅ 🔁
+- Open (L): prefix SCAN invalidation (Redis-driver concern); hit-rate alerting (§13);
+  more consumer wirings (e.g. FUL reading service/package defs) as hot paths emerge.
 
 ## Rbac (EM-CFG-03) — audited
 - Role + permission catalog (runtime CRUD), role-permission matrix, user role
@@ -145,6 +165,8 @@ Implemented (`FieldAuditService` + tests); depth not separately diffed. ⚠️ (
 12. TCK-01 category catalog + WO-gating + WO-finalized loop + reopen.
 13. ILM-CFG-01 account flag system (§3.5) + sub-status registry.
 14. FUL-02 STEP-KYC activation gate.
+15. FUL-02 order journey as config (ful-order-capture process + topic handlers + message catches).
+16. FOUNDATION_CACHE (cache-aside foundation, Billing/Rating consumers, event eviction, admin ops).
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.

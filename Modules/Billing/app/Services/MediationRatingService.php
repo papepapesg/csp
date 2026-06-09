@@ -2,6 +2,7 @@
 
 namespace Modules\Billing\Services;
 
+use App\Foundation\Cache\SophixCache;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
@@ -24,7 +25,10 @@ class MediationRatingService
 
     private const SMS_RATE = 1.00;
 
-    public function __construct(private readonly EventBus $events) {}
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly SophixCache $cache,
+    ) {}
 
     /**
      * @param  array<int,array<string,mixed>>  $batch  records with usage_type, quantity, source_ref, ...
@@ -107,8 +111,13 @@ class MediationRatingService
     private function price(UsageRecord $record): array
     {
         if ($record->usage_type === 'VOICE') {
-            $tariff = VoiceTariff::query()->where('operator_code', $record->operator_code)
-                ->where('destination', $record->destination ?? 'ONNET')->first();
+            // FOUNDATION_CACHE pricing read (1h TTL): rating consumes the PLM tariff
+            // catalogs cache-aside; PostgreSQL stays the source of truth.
+            $dest = $record->destination ?? 'ONNET';
+            $attrs = $this->cache->remember('plm', 'voice-tariff', "{$record->operator_code}:{$dest}", SophixCache::TTL_PRICING,
+                fn () => VoiceTariff::query()->where('operator_code', $record->operator_code)
+                    ->where('destination', $dest)->first()?->getAttributes());
+            $tariff = $attrs ? VoiceTariff::hydrate([$attrs])->first() : null;
             $rate = (float) ($tariff->rate_per_min ?? 0);
             $setup = (float) ($tariff->setup_fee ?? 0);
             $seconds = max((float) $record->quantity, (float) ($tariff->min_charge_seconds ?? 0));
@@ -117,13 +126,15 @@ class MediationRatingService
             return [$rate, $amount, $tariff->code ?? null];
         }
         if ($record->usage_type === 'DATA') {
-            $rate = UsageTariff::rate($record->operator_code, 'DATA') ?? self::DATA_RATE_PER_MB;
+            $rate = $this->cache->remember('plm', 'usage-tariff', "{$record->operator_code}:DATA", SophixCache::TTL_PRICING,
+                fn () => UsageTariff::rate($record->operator_code, 'DATA')) ?? self::DATA_RATE_PER_MB;
 
             return [$rate, (float) $record->quantity * $rate, 'DATA_FLAT'];
         }
 
         // SMS
-        $rate = UsageTariff::rate($record->operator_code, 'SMS') ?? self::SMS_RATE;
+        $rate = $this->cache->remember('plm', 'usage-tariff', "{$record->operator_code}:SMS", SophixCache::TTL_PRICING,
+            fn () => UsageTariff::rate($record->operator_code, 'SMS')) ?? self::SMS_RATE;
 
         return [$rate, (float) $record->quantity * $rate, 'SMS_FLAT'];
     }

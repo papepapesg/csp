@@ -27,6 +27,15 @@ class FoundationServiceProvider extends ServiceProvider
                 : new OutboxEventBus;
         });
 
+        // FOUNDATION_CACHE: cache-aside helper over the configured Laravel store
+        // (array/file in dev, Redis cluster in production — swappable via cache config,
+        // same philosophy as the Kafka/Camunda/Drools driver bindings).
+        $this->app->singleton(\App\Foundation\Cache\SophixCache::class, function ($app) {
+            return new \App\Foundation\Cache\SophixCache(
+                $app['cache']->store(config('sophix.cache_store') ?: null),
+            );
+        });
+
         // Default rule engine; the Rules module rebinds this to the data-driven
         // (decision-table) engine. singletonIf so module order doesn't clobber it.
         $this->app->singletonIf(RuleEngine::class, NativeRuleEngine::class);

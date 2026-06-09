@@ -51,6 +51,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/approvals/{approvalRequest}/decide', [ApprovalController::class, 'decide']);
 });
 
+// --- FOUNDATION_CACHE §11 admin operations ---
+Route::middleware(['auth:sanctum', 'permission:itops.manage'])->group(function () {
+    Route::post('/admin/cache/invalidate', [\App\Foundation\Http\Controllers\CacheAdminController::class, 'invalidate']);
+    Route::get('/admin/cache/stats', [\App\Foundation\Http\Controllers\CacheAdminController::class, 'stats']);
+});
+
 // --- FE-APP-04 customer self-care (PWA at /care) ---
 Route::middleware(['auth:sanctum', 'permission:selfcare.access'])->prefix('selfcare')->group(function () {
     Route::get('me', [SelfCareController::class, 'me']);

@@ -2,6 +2,7 @@
 
 namespace Modules\Billing\Services;
 
+use App\Foundation\Cache\SophixCache;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
@@ -25,7 +26,35 @@ class WalletService
     /** Default money wallet code convention when a caller does not name one. */
     public const DEFAULT_WALLET_CODE = 'MONEY_KES';
 
-    public function __construct(private readonly EventBus $events) {}
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly SophixCache $cache,
+    ) {}
+
+    /**
+     * FOUNDATION_CACHE consumer read: Billing does not own the PLM wallet catalog, so
+     * the hot per-charge lookup is cache-aside (`sophix:plm:wallet:{operator}:{code}`,
+     * 24h TTL; Wallet* events evict). PostgreSQL stays the source of truth.
+     */
+    private function catalogEntry(string $operator, string $code): ?WalletCatalog
+    {
+        $attrs = $this->cache->remember('plm', 'wallet', "{$operator}:{$code}", SophixCache::TTL_CATALOG,
+            fn () => WalletCatalog::activeByCode($operator, $code)?->getAttributes());
+
+        return $attrs ? WalletCatalog::hydrate([$attrs])->first() : null;
+    }
+
+    /** Cached ACTIVE catalog set for the operator (used by charge-time selection). */
+    private function catalogSet(string $operator): Collection
+    {
+        $rows = $this->cache->remember('plm', 'wallet-catalog', $operator, SophixCache::TTL_CATALOG,
+            fn () => WalletCatalog::query()
+                ->where('operator_code', $operator)
+                ->where('status', WalletCatalog::STATUS_ACTIVE)
+                ->get()->map->getAttributes()->all());
+
+        return WalletCatalog::hydrate($rows ?? [])->keyBy('code');
+    }
 
     /**
      * Resolve (or create) the ledger row for a (subscription, walletRef). The
@@ -38,7 +67,7 @@ class WalletService
         ?string $accountId = null,
         ?string $customerId = null,
     ): Wallet {
-        $catalog = WalletCatalog::activeByCode(Context::operatorCode(), $walletCode);
+        $catalog = $this->catalogEntry(Context::operatorCode(), $walletCode);
         if (! $catalog) {
             throw DomainException::ruleRejected(
                 'UNKNOWN_WALLET_REF',
@@ -69,11 +98,7 @@ class WalletService
     public function resolveChargingWallets(string $subscriptionId, string $billingMode = 'PREPAID', ?string $operator = null): Collection
     {
         $operator ??= Context::operatorCode();
-        $catalog = WalletCatalog::query()
-            ->where('operator_code', $operator)
-            ->where('status', WalletCatalog::STATUS_ACTIVE)
-            ->get()
-            ->keyBy('code');
+        $catalog = $this->catalogSet($operator); // cache-aside (FOUNDATION_CACHE)
 
         return Wallet::query()
             ->where('subscription_id', $subscriptionId)
@@ -123,7 +148,7 @@ class WalletService
     {
         // R-W-11: a non-refillable wallet rejects top-ups (one-shot promo/bonus credits).
         if ($reason === 'TOPUP') {
-            $catalog = WalletCatalog::activeByCode($wallet->operator_code, (string) $wallet->wallet_code);
+            $catalog = $this->catalogEntry((string) $wallet->operator_code, (string) $wallet->wallet_code);
             if ($catalog && ! $catalog->refillable) {
                 throw DomainException::ruleRejected(
                     'WALLET_NOT_REFILLABLE',

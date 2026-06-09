@@ -2,18 +2,24 @@
 
 namespace Modules\Billing\Providers;
 
+use App\Foundation\Events\OutboxEventPublished;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Modules\Billing\Adapters\StubTaxGateway;
 use Modules\Billing\Console\DunningRunCommand;
 use Modules\Billing\Console\RateUsageCommand;
 use Modules\Billing\Console\RunCycleBillingCommand;
 use Modules\Billing\Contracts\TaxGateway;
+use Modules\Billing\Listeners\EvictPlmCatalogCache;
 
 /** Binds the tax-fiscalisation gateway (driver via SOPHIX_TAX_DRIVER). */
 class BillingRuntimeProvider extends ServiceProvider
 {
     public function boot(): void
     {
+        // FOUNDATION_CACHE: evict cached PLM wallet-catalog copies on Wallet* events.
+        Event::listen(OutboxEventPublished::class, [EvictPlmCatalogCache::class, 'handle']);
+
         if ($this->app->runningInConsole()) {
             $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class]);
         }
