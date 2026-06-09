@@ -31,4 +31,22 @@ final class CatalogEvents
     public const WALLET_ACTIVATED = 'WalletActivated';
 
     public const WALLET_RETIRED = 'WalletRetired';
+
+    // SIP-04 bundle launch lifecycle.
+    public const BUNDLE_CREATED = 'CommercialBundleCreated';
+
+    public const BUNDLE_VALIDATED = 'CommercialBundleValidated';
+
+    public const BUNDLE_APPROVED = 'CommercialBundleApproved';
+
+    public const BUNDLE_ACTIVATED = 'CommercialBundleActivated';
+
+    public const BUNDLE_RETIRED = 'CommercialBundleRetired';
+
+    // SIP-05 campaigns.
+    public const CAMPAIGN_CREATED = 'PromotionCampaignCreated';
+
+    public const CAMPAIGN_ACTIVATED = 'PromotionCampaignActivated';
+
+    public const CAMPAIGN_REDEEMED = 'PromotionCampaignRedeemed';
 }

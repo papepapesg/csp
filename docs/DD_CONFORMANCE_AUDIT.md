@@ -76,11 +76,30 @@ auto-interrupt, scheduled effective-timing. (M/L)
 - Open (M/L): `ticket_link` general multi-entity links + `ticket_attachment`; gap-free
   `ticket_number`; full WAITING_*/UNDER_REVIEW status set. ⚠️
 
-## Catalog / SIP / PLM-CFG — partially audited
-Service/package/version, tax, discount, wallet catalog present. `package_service`
-composition exists. DATA/SMS rating now reads the **`usage_tariff`** catalog (config,
-not constants) — ✅ 🔁. Per-service wallet routing consumed at charge time is NOT wired
-(catalog carries `default_wallet_ref`; billing doesn't read it per-line yet). ⚠️
+## Catalog / SIP / PLM-CFG — audited 🔁
+- PLM-CFG-01 services (+classes, consumption model, wallet/tax refs), SIP-01 packages
+  (+versions, package_service composition, activate lifecycle), ILM-CFG-02 tech
+  regions, RLM-CFG-01 homepass — ✅ (existing, test-covered)
+- PLM-CFG-02 tax (tax_group/tax_rule + compute + fiscalised tax_invoice) — ✅
+- PLM-CFG-04/SIP-03 discounts (catalog + assignment + compute; stackable flag) — ✅
+- PLM-CFG-05/06/07 config catalogs (adjustment-type, equipment-type, voice/usage
+  tariffs) — ✅
+- **SIP-04 Bundle Launch** — ✅ 🔁 (was ❌ entirely): commercial_bundle + components +
+  availability + discount rules + migration rules + auditable launch checks; lifecycle
+  DRAFT→READY_FOR_REVIEW→APPROVED→ACTIVE→RETIRED with the validation gate
+  (R-SIP-BUN-02/03/05); channel/franchise/region availability (R-SIP-BUN-10);
+  migration-preview authorizes the path and names the owning SUB workflow
+  (R-SIP-BUN-08/09).
+- **SIP-05 Promotional Campaigns (MVP per DD)** — ✅ 🔁 (was a dead scaffold): offers /
+  target rules / channels / participation tables; lifecycle; eligibility evaluation
+  (window + channel governance + hard/soft target rules + participant cap); unique
+  redemption binding a SIP-03 discount assignment.
+- Open (M): **BIL-02-ADJ-01 / BIL-01-CN-01 invoice adjustments** — adjustment_type
+  catalog + permissions exist but credit/debit-note issuance behavior is missing
+  (next money-path item). SIP-02 launch-lifecycle depth (launch windows, EM-CFG-04
+  approval hook for package/bundle launch — bundle approve is a direct endpoint
+  today). Per-service wallet routing at charge time (needs subscription service
+  lines). ⚠️
 
 ## Foundation / Auth (EM-CFG-03 / FOUNDATION_AUTH) — known divergence
 Local Sanctum + spatie/laravel-permission instead of Keycloak/OIDC. Acknowledged top
@@ -173,6 +192,8 @@ Implemented (`FieldAuditService` + tests); depth not separately diffed. ⚠️ (
 15. FUL-02 order journey as config (ful-order-capture process + topic handlers + message catches).
 16. FOUNDATION_CACHE (cache-aside foundation, Billing/Rating consumers, event eviction, admin ops).
 17. EM-CFG-03 RBAC Admin portal (/admin/rbac) + rbac_change_audit (§8.8) + user directory.
+18. SIP-04 Bundle Launch (full: lifecycle, launch checks, availability, migration paths).
+19. SIP-05 Promotional Campaigns MVP (eligibility, channels, unique redemption → SIP-03 binding).
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.

@@ -2,6 +2,8 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\Catalog\Http\Controllers\ConfigCatalogController;
+use Modules\Catalog\Http\Controllers\BundleController;
+use Modules\Catalog\Http\Controllers\CampaignController;
 use Modules\Catalog\Http\Controllers\DiscountController;
 use Modules\Catalog\Http\Controllers\HomePassController;
 use Modules\Catalog\Http\Controllers\PackageController;
@@ -63,6 +65,26 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('wallet-catalog/{wallet}', [WalletCatalogController::class, 'update'])->middleware('permission:catalog.manage');
     Route::post('wallet-catalog/{wallet}/activate', [WalletCatalogController::class, 'activate'])->middleware('permission:catalog.manage');
     Route::post('wallet-catalog/{wallet}/retire', [WalletCatalogController::class, 'retire'])->middleware('permission:catalog.manage');
+
+    // SIP-04 commercial bundles (launch lifecycle + availability + migration paths)
+    Route::get('commercial-bundles', [BundleController::class, 'index'])->middleware('permission:catalog.read');
+    Route::get('commercial-bundles/available', [BundleController::class, 'available'])->middleware('permission:catalog.read');
+    Route::post('commercial-bundles', [BundleController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
+    Route::post('commercial-bundles/migration-preview', [BundleController::class, 'migrationPreview'])->middleware('permission:catalog.read');
+    Route::get('commercial-bundles/{bundle}', [BundleController::class, 'show'])->middleware('permission:catalog.read');
+    Route::post('commercial-bundles/{bundle}/validate', [BundleController::class, 'validateBundle'])->middleware('permission:catalog.manage');
+    Route::post('commercial-bundles/{bundle}/submit-review', [BundleController::class, 'submitReview'])->middleware('permission:catalog.manage');
+    Route::post('commercial-bundles/{bundle}/approve', [BundleController::class, 'approve'])->middleware('permission:catalog.manage');
+    Route::post('commercial-bundles/{bundle}/activate', [BundleController::class, 'activate'])->middleware('permission:catalog.manage');
+    Route::post('commercial-bundles/{bundle}/retire', [BundleController::class, 'retire'])->middleware('permission:catalog.manage');
+    Route::post('commercial-bundles/{bundle}/migration-rules', [BundleController::class, 'storeMigrationRule'])->middleware('permission:catalog.manage');
+
+    // SIP-05 promotional campaigns (MVP: lifecycle + eligibility + redemption)
+    Route::get('campaigns', [CampaignController::class, 'index'])->middleware('permission:catalog.read');
+    Route::post('campaigns', [CampaignController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
+    Route::post('campaigns/{campaign}/activate', [CampaignController::class, 'activate'])->middleware('permission:catalog.manage');
+    Route::post('campaigns/{campaign}/check-eligibility', [CampaignController::class, 'checkEligibility'])->middleware('permission:catalog.read');
+    Route::post('campaigns/{campaign}/participate', [CampaignController::class, 'participate'])->middleware(['permission:catalog.manage', 'idempotency']);
 
     // PLM config catalogs (wallet / adjustment-type / voice-tariff / equipment-type)
     Route::get('config/{catalog}', [ConfigCatalogController::class, 'index'])->middleware('permission:catalog.read');
