@@ -32,4 +32,27 @@ final class BillingEvents
     public const DUNNING_CLEARED = 'DunningCleared';
 
     public const SUBSCRIPTION_SUSPENDED_NP = 'SubscriptionSuspendedForNonPayment';
+
+    // BIL-02-ADJ-01 adjustment lifecycle
+    public const ADJUSTMENT_PROPOSED = 'AdjustmentProposed';
+
+    public const ADJUSTMENT_APPROVED = 'AdjustmentApproved';
+
+    public const ADJUSTMENT_REJECTED = 'AdjustmentRejected';
+
+    // BIL-02-GEN-01 note issuance → BIL-01-CN-01 note application
+    public const CREDIT_NOTE_ISSUED = 'CreditNoteIssued';
+
+    public const DEBIT_NOTE_ISSUED = 'DebitNoteIssued';
+
+    public const CREDIT_NOTE_APPLIED = 'CreditNoteApplied';
+
+    public const DEBIT_NOTE_APPLIED = 'DebitNoteApplied';
+
+    public const DEBIT_NOTE_APPLICATION_FAILED = 'DebitNoteApplicationFailed';
+
+    public const NOTE_APPLICATION_FAILED = 'NoteApplicationFailed';
+
+    // BIL-CFG-01 catalog administration
+    public const BILLABLE_EVENT_CHANGED = 'BillableEventCatalogChanged';
 }

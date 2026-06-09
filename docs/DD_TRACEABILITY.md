@@ -79,10 +79,10 @@ Status legend: **IMPLEMENTED** (behavior + tests) · **PARTIAL** (works, depth b
 ## 05_billing
 | Document | Status | Where / note |
 |---|---|---|
-| DD_BIL-01-CN-01-Note_Application-v1.0 | **MISSING** | Invoice adjustments / credit-debit notes: catalog+permissions exist, issuance behavior not built (tracked next) |
+| DD_BIL-01-CN-01-Note_Application-v1.0 | **IMPLEMENTED** | NoteApplicationService: POSTPAID outstanding reduce/increase (surplus → account credit, FIFO auto-allocation), PREPAID wallet credit/debit (insufficient → FAILED, retryable), append-only note_application_ledger, Applied/Failed events |
 | DD_BIL-01-Charging_Engine-Core-v1.1 | **IMPLEMENTED** | Charging core: billing intents (invoice/wallet/credit rails), cycle billing, rating |
 | DD_BIL-01-PAY-01-Payment_Application-v1.0 | **IMPLEMENTED** | Payment application: FIFO/directed allocation, surplus credit, dunning clear |
-| DD_BIL-02-ADJ-01-Invoice_Adjustments-v1.3 | **MISSING** | Invoice adjustments / credit-debit notes: catalog+permissions exist, issuance behavior not built (tracked next) |
+| DD_BIL-02-ADJ-01-Invoice_Adjustments-v1.3 | **IMPLEMENTED** | AdjustmentService: FULL/LINE/AMOUNT scopes, reason-code catalog, limits config + override, audited approval steps (zero-step/threshold/multi), CREDIT_NOTE/DEBIT_NOTE issuance (CN-/DN- legal numbers, original_invoice_id), /retry-application |
 | DD_BIL-02-GEN-01-Invoice_Generation-v1.3 | **IMPLEMENTED** | Invoicing core: assembler, gap-free legal numbering, read API |
 | DD_BIL-02-Invoicing-Core-v2.11 | **IMPLEMENTED** | Invoicing core: assembler, gap-free legal numbering, read API |
 | DD_BIL-02-READ-01-Invoice_Read_API-v1.5 | **IMPLEMENTED** | Invoicing core: assembler, gap-free legal numbering, read API |
@@ -91,7 +91,7 @@ Status legend: **IMPLEMENTED** (behavior + tests) · **PARTIAL** (works, depth b
 | DD_BIL-03-Cycle_Close-v1.1 | **IMPLEMENTED** | Dunning ladder as decision table -> SUB-WF ops |
 | DD_BIL-04-Dunning_Engine-v1.4 | **IMPLEMENTED** | Dunning ladder as decision table -> SUB-WF ops |
 | DD_BIL-05-Wallet_and_Topup-v1.0 | **IMPLEMENTED** | Multi-wallet ledger + topup (per PLM-CFG-03 catalog) |
-| DD_BIL-CFG-01-Billable_Event_Catalog-v1.0 | **PARTIAL** | Billing intents carry intent_type codes; the first-class billable-event catalog table is not yet built (tracked with adjustments) |
+| DD_BIL-CFG-01-Billable_Event_Catalog-v1.0 | **IMPLEMENTED** | billable_event + billable_event_category (operator-scoped, DRAFT→ACTIVE→RETIRED, trigger taxonomy, sign policy, applicability), admin CRUD API, runtime enforcement on billing intents (unknown rejected, applicability skip, sign policy) |
 | DD_DIS-OP-01-Discount_Runtime_Application-v1.0 | **IMPLEMENTED** | Discount compute at billing time |
 | DD_MED-01-Usage_Mediation-v1.0 | **IMPLEMENTED** | Mediation dedupe + rating (voice/usage tariff catalogs) |
 | DD_PAY-GW-01-Payment_Gateway_Integration-v1.0 | **IMPLEMENTED** | PaymentGateway module: callback webhook -> PaymentService.receiveAndApply (tested) |
@@ -199,10 +199,10 @@ Status legend: **IMPLEMENTED** (behavior + tests) · **PARTIAL** (works, depth b
 ## Summary
 | Status | DDs |
 |---|---|
-| IMPLEMENTED | 99 |
-| PARTIAL | 9 |
+| IMPLEMENTED | 102 |
+| PARTIAL | 8 |
 | VARIANT | 10 |
 | DEFERRED | 2 |
-| MISSING | 2 |
+| MISSING | 0 |
 | REFERENCE | 12 |
 | **Total** | **134** |

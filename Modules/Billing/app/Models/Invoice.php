@@ -26,6 +26,13 @@ class Invoice extends Model
 
     public const OVERDUE = 'OVERDUE';
 
+    /** Note documents (CREDIT_NOTE / DEBIT_NOTE) are never receivables. */
+    public const ISSUED = 'ISSUED';
+
+    public const CREDIT_NOTE = 'CREDIT_NOTE';
+
+    public const DEBIT_NOTE = 'DEBIT_NOTE';
+
     protected $table = 'invoice';
 
     protected $primaryKey = 'invoice_id';

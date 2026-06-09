@@ -1,6 +1,8 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Billing\Http\Controllers\AdjustmentController;
+use Modules\Billing\Http\Controllers\BillableEventController;
 use Modules\Billing\Http\Controllers\DunningController;
 use Modules\Billing\Http\Controllers\InvoiceController;
 use Modules\Billing\Http\Controllers\PaymentController;
@@ -31,6 +33,29 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('wallets/{subscriptionId}/balance', [WalletController::class, 'balance'])->middleware('permission:wallet.read');
     Route::post('wallets/{subscriptionId}/topup', [WalletController::class, 'topup'])->middleware(['permission:wallet.manage', 'idempotency']);
     Route::post('wallets/{subscriptionId}/debit', [WalletController::class, 'debit'])->middleware('permission:wallet.manage');
+
+    // BIL-02-ADJ-01 — Invoice adjustments (proposal → approval → note application)
+    Route::get('adjustments', [AdjustmentController::class, 'index'])->middleware('permission:invoice.read');
+    Route::get('adjustment-reason-codes', [AdjustmentController::class, 'reasonCodes'])->middleware('permission:invoice.read');
+    Route::get('adjustments/{adjustment}', [AdjustmentController::class, 'show'])->middleware('permission:invoice.read');
+    Route::post('adjustments', [AdjustmentController::class, 'store'])->middleware(['permission:adjustment.create', 'idempotency']);
+    Route::post('adjustments/{adjustment}/approve', [AdjustmentController::class, 'approve'])->middleware('permission:adjustment.approve');
+    Route::post('adjustments/{adjustment}/reject', [AdjustmentController::class, 'reject'])->middleware('permission:adjustment.approve');
+    Route::post('adjustments/{adjustment}/request-revision', [AdjustmentController::class, 'requestRevision'])->middleware('permission:adjustment.approve');
+    Route::post('adjustments/{adjustment}/cancel', [AdjustmentController::class, 'cancel'])->middleware('permission:adjustment.create');
+    Route::post('adjustments/{adjustment}/override-limit', [AdjustmentController::class, 'overrideLimit'])->middleware('permission:adjustment.approve');
+    Route::post('adjustments/{adjustment}/retry-application', [AdjustmentController::class, 'retryApplication'])->middleware('permission:adjustment.approve');
+    // BIL-01-CN-01 — note document + application ledger
+    Route::get('credit-notes/{note}', [AdjustmentController::class, 'showNote'])->middleware('permission:invoice.read');
+
+    // BIL-CFG-01 — BillableEvent catalog (admin)
+    Route::get('billing/billable-events', [BillableEventController::class, 'index'])->middleware('permission:catalog.read');
+    Route::get('billing/billable-event-categories', [BillableEventController::class, 'categories'])->middleware('permission:catalog.read');
+    Route::get('billing/billable-events/{billableEvent}', [BillableEventController::class, 'show'])->middleware('permission:catalog.read');
+    Route::post('billing/billable-events', [BillableEventController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
+    Route::patch('billing/billable-events/{billableEvent}', [BillableEventController::class, 'update'])->middleware('permission:catalog.manage');
+    Route::post('billing/billable-events/{billableEvent}/activate', [BillableEventController::class, 'activate'])->middleware('permission:catalog.manage');
+    Route::post('billing/billable-events/{billableEvent}/retire', [BillableEventController::class, 'retire'])->middleware('permission:catalog.manage');
 
     // MED-01 mediation + RAT-01 rating
     Route::get('usage', [UsageController::class, 'index'])->middleware('permission:invoice.read');

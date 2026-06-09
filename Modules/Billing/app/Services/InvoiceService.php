@@ -79,13 +79,82 @@ class InvoiceService
     }
 
     /**
+     * BIL-02-GEN-01: issue a CREDIT_NOTE / DEBIT_NOTE document. A note is an
+     * invoice row of its own (own gap-free legal number, original_invoice_id
+     * back-reference) but it is never a receivable — status ISSUED, no due date.
+     * Emits CreditNoteIssued / DebitNoteIssued for BIL-01-CN-01 to apply.
+     *
+     * @param  array<string,mixed>  $header
+     */
+    public function issueNote(string $noteType, array $header): Invoice
+    {
+        return DB::transaction(function () use ($noteType, $header) {
+            $operator = $header['operator_code'] ?? Context::operatorCode();
+            $amount = round((float) $header['amount'], 2);
+
+            $note = Invoice::query()->create([
+                'operator_code' => $operator,
+                'account_id' => $header['account_id'] ?? null,
+                'customer_id' => $header['customer_id'] ?? null,
+                'subscription_id' => $header['subscription_id'] ?? null,
+                'type' => $noteType,
+                'original_invoice_id' => $header['original_invoice_id'] ?? null,
+                'currency' => $header['currency'] ?? 'KES',
+                'billing_mode' => $header['billing_mode'] ?? 'POSTPAID',
+                'status' => Invoice::ISSUED,
+                'issue_date' => now(),
+                'due_date' => null,
+                'subtotal_amount' => $amount,
+                'tax_amount_total' => 0,
+                'total_amount' => $amount,
+                'amount_paid' => 0,
+                'amount_due' => 0,
+                'legal_invoice_number' => $this->nextLegalNumber($operator, $noteType),
+            ]);
+
+            $note->lines()->create([
+                'description' => $header['description'] ?? $noteType,
+                'quantity' => 1,
+                'unit_price' => $amount,
+                'subtotal' => $amount,
+                'tax_amount' => 0,
+            ]);
+
+            $this->events->publish(new DomainEvent(
+                type: $noteType === Invoice::CREDIT_NOTE ? BillingEvents::CREDIT_NOTE_ISSUED : BillingEvents::DEBIT_NOTE_ISSUED,
+                topic: BillingEvents::TOPIC,
+                payload: [
+                    'noteId' => $note->invoice_id,
+                    'noteType' => $noteType === Invoice::CREDIT_NOTE ? 'CREDIT' : 'DEBIT',
+                    'customerId' => $note->customer_id,
+                    'targetInvoiceId' => $note->original_invoice_id,
+                    'targetWalletRef' => $header['target_wallet_ref'] ?? null,
+                    'adjustmentRequestId' => $header['adjustment_request_id'] ?? null,
+                    'amount' => (string) $amount,
+                    'currency' => $note->currency,
+                    'reasonCode' => $header['reason_code'] ?? null,
+                ],
+                aggregateType: 'Invoice',
+                aggregateId: $note->invoice_id,
+            ));
+
+            return $note;
+        });
+    }
+
+    /**
      * Gap-free legal number per (operator, fiscal year, type) using a locked
      * counter row (BIL-02). Must be called inside the generate() transaction.
      */
     private function nextLegalNumber(string $operator, string $type): string
     {
         $year = (int) now()->year;
-        $prefix = $type === 'TAX' ? 'TInv' : 'Inv';
+        $prefix = match ($type) {
+            'TAX' => 'TInv',
+            Invoice::CREDIT_NOTE => 'CN',
+            Invoice::DEBIT_NOTE => 'DN',
+            default => 'Inv',
+        };
 
         // Ensure the counter row exists, then lock + increment it atomically.
         DB::table('invoice_sequence')->insertOrIgnore([

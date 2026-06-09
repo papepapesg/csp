@@ -9,10 +9,10 @@ Legend: ✅ conformant · ⚠️ partial (table/scaffold present, behavior incom
 **M**edium, **L**ow.
 
 > Full corpus coverage: see **`docs/DD_TRACEABILITY.md`** — all 134 design documents
-> (256 PDFs incl. implementation guides) classified: 99 implemented, 9 partial,
+> (256 PDFs incl. implementation guides) classified: 102 implemented, 8 partial,
 > 10 per-operator variants (delivered by config engine), 2 deferred by decision
-> (FOUNDATION_AUTH/Keycloak; external deep reporting), 2 missing-tracked
-> (BIL-02-ADJ credit notes; billable-event catalog), 12 reference docs.
+> (FOUNDATION_AUTH/Keycloak; external deep reporting), 0 missing,
+> 12 reference docs.
 >
 > How this was built: each row was checked by reading the governing DD section and
 > grepping the implementation. Modules marked "not yet fully audited" have not had a
@@ -104,9 +104,26 @@ auto-interrupt, scheduled effective-timing. (M/L)
   with launcher (launch/pause/end) + live eligibility tester, and the bundle
   composer + launch pipeline (validate→review→approve→activate with the auditable
   checks displayed). 🔁
-- Open (M): **BIL-02-ADJ-01 / BIL-01-CN-01 invoice adjustments** — adjustment_type
-  catalog + permissions exist but credit/debit-note issuance behavior is missing
-  (next money-path item). SIP-02 launch-lifecycle depth (launch windows, EM-CFG-04
+- **BIL-02-ADJ-01 / BIL-01-CN-01 invoice adjustments + note application** — ✅ 🔁
+  (was the last missing money path): governed pipeline adjustment_request
+  (FULL/LINE/AMOUNT scopes; operator reason-code catalog; adjustment_limits_config
+  + /override-limit; audited adjustment_approval_step rows; zero-step / threshold /
+  multi-step approval policy) → CREDIT_NOTE/DEBIT_NOTE invoices (CN-/DN- legal
+  numbers, original_invoice_id) → note_application_ledger application: POSTPAID
+  outstanding reduce/increase with surplus → account_credit_balance and FIFO
+  auto-allocation; PREPAID wallet credit/debit where an insufficient wallet FAILS
+  (never made negative) and /retry-application re-applies after top-up. Events:
+  AdjustmentProposed/Approved/Rejected, Credit/DebitNoteIssued,
+  Credit/DebitNoteApplied (per ledger row), DebitNoteApplicationFailed.
+- **BIL-CFG-01 BillableEvent catalog** — ✅ 🔁 (was intent_type as free string):
+  billable_event + billable_event_category, operator-scoped, DRAFT→ACTIVE→RETIRED,
+  trigger taxonomy (SAGA_INTENT / LIFECYCLE_EVENT / ADMIN_ACTION /
+  CUSTOMER_PURCHASE / EXTERNAL_PAYMENT / SCHEDULED), amount_sign_policy,
+  applicability, pay-first + state-callback rules (R-B-6/SC-3), code/sign/trigger
+  immutability once ACTIVE; admin CRUD at /api/billing/billable-events; runtime
+  enforcement in BillingIntentService (unknown event rejected, applicability
+  mismatch skips per R-B-5, sign-policy violations rejected).
+- Open (M): SIP-02 launch-lifecycle depth (launch windows, EM-CFG-04
   approval hook for package/bundle launch — bundle approve is a direct endpoint
   today). Per-service wallet routing at charge time (needs subscription service
   lines). ⚠️
@@ -226,6 +243,8 @@ Implemented (`FieldAuditService` + tests); depth not separately diffed. ⚠️ (
 24. Operator deployment config (identity/locale/currency/theme/log level) + runtime theming in the shell.
 25. Setup wizard (sophix:setup demo|preprod|prod) incl. demo journey seeder (verified end-to-end).
 26. i18n foundation: per-operator backend locale (Content-Language, X-Locale override), frontend t()/money()/date formatters on en-KE/sw-KE/fr-SN conventions; notification templates already per-locale.
+27. BIL-02-ADJ-01 + BIL-01-CN-01: governed adjustment pipeline (proposal → audited approval → credit/debit-note issuance → application across POSTPAID invoices/credit balance and PREPAID wallets, append-only ledger, failed-application retry).
+28. BIL-CFG-01 BillableEvent catalog (event + category tables, admin API, runtime intent enforcement) — last MISSING corpus items closed; zero tracked-missing DDs remain.
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.

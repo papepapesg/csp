@@ -5,6 +5,8 @@ namespace Database\Seeders;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
+use Modules\Billing\Database\Seeders\AdjustmentConfigSeeder;
+use Modules\Billing\Database\Seeders\BillableEventSeeder;
 use Modules\Billing\Database\Seeders\DunningPolicySeeder;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
 use Modules\Catalog\Database\Seeders\TaxCatalogSeeder;
@@ -50,6 +52,8 @@ class DatabaseSeeder extends Seeder
             WalletCatalogSeeder::class,
             TaxCatalogSeeder::class,
             DunningPolicySeeder::class,
+            AdjustmentConfigSeeder::class,
+            BillableEventSeeder::class,
             RestrictionCatalogSeeder::class,
             UpgradeConfigSeeder::class,
             WoSupportSeeder::class,

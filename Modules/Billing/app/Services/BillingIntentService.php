@@ -2,6 +2,7 @@
 
 namespace Modules\Billing\Services;
 
+use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
@@ -9,6 +10,7 @@ use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Models\AccountCreditBalance;
+use Modules\Billing\Models\BillableEvent;
 use Modules\Billing\Models\BillingIntent;
 
 /**
@@ -25,6 +27,7 @@ class BillingIntentService
         private readonly EventBus $events,
         private readonly InvoiceService $invoices,
         private readonly WalletService $wallets,
+        private readonly BillableEventCatalogService $catalog,
     ) {}
 
     /**
@@ -37,6 +40,41 @@ class BillingIntentService
             $billingMode = $data['billing_mode'] ?? 'POSTPAID';
             $operator = $data['operator_code'] ?? Context::operatorCode();
             $payFirst = (bool) ($data['pay_first'] ?? false) && $amount > 0;
+
+            // BIL-CFG-01: when the operator governs intents through the
+            // BillableEvent catalog, the intent must resolve to an ACTIVE event;
+            // applicability skips (R-B-5) and sign policy (R-AS-*) are enforced.
+            $skipCharge = false;
+            if ($this->catalog->operatorHasCatalog($operator)) {
+                $matched = $this->catalog->resolve($operator, (string) $data['intent_type'], $billingMode);
+                if ($matched->isEmpty()) {
+                    $any = $this->catalog->resolve($operator, (string) $data['intent_type'], 'PREPAID')
+                        ->merge($this->catalog->resolve($operator, (string) $data['intent_type'], 'POSTPAID'));
+                    if ($any->isEmpty()) {
+                        throw DomainException::ruleRejected(
+                            'UNKNOWN_BILLABLE_EVENT',
+                            "Intent '{$data['intent_type']}' does not resolve to an ACTIVE BillableEvent for this operator.",
+                        );
+                    }
+                    // Event exists but its applicability excludes this billing mode
+                    // (e.g. PREPAID_ONLY against a postpaid subscription): skip, don't fail.
+                    $skipCharge = true;
+                } else {
+                    /** @var BillableEvent $event */
+                    $event = $matched->first();
+                    if ($event->amount_sign_policy === 'POSITIVE_ONLY' && $amount < 0) {
+                        throw DomainException::ruleRejected('AMOUNT_SIGN_VIOLATION', "BillableEvent {$event->code} is POSITIVE_ONLY; a negative amount is not allowed.");
+                    }
+                    if ($event->amount_sign_policy === 'NEGATIVE_ONLY' && $amount > 0) {
+                        throw DomainException::ruleRejected('AMOUNT_SIGN_VIOLATION', "BillableEvent {$event->code} is NEGATIVE_ONLY; a positive amount is not allowed.");
+                    }
+                    // The event's pay_first_required is the default when the
+                    // workflow config did not say otherwise.
+                    if (! array_key_exists('pay_first', $data)) {
+                        $payFirst = $event->pay_first_required && $amount > 0;
+                    }
+                }
+            }
 
             $intent = BillingIntent::query()->create([
                 'intent_id' => Id::make('bint'),
@@ -51,7 +89,11 @@ class BillingIntentService
                 'settlement_channel' => 'NONE',
             ]);
 
-            if ($amount > 0 && $billingMode === 'PREPAID') {
+            if ($skipCharge) {
+                // BIL-CFG-01 R-B-5: the event's applicability excludes this billing
+                // mode — the intent is acknowledged without charging.
+                $intent->update(['status' => BillingIntent::CONFIRMED, 'confirmed_at' => now()]);
+            } elseif ($amount > 0 && $billingMode === 'PREPAID') {
                 // Prepaid: charge the customer's prepaid wallet (PLM-CFG-03) instead of
                 // raising an invoice. If the balance covers it, settle inline and the
                 // operation proceeds; if not, stay PENDING (pay-first) so the flow parks
