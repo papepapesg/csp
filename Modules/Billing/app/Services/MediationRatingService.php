@@ -9,6 +9,7 @@ use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Models\RatedEvent;
 use Modules\Billing\Models\UsageRecord;
+use Modules\Catalog\Models\UsageTariff;
 use Modules\Catalog\Models\VoiceTariff;
 
 /**
@@ -116,10 +117,14 @@ class MediationRatingService
             return [$rate, $amount, $tariff->code ?? null];
         }
         if ($record->usage_type === 'DATA') {
-            return [self::DATA_RATE_PER_MB, (float) $record->quantity * self::DATA_RATE_PER_MB, 'DATA_FLAT'];
+            $rate = UsageTariff::rate($record->operator_code, 'DATA') ?? self::DATA_RATE_PER_MB;
+
+            return [$rate, (float) $record->quantity * $rate, 'DATA_FLAT'];
         }
 
         // SMS
-        return [self::SMS_RATE, (float) $record->quantity * self::SMS_RATE, 'SMS_FLAT'];
+        $rate = UsageTariff::rate($record->operator_code, 'SMS') ?? self::SMS_RATE;
+
+        return [$rate, (float) $record->quantity * $rate, 'SMS_FLAT'];
     }
 }

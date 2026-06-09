@@ -71,7 +71,8 @@ SLA/ASR policy seeded. A section-by-section DD diff has not been run. ⚠️ (un
 
 ## Catalog / SIP / PLM-CFG — partially audited
 Service/package/version, tax, discount, wallet catalog present. `package_service`
-composition exists. Per-service wallet routing consumed at charge time is NOT wired
+composition exists. DATA/SMS rating now reads the **`usage_tariff`** catalog (config,
+not constants) — ✅ 🔁. Per-service wallet routing consumed at charge time is NOT wired
 (catalog carries `default_wallet_ref`; billing doesn't read it per-line yet). ⚠️
 
 ## Foundation / Auth (EM-CFG-03 / FOUNDATION_AUTH) — known divergence
@@ -93,6 +94,7 @@ Notification, field-audit policy depth.
 5. OSR-01 stock reservation + WO→install consumption.
 6. PROV-INT-01 force-sync approval lifecycle.
 7. BIL-02 automatic cycle billing (rated_event → invoice/wallet).
+8. PLM-CFG-07 usage_tariff catalog (data/SMS rating is config, not constants).
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.
@@ -100,5 +102,5 @@ Notification, field-audit policy depth.
 3. ~~Automatic cycle billing~~ — ✅ done (usage). Remaining: recurring package-fee generation (M).
 4. **WO attachments + checklist attachment requirements** (M).
 5. **Per-service wallet routing consumed at charge time** (M).
-6. **Usage-tariff catalog for data/SMS rating** (M).
+6. ~~Usage-tariff catalog for data/SMS rating~~ — ✅ done.
 7. Full DD diff for Ticketing, Catalog depth, Ilm/CVM, Fulfillment (unknown).
