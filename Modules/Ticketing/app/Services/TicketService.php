@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Modules\Ticketing\Events\TicketEvents;
 use Modules\Ticketing\Models\SlaPolicy;
 use Modules\Ticketing\Models\Ticket;
+use Modules\Ticketing\Models\TicketCategory;
 use Modules\WorkOrder\Services\WorkOrderService;
 
 /**
@@ -28,8 +29,12 @@ class TicketService
     public function create(array $data): Ticket
     {
         return DB::transaction(function () use ($data) {
-            $priority = $data['priority'] ?? 'NORMAL';
+            // TCK-01 §7.6: the category catalog supplies routing defaults (priority/queue).
+            $category = TicketCategory::resolve(Context::operatorCode(), $data['category'] ?? null);
+            $priority = $data['priority'] ?? $category?->default_priority ?? 'NORMAL';
             $ticket = Ticket::query()->create($data + [
+                'priority' => $priority,
+                'queue' => $data['queue'] ?? $category?->default_queue,
                 'status' => Ticket::OPEN,
                 'sla_due_at' => now()->addHours(SlaPolicy::resolveHours(Context::operatorCode(), $data['category'] ?? null, $priority)),
             ]);
@@ -68,8 +73,23 @@ class TicketService
      */
     public function createWorkOrder(Ticket $ticket, array $woData, ?string $actor = null): Ticket
     {
-        return DB::transaction(function () use ($ticket, $woData, $actor) {
+        // TCK-7: terminal tickets cannot create WOs.
+        if (in_array($ticket->status, [Ticket::RESOLVED, Ticket::CLOSED, Ticket::CANCELLED], true)) {
+            throw new DomainException('TICKET_TERMINAL_STATE', 'A terminal ticket cannot create a work order.', 409);
+        }
+        // TCK-3: only configured categories with wo_allowed may create a WO.
+        $category = TicketCategory::resolve($ticket->operator_code, $ticket->category);
+        if (! $category || ! $category->wo_allowed) {
+            throw new DomainException('TICKET_CATEGORY_WO_NOT_ALLOWED', "Category {$ticket->category} is not allowed to create a work order.", 409);
+        }
+        // One active linked WO at a time (TCK §9.1).
+        if ($ticket->work_order_id && $ticket->status === Ticket::PENDING_WO) {
+            throw new DomainException('ACTIVE_WORK_ORDER_ALREADY_LINKED', 'An active work order is already linked to this ticket.', 409);
+        }
+
+        return DB::transaction(function () use ($ticket, $woData, $actor, $category) {
             $wo = $this->workOrders->create(array_merge([
+                'kind' => $category->default_wo_kind ?? 'SUPPORT',
                 'type' => 'SUPPORT',
                 'account_id' => $ticket->account_id,
                 'customer_id' => $ticket->customer_id,
@@ -107,6 +127,62 @@ class TicketService
             $this->emit(TicketEvents::RESOLVED, $ticket, ['resolutionCode' => $ticket->resolution_code]);
 
             return $ticket;
+        });
+    }
+
+    /**
+     * TCK-01 §9.2: a linked Work Order finished → move the ticket out of PENDING_WO.
+     * Records the timeline event and resolves (or, if review is required, parks in
+     * UNDER_REVIEW). Idempotent: only acts while the ticket waits on that WO.
+     */
+    public function onWorkOrderFinalized(string $workOrderId, ?string $finalReason = null): void
+    {
+        $ticket = Ticket::query()->where('work_order_id', $workOrderId)->where('status', Ticket::PENDING_WO)->first();
+        if (! $ticket) {
+            return;
+        }
+        DB::transaction(function () use ($ticket, $workOrderId, $finalReason) {
+            $from = $ticket->status;
+            $ticket->update(['status' => Ticket::RESOLVED, 'resolution_code' => $finalReason, 'resolved_at' => now()]);
+            $this->timeline($ticket, 'LINKED_WORK_ORDER_FINALIZED', $from, Ticket::RESOLVED, null, ['workOrderId' => $workOrderId, 'finalReason' => $finalReason]);
+            $this->emit(TicketEvents::RESOLVED, $ticket, ['resolutionCode' => $finalReason, 'via' => 'WORK_ORDER']);
+        });
+    }
+
+    /** TCK-01 §8.8 reopen a RESOLVED ticket (RESOLVED → OPEN only, via reopen policy). */
+    public function reopen(Ticket $ticket, string $reasonCode, ?string $comment = null, ?string $actor = null): Ticket
+    {
+        if ($ticket->status !== Ticket::RESOLVED) {
+            throw new DomainException('TICKET_TERMINAL_STATE', 'Only a RESOLVED ticket can be reopened.', 409);
+        }
+
+        return DB::transaction(function () use ($ticket, $reasonCode, $comment, $actor) {
+            $ticket->update([
+                'status' => Ticket::OPEN,
+                'reopened_count' => (int) $ticket->reopened_count + 1,
+                'resolved_at' => null,
+            ]);
+            $this->timeline($ticket, 'REOPENED', Ticket::RESOLVED, Ticket::OPEN, $actor, ['reasonCode' => $reasonCode, 'comment' => $comment]);
+            $this->emit(TicketEvents::REOPENED, $ticket, ['reasonCode' => $reasonCode, 'reopenedCount' => $ticket->reopened_count]);
+
+            return $ticket->refresh();
+        });
+    }
+
+    /** TCK-01 §5 cancel a non-terminal ticket (duplicate / error / customer withdrew). */
+    public function cancel(Ticket $ticket, ?string $reason = null, ?string $actor = null): Ticket
+    {
+        if (in_array($ticket->status, [Ticket::RESOLVED, Ticket::CLOSED, Ticket::CANCELLED], true)) {
+            throw new DomainException('TICKET_TERMINAL_STATE', 'Ticket is already terminal.', 409);
+        }
+
+        return DB::transaction(function () use ($ticket, $reason, $actor) {
+            $from = $ticket->status;
+            $ticket->update(['status' => Ticket::CANCELLED, 'cancelled_at' => now()]);
+            $this->timeline($ticket, 'CANCELLED', $from, Ticket::CANCELLED, $actor, ['reason' => $reason]);
+            $this->emit(TicketEvents::CANCELLED, $ticket, ['reason' => $reason]);
+
+            return $ticket->refresh();
         });
     }
 

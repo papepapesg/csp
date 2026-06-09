@@ -67,9 +67,14 @@ auto-interrupt, scheduled effective-timing. (M/L)
 - Open (M/L): `stock_reason_code` catalog as a first-class table; two-tier transfer
   helper; WO bill-of-materials (auto-reserve qty from the job's required SKUs).
 
-## Ticketing (TCK-01) — not yet fully audited
-WO creation + link + wait-for-finalize is implemented (`TicketService`, `AsrService`).
-SLA/ASR policy seeded. A section-by-section DD diff has not been run. ⚠️ (unknown)
+## Ticketing (TCK-01) — audited 🔁
+- Case lifecycle, SLA policy, ASR routing, WO creation + link — ✅
+- **Config-driven category catalog** (`ticket_category_catalog`) + **WO-creation gating**
+  (TCK-3 wo_allowed, TCK-7 terminal guard, one-active-WO) — ✅ 🔁
+- **WorkOrderFinalized → ticket** resolution loop (§9.2, was claimed but unwired) — ✅ 🔁
+- **Reopen** (RESOLVED→OPEN + reopened_count, §8.8) + **cancel** + comment visibility — ✅ 🔁
+- Open (M/L): `ticket_link` general multi-entity links + `ticket_attachment`; gap-free
+  `ticket_number`; full WAITING_*/UNDER_REVIEW status set. ⚠️
 
 ## Catalog / SIP / PLM-CFG — partially audited
 Service/package/version, tax, discount, wallet catalog present. `package_service`
@@ -106,6 +111,7 @@ field-audit policy depth.
 9. WO-01 attachments + checklist attachment enforcement.
 10. PROV-INT-01 per-attempt ledger (§10.4).
 11. NOT-01 template studio (per-channel notification templates + invoice layouts + UI).
+12. TCK-01 category catalog + WO-gating + WO-finalized loop + reopen.
 
 ## Remaining gaps, prioritized
 1. ~~OSR-01 stock reservation + WO→install consumption~~ — ✅ done this pass.

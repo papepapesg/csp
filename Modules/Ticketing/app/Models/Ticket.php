@@ -25,9 +25,13 @@ class Ticket extends Model
 
     public const PENDING_WO = 'PENDING_WO';
 
+    public const UNDER_REVIEW = 'UNDER_REVIEW';
+
     public const RESOLVED = 'RESOLVED';
 
     public const CLOSED = 'CLOSED';
+
+    public const CANCELLED = 'CANCELLED';
 
     protected $table = 'ticket';
 

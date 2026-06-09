@@ -17,5 +17,9 @@ final class TicketEvents
 
     public const CLOSED = 'TicketClosed';
 
-    public const WORK_ORDER_LINKED = 'TicketWorkOrderLinked';
+    public const WORK_ORDER_LINKED = 'TicketWorkOrderCreated';
+
+    public const REOPENED = 'TicketReopened';
+
+    public const CANCELLED = 'TicketCancelled';
 }

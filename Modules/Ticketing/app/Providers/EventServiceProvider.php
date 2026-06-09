@@ -2,7 +2,9 @@
 
 namespace Modules\Ticketing\Providers;
 
+use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
+use Modules\Ticketing\Listeners\ResolveTicketOnWorkOrderFinalized;
 
 class EventServiceProvider extends ServiceProvider
 {
@@ -11,7 +13,10 @@ class EventServiceProvider extends ServiceProvider
      *
      * @var array<string, array<int, string>>
      */
-    protected $listen = [];
+    protected $listen = [
+        // TCK-01 §9.2: a finalized WO resolves the ticket that was waiting on it.
+        OutboxEventPublished::class => [ResolveTicketOnWorkOrderFinalized::class],
+    ];
 
     /**
      * Indicates if events should be discovered.

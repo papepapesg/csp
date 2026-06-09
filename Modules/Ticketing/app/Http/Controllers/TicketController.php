@@ -36,7 +36,7 @@ class TicketController extends ApiController
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'category' => ['required', 'in:TECHNICAL,BILLING,INFORMATION,COMPLAINT,SERVICE_REQUEST'],
+            'category' => ['required', 'string', 'max:64'], // governed by the ticket_category_catalog, not a code enum
             'subcategory' => ['nullable', 'string', 'max:64'],
             'priority' => ['nullable', 'in:LOW,NORMAL,HIGH,URGENT'],
             'subject' => ['required', 'string', 'max:255'],
@@ -65,13 +65,33 @@ class TicketController extends ApiController
 
     public function comment(Request $request, Ticket $ticket): JsonResponse
     {
-        $data = $request->validate([
+        $v = $request->validate([
             'body' => ['required', 'string'],
-            'internal' => ['sometimes', 'boolean'],
+            'visibility' => ['nullable', 'in:INTERNAL,CUSTOMER_VISIBLE'],
         ]);
-        $data['author_id'] = $request->user()?->uid;
 
-        return ApiResponse::created($this->tickets->comment($ticket, $data));
+        return ApiResponse::created($this->tickets->comment($ticket, [
+            'body' => $v['body'],
+            'visibility' => $v['visibility'] ?? 'INTERNAL',
+            'author_id' => $request->user()?->uid,
+        ]));
+    }
+
+    public function reopen(Request $request, Ticket $ticket): JsonResponse
+    {
+        $data = $request->validate([
+            'reason_code' => ['required', 'string', 'max:64'],
+            'comment' => ['nullable', 'string'],
+        ]);
+
+        return ApiResponse::item($this->tickets->reopen($ticket, $data['reason_code'], $data['comment'] ?? null, $request->user()?->uid));
+    }
+
+    public function cancel(Request $request, Ticket $ticket): JsonResponse
+    {
+        $data = $request->validate(['reason' => ['nullable', 'string', 'max:255']]);
+
+        return ApiResponse::item($this->tickets->cancel($ticket, $data['reason'] ?? null, $request->user()?->uid));
     }
 
     public function createWorkOrder(Request $request, Ticket $ticket): JsonResponse

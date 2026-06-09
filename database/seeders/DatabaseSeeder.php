@@ -19,6 +19,7 @@ use Modules\Subscription\Database\Seeders\PerOperationConfigSeeder;
 use Modules\Subscription\Database\Seeders\StatusCatalogSeeder;
 use Modules\Subscription\Database\Seeders\UpgradeConfigSeeder;
 use Modules\Ticketing\Database\Seeders\AsrPolicySeeder;
+use Modules\Ticketing\Database\Seeders\TicketCategorySeeder;
 use Modules\Ticketing\Database\Seeders\SlaPolicySeeder;
 use Modules\WorkOrder\Database\Seeders\FieldAuditPolicySeeder;
 use Modules\Notification\Database\Seeders\TemplateCatalogSeeder;
@@ -54,6 +55,7 @@ class DatabaseSeeder extends Seeder
             CvmPolicySeeder::class,
             SlaPolicySeeder::class,
             AsrPolicySeeder::class,
+            TicketCategorySeeder::class,
             TemplateCatalogSeeder::class,
         ]);
 

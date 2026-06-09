@@ -20,6 +20,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('tickets/{ticket}/comments', [TicketController::class, 'comment'])->middleware('permission:ticket.create');
     Route::post('tickets/{ticket}/work-orders', [TicketController::class, 'createWorkOrder'])->middleware('permission:ticket.manage');
     Route::post('tickets/{ticket}/resolve', [TicketController::class, 'resolve'])->middleware('permission:ticket.manage');
+    Route::post('tickets/{ticket}/reopen', [TicketController::class, 'reopen'])->middleware('permission:ticket.manage');
+    Route::post('tickets/{ticket}/cancel', [TicketController::class, 'cancel'])->middleware('permission:ticket.manage');
     Route::post('tickets/{ticket}/close', [TicketController::class, 'close'])->middleware('permission:ticket.manage');
     Route::post('asr', [AsrController::class, 'store'])->middleware(['permission:ticket.create', 'idempotency']);
 });

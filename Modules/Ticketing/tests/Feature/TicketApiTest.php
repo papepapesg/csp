@@ -18,6 +18,7 @@ class TicketApiTest extends TestCase
     {
         parent::setUp();
         $this->seed(RbacSeeder::class);
+        $this->seed(\Modules\Ticketing\Database\Seeders\TicketCategorySeeder::class);
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('SUPER_ADMIN');
         Sanctum::actingAs($user);
@@ -55,7 +56,41 @@ class TicketApiTest extends TestCase
         $ticket = $this->getJson("/api/tickets/{$id}")->json();
         $this->assertStringStartsWith('wo_', $ticket['work_order_id']);
         $this->assertDatabaseHas('work_order', ['work_order_id' => $ticket['work_order_id'], 'type' => 'SUPPORT', 'source_type' => 'TICKET']);
-        $this->assertDatabaseHas('outbox_events', ['event_type' => 'TicketWorkOrderLinked']);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'TicketWorkOrderCreated']);
+    }
+
+    public function test_wo_creation_is_gated_by_category(): void
+    {
+        $id = $this->postJson('/api/tickets', ['category' => 'BILLING_DISPUTE', 'subject' => 'overcharged', 'customer_id' => 'c2'], ['Idempotency-Key' => 'bd-1'])
+            ->assertCreated()->json('ticket_id');
+
+        $this->postJson("/api/tickets/{$id}/work-orders", ['tech_region_id' => 'KE-NRB'])
+            ->assertStatus(409)->assertJsonPath('errorCode', 'TICKET_CATEGORY_WO_NOT_ALLOWED');
+    }
+
+    public function test_finalizing_the_work_order_resolves_the_ticket(): void
+    {
+        $id = $this->create('URGENT');
+        $woId = $this->postJson("/api/tickets/{$id}/work-orders", ['tech_region_id' => 'KE-NRB'])->assertOk()->json('work_order_id');
+
+        $svc = app(\Modules\WorkOrder\Services\WorkOrderService::class);
+        $wo = \Modules\WorkOrder\Models\WorkOrder::find($woId);
+        $svc->assign($wo, ['contractor_id' => 'con_1']);
+        $svc->start($wo->refresh());
+        $svc->finalize($wo->refresh(), ['final_reason' => 'SERVICE_RESTORED']);
+        \Illuminate\Support\Facades\Artisan::call('sophix:outbox:dispatch');
+
+        $this->assertSame('RESOLVED', Ticket::find($id)->status);
+        $this->assertDatabaseHas('ticket_timeline', ['ticket_id' => $id, 'event_type' => 'LINKED_WORK_ORDER_FINALIZED']);
+    }
+
+    public function test_resolved_ticket_can_be_reopened(): void
+    {
+        $id = $this->create();
+        $this->postJson("/api/tickets/{$id}/resolve", ['resolution_code' => 'FIXED'])->assertOk();
+        $this->postJson("/api/tickets/{$id}/reopen", ['reason_code' => 'ISSUE_RECURRED'])
+            ->assertOk()->assertJsonPath('status', 'OPEN')->assertJsonPath('reopened_count', 1);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'TicketReopened']);
     }
 
     public function test_create_requires_permission(): void

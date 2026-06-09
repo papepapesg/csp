@@ -18,6 +18,7 @@ class AsrTest extends TestCase
     {
         parent::setUp();
         $this->seed(RbacSeeder::class);
+        $this->seed(\Modules\Ticketing\Database\Seeders\TicketCategorySeeder::class);
         $this->seed(SlaPolicySeeder::class);
         $this->seed(AsrPolicySeeder::class);
         $user = User::factory()->create(['operator_code' => 'WIK']);
