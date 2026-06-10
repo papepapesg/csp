@@ -41,4 +41,34 @@ class DunningController extends ApiController
 
         return ApiResponse::item(['accountId' => $account, 'status' => 'CLEARED']);
     }
+
+    /** R-5 admin overrides (DUNNING_ADMIN): clear-without-payment, hold, confirm/extend review. */
+    public function adminClear(Request $request, string $account): JsonResponse
+    {
+        $this->dunning->adminClear($account, $request->user()?->uid);
+
+        return ApiResponse::item(['accountId' => $account, 'status' => 'CLEARED']);
+    }
+
+    public function hold(Request $request, string $account): JsonResponse
+    {
+        $this->dunning->hold($account, $request->user()?->uid);
+
+        return ApiResponse::item(['accountId' => $account, 'held' => true]);
+    }
+
+    public function confirmTermination(Request $request, string $account): JsonResponse
+    {
+        $this->dunning->confirmTermination($account, $request->user()?->uid);
+
+        return ApiResponse::item(['accountId' => $account, 'status' => 'TERMINATING']);
+    }
+
+    public function extendReview(Request $request, string $account): JsonResponse
+    {
+        $hours = (int) $request->input('hours', 72);
+        $this->dunning->extendReview($account, $hours);
+
+        return ApiResponse::item(['accountId' => $account, 'reviewExtendedHours' => $hours]);
+    }
 }

@@ -29,6 +29,10 @@ class BillingRuntimeProvider extends ServiceProvider
         // BIL-01-PAY-01 OV-2: a newly issued invoice auto-draws any account credit balance.
         Event::listen(OutboxEventPublished::class, [\Modules\Billing\Listeners\ApplyCreditBalanceOnInvoice::class, 'handle']);
 
+        // BIL-04: prepaid CyclePaymentMissed → enter dunning; voluntary pause/resume
+        // → suspend/resume dunning; WalletToppedUp → prepaid recovery.
+        Event::listen(OutboxEventPublished::class, [\Modules\Billing\Listeners\DunningEventBridge::class, 'handle']);
+
         // ADJ-01 approval routing fallback: when no decision table is deployed
         // for rules.billing.adjustment-approval, derive the same answer from
         // adjustment_limits_config (steps + auto_approve_under threshold).

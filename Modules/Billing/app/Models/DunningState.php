@@ -26,6 +26,17 @@ class DunningState extends Model
 
     public const LEVEL_TERMINATED = 4;
 
+    // Statuses (BIL-04 D-4 / T-4 / T-6).
+    public const STATUS_ACTIVE = 'ACTIVE';
+
+    public const STATUS_CLEARED = 'CLEARED';
+
+    public const STATUS_PENDING_TERMINATION_REVIEW = 'PENDING_TERMINATION_REVIEW';
+
+    public const STATUS_SUSPENDED_BY_PAUSE = 'SUSPENDED_BY_PAUSE';
+
+    public const STATUS_RECOVERY_FAILED = 'RECOVERY_FAILED';
+
     protected $table = 'dunning_state';
 
     protected $primaryKey = 'dunning_id';
@@ -39,6 +50,8 @@ class DunningState extends Model
         'outstanding_debt_amount' => 'decimal:2',
         'entered_level_at' => 'datetime',
         'last_scanned_at' => 'datetime',
+        'next_evaluation_at' => 'datetime',
+        'review_due_at' => 'datetime',
     ];
 
     protected static function booted(): void

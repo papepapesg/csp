@@ -20,6 +20,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('dunning', [DunningController::class, 'index'])->middleware('permission:invoice.read');
     Route::post('dunning/run', [DunningController::class, 'run'])->middleware('permission:invoice.manage');
     Route::post('dunning/{account}/clear', [DunningController::class, 'clear'])->middleware('permission:invoice.manage');
+    Route::post('dunning/{account}/admin-clear', [DunningController::class, 'adminClear'])->middleware('permission:dunning.admin');
+    Route::post('dunning/{account}/hold', [DunningController::class, 'hold'])->middleware('permission:dunning.admin');
+    Route::post('dunning/{account}/confirm-termination', [DunningController::class, 'confirmTermination'])->middleware('permission:dunning.admin');
+    Route::post('dunning/{account}/extend-review', [DunningController::class, 'extendReview'])->middleware('permission:dunning.admin');
     // BIL-02-GEN-01 — Bulk reversal (rule group R; BILLING_ADMIN proposes, FINANCE_HEAD approves)
     Route::get('billing/bulk-reversals', [BulkReversalController::class, 'index'])->middleware('permission:invoice.read');
     Route::post('billing/bulk-reversals/preview', [BulkReversalController::class, 'preview'])->middleware('permission:invoice.manage');

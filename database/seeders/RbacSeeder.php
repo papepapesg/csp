@@ -20,7 +20,7 @@ class RbacSeeder extends Seeder
         'customer.read', 'customer.update', 'customer.create',
         'subscription.read', 'subscription.create', 'subscription.activate', 'subscription.manage',
         'catalog.read', 'catalog.manage',
-        'invoice.read', 'invoice.manage', 'payment.read', 'payment.apply', 'payment.reverse',
+        'invoice.read', 'invoice.manage', 'payment.read', 'payment.apply', 'payment.reverse', 'dunning.admin',
         'wallet.read', 'wallet.manage', 'adjustment.create', 'adjustment.approve',
         'ticket.create', 'ticket.read', 'ticket.assign',
         'fulfillment.read', 'fulfillment.manage',
@@ -43,8 +43,8 @@ class RbacSeeder extends Seeder
         'RBAC_ADMIN' => ['rbac.manage'],
         'CUSTOMER_CARE_AGENT' => ['customer.read', 'customer.update', 'ticket.create', 'ticket.read', 'ticket.manage', 'notification.read', 'notification.send', 'subscription.read', 'invoice.read', 'payment.read', 'wallet.read'],
         'CUSTOMER_CARE_SUPERVISOR' => ['customer.read', 'customer.update', 'ticket.create', 'ticket.read', 'ticket.assign', 'ticket.manage', 'notification.read', 'notification.send', 'subscription.read', 'invoice.read'],
-        'BILLING_OPERATOR' => ['invoice.read', 'invoice.manage', 'payment.read', 'payment.apply', 'payment.reverse', 'wallet.read', 'wallet.manage', 'adjustment.create', 'customer.read', 'subscription.read'],
-        'BILLING_LEAD' => ['invoice.read', 'invoice.manage', 'payment.read', 'payment.apply', 'payment.reverse', 'wallet.read', 'wallet.manage', 'adjustment.create', 'adjustment.approve', 'customer.read', 'subscription.read', 'report.view'],
+        'BILLING_OPERATOR' => ['invoice.read', 'invoice.manage', 'payment.read', 'payment.apply', 'payment.reverse', 'dunning.admin', 'wallet.read', 'wallet.manage', 'adjustment.create', 'customer.read', 'subscription.read'],
+        'BILLING_LEAD' => ['invoice.read', 'invoice.manage', 'payment.read', 'payment.apply', 'payment.reverse', 'dunning.admin', 'wallet.read', 'wallet.manage', 'adjustment.create', 'adjustment.approve', 'customer.read', 'subscription.read', 'report.view'],
         // BIL-04 dunning service account. The only role allowed to trigger non-payment
         // suspension (DD_SUB-WF-SUSPEND-NP-01 R-T-1); also drives dunning restrictions.
         'BILLING_INTERNAL' => ['invoice.read', 'payment.read', 'subscription.read', 'subscription.manage'],

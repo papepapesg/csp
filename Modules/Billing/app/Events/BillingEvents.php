@@ -50,6 +50,15 @@ final class BillingEvents
 
     public const DUNNING_CLEARED = 'DunningCleared';
 
+    // BIL-04 dunning lifecycle events (§4.4)
+    public const SUBSCRIPTION_ENTERED_DUNNING = 'SubscriptionEnteredDunning';
+
+    public const DUNNING_DEBT_INCREASED = 'SubscriptionDunningDebtIncreased';
+
+    public const DUNNING_TERMINATION_PENDING = 'SubscriptionDunningTerminationPending';
+
+    public const DUNNING_RECOVERY_FAILED = 'SubscriptionDunningRecoveryFailed';
+
     public const SUBSCRIPTION_SUSPENDED_NP = 'SubscriptionSuspendedForNonPayment';
 
     // BIL-02-ADJ-01 adjustment lifecycle
