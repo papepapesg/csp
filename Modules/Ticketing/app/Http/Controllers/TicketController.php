@@ -63,6 +63,29 @@ class TicketController extends ApiController
         return ApiResponse::item($this->tickets->assign($ticket, $data['assignee_id'], $request->user()?->uid));
     }
 
+    public function addAttachment(Request $request, Ticket $ticket): JsonResponse
+    {
+        $v = $request->validate([
+            'file_id' => ['required', 'string'],
+            'file_name' => ['required', 'string'],
+            'content_type' => ['nullable', 'string'],
+            'size_bytes' => ['nullable', 'integer'],
+        ]);
+
+        return ApiResponse::item($this->tickets->addAttachment($ticket, $v, $request->user()?->uid), 201);
+    }
+
+    public function link(Request $request, Ticket $ticket): JsonResponse
+    {
+        $v = $request->validate([
+            'entity_type' => ['required', 'string'],
+            'entity_ref' => ['required', 'string'],
+            'relation' => ['nullable', 'string'],
+        ]);
+
+        return ApiResponse::item($this->tickets->linkEntity($ticket, $v['entity_type'], $v['entity_ref'], $v['relation'] ?? 'RELATED', $request->user()?->uid), 201);
+    }
+
     public function comment(Request $request, Ticket $ticket): JsonResponse
     {
         $v = $request->validate([

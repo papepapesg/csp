@@ -36,6 +36,7 @@ class TicketService
                 'priority' => $priority,
                 'queue' => $data['queue'] ?? $category?->default_queue,
                 'status' => Ticket::OPEN,
+                'ticket_number' => $this->nextTicketNumber(Context::operatorCode()),
                 'sla_due_at' => now()->addHours(SlaPolicy::resolveHours(Context::operatorCode(), $data['category'] ?? null, $priority)),
             ]);
             $this->timeline($ticket, 'CREATED', null, Ticket::OPEN, $data['opened_by'] ?? null);
@@ -43,6 +44,49 @@ class TicketService
 
             return $ticket;
         });
+    }
+
+    /** Gap-free human-facing ticket number per (operator, year): TCK-WIK-2026-000042. */
+    private function nextTicketNumber(string $operator): string
+    {
+        $year = (int) now()->year;
+        DB::table('ticket_number_sequence')->insertOrIgnore([
+            'operator_code' => $operator, 'fiscal_year' => $year, 'last_value' => 0,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $row = DB::table('ticket_number_sequence')->where('operator_code', $operator)->where('fiscal_year', $year)->lockForUpdate()->first();
+        $next = ((int) $row->last_value) + 1;
+        DB::table('ticket_number_sequence')->where('operator_code', $operator)->where('fiscal_year', $year)->update(['last_value' => $next, 'updated_at' => now()]);
+
+        return sprintf('TCK-%s-%d-%06d', $operator, $year, $next);
+    }
+
+    /** Attach a file (stored in FOUNDATION_FILE_STORAGE) to a ticket (TCK-01 §attachments). */
+    public function addAttachment(Ticket $ticket, array $data, ?string $actor = null): object
+    {
+        $id = \App\Foundation\Support\Id::make('tatt');
+        DB::table('ticket_attachment')->insert([
+            'attachment_id' => $id, 'ticket_id' => $ticket->ticket_id,
+            'file_id' => $data['file_id'], 'file_name' => $data['file_name'],
+            'content_type' => $data['content_type'] ?? null, 'size_bytes' => $data['size_bytes'] ?? null,
+            'uploaded_by' => $actor, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->timeline($ticket, 'ATTACHMENT_ADDED', null, $ticket->status, $actor, ['fileName' => $data['file_name']]);
+
+        return DB::table('ticket_attachment')->where('attachment_id', $id)->first();
+    }
+
+    /** Link the ticket to another entity (subscription/invoice/WO/ticket…). */
+    public function linkEntity(Ticket $ticket, string $entityType, string $entityRef, string $relation = 'RELATED', ?string $actor = null): object
+    {
+        $id = \App\Foundation\Support\Id::make('tlnk');
+        DB::table('ticket_link')->updateOrInsert(
+            ['ticket_id' => $ticket->ticket_id, 'entity_type' => $entityType, 'entity_ref' => $entityRef, 'relation' => $relation],
+            ['link_id' => $id, 'linked_by' => $actor, 'updated_at' => now(), 'created_at' => now()],
+        );
+        $this->timeline($ticket, 'LINKED', null, $ticket->status, $actor, ['entityType' => $entityType, 'entityRef' => $entityRef, 'relation' => $relation]);
+
+        return DB::table('ticket_link')->where('ticket_id', $ticket->ticket_id)->where('entity_type', $entityType)->where('entity_ref', $entityRef)->where('relation', $relation)->first();
     }
 
     public function assign(Ticket $ticket, string $assigneeId, ?string $actor = null): Ticket

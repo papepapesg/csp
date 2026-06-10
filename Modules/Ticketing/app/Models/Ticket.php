@@ -19,9 +19,18 @@ class Ticket extends Model
 
     public const OPEN = 'OPEN';
 
+    public const TRIAGED = 'TRIAGED';
+
     public const ASSIGNED = 'ASSIGNED';
 
     public const IN_PROGRESS = 'IN_PROGRESS';
+
+    // TCK-01 §5 WAITING states (WAITING_WORK_ORDER supersedes the legacy PENDING_WO alias).
+    public const WAITING_CUSTOMER = 'WAITING_CUSTOMER';
+
+    public const WAITING_INTERNAL = 'WAITING_INTERNAL';
+
+    public const WAITING_WORK_ORDER = 'WAITING_WORK_ORDER';
 
     public const PENDING_WO = 'PENDING_WO';
 

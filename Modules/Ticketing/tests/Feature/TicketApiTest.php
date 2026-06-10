@@ -31,6 +31,25 @@ class TicketApiTest extends TestCase
         ], ['Idempotency-Key' => 'tk-'.$priority])->assertCreated()->assertJsonPath('status', 'OPEN')->json('ticket_id');
     }
 
+    public function test_ticket_gets_gap_free_number_attachments_and_links(): void
+    {
+        $a = $this->postJson('/api/tickets', ['category' => 'TECHNICAL', 'subject' => 'A', 'customer_id' => 'c1'], ['Idempotency-Key' => 'n1'])->assertCreated()->json();
+        $b = $this->postJson('/api/tickets', ['category' => 'TECHNICAL', 'subject' => 'B', 'customer_id' => 'c2'], ['Idempotency-Key' => 'n2'])->assertCreated()->json();
+
+        // Gap-free, human-facing, sequential per operator.
+        $this->assertSame('TCK-WIK-'.now()->year.'-000001', $a['ticket_number']);
+        $this->assertSame('TCK-WIK-'.now()->year.'-000002', $b['ticket_number']);
+
+        // Attachment metadata + entity link.
+        $this->postJson("/api/tickets/{$a['ticket_id']}/attachments", ['file_id' => 'file_1', 'file_name' => 'speedtest.png', 'content_type' => 'image/png', 'size_bytes' => 2048])
+            ->assertCreated()->assertJsonPath('file_name', 'speedtest.png');
+        $this->postJson("/api/tickets/{$a['ticket_id']}/links", ['entity_type' => 'SUBSCRIPTION', 'entity_ref' => 'sub_1', 'relation' => 'RELATED'])
+            ->assertCreated()->assertJsonPath('entity_ref', 'sub_1');
+
+        $this->assertDatabaseHas('ticket_attachment', ['ticket_id' => $a['ticket_id'], 'file_id' => 'file_1']);
+        $this->assertDatabaseHas('ticket_link', ['ticket_id' => $a['ticket_id'], 'entity_type' => 'SUBSCRIPTION', 'entity_ref' => 'sub_1']);
+    }
+
     public function test_ticket_lifecycle_with_sla_and_timeline(): void
     {
         $id = $this->create();

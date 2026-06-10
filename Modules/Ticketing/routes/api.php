@@ -18,6 +18,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('tickets/{ticket}', [TicketController::class, 'show'])->middleware('permission:ticket.read');
     Route::post('tickets/{ticket}/assign', [TicketController::class, 'assign'])->middleware('permission:ticket.assign');
     Route::post('tickets/{ticket}/comments', [TicketController::class, 'comment'])->middleware('permission:ticket.create');
+    Route::post('tickets/{ticket}/attachments', [TicketController::class, 'addAttachment'])->middleware('permission:ticket.create');
+    Route::post('tickets/{ticket}/links', [TicketController::class, 'link'])->middleware('permission:ticket.manage');
     Route::post('tickets/{ticket}/work-orders', [TicketController::class, 'createWorkOrder'])->middleware('permission:ticket.manage');
     Route::post('tickets/{ticket}/resolve', [TicketController::class, 'resolve'])->middleware('permission:ticket.manage');
     Route::post('tickets/{ticket}/reopen', [TicketController::class, 'reopen'])->middleware('permission:ticket.manage');
