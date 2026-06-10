@@ -45,6 +45,34 @@ return [
 
     'drools' => [
         'base_url' => env('DROOLS_BASE_URL', 'http://drools:8080/kie-server'),
+        'user' => env('DROOLS_USER', 'sophix'),
+        'password' => env('DROOLS_PASSWORD', ''),
+        'timeout_seconds' => (int) env('DROOLS_TIMEOUT_SECONDS', 3), // DROOLS-CALL-1
+        /*
+        | DROOLS-VER-5: callers PIN container ids — no floating to latest.
+        | Keyed by rule-set prefix (longest match wins); {operator} is replaced
+        | with the lowercased operator code (container naming §8:
+        | {module}-rules-{operator}_{version}).
+        */
+        'containers' => [
+            'rules.subscription' => [
+                'container' => 'subscription-rules-{operator}_1.0.0',
+                'lookup' => 'subscription-session',
+                'fact_class' => 'com.sophix.subscription.facts.RequestFact',
+            ],
+            'rules.billing' => [
+                'container' => 'billing-rules-{operator}_1.0.0',
+                'lookup' => 'billing-session',
+                'fact_class' => 'com.sophix.billing.facts.RequestFact',
+            ],
+        ],
+    ],
+
+    'rules' => [
+        // In-process memo of resolved decision tables (NOT Redis — a module never
+        // caches data it owns, FOUNDATION_CACHE §5). Bounds policy-edit staleness
+        // in long-running workers. 0 disables.
+        'memo_seconds' => (int) env('SOPHIX_RULES_MEMO_SECONDS', 60),
     ],
 
     /*

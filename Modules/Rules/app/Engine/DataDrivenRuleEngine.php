@@ -23,6 +23,18 @@ class DataDrivenRuleEngine implements RuleEngine
     /** @var array<string, callable(array<string,mixed>): array<string,mixed>> */
     private array $fallbacks = [];
 
+    /**
+     * In-process memo of resolved tables, keyed {ruleSet}|{operator}. Rules are
+     * the engine's OWN source-of-truth data, so FOUNDATION_CACHE §5 forbids a
+     * Redis copy ("a module never caches data it owns") — but a worker loop
+     * evaluating the same package thousands of times per minute need not re-read
+     * PostgreSQL every call. The short TTL (sophix.rules.memo_seconds) bounds
+     * how long a studio edit takes to reach long-running workers.
+     *
+     * @var array<string, array{attrs: ?array<string,mixed>, expires: float}>
+     */
+    private array $memo = [];
+
     public function register(string $ruleSet, callable $resolver): void
     {
         $this->fallbacks[$ruleSet] = $resolver;
@@ -49,13 +61,36 @@ class DataDrivenRuleEngine implements RuleEngine
 
     private function resolveTable(string $ruleSet, ?string $operator): ?DecisionTable
     {
-        return DecisionTable::query()
+        $ttl = (int) config('sophix.rules.memo_seconds', 60);
+        $key = $ruleSet.'|'.($operator ?? '*');
+
+        if ($ttl > 0 && isset($this->memo[$key]) && $this->memo[$key]['expires'] > microtime(true)) {
+            $attrs = $this->memo[$key]['attrs'];
+
+            return $attrs === null ? null : DecisionTable::hydrate([$attrs])->first();
+        }
+
+        $table = DecisionTable::query()
             ->where('rule_set', $ruleSet)
             ->where('status', DecisionTable::DEPLOYED)
             ->where(fn ($q) => $q->where('operator_code', $operator)->orWhereNull('operator_code'))
             ->orderByRaw('operator_code IS NULL')   // operator-specific first
             ->orderByDesc('version')
             ->first();
+
+        if ($ttl > 0) {
+            // Misses are memoized too: fallback-only rule sets would otherwise
+            // query on every single evaluation.
+            $this->memo[$key] = ['attrs' => $table?->getAttributes(), 'expires' => microtime(true) + $ttl];
+        }
+
+        return $table;
+    }
+
+    /** Drop memoized resolutions (same-process policy edits, e.g. the studio API). */
+    public function forgetMemo(): void
+    {
+        $this->memo = [];
     }
 
     /**
