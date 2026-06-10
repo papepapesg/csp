@@ -130,7 +130,8 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 2026-06-10 | #38 outbox/event bus (confirmed prior coverage); #36 workflow engine | engine internals: token walk, fetchAndLock, tick |
 | 2026-06-10 | #37 rules engine | table anatomy, hit policy, fallbacks, 14 consumers |
 | 2026-06-10 | #13 invoice generation + legal numbering | gap-free row-locked sequence; STA-01 lazy-status gap noted |
-| 2026-06-10 | #14 cycle billing | rate→billed-flag→settle by mode; gaps: no cycle anchor, no recurring package fee |
+| 2026-06-10 | #14 cycle billing | rate→billed-flag→settle by mode; gaps found |
+| 2026-06-10 | #14 GAP CLOSED | BIL-03 per-subscription anchor + recurring package fee; separated cycle-vs-usage (ChargeComputeService typed charges); BIL-02-GEN-01 SUMMARY/DETAIL lines + operator grouping policy |
 
 **Next up (suggested order): #16 payments → #18 dunning,
 then #30 ticketing/SLA, #24–#26 OSR, #34 campaigns/bundles, #4 ILM, #50/#47 channels.**
