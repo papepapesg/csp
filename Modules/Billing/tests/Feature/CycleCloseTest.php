@@ -61,6 +61,79 @@ class CycleCloseTest extends TestCase
         $med->ratePending('WIK');
     }
 
+    public function test_triple_play_wallet_grouping_splits_voice_invoice_with_itemized_call_detail(): void
+    {
+        // The triple-play scenario: Internet + TV bill together (the cyclical
+        // package fee); VOICE is rated and — under a WALLET grouping policy —
+        // gets its own invoice; the voice invoice has itemized call detail
+        // (destination / when / duration) via the RAT-01 audit link.
+        \Illuminate\Support\Facades\DB::table('invoice_grouping_config')->insert([
+            'operator_code' => 'WIK', 'trigger_code' => 'CYCLE_POSTPAID',
+            'grouping_dimension' => 'WALLET', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        // Catalog: package wallet = INTERNET (cyclical fee routes there); the
+        // package's USAGE voice service routes to the VOICE wallet (PLM-CFG-01).
+        \Illuminate\Support\Facades\DB::table('package')->insert([
+            'id' => 'pkg_triple', 'operator_code' => 'WIK', 'code' => 'TRIPLE', 'name' => 'Triple Play',
+            'status' => 'ACTIVE', 'default_wallet_ref' => 'WALLET_INTERNET', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        \Illuminate\Support\Facades\DB::table('service_class')->insertOrIgnore([
+            'id' => 'scl_voice', 'operator_code' => 'WIK', 'name' => 'Voice', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        \Illuminate\Support\Facades\DB::table('service')->insert([
+            'id' => 'svc_voice', 'operator_code' => 'WIK', 'code' => 'VOICE_LINE', 'name' => 'Voice line',
+            'service_class_id' => 'scl_voice', 'consumption_model' => 'USAGE', 'revenue_category' => 'VOICE',
+            'default_wallet_ref' => 'WALLET_VOICE', 'status' => 'ACTIVE', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        \Illuminate\Support\Facades\DB::table('package_service')->insert([
+            'id' => 'pks_1', 'package_id' => 'pkg_triple', 'service_id' => 'svc_voice', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $pv = PackageVersion::query()->create([
+            'package_id' => 'pkg_triple', 'price' => 4500, 'currency' => 'KES',
+            'effective_from' => now()->subYear(), 'status' => PackageVersion::STATUS_ACTIVE,
+        ]);
+        $sub = Subscription::query()->create([
+            'subscription_id' => Id::make('sub'), 'customer_id' => 'c1', 'account_id' => 'a1',
+            'operator_code' => 'WIK', 'homepass_id' => 'h1', 'package_ref' => 'pkg_triple',
+            'package_version_id' => $pv->getKey(), 'status_code' => 'ACTIVE',
+            'currency' => 'KES', 'billing_mode' => 'POSTPAID', 'cycle_frequency_months' => 1,
+            'current_cycle_start' => now()->subMonth(), 'current_cycle_end' => now()->subMinute(),
+        ]);
+
+        // Two rated voice calls (CDRs with destination + duration).
+        $med = app(MediationRatingService::class);
+        $med->ingest([
+            ['usage_type' => 'VOICE', 'quantity' => 180, 'destination' => 'ONNET', 'source_ref' => 'call-1', 'subscription_id' => $sub->subscription_id],
+            ['usage_type' => 'VOICE', 'quantity' => 60, 'destination' => 'INTL_UG', 'source_ref' => 'call-2', 'subscription_id' => $sub->subscription_id],
+        ]);
+        $med->ratePending('WIK');
+
+        app(CycleCloseService::class)->scan('WIK');
+
+        // TWO invoices: the cyclical fee (Internet+TV wallet) and voice (own wallet).
+        $invoices = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->get();
+        $this->assertCount(2, $invoices);
+        $internet = $invoices->firstWhere('grouping_key_values', 'WALLET_INTERNET');
+        $voice = $invoices->firstWhere('grouping_key_values', 'WALLET_VOICE');
+        $this->assertEquals(4500.00, $internet->total_amount); // cyclical package fee together
+        $this->assertSame('SUBSCRIPTION', $internet->lines()->where('line_type', 'DETAIL')->first()->service_category_code);
+        $this->assertSame('VOICE', $voice->lines()->where('line_type', 'DETAIL')->first()->service_category_code);
+
+        // RAT-01 mark-invoiced: the calls are linked to the VOICE invoice…
+        $this->assertSame(2, \Modules\Billing\Models\RatedEvent::query()->where('invoice_id', $voice->invoice_id)->count());
+
+        // …and the itemized page lists each call: destination, when, duration.
+        $this->seed(\Database\Seeders\RbacSeeder::class);
+        $user = \App\Models\User::factory()->create(['operator_code' => 'WIK']);
+        $user->assignRole('BILLING_OPERATOR');
+        \Laravel\Sanctum\Sanctum::actingAs($user);
+        $items = $this->getJson('/api/rated-events?invoice_id='.$voice->invoice_id)->assertOk()->json('items');
+        $this->assertCount(2, $items);
+        $this->assertEqualsCanonicalizing(['ONNET', 'INTL_UG'], array_column($items, 'destination'));
+        $this->assertNotNull($items[0]['occurred_at']);
+        $this->assertContains(180, array_map(fn ($i) => (int) $i['quantity'], $items)); // duration seconds
+    }
+
     public function test_postpaid_close_invoices_recurring_fee_plus_usage_and_advances_anchor(): void
     {
         $sub = $this->subscription('POSTPAID', $this->pricedPackage(2500));

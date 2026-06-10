@@ -103,9 +103,10 @@ class CycleCloseService
 
             $windowEnd = $subscription->current_cycle_end;
 
-            // BIL-01 computes the typed charges (RECURRING + per-category USAGE);
+            // BIL-01 computes the typed charges (cyclical fee + per-category USAGE);
             // BIL-03 only orchestrates the boundary.
-            ['charges' => $charges, 'ratedIds' => $ratedIds] = $this->charges->cycleCharges($subscription);
+            ['charges' => $charges, 'ratedIdsByCategory' => $ratedIdsByCategory] = $this->charges->cycleCharges($subscription);
+            $ratedIds = array_merge(...array_values($ratedIdsByCategory ?: [[]]));
             $total = round(array_sum(array_map(fn (Charge $c) => $c->amount, $charges)), 2);
 
             if ($total <= 0) {
@@ -137,7 +138,18 @@ class CycleCloseService
                 $charges,
                 'CYCLE_POSTPAID',
             );
-            RatedEvent::query()->whereIn('rated_id', $ratedIds)->update(['billed' => true]);
+
+            // RAT-01 mark-invoiced: each rated usage id is linked to THE invoice
+            // that carries its category line — a grouping split (e.g. voice on its
+            // own document) links voice calls to the voice invoice. This link is
+            // what the itemized usage pages are built from.
+            foreach ($invoices as $invoice) {
+                $categories = $invoice->lines()->where('line_type', 'DETAIL')->pluck('service_category_code')->all();
+                $ids = array_merge(...array_values(array_intersect_key($ratedIdsByCategory, array_flip($categories)) ?: [[]]));
+                if ($ids !== []) {
+                    RatedEvent::query()->whereIn('rated_id', $ids)->update(['billed' => true, 'invoice_id' => $invoice->invoice_id]);
+                }
+            }
             $this->advanceAnchor($subscription);
             $this->emit($subscription, BillingEvents::CYCLE_CLOSED, ['invoiceIds' => $invoices->pluck('invoice_id')->all(), 'total' => (string) $total]);
 
