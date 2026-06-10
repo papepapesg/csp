@@ -70,12 +70,14 @@ class TicketApiTest extends TestCase
 
         $this->postJson("/api/tickets/{$id}/work-orders", ['tech_region_id' => 'KE-NRB-KAREN'])
             ->assertOk()
-            ->assertJsonPath('status', 'PENDING_WO');
+            ->assertJsonPath('status', 'WAITING_WORK_ORDER');
 
         $ticket = $this->getJson("/api/tickets/{$id}")->json();
         $this->assertStringStartsWith('wo_', $ticket['work_order_id']);
         $this->assertDatabaseHas('work_order', ['work_order_id' => $ticket['work_order_id'], 'type' => 'SUPPORT', 'source_type' => 'TICKET']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'TicketWorkOrderCreated']);
+        // TCK-6: the WO creation is auditable through a ticket_link row.
+        $this->assertDatabaseHas('ticket_link', ['ticket_id' => $id, 'entity_type' => 'WORK_ORDER', 'entity_ref' => $ticket['work_order_id'], 'relation' => 'CREATED_FROM_TICKET']);
     }
 
     public function test_wo_creation_is_gated_by_category(): void
@@ -110,6 +112,53 @@ class TicketApiTest extends TestCase
         $this->postJson("/api/tickets/{$id}/reopen", ['reason_code' => 'ISSUE_RECURRED'])
             ->assertOk()->assertJsonPath('status', 'OPEN')->assertJsonPath('reopened_count', 1);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'TicketReopened']);
+    }
+
+    public function test_ticket_must_link_to_an_entity_tck2(): void
+    {
+        // No customer/account/subscription and no links, on a non-internal category → 422.
+        $this->postJson('/api/tickets', ['category' => 'TECHNICAL', 'subject' => 'orphan'], ['Idempotency-Key' => 'orphan-1'])
+            ->assertStatus(422)->assertJsonPath('errorCode', 'TICKET_REQUIRES_LINK');
+
+        // An inline link satisfies TCK-2 even without the column refs.
+        $id = $this->postJson('/api/tickets', [
+            'category' => 'TECHNICAL', 'subject' => 'linked',
+            'links' => [['entity_type' => 'EQUIPMENT_INSTANCE', 'entity_ref' => 'eqp_42', 'relation' => 'REPORTED_DEVICE']],
+        ], ['Idempotency-Key' => 'linked-1'])->assertCreated()->json('ticket_id');
+        $this->assertDatabaseHas('ticket_link', ['ticket_id' => $id, 'entity_type' => 'EQUIPMENT_INSTANCE', 'entity_ref' => 'eqp_42']);
+    }
+
+    public function test_cancelling_the_work_order_sends_ticket_back_for_review(): void
+    {
+        $id = $this->create('URGENT');
+        $woId = $this->postJson("/api/tickets/{$id}/work-orders", ['tech_region_id' => 'KE-NRB'])->assertOk()->json('work_order_id');
+
+        $svc = app(\Modules\WorkOrder\Services\WorkOrderService::class);
+        $wo = \Modules\WorkOrder\Models\WorkOrder::find($woId);
+        $svc->cancel($wo, 'TECH_UNAVAILABLE');
+        \Illuminate\Support\Facades\Artisan::call('sophix:outbox:dispatch');
+
+        $ticket = Ticket::find($id);
+        // Not assigned to a user, so it parks in WAITING_INTERNAL with the review flag set.
+        $this->assertSame('WAITING_INTERNAL', $ticket->status);
+        $this->assertTrue((bool) $ticket->requires_review);
+        $this->assertNull($ticket->work_order_id);
+        $this->assertDatabaseHas('ticket_timeline', ['ticket_id' => $id, 'event_type' => 'LINKED_WORK_ORDER_CANCELLED']);
+    }
+
+    public function test_first_response_is_stamped_on_first_agent_action(): void
+    {
+        $id = $this->create();
+        $this->assertNull(Ticket::find($id)->first_response_at);
+        $this->assertNotNull(Ticket::find($id)->first_response_due_at); // SLA clock started at create
+
+        $this->postJson("/api/tickets/{$id}/assign", ['assignee_id' => 'agent_1'])->assertOk();
+        $first = Ticket::find($id)->first_response_at;
+        $this->assertNotNull($first);
+
+        // A later comment does not move the (already stamped) first response.
+        $this->postJson("/api/tickets/{$id}/comments", ['body' => 'follow-up'])->assertCreated();
+        $this->assertEquals($first->timestamp, Ticket::find($id)->first_response_at->timestamp);
     }
 
     public function test_create_requires_permission(): void

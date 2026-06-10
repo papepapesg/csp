@@ -50,7 +50,14 @@ class Ticket extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['sla_due_at' => 'datetime', 'resolved_at' => 'datetime', 'closed_at' => 'datetime'];
+    protected $casts = [
+        'sla_due_at' => 'datetime',
+        'first_response_due_at' => 'datetime',
+        'first_response_at' => 'datetime',
+        'resolved_at' => 'datetime',
+        'closed_at' => 'datetime',
+        'requires_review' => 'boolean',
+    ];
 
     public function getRouteKeyName(): string
     {

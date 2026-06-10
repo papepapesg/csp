@@ -45,6 +45,11 @@ class TicketController extends ApiController
             'account_id' => ['nullable', 'string'],
             'subscription_id' => ['nullable', 'string'],
             'queue' => ['nullable', 'string', 'max:64'],
+            // TCK-2 / §8.1: inline entity links satisfy the "must link to an entity" rule.
+            'links' => ['nullable', 'array'],
+            'links.*.entity_type' => ['required_with:links', 'string'],
+            'links.*.entity_ref' => ['required_with:links', 'string'],
+            'links.*.relation' => ['nullable', 'string'],
         ]);
         $data['opened_by'] = $request->user()?->uid;
 

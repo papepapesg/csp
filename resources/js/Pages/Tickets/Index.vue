@@ -20,7 +20,7 @@ const flash = (e) => { error.value = e.response?.data?.message ?? 'Request faile
 
 const isOverdue = (t) => t.sla_due_at && !['RESOLVED', 'CLOSED', 'CANCELLED'].includes(t.status) && new Date(t.sla_due_at) < new Date();
 const visible = computed(() => (filter.value.overdueOnly ? tickets.value.filter(isOverdue) : tickets.value));
-const statusChip = (s) => ({ OPEN: 'bg-blue-100 text-blue-700', ASSIGNED: 'bg-indigo-100 text-indigo-700', PENDING_WO: 'bg-amber-100 text-amber-700', RESOLVED: 'bg-green-100 text-green-700', CLOSED: 'bg-gray-200 text-gray-600', CANCELLED: 'bg-red-100 text-red-600' }[s] ?? 'bg-gray-100');
+const statusChip = (s) => ({ OPEN: 'bg-blue-100 text-blue-700', ASSIGNED: 'bg-indigo-100 text-indigo-700', WAITING_WORK_ORDER: 'bg-amber-100 text-amber-700', WAITING_CUSTOMER: 'bg-amber-100 text-amber-700', WAITING_INTERNAL: 'bg-amber-100 text-amber-700', UNDER_REVIEW: 'bg-purple-100 text-purple-700', RESOLVED: 'bg-green-100 text-green-700', CLOSED: 'bg-gray-200 text-gray-600', CANCELLED: 'bg-red-100 text-red-600' }[s] ?? 'bg-gray-100');
 
 async function load() {
     const { data } = await window.axios.get('/api/tickets', {
@@ -66,7 +66,7 @@ onMounted(load);
             <div class="mb-3 flex gap-2 items-center">
                 <select v-model="filter.status" @change="load" class="border rounded px-2 py-1 text-sm">
                     <option value="">all statuses</option>
-                    <option v-for="s in ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'PENDING_WO', 'RESOLVED', 'CLOSED', 'CANCELLED']" :key="s">{{ s }}</option>
+                    <option v-for="s in ['OPEN', 'TRIAGED', 'ASSIGNED', 'WAITING_CUSTOMER', 'WAITING_INTERNAL', 'WAITING_WORK_ORDER', 'UNDER_REVIEW', 'RESOLVED', 'CLOSED', 'CANCELLED']" :key="s">{{ s }}</option>
                 </select>
                 <input v-model="filter.queue" @keyup.enter="load" placeholder="queue" class="border rounded px-2 py-1 text-sm w-36" />
                 <label class="text-sm"><input type="checkbox" v-model="filter.overdueOnly" /> SLA overdue only</label>

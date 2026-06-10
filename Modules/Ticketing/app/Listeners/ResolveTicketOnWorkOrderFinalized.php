@@ -7,8 +7,9 @@ use Modules\Ticketing\Services\TicketService;
 
 /**
  * TCK-01 §9.2 WO event consumption. When a Work Order created from a ticket finalizes,
- * move the waiting ticket (PENDING_WO) to RESOLVED. Event-driven + idempotent (only
- * acts while a ticket still waits on that WO), per TCK-10.
+ * move the waiting ticket (WAITING_WORK_ORDER) to RESOLVED/UNDER_REVIEW; when it is
+ * cancelled, send the ticket back to ASSIGNED/WAITING_INTERNAL for review. Event-driven
+ * + idempotent (only acts while a ticket still waits on that WO), per TCK-10.
  */
 class ResolveTicketOnWorkOrderFinalized
 {
@@ -17,12 +18,14 @@ class ResolveTicketOnWorkOrderFinalized
     public function handle(OutboxEventPublished $published): void
     {
         $event = $published->event;
-        if ($event->event_type !== 'WorkOrderFinalized') {
+        $woId = $event->payload['workOrderId'] ?? null;
+        if (! $woId) {
             return;
         }
-        $woId = $event->payload['workOrderId'] ?? null;
-        if ($woId) {
-            $this->tickets->onWorkOrderFinalized($woId, $event->payload['finalReason'] ?? null);
-        }
+        match ($event->event_type) {
+            'WorkOrderFinalized' => $this->tickets->onWorkOrderFinalized($woId, $event->payload['finalReason'] ?? null),
+            'WorkOrderCancelled' => $this->tickets->onWorkOrderCancelled($woId, $event->payload['reason'] ?? $event->payload['cancelReason'] ?? null),
+            default => null,
+        };
     }
 }

@@ -28,22 +28,75 @@ class TicketService
     /** @param array<string,mixed> $data */
     public function create(array $data): Ticket
     {
-        return DB::transaction(function () use ($data) {
-            // TCK-01 §7.6: the category catalog supplies routing defaults (priority/queue).
-            $category = TicketCategory::resolve(Context::operatorCode(), $data['category'] ?? null);
+        // TCK-01 §7.6: the category catalog supplies routing defaults (priority/queue).
+        $category = TicketCategory::resolve(Context::operatorCode(), $data['category'] ?? null);
+        // Inline entity links (§8.1 "links": [...]) are pulled out before the row insert.
+        $links = $data['links'] ?? [];
+        unset($data['links']);
+        // TCK-2: a ticket must link to at least one business entity or be an explicit
+        // internal category. We honour the row's customer/account/subscription columns,
+        // any inline links, or a category whose type is an internal escalation.
+        $this->assertLinked($data, $links, $category);
+
+        return DB::transaction(function () use ($data, $links, $category) {
             $priority = $data['priority'] ?? $category?->default_priority ?? 'NORMAL';
+            $slaHours = SlaPolicy::resolveHours(Context::operatorCode(), $data['category'] ?? null, $priority);
             $ticket = Ticket::query()->create($data + [
                 'priority' => $priority,
                 'queue' => $data['queue'] ?? $category?->default_queue,
                 'status' => Ticket::OPEN,
                 'ticket_number' => $this->nextTicketNumber(Context::operatorCode()),
-                'sla_due_at' => now()->addHours(SlaPolicy::resolveHours(Context::operatorCode(), $data['category'] ?? null, $priority)),
+                'sla_due_at' => now()->addHours($slaHours),
+                'first_response_due_at' => now()->addHours($slaHours), // §7.1 first-response clock
             ]);
             $this->timeline($ticket, 'CREATED', null, Ticket::OPEN, $data['opened_by'] ?? null);
+            // §8.6 step 3 / §7.2: persist the entity links supplied at creation.
+            foreach ($links as $link) {
+                $this->linkEntity($ticket, $link['entity_type'], $link['entity_ref'], $link['relation'] ?? 'RELATED', $data['opened_by'] ?? null);
+            }
             $this->emit(TicketEvents::CREATED, $ticket, ['category' => $ticket->category, 'priority' => $ticket->priority]);
 
             return $ticket;
         });
+    }
+
+    /**
+     * TCK-2: every ticket must link to at least one of customer/account/subscription/
+     * invoice/payment/order/work order/equipment, or be an explicit internal category.
+     *
+     * @param  array<string,mixed>  $data
+     * @param  array<int,array<string,mixed>>  $links
+     */
+    /**
+     * §6 categories that are informational / internal intake and so satisfy TCK-2's
+     * "explicit internal category" clause without an entity reference (general inquiry,
+     * internal escalation, catalog query, KYC, and the ASR information/complaint/
+     * service-request intake forms a prospect may raise before any record exists).
+     */
+    private const NON_ENTITY_CATEGORIES = [
+        'INTERNAL_ESCALATION', 'GENERAL_INQUIRY', 'PACKAGE_OR_CATALOG_QUERY', 'KYC_SUPPORT',
+        'INFORMATION', 'INFORMATION_REQUEST', 'COMPLAINT', 'SERVICE_REQUEST',
+    ];
+
+    private function assertLinked(array $data, array $links, ?TicketCategory $category): void
+    {
+        $hasColumnRef = ! empty($data['customer_id']) || ! empty($data['account_id']) || ! empty($data['subscription_id'])
+            || ! empty($data['invoice_id']) || ! empty($data['payment_id']) || ! empty($data['order_id'])
+            || ! empty($data['work_order_id']) || ! empty($data['equipment_id']);
+        $code = $data['category'] ?? null;
+        $isInternal = in_array($code, self::NON_ENTITY_CATEGORIES, true)
+            || ($category && in_array($category->type_code, self::NON_ENTITY_CATEGORIES, true));
+        if (! $hasColumnRef && empty($links) && ! $isInternal) {
+            throw new DomainException('TICKET_REQUIRES_LINK', 'A ticket must link to at least one entity (customer, account, subscription, invoice, payment, order, work order, equipment) or be an explicit internal category.', 422);
+        }
+    }
+
+    /** §7.1 SLA: stamp the first agent response (assign/comment/resolve) once. */
+    private function captureFirstResponse(Ticket $ticket): void
+    {
+        if ($ticket->first_response_at === null) {
+            $ticket->forceFill(['first_response_at' => now()])->save();
+        }
     }
 
     /** Gap-free human-facing ticket number per (operator, year): TCK-WIK-2026-000042. */
@@ -94,6 +147,7 @@ class TicketService
         return DB::transaction(function () use ($ticket, $assigneeId, $actor) {
             $from = $ticket->status;
             $ticket->update(['assignee_id' => $assigneeId, 'status' => Ticket::ASSIGNED]);
+            $this->captureFirstResponse($ticket);
             $this->timeline($ticket, 'ASSIGNED', $from, Ticket::ASSIGNED, $actor, ['assigneeId' => $assigneeId]);
             $this->emit(TicketEvents::ASSIGNED, $ticket, ['assigneeId' => $assigneeId]);
 
@@ -105,13 +159,17 @@ class TicketService
     public function comment(Ticket $ticket, array $data): Ticket
     {
         $ticket->comments()->create($data);
+        // §7.1: an internal/customer-visible agent comment counts as a first response.
+        if (($data['author_id'] ?? null) !== null) {
+            $this->captureFirstResponse($ticket);
+        }
         $this->timeline($ticket, 'COMMENT', $ticket->status, $ticket->status, $data['author_id'] ?? null);
 
         return $ticket->load('comments');
     }
 
     /**
-     * Raise a work order for field intervention and move the ticket to PENDING_WO.
+     * Raise a work order for field intervention and move the ticket to WAITING_WORK_ORDER.
      *
      * @param  array<string,mixed>  $woData
      */
@@ -127,7 +185,7 @@ class TicketService
             throw new DomainException('TICKET_CATEGORY_WO_NOT_ALLOWED', "Category {$ticket->category} is not allowed to create a work order.", 409);
         }
         // One active linked WO at a time (TCK §9.1).
-        if ($ticket->work_order_id && $ticket->status === Ticket::PENDING_WO) {
+        if ($ticket->work_order_id && $ticket->status === Ticket::WAITING_WORK_ORDER) {
             throw new DomainException('ACTIVE_WORK_ORDER_ALREADY_LINKED', 'An active work order is already linked to this ticket.', 409);
         }
 
@@ -138,14 +196,19 @@ class TicketService
                 'account_id' => $ticket->account_id,
                 'customer_id' => $ticket->customer_id,
                 'subscription_id' => $ticket->subscription_id,
+                // §8.6 callerContext: source_type/source_ref tell WO-01 this WO was
+                // created by TCK and which ticket to notify back (WorkOrderFinalized).
                 'source_type' => 'TICKET',
                 'source_ref' => $ticket->ticket_id,
                 'created_by' => $actor,
             ], $woData));
 
+            // §8.6: (1) status → WAITING_WORK_ORDER, (2) set current_wo_id,
+            // (3) insert ticket_link (TCK-6 auditable link), (4) timeline, (5) emit.
             $from = $ticket->status;
-            $ticket->update(['work_order_id' => $wo->work_order_id, 'status' => Ticket::PENDING_WO]);
-            $this->timeline($ticket, 'WORK_ORDER_LINKED', $from, Ticket::PENDING_WO, $actor, ['workOrderId' => $wo->work_order_id]);
+            $ticket->update(['work_order_id' => $wo->work_order_id, 'status' => Ticket::WAITING_WORK_ORDER]);
+            $this->linkEntity($ticket, 'WORK_ORDER', $wo->work_order_id, 'CREATED_FROM_TICKET', $actor);
+            $this->timeline($ticket, 'WorkOrderCreatedFromTicket', $from, Ticket::WAITING_WORK_ORDER, $actor, ['workOrderId' => $wo->work_order_id]);
             $this->emit(TicketEvents::WORK_ORDER_LINKED, $ticket, ['workOrderId' => $wo->work_order_id]);
 
             return $ticket->refresh();
@@ -175,21 +238,53 @@ class TicketService
     }
 
     /**
-     * TCK-01 §9.2: a linked Work Order finished → move the ticket out of PENDING_WO.
-     * Records the timeline event and resolves (or, if review is required, parks in
-     * UNDER_REVIEW). Idempotent: only acts while the ticket waits on that WO.
+     * TCK-01 §9.2: a linked Work Order finished → move the ticket out of WAITING_WORK_ORDER.
+     * Records the timeline event and resolves (or, if the category requires review, parks
+     * in UNDER_REVIEW). Idempotent: only acts while the ticket waits on that WO.
      */
     public function onWorkOrderFinalized(string $workOrderId, ?string $finalReason = null): void
     {
-        $ticket = Ticket::query()->where('work_order_id', $workOrderId)->where('status', Ticket::PENDING_WO)->first();
+        $ticket = Ticket::query()->where('work_order_id', $workOrderId)
+            ->whereIn('status', [Ticket::WAITING_WORK_ORDER, Ticket::PENDING_WO])->first();
         if (! $ticket) {
             return;
         }
-        DB::transaction(function () use ($ticket, $workOrderId, $finalReason) {
+        // §9.2: route to UNDER_REVIEW when the category demands a supervisor sign-off,
+        // otherwise straight to RESOLVED.
+        $category = TicketCategory::resolve($ticket->operator_code, $ticket->category);
+        $to = ($category && $category->review_required) ? Ticket::UNDER_REVIEW : Ticket::RESOLVED;
+        DB::transaction(function () use ($ticket, $workOrderId, $finalReason, $to) {
             $from = $ticket->status;
-            $ticket->update(['status' => Ticket::RESOLVED, 'resolution_code' => $finalReason, 'resolved_at' => now()]);
-            $this->timeline($ticket, 'LINKED_WORK_ORDER_FINALIZED', $from, Ticket::RESOLVED, null, ['workOrderId' => $workOrderId, 'finalReason' => $finalReason]);
-            $this->emit(TicketEvents::RESOLVED, $ticket, ['resolutionCode' => $finalReason, 'via' => 'WORK_ORDER']);
+            $patch = ['status' => $to, 'resolution_code' => $finalReason];
+            if ($to === Ticket::RESOLVED) {
+                $patch['resolved_at'] = now();
+            }
+            $ticket->update($patch);
+            $this->timeline($ticket, 'LINKED_WORK_ORDER_FINALIZED', $from, $to, null, ['workOrderId' => $workOrderId, 'finalReason' => $finalReason]);
+            if ($to === Ticket::RESOLVED) {
+                $this->emit(TicketEvents::RESOLVED, $ticket, ['resolutionCode' => $finalReason, 'via' => 'WORK_ORDER']);
+            }
+        });
+    }
+
+    /**
+     * TCK-01 §9.2: the linked Work Order was cancelled. The field intervention did not
+     * happen, so the ticket must not resolve — move it back to ASSIGNED (if an owner is
+     * known) or WAITING_INTERNAL and flag it for review. Idempotent on the waiting state.
+     */
+    public function onWorkOrderCancelled(string $workOrderId, ?string $reason = null): void
+    {
+        $ticket = Ticket::query()->where('work_order_id', $workOrderId)
+            ->whereIn('status', [Ticket::WAITING_WORK_ORDER, Ticket::PENDING_WO])->first();
+        if (! $ticket) {
+            return;
+        }
+        DB::transaction(function () use ($ticket, $workOrderId, $reason) {
+            $from = $ticket->status;
+            $to = $ticket->assignee_id ? Ticket::ASSIGNED : Ticket::WAITING_INTERNAL;
+            $ticket->update(['status' => $to, 'work_order_id' => null, 'requires_review' => true]);
+            $this->timeline($ticket, 'LINKED_WORK_ORDER_CANCELLED', $from, $to, null, ['workOrderId' => $workOrderId, 'reason' => $reason]);
+            $this->emit(TicketEvents::ASSIGNED, $ticket, ['via' => 'WORK_ORDER_CANCELLED', 'reason' => $reason]);
         });
     }
 

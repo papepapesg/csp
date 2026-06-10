@@ -73,7 +73,7 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 
 | # | Feature | Command owner (DD) | Implementation entry points | Events | E2E proof (tests) | Tour |
 |---|---|---|---|---|---|---|
-| 30 | Ticket lifecycle + SLA + ticket→WO | TCK-01 (+ ASR satellites) | `TicketService` (category catalog gating, one-active-WO, reopen, WO-finalized loop, SLA policies) | TicketCreated/WorkOrderCreated/Reopened | `TicketApiTest`, `AsrTest` | ⬜ |
+| 30 | Ticket lifecycle + SLA + ticket→WO | TCK-01 (+ ASR satellites) | `TicketService` (TCK-2 link rule, category catalog gating, one-active-WO, TCK-6 `ticket_link` on WO create, canonical `WAITING_WORK_ORDER`, WO finalized→RESOLVED/UNDER_REVIEW + WO cancelled→review loop, first-response SLA) | TicketCreated/TicketWorkOrderCreated/Reopened | `TicketApiTest`, `AsrTest` | ✅ |
 | 31 | Ticketing cockpit UI (added) | UI over TCK | `resources/js/Pages/Tickets/Index.vue` (queues, SLA, timeline, actions) | — | — | ⬜ |
 | 32 | Notifications + templates studio | NOT-01 / ICN-01 | `NotificationService` + `TemplateService` (per-channel/locale templates); `Notification/Studio.vue` | NotificationSent | `TemplateStudioTest` | ⬜ |
 | 33 | CVM retention | EM-03 | `CvmService` (rule-based case selection, action queues) | CvmCase* | `CvmTest` | ⬜ |

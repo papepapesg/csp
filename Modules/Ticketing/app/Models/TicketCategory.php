@@ -17,7 +17,7 @@ class TicketCategory extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['wo_allowed' => 'boolean', 'active' => 'boolean'];
+    protected $casts = ['wo_allowed' => 'boolean', 'active' => 'boolean', 'review_required' => 'boolean'];
 
     public static function resolve(string $operator, ?string $category): ?self
     {
