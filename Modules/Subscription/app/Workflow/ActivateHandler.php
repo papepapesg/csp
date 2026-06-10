@@ -32,9 +32,16 @@ class ActivateHandler implements TaskHandler
             return TaskResult::fail('Subscription not found', retryable: false);
         }
         if ($subscription->status_code !== Subscription::ACTIVE && ! $subscription->isTerminal()) {
-            $this->subscriptions->transitionStatus($subscription, Subscription::ACTIVE, [
-                'start_date' => $subscription->start_date ?? now()->toDateString(),
-            ]);
+            // R-BIL-03-V-2: open the first billing cycle at activation so the
+            // cycle-close scanner has a boundary to evaluate (current_cycle_end =
+            // start + one period). Only when not already running a cycle.
+            $extra = ['start_date' => $subscription->start_date ?? now()->toDateString()];
+            if (! $subscription->current_cycle_end) {
+                $start = now();
+                $extra['current_cycle_start'] = $start;
+                $extra['current_cycle_end'] = (clone $start)->add($subscription->cyclePeriod());
+            }
+            $this->subscriptions->transitionStatus($subscription, Subscription::ACTIVE, $extra);
         }
 
         return TaskResult::success(['subscriptionStatus' => Subscription::ACTIVE]);

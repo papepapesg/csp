@@ -69,11 +69,22 @@ class Subscription extends Model
         'last_status_changed_at' => 'datetime',
         'start_date' => 'date',
         'end_date' => 'date',
+        'current_cycle_start' => 'datetime',
+        'current_cycle_end' => 'datetime',
+        'last_cycle_closed_window_end' => 'datetime',
     ];
 
     protected static function booted(): void
     {
         static::creating(fn (self $m) => $m->operator_code ??= Context::operatorCode());
+    }
+
+    /** Length of one billing cycle, from the SUB-LM cycle attributes. */
+    public function cyclePeriod(): \Carbon\CarbonInterval
+    {
+        return $this->cycle_period_days
+            ? \Carbon\CarbonInterval::days((int) $this->cycle_period_days)
+            : \Carbon\CarbonInterval::months(max(1, (int) ($this->cycle_frequency_months ?? 1)));
     }
 
     public function getRouteKeyName(): string

@@ -13,6 +13,13 @@ final class BillingEvents
 
     public const CYCLE_BILLED = 'SubscriptionCycleBilled';
 
+    // BIL-03 cycle close (per-subscription boundary)
+    public const CYCLE_CLOSED = 'CycleClosed';            // POSTPAID: cycle invoice generated
+
+    public const CYCLE_ACTIVATED = 'CycleActivated';      // PREPAID/PREPAYMENT: new cycle paid + opened
+
+    public const CYCLE_PAYMENT_MISSED = 'CyclePaymentMissed'; // boundary unpaid → dunning/freeze
+
     public const INVOICE_PAID = 'InvoicePaid';
 
     public const PAYMENT_RECEIVED = 'PaymentReceived';

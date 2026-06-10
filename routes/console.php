@@ -11,6 +11,9 @@ Artisan::command('inspire', function () {
 // Forward committed transactional-outbox events to the event bus (FOUNDATION_KAFKA).
 Schedule::command('sophix:outbox:dispatch')->everyMinute()->withoutOverlapping();
 
+// BIL-03 cycle-close scanner (per-subscription boundary; recurring fee + usage).
+Schedule::command('sophix:billing:cycle-close')->everyThirtyMinutes()->withoutOverlapping();
+
 // BIL-04 dunning scanner (daily).
 Schedule::command('sophix:billing:dunning-run')->daily();
 

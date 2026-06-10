@@ -23,6 +23,9 @@ class BillingRuntimeProvider extends ServiceProvider
         // FOUNDATION_CACHE: evict cached PLM wallet-catalog copies on Wallet* events.
         Event::listen(OutboxEventPublished::class, [EvictPlmCatalogCache::class, 'handle']);
 
+        // BIL-03: a wallet top-up may unfreeze a prepaid cycle that missed payment.
+        Event::listen(OutboxEventPublished::class, [\Modules\Billing\Listeners\RetryFrozenCycleOnTopup::class, 'handle']);
+
         // ADJ-01 approval routing fallback: when no decision table is deployed
         // for rules.billing.adjustment-approval, derive the same answer from
         // adjustment_limits_config (steps + auto_approve_under threshold).
@@ -37,7 +40,7 @@ class BillingRuntimeProvider extends ServiceProvider
         });
 
         if ($this->app->runningInConsole()) {
-            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class]);
+            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, \Modules\Billing\Console\CycleCloseCommand::class]);
         }
     }
 
