@@ -69,6 +69,10 @@ class OrderCaptureService
                 'packageRef' => $order->package_ref,
                 'homepassId' => $order->homepass_id,
                 'billingMode' => $order->billing_mode,
+                // Deposit gate: a deposit-required order parks AWAITING_PAYMENT
+                // until the deposit is confirmed (a paid order passes through).
+                'depositRequired' => (bool) ($data['deposit_required'] ?? false),
+                'depositPaid' => ! empty($data['payment_ref']),
             ],
             operator: $order->operator_code,
         );
@@ -92,6 +96,14 @@ class OrderCaptureService
         }
 
         $this->engine->correlateMessage('ful-install-finalized', $order->order_id, ['installConfirmed' => true]);
+
+        return $order->refresh()->load('steps');
+    }
+
+    /** Deposit received: resume an order parked AWAITING_PAYMENT (FUL-02 wait-payment). */
+    public function confirmDepositPaid(FulfillmentOrder $order): FulfillmentOrder
+    {
+        $this->engine->correlateMessage('ful-payment-received', $order->order_id, ['depositPaid' => true]);
 
         return $order->refresh()->load('steps');
     }

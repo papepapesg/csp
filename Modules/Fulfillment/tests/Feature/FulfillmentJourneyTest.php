@@ -152,4 +152,23 @@ class FulfillmentJourneyTest extends TestCase
             'customer_id' => 'c', 'account_id' => 'a', 'package_ref' => 'p',
         ])->assertForbidden();
     }
+
+    public function test_deposit_required_order_parks_awaiting_payment_then_resumes_on_deposit(): void
+    {
+        $resp = $this->postJson('/api/fulfillment-orders', [
+            'customer_id' => 'cust_dep', 'account_id' => 'acct_dep', 'homepass_id' => 'hp_1',
+            'package_ref' => 'pkg_triple', 'deposit_required' => true, // no payment_ref → unpaid
+        ], ['Idempotency-Key' => 'order-dep'])->assertStatus(201);
+        $orderId = $resp->json('order.order_id');
+
+        // The flow runs to the deposit gate and parks awaiting payment — no install WO yet.
+        $this->drain();
+        $this->assertSame('AWAITING_PAYMENT', FulfillmentOrder::find($orderId)->status);
+        $this->assertDatabaseMissing('work_order', ['source_ref' => $orderId]);
+
+        // Deposit received → correlate, the flow proceeds to create the install WO.
+        app(\Modules\Fulfillment\Services\OrderCaptureService::class)->confirmDepositPaid(FulfillmentOrder::find($orderId));
+        $this->drain();
+        $this->assertSame('AWAITING_INSTALL', FulfillmentOrder::find($orderId)->status);
+    }
 }

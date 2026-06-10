@@ -23,6 +23,8 @@ class FulfillmentOrder extends Model
 
     public const AWAITING_KYC = 'AWAITING_KYC';
 
+    public const AWAITING_PAYMENT = 'AWAITING_PAYMENT';
+
     public const ACTIVATING = 'ACTIVATING';
 
     public const COMPLETED = 'COMPLETED';

@@ -10,6 +10,7 @@ use Modules\Fulfillment\Listeners\ResumeOrderOnKycApproved;
 use Modules\Fulfillment\Workflow\CompleteOrderHandler;
 use Modules\Fulfillment\Workflow\CreateInstallWoHandler;
 use Modules\Fulfillment\Workflow\CreateSubscriptionHandler;
+use Modules\Fulfillment\Workflow\DepositGateHandler;
 use Modules\Fulfillment\Workflow\KycGateHandler;
 use Modules\Fulfillment\Workflow\TriggerActivationHandler;
 use Modules\Fulfillment\Workflow\ValidateOrderHandler;
@@ -24,6 +25,7 @@ class FulfillmentWorkflowProvider extends ServiceProvider
         $registry->register(ValidateOrderHandler::class);
         $registry->register(CreateSubscriptionHandler::class);
         $registry->register(CreateInstallWoHandler::class);
+        $registry->register(DepositGateHandler::class);
         $registry->register(KycGateHandler::class);
         $registry->register(TriggerActivationHandler::class);
         $registry->register(CompleteOrderHandler::class);

@@ -41,6 +41,7 @@ class FulfillmentOrderController extends ApiController
             'package_version_id' => ['nullable', 'string'],
             'billing_mode' => ['nullable', 'in:POSTPAID,PREPAID'],
             'payment_ref' => ['nullable', 'string'],
+            'deposit_required' => ['nullable', 'boolean'],
         ]);
         $data['created_by'] = $request->user()?->uid;
 
