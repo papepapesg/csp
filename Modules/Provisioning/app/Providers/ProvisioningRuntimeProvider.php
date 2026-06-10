@@ -39,7 +39,7 @@ class ProvisioningRuntimeProvider extends ServiceProvider
         $this->app->make(TaskRegistry::class)->register(ActivateServiceHandler::class);
 
         if ($this->app->runningInConsole()) {
-            $this->commands([ReconcileCommand::class]);
+            $this->commands([ReconcileCommand::class, \Modules\Provisioning\Console\PollAsyncCommand::class]);
         }
     }
 }

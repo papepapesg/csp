@@ -23,6 +23,9 @@ Schedule::command('sophix:wallet:expire')->daily();
 // BIL-04 dunning scanner (daily).
 Schedule::command('sophix:billing:dunning-run')->daily();
 
+// PROV-INT-01 async status worker (resolve ACCEPTED commands).
+Schedule::command('sophix:provisioning:poll-async')->everyFiveMinutes()->withoutOverlapping();
+
 // PROV-INT-01 reconciliation worker (hourly polling of network vs desired state).
 Schedule::command('sophix:provisioning:reconcile')->hourly()->withoutOverlapping();
 

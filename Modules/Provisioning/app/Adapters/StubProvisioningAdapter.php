@@ -33,9 +33,24 @@ class StubProvisioningAdapter implements ProvisioningAdapter
             return ProvisioningResult::failed('Simulated NMS rejection');
         }
 
+        $ref = 'NMS-'.strtoupper(substr(Id::make('x'), 2, 12));
+        $observed = ['accepted' => true, 'observedStatus' => $command->desired_state['desiredStatus'] ?? 'ACTIVE'];
+
+        // Async vendors return only "accepted"; the status worker resolves later.
+        if (($command->desired_state['simulateAsync'] ?? false) === true) {
+            return ProvisioningResult::accepted($ref, $observed);
+        }
+
+        return ProvisioningResult::confirmed($ref, $observed);
+    }
+
+    public function pollStatus(ProvisioningCommand $command): ?ProvisioningResult
+    {
+        // The stub completes async commands on the first poll (a real driver would
+        // query the vendor and return null while still in progress).
         return ProvisioningResult::confirmed(
-            externalRef: 'NMS-'.strtoupper(substr(Id::make('x'), 2, 12)),
-            response: ['accepted' => true, 'observedStatus' => $command->desired_state['desiredStatus'] ?? 'ACTIVE'],
+            externalRef: (string) $command->external_ref,
+            response: ['observedStatus' => $command->desired_state['desiredStatus'] ?? 'ACTIVE'],
         );
     }
 

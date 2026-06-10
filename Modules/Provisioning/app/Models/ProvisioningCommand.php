@@ -16,6 +16,7 @@ class ProvisioningCommand extends Model
 {
     use HasPrefixedId;
 
+    // Legacy aliases (kept for existing callers/tests).
     public const PENDING = 'PENDING';
 
     public const SENT = 'SENT';
@@ -25,6 +26,23 @@ class ProvisioningCommand extends Model
     public const FAILED = 'FAILED';
 
     public const MISMATCH = 'MISMATCH';
+
+    // PROV-INT-01 §9 canonical command status model.
+    public const RECEIVED = 'RECEIVED';
+
+    public const DISPATCHING = 'DISPATCHING';
+
+    public const ACCEPTED = 'ACCEPTED';            // §7.2 async: vendor accepted, result pending
+
+    public const SUCCEEDED = 'SUCCEEDED';
+
+    public const FAILED_RETRYABLE = 'FAILED_RETRYABLE';
+
+    public const FAILED_FINAL = 'FAILED_FINAL';
+
+    public const TIMED_OUT = 'TIMED_OUT';
+
+    public const SUPERSEDED = 'SUPERSEDED';
 
     protected $table = 'provisioning_command';
 

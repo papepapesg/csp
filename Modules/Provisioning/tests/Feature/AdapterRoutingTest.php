@@ -52,6 +52,23 @@ class AdapterRoutingTest extends TestCase
         $this->assertStringStartsWith('NMS-', (string) $data->external_ref);
     }
 
+    public function test_async_command_is_accepted_then_resolved_by_the_status_worker(): void
+    {
+        $svc = app(ProvisioningService::class);
+        // simulateAsync → the stub returns ACCEPTED, not confirmed.
+        $cmd = $svc->broadcast('sub_async', 'ACTIVATE', [[
+            'target_code' => 'DEFAULT_NMS', 'desired_state' => ['desiredStatus' => 'ACTIVE', 'simulateAsync' => true],
+        ]])[0];
+        $this->assertSame(ProvisioningCommand::ACCEPTED, $cmd->status);
+        $this->assertSame('ASYNC_ACCEPTED', $cmd->execution_mode);
+        $this->assertNotNull($cmd->accepted_at);
+
+        // The status worker polls and resolves it to CONFIRMED.
+        $r = $svc->pollAsyncCommands('WIK');
+        $this->assertSame(['polled' => 1, 'resolved' => 1], $r);
+        $this->assertSame(ProvisioningCommand::CONFIRMED, $cmd->fresh()->status);
+    }
+
     public function test_each_dispatch_records_an_attempt(): void
     {
         $svc = app(ProvisioningService::class);
@@ -92,5 +109,10 @@ class RoutingProbeAdapter implements ProvisioningAdapter
     public function fetchObserved(string $targetCode, string $subscriberKey, string $desiredStatus, array $desiredProfile = []): ?array
     {
         return ['observedStatus' => $desiredStatus, 'observedProfile' => $desiredProfile];
+    }
+
+    public function pollStatus(ProvisioningCommand $command): ?ProvisioningResult
+    {
+        return ProvisioningResult::confirmed(externalRef: 'PROBE-SIP-ADAPTER', response: ['observedStatus' => 'ACTIVE']);
     }
 }

@@ -23,4 +23,10 @@ interface ProvisioningAdapter
      * @return array{observedStatus:?string,observedProfile:array<string,mixed>}|null
      */
     public function fetchObserved(string $targetCode, string $subscriberKey, string $desiredStatus, array $desiredProfile = []): ?array;
+
+    /**
+     * PROV §7.2 async: poll the final outcome of a previously-ACCEPTED command.
+     * Returns a resolved result (confirmed/failed) or null while still pending.
+     */
+    public function pollStatus(ProvisioningCommand $command): ?ProvisioningResult;
 }

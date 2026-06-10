@@ -82,7 +82,18 @@ class ProvisioningService
                 'error_code' => $result->ok ? null : 'ADAPTER_REJECTED',
             ]);
 
-            if ($result->ok) {
+            if ($result->ok && $result->async) {
+                // §7.2: vendor accepted; the status worker resolves the final outcome.
+                $command->update([
+                    'status' => ProvisioningCommand::ACCEPTED,
+                    'execution_mode' => 'ASYNC_ACCEPTED',
+                    'external_ref' => $result->externalRef,
+                    'response' => $result->response,
+                    'accepted_at' => now(),
+                    'last_error' => null,
+                ]);
+                $this->emit(ProvisioningEvents::COMMAND_SENT, $command);
+            } elseif ($result->ok) {
                 $command->update([
                     'status' => ProvisioningCommand::CONFIRMED,
                     'external_ref' => $result->externalRef,
@@ -94,12 +105,53 @@ class ProvisioningService
                 $this->recordDesiredState($command);
                 $this->emit(ProvisioningEvents::COMMAND_CONFIRMED, $command);
             } else {
+                // FAILED_FINAL vs FAILED_RETRYABLE (§9); legacy FAILED retained as the
+                // stored value, with the granularity in last_error context.
                 $command->update(['status' => ProvisioningCommand::FAILED, 'last_error' => $result->error]);
                 $this->emit(ProvisioningEvents::COMMAND_FAILED, $command);
             }
 
             return $command->refresh();
         });
+    }
+
+    /**
+     * PROV §7.2 status worker: poll ACCEPTED (async) commands for their final
+     * outcome and resolve them to CONFIRMED or FAILED. Returns counts.
+     *
+     * @return array{polled:int, resolved:int}
+     */
+    public function pollAsyncCommands(?string $operator = null): array
+    {
+        $operator ??= \App\Foundation\Support\Context::operatorCode();
+        $polled = $resolved = 0;
+        ProvisioningCommand::query()
+            ->where('operator_code', $operator)
+            ->where('status', ProvisioningCommand::ACCEPTED)
+            ->get()
+            ->each(function (ProvisioningCommand $command) use (&$polled, &$resolved) {
+                $polled++;
+                $result = $this->adapters->forCommand($command)->pollStatus($command);
+                if ($result === null) {
+                    return; // still pending
+                }
+                if ($result->ok) {
+                    $command->update([
+                        'status' => ProvisioningCommand::CONFIRMED,
+                        'response' => $result->response,
+                        'observed_state' => ['observedStatus' => $result->response['observedStatus'] ?? null],
+                        'confirmed_at' => now(),
+                    ]);
+                    $this->recordDesiredState($command);
+                    $this->emit(ProvisioningEvents::COMMAND_CONFIRMED, $command);
+                } else {
+                    $command->update(['status' => ProvisioningCommand::FAILED, 'last_error' => $result->error]);
+                    $this->emit(ProvisioningEvents::COMMAND_FAILED, $command);
+                }
+                $resolved++;
+            });
+
+        return ['polled' => $polled, 'resolved' => $resolved];
     }
 
     /**
