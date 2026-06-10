@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use Modules\Billing\Http\Controllers\AdjustmentController;
 use Modules\Billing\Http\Controllers\BillableEventController;
+use Modules\Billing\Http\Controllers\BulkReversalController;
 use Modules\Billing\Http\Controllers\DunningController;
 use Modules\Billing\Http\Controllers\InvoiceController;
 use Modules\Billing\Http\Controllers\PaymentController;
@@ -19,6 +20,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('dunning', [DunningController::class, 'index'])->middleware('permission:invoice.read');
     Route::post('dunning/run', [DunningController::class, 'run'])->middleware('permission:invoice.manage');
     Route::post('dunning/{account}/clear', [DunningController::class, 'clear'])->middleware('permission:invoice.manage');
+    // BIL-02-GEN-01 — Bulk reversal (rule group R; BILLING_ADMIN proposes, FINANCE_HEAD approves)
+    Route::get('billing/bulk-reversals', [BulkReversalController::class, 'index'])->middleware('permission:invoice.read');
+    Route::post('billing/bulk-reversals/preview', [BulkReversalController::class, 'preview'])->middleware('permission:invoice.manage');
+    Route::post('billing/bulk-reversals', [BulkReversalController::class, 'store'])->middleware('permission:invoice.manage');
+    Route::post('billing/bulk-reversals/{batch}/approve', [BulkReversalController::class, 'approve'])->middleware('permission:adjustment.approve');
+    Route::post('billing/bulk-reversals/{batch}/reject', [BulkReversalController::class, 'reject'])->middleware('permission:adjustment.approve');
+
     // BIL-02 — Invoices
     Route::get('invoices', [InvoiceController::class, 'index'])->middleware('permission:invoice.read');
     Route::get('invoices/{invoice}', [InvoiceController::class, 'show'])->middleware('permission:invoice.read');

@@ -39,6 +39,7 @@ class CycleCloseService
         private readonly InvoiceService $invoices,
         private readonly WalletService $wallets,
         private readonly ChargeComputeService $charges,
+        private readonly GenerationFailureService $failures,
     ) {}
 
     /** @return array{run_id:string, evaluated:int, closed:int, skipped:int, failed:int} */
@@ -67,6 +68,14 @@ class CycleCloseService
             try {
                 $this->closeCycle($subscription->subscription_id) ? $closed++ : $skipped++;
             } catch (\Throwable $e) {
+                // R-GEN-01-Q-1: recoverable failure → persisted with context for a
+                // backed-off retry + admin visibility, not lost.
+                $this->failures->enqueue(
+                    $operator, 'CYCLE_POSTPAID', $subscription->subscription_id,
+                    ['subscriptionId' => $subscription->subscription_id],
+                    $e instanceof \App\Foundation\Errors\DomainException ? $e->errorCode : 'GENERATION_FAILED',
+                    $e->getMessage(),
+                );
                 $failed++;
             }
         }
@@ -151,6 +160,7 @@ class CycleCloseService
                 }
             }
             $this->advanceAnchor($subscription);
+            $this->failures->resolveFor($subscription->operator_code, $subscriptionId, 'CYCLE_POSTPAID');
             $this->emit($subscription, BillingEvents::CYCLE_CLOSED, ['invoiceIds' => $invoices->pluck('invoice_id')->all(), 'total' => (string) $total]);
 
             return true;

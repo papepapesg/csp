@@ -11,6 +11,10 @@ final class BillingEvents
 
     public const INVOICE_GENERATED = 'InvoiceGenerated';
 
+    public const INVOICE_CANCELLED = 'InvoiceCancelled';  // BIL-02-GEN-01 bulk reversal (R-GEN-01-R-3)
+
+    public const BULK_REVERSAL_COMPLETED = 'BulkReversalCompleted';
+
     public const CYCLE_BILLED = 'SubscriptionCycleBilled';
 
     // BIL-03 cycle close (per-subscription boundary)

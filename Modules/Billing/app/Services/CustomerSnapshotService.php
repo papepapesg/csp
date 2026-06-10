@@ -25,7 +25,9 @@ class CustomerSnapshotService
     {
         $customer = Customer::query()->find($customerId);
         if (! $customer) {
-            throw DomainException::dependencyUnavailable("CUSTOMER_SNAPSHOT_FETCH_FAILED: customer [{$customerId}] not found.");
+            // Recoverable (R-GEN-01-F-6): the generator queues + retries; it must
+            // NOT write an invoice with a partial snapshot.
+            throw new DomainException('CUSTOMER_SNAPSHOT_FETCH_FAILED', "Customer [{$customerId}] could not be resolved for snapshot.", status: 503, retryable: true);
         }
 
         $account = $accountId ? CustomerAccount::query()->find($accountId) : null;
