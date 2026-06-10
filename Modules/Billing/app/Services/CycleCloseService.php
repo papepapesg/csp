@@ -9,7 +9,6 @@ use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Models\RatedEvent;
-use Modules\Catalog\Models\PackageVersion;
 use Modules\Subscription\Models\Subscription;
 
 /**
@@ -39,6 +38,7 @@ class CycleCloseService
         private readonly EventBus $events,
         private readonly InvoiceService $invoices,
         private readonly WalletService $wallets,
+        private readonly ChargeComputeService $charges,
     ) {}
 
     /** @return array{run_id:string, evaluated:int, closed:int, skipped:int, failed:int} */
@@ -102,14 +102,14 @@ class CycleCloseService
             }
 
             $windowEnd = $subscription->current_cycle_end;
-            $recurringFee = $this->recurringFee($subscription);
-            $rated = RatedEvent::query()->where('subscription_id', $subscriptionId)->where('billed', false)->lockForUpdate()->get();
-            $usageTotal = round((float) $rated->sum('amount'), 2);
-            $total = round($recurringFee + $usageTotal, 2);
+
+            // BIL-01 computes the typed charges (RECURRING + per-category USAGE);
+            // BIL-03 only orchestrates the boundary.
+            ['charges' => $charges, 'ratedIds' => $ratedIds] = $this->charges->cycleCharges($subscription);
+            $total = round(array_sum(array_map(fn (Charge $c) => $c->amount, $charges)), 2);
 
             if ($total <= 0) {
-                // Nothing to charge this cycle — still advance so the window moves.
-                $this->advanceAnchor($subscription);
+                $this->advanceAnchor($subscription); // nothing owed — move the window on
 
                 return true;
             }
@@ -123,41 +123,26 @@ class CycleCloseService
 
                     return false;
                 }
-                RatedEvent::query()->whereIn('rated_id', $rated->pluck('rated_id'))->update(['billed' => true]);
+                RatedEvent::query()->whereIn('rated_id', $ratedIds)->update(['billed' => true]);
                 $this->advanceAnchor($subscription);
                 $this->emit($subscription, BillingEvents::CYCLE_ACTIVATED, ['amount' => (string) $total, 'settlement' => 'WALLET']);
 
                 return true;
             }
 
-            // POSTPAID: one cycle invoice = recurring fee line + usage lines.
-            $lines = [];
-            if ($recurringFee > 0) {
-                $lines[] = ['description' => 'Recurring fee — '.$subscription->package_ref, 'quantity' => 1, 'unit_price' => $recurringFee];
-            }
-            foreach ($rated as $e) {
-                $lines[] = ['description' => 'Usage — '.($e->tariff_code ?? 'RATED'), 'quantity' => 1, 'unit_price' => (float) $e->amount];
-            }
-            $invoice = $this->invoices->generate(
-                ['account_id' => $subscription->account_id, 'subscription_id' => $subscriptionId, 'currency' => $subscription->currency ?? 'KES'],
-                $lines,
+            // POSTPAID: BIL-02-GEN-01 builds the cycle invoice(s) from the charges,
+            // SUMMARY/DETAIL structured and grouped per the operator policy.
+            $invoices = $this->invoices->generateFromCharges(
+                ['account_id' => $subscription->account_id, 'customer_id' => $subscription->customer_id, 'subscription_id' => $subscriptionId, 'currency' => $subscription->currency ?? 'KES'],
+                $charges,
+                'CYCLE_POSTPAID',
             );
-            RatedEvent::query()->whereIn('rated_id', $rated->pluck('rated_id'))->update(['billed' => true]);
+            RatedEvent::query()->whereIn('rated_id', $ratedIds)->update(['billed' => true]);
             $this->advanceAnchor($subscription);
-            $this->emit($subscription, BillingEvents::CYCLE_CLOSED, ['invoiceId' => $invoice->invoice_id, 'recurringFee' => (string) $recurringFee, 'usage' => (string) $usageTotal, 'total' => (string) $total]);
+            $this->emit($subscription, BillingEvents::CYCLE_CLOSED, ['invoiceIds' => $invoices->pluck('invoice_id')->all(), 'total' => (string) $total]);
 
             return true;
         });
-    }
-
-    /** The package's recurring price for this subscription (0 when unpriced). */
-    private function recurringFee(Subscription $subscription): float
-    {
-        if (! $subscription->package_version_id) {
-            return 0.0;
-        }
-
-        return (float) (PackageVersion::query()->whereKey($subscription->package_version_id)->value('price') ?? 0);
     }
 
     /** Move the window forward by one period; record the closed window (idempotency key). */

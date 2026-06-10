@@ -5,6 +5,8 @@ namespace Modules\Billing\Services;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
+use App\Foundation\Support\Id;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Models\Invoice;
@@ -12,10 +14,111 @@ use Modules\Billing\Models\Invoice;
 /**
  * BIL-02 invoicing core. Generates invoices from charge lines, computes totals
  * and issues a gap-free legal invoice number per operator/fiscal-year/type.
+ * The structured path (BIL-02-GEN-01) builds a SUMMARY/DETAIL line hierarchy
+ * from typed BIL-01 charges and applies the operator's grouping policy.
  */
 class InvoiceService
 {
     public function __construct(private readonly EventBus $events) {}
+
+    /**
+     * BIL-02-GEN-01: build invoice(s) from typed BIL-01 charges, applying the
+     * operator's grouping policy. The dimension may split the charges into more
+     * than one invoice (e.g. one per wallet); within each invoice the lines form
+     * a SUMMARY (per package) → DETAIL (per charge) hierarchy.
+     *
+     * @param  array<string,mixed>  $header
+     * @param  array<int,Charge>  $charges
+     * @return Collection<int,Invoice>
+     */
+    public function generateFromCharges(array $header, array $charges, string $triggerCode = 'CYCLE_POSTPAID'): Collection
+    {
+        $operator = $header['operator_code'] ?? Context::operatorCode();
+        $dimension = (string) (DB::table('invoice_grouping_config')
+            ->where('operator_code', $operator)->where('trigger_code', $triggerCode)
+            ->value('grouping_dimension') ?? 'SINGLE');
+
+        // One invoice per group in the policy (R-GEN-01-C-4).
+        $groups = collect($charges)->groupBy(fn (Charge $c) => $c->groupKey($dimension));
+
+        return $groups->map(fn (Collection $groupCharges, string $groupKey) => DB::transaction(
+            fn () => $this->writeStructuredInvoice($header, $operator, $dimension, $groupKey, $groupCharges->all())
+        ))->values();
+    }
+
+    /**
+     * Persist one grouped invoice with a SUMMARY/DETAIL line hierarchy.
+     *
+     * @param  array<int,Charge>  $charges
+     */
+    private function writeStructuredInvoice(array $header, string $operator, string $dimension, string $groupKey, array $charges): Invoice
+    {
+        $type = $header['type'] ?? 'STANDARD';
+        $subtotal = round(array_sum(array_map(fn (Charge $c) => $c->amount, $charges)), 2);
+        $tax = round((float) ($header['tax_amount_total'] ?? 0), 2);
+
+        $invoice = Invoice::query()->create([
+            'operator_code' => $operator,
+            'account_id' => $header['account_id'],
+            'customer_id' => $header['customer_id'] ?? null,
+            'subscription_id' => $header['subscription_id'] ?? null,
+            'type' => $type,
+            'grouping_dimension' => $dimension,
+            'grouping_key' => $groupKey,
+            'currency' => $header['currency'] ?? 'KES',
+            'billing_mode' => $header['billing_mode'] ?? 'POSTPAID',
+            'status' => Invoice::OPEN,
+            'issue_date' => now(),
+            'due_date' => now()->addDays((int) ($header['due_date_grace_days'] ?? 14)),
+            'subtotal_amount' => $subtotal,
+            'tax_amount_total' => $tax,
+            'total_amount' => $subtotal + $tax,
+            'amount_paid' => 0,
+            'amount_due' => $subtotal + $tax,
+            'legal_invoice_number' => $this->nextLegalNumber($operator, $type),
+        ]);
+
+        // SUMMARY per package; DETAIL per charge under it (R-GEN-01-L).
+        foreach (collect($charges)->groupBy(fn (Charge $c) => $c->packageRef ?? 'GENERAL') as $pkg => $pkgCharges) {
+            $summaryAmount = round($pkgCharges->sum(fn (Charge $c) => $c->amount), 2);
+            $summaryId = Id::make('invl');
+            $invoice->lines()->create([
+                'id' => $summaryId,
+                'line_type' => 'SUMMARY',
+                'description' => $pkg === 'GENERAL' ? 'Charges' : 'Package — '.$pkg,
+                'package_ref' => $pkg === 'GENERAL' ? null : $pkg,
+                'quantity' => 1,
+                'unit_price' => $summaryAmount,
+                'subtotal' => $summaryAmount,
+                'tax_amount' => 0,
+            ]);
+            foreach ($pkgCharges as $charge) {
+                $invoice->lines()->create([
+                    'line_type' => 'DETAIL',
+                    'parent_line_id' => $summaryId,
+                    'charge_type' => $charge->chargeType,
+                    'service_category_code' => $charge->serviceCategoryCode,
+                    'package_ref' => $charge->packageRef,
+                    'wallet_type_code' => $charge->walletTypeCode,
+                    'description' => $charge->description,
+                    'quantity' => $charge->quantity,
+                    'unit_price' => $charge->quantity > 0 ? round($charge->amount / $charge->quantity, 4) : $charge->amount,
+                    'subtotal' => $charge->amount,
+                    'tax_amount' => 0,
+                ]);
+            }
+        }
+
+        $this->events->publish(new DomainEvent(
+            type: BillingEvents::INVOICE_GENERATED,
+            topic: BillingEvents::TOPIC,
+            payload: ['invoiceId' => $invoice->invoice_id, 'accountId' => $invoice->account_id, 'total' => (string) ($subtotal + $tax), 'groupingDimension' => $dimension, 'groupingKey' => $groupKey],
+            aggregateType: 'Invoice',
+            aggregateId: $invoice->invoice_id,
+        ));
+
+        return $invoice;
+    }
 
     /**
      * @param  array<string,mixed>  $header

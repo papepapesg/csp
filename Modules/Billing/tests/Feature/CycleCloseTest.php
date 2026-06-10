@@ -64,13 +64,25 @@ class CycleCloseTest extends TestCase
     public function test_postpaid_close_invoices_recurring_fee_plus_usage_and_advances_anchor(): void
     {
         $sub = $this->subscription('POSTPAID', $this->pricedPackage(2500));
-        $this->rateUsage($sub->subscription_id, 'cdr-a');
+        $this->rateUsage($sub->subscription_id, 'cdr-a'); // DATA 1000
 
         $r = app(CycleCloseService::class)->scan('WIK');
         $this->assertSame(1, $r['closed']);
 
-        // One invoice = 2500 recurring + 1000 usage.
-        $this->assertDatabaseHas('invoice', ['subscription_id' => $sub->subscription_id, 'total_amount' => 3500.00, 'status' => 'OPEN']);
+        // One invoice (SINGLE policy) = 2500 recurring + 1000 usage.
+        $invoice = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
+        $this->assertEquals(3500.00, $invoice->total_amount);
+        $this->assertSame('SINGLE', $invoice->grouping_dimension);
+
+        // SUMMARY/DETAIL structure: a package SUMMARY with RECURRING + USAGE detail
+        // leaves — the cycle fee and usage are distinct, typed charges.
+        $summary = $invoice->lines()->where('line_type', 'SUMMARY')->firstOrFail();
+        $details = $invoice->lines()->where('line_type', 'DETAIL')->get();
+        $this->assertEqualsCanonicalizing(['RECURRING', 'USAGE'], $details->pluck('charge_type')->all());
+        $this->assertTrue($details->every(fn ($d) => $d->parent_line_id === $summary->id));
+        $this->assertEquals(2500.00, $details->firstWhere('charge_type', 'RECURRING')->subtotal);
+        $this->assertSame('DATA', $details->firstWhere('charge_type', 'USAGE')->service_category_code);
+
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'CycleClosed']);
         $this->assertDatabaseHas('rated_event', ['subscription_id' => $sub->subscription_id, 'billed' => true]);
 
@@ -81,6 +93,27 @@ class CycleCloseTest extends TestCase
 
         // Idempotent: a second pass finds nothing due.
         $this->assertSame(0, app(CycleCloseService::class)->scan('WIK')['closed']);
+    }
+
+    public function test_voice_and_data_usage_become_distinct_typed_charges(): void
+    {
+        // The user's point: usage (voice/data) is a different billing model than
+        // the flat cycle fee, and each usage category is its own line.
+        $sub = $this->subscription('POSTPAID', $this->pricedPackage(1000));
+        $med = app(MediationRatingService::class);
+        $med->ingest([
+            ['usage_type' => 'DATA', 'quantity' => 1000, 'source_ref' => 'd1', 'subscription_id' => $sub->subscription_id],
+            ['usage_type' => 'VOICE', 'quantity' => 120, 'destination' => 'ONNET', 'source_ref' => 'v1', 'subscription_id' => $sub->subscription_id],
+        ]);
+        $med->ratePending('WIK');
+
+        app(CycleCloseService::class)->scan('WIK');
+        $invoice = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
+        $details = $invoice->lines()->where('line_type', 'DETAIL')->get();
+
+        // RECURRING + DATA usage + VOICE usage = three distinct detail leaves.
+        $this->assertContains('RECURRING', $details->pluck('charge_type')->all());
+        $this->assertEqualsCanonicalizing(['DATA', 'VOICE'], $details->where('charge_type', 'USAGE')->pluck('service_category_code')->all());
     }
 
     public function test_flat_rate_subscription_with_no_usage_still_bills_the_recurring_fee(): void

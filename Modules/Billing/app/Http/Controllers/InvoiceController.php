@@ -32,10 +32,32 @@ class InvoiceController extends ApiController
         return ApiResponse::paginated($page);
     }
 
-    /** GET /api/invoices/{invoice} */
+    /** GET /api/invoices/{invoice} — header + SUMMARY lines with nested DETAIL (BIL-02-GEN-01). */
     public function show(Invoice $invoice): JsonResponse
     {
-        return ApiResponse::item($invoice->load('lines'));
+        $invoice->load('lines');
+        $details = $invoice->lines->where('line_type', \Modules\Billing\Models\InvoiceLine::DETAIL)->groupBy('parent_line_id');
+
+        // Header fields stay top-level (back-compat); add the SUMMARY/DETAIL view.
+        $payload = $invoice->toArray();
+        $payload['grouping'] = ['dimension' => $invoice->grouping_dimension, 'key' => $invoice->grouping_key];
+        $payload['summary'] = $invoice->lines
+            ->where('line_type', \Modules\Billing\Models\InvoiceLine::SUMMARY)->values()
+            ->map(fn ($line) => [
+                'id' => $line->id,
+                'description' => $line->description,
+                'package_ref' => $line->package_ref,
+                'amount' => $line->subtotal,
+                'details' => ($details[$line->id] ?? collect())->map(fn ($d) => [
+                    'charge_type' => $d->charge_type,
+                    'service_category_code' => $d->service_category_code,
+                    'description' => $d->description,
+                    'quantity' => $d->quantity,
+                    'amount' => $d->subtotal,
+                ])->values(),
+            ]);
+
+        return ApiResponse::item($payload);
     }
 
     /** POST /api/invoices */

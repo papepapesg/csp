@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Hash;
 use Modules\Billing\Database\Seeders\AdjustmentConfigSeeder;
 use Modules\Billing\Database\Seeders\BillableEventSeeder;
 use Modules\Billing\Database\Seeders\DunningPolicySeeder;
+use Modules\Billing\Database\Seeders\InvoiceGroupingSeeder;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
 use Modules\Catalog\Database\Seeders\TaxCatalogSeeder;
 use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
@@ -55,6 +56,7 @@ class DatabaseSeeder extends Seeder
             DunningPolicySeeder::class,
             AdjustmentConfigSeeder::class,
             BillableEventSeeder::class,
+            InvoiceGroupingSeeder::class,
             RestrictionCatalogSeeder::class,
             UpgradeConfigSeeder::class,
             WoSupportSeeder::class,
