@@ -71,10 +71,11 @@ class TicketController extends ApiController
     public function addAttachment(Request $request, Ticket $ticket): JsonResponse
     {
         $v = $request->validate([
-            'file_id' => ['required', 'string'],
-            'file_name' => ['required', 'string'],
+            'file_id' => ['required', 'string'], // a FOUNDATION_FILE_STORAGE file_id (upload via POST /api/files first)
+            'file_name' => ['nullable', 'string'], // defaults to the foundation file's authoritative name
             'content_type' => ['nullable', 'string'],
             'size_bytes' => ['nullable', 'integer'],
+            'visibility' => ['nullable', 'in:INTERNAL,CUSTOMER_VISIBLE'],
         ]);
 
         return ApiResponse::item($this->tickets->addAttachment($ticket, $v, $request->user()?->uid), 201);

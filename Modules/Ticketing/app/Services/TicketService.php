@@ -114,17 +114,30 @@ class TicketService
         return sprintf('TCK-%s-%d-%06d', $operator, $year, $next);
     }
 
-    /** Attach a file (stored in FOUNDATION_FILE_STORAGE) to a ticket (TCK-01 §attachments). */
+    /**
+     * Attach a file to a ticket (TCK-01 §7.4). TCK-9: the binary must already live in
+     * FOUNDATION_FILE_STORAGE — we resolve the foundation file by id (so a ticket can
+     * never reference a non-existent object), keep only a reference (the storage path
+     * stays in file_object, owned by the foundation), and take the authoritative
+     * name/type/size from it rather than trusting the caller.
+     */
     public function addAttachment(Ticket $ticket, array $data, ?string $actor = null): object
     {
+        $file = \App\Foundation\Files\FileObject::query()->where('file_id', $data['file_id'])->first();
+        if (! $file) {
+            throw new DomainException('TICKET_ATTACHMENT_FILE_NOT_FOUND', 'The referenced file is not registered in file storage.', 404);
+        }
         $id = \App\Foundation\Support\Id::make('tatt');
         DB::table('ticket_attachment')->insert([
             'attachment_id' => $id, 'ticket_id' => $ticket->ticket_id,
-            'file_id' => $data['file_id'], 'file_name' => $data['file_name'],
-            'content_type' => $data['content_type'] ?? null, 'size_bytes' => $data['size_bytes'] ?? null,
+            'file_id' => $file->file_id,
+            'file_name' => $data['file_name'] ?? $file->filename,
+            'content_type' => $data['content_type'] ?? $file->mime_type,
+            'size_bytes' => $data['size_bytes'] ?? $file->size_bytes,
+            'visibility' => $data['visibility'] ?? 'INTERNAL',
             'uploaded_by' => $actor, 'created_at' => now(), 'updated_at' => now(),
         ]);
-        $this->timeline($ticket, 'ATTACHMENT_ADDED', null, $ticket->status, $actor, ['fileName' => $data['file_name']]);
+        $this->timeline($ticket, 'ATTACHMENT_ADDED', null, $ticket->status, $actor, ['fileName' => $file->filename, 'fileId' => $file->file_id]);
 
         return DB::table('ticket_attachment')->where('attachment_id', $id)->first();
     }

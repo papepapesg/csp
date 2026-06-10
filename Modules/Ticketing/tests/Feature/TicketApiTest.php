@@ -40,13 +40,24 @@ class TicketApiTest extends TestCase
         $this->assertSame('TCK-WIK-'.now()->year.'-000001', $a['ticket_number']);
         $this->assertSame('TCK-WIK-'.now()->year.'-000002', $b['ticket_number']);
 
-        // Attachment metadata + entity link.
-        $this->postJson("/api/tickets/{$a['ticket_id']}/attachments", ['file_id' => 'file_1', 'file_name' => 'speedtest.png', 'content_type' => 'image/png', 'size_bytes' => 2048])
-            ->assertCreated()->assertJsonPath('file_name', 'speedtest.png');
+        // The binary is stored in FOUNDATION_FILE_STORAGE first; the ticket only references file_id.
+        \Illuminate\Support\Facades\Storage::fake('local');
+        $upload = $this->post('/api/files', [
+            'file' => \Illuminate\Http\UploadedFile::fake()->image('speedtest.png'),
+            'category' => 'ticket',
+        ])->assertCreated()->json();
+
+        // Attachment references the foundation file; name/type are taken from it.
+        $this->postJson("/api/tickets/{$a['ticket_id']}/attachments", ['file_id' => $upload['file_id'], 'visibility' => 'CUSTOMER_VISIBLE'])
+            ->assertCreated()->assertJsonPath('file_name', 'speedtest.png')->assertJsonPath('visibility', 'CUSTOMER_VISIBLE');
+        // An attachment that points at a non-existent foundation file is rejected (TCK-9).
+        $this->postJson("/api/tickets/{$a['ticket_id']}/attachments", ['file_id' => 'file_does_not_exist'])
+            ->assertStatus(404)->assertJsonPath('errorCode', 'TICKET_ATTACHMENT_FILE_NOT_FOUND');
+
         $this->postJson("/api/tickets/{$a['ticket_id']}/links", ['entity_type' => 'SUBSCRIPTION', 'entity_ref' => 'sub_1', 'relation' => 'RELATED'])
             ->assertCreated()->assertJsonPath('entity_ref', 'sub_1');
 
-        $this->assertDatabaseHas('ticket_attachment', ['ticket_id' => $a['ticket_id'], 'file_id' => 'file_1']);
+        $this->assertDatabaseHas('ticket_attachment', ['ticket_id' => $a['ticket_id'], 'file_id' => $upload['file_id'], 'visibility' => 'CUSTOMER_VISIBLE']);
         $this->assertDatabaseHas('ticket_link', ['ticket_id' => $a['ticket_id'], 'entity_type' => 'SUBSCRIPTION', 'entity_ref' => 'sub_1']);
     }
 
