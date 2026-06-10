@@ -29,9 +29,9 @@ class InvoiceLine extends Model
         'tax_breakdown' => 'array',
     ];
 
-    /** DETAIL lines nested under this SUMMARY line. */
+    /** DETAIL lines nested under this SUMMARY line (R-GEN-01-L-1). */
     public function details(): HasMany
     {
-        return $this->hasMany(self::class, 'parent_line_id', 'id');
+        return $this->hasMany(self::class, 'parent_summary_line_id', 'id');
     }
 }

@@ -36,24 +36,25 @@ class InvoiceController extends ApiController
     public function show(Invoice $invoice): JsonResponse
     {
         $invoice->load('lines');
-        $details = $invoice->lines->where('line_type', \Modules\Billing\Models\InvoiceLine::DETAIL)->groupBy('parent_line_id');
+        $details = $invoice->lines->where('line_type', \Modules\Billing\Models\InvoiceLine::DETAIL)->groupBy('parent_summary_line_id');
 
         // Header fields stay top-level (back-compat); add the SUMMARY/DETAIL view.
         $payload = $invoice->toArray();
-        $payload['grouping'] = ['dimension' => $invoice->grouping_dimension, 'key' => $invoice->grouping_key];
+        $payload['grouping'] = ['dimension' => $invoice->grouping_dimension, 'key_values' => $invoice->grouping_key_values];
         $payload['summary'] = $invoice->lines
-            ->where('line_type', \Modules\Billing\Models\InvoiceLine::SUMMARY)->values()
+            ->where('line_type', \Modules\Billing\Models\InvoiceLine::SUMMARY)
+            ->sortBy('sort_order')->values()
             ->map(fn ($line) => [
                 'id' => $line->id,
                 'description' => $line->description,
                 'package_ref' => $line->package_ref,
                 'amount' => $line->subtotal,
-                'details' => ($details[$line->id] ?? collect())->map(fn ($d) => [
-                    'charge_type' => $d->charge_type,
+                'details' => ($details[$line->id] ?? collect())->sortBy('sort_order')->map(fn ($d) => [
                     'service_category_code' => $d->service_category_code,
                     'description' => $d->description,
                     'quantity' => $d->quantity,
                     'amount' => $d->subtotal,
+                    'tax_amount' => $d->tax_amount,
                 ])->values(),
             ]);
 

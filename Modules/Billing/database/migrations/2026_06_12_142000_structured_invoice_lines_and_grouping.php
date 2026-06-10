@@ -19,18 +19,18 @@ return new class extends Migration
     {
         Schema::table('invoice_line', function (Blueprint $table) {
             $table->string('line_type')->default('SUMMARY')->after('invoice_id'); // SUMMARY | DETAIL
-            $table->string('parent_line_id')->nullable()->after('line_type');      // DETAIL → its SUMMARY
-            $table->string('charge_type')->nullable()->after('parent_line_id');    // RECURRING | USAGE | ONE_OFF
-            $table->string('service_category_code')->nullable()->after('charge_type');
+            $table->string('parent_summary_line_id')->nullable()->after('line_type'); // DETAIL → its SUMMARY (R-GEN-01-L-1)
+            $table->string('service_category_code')->nullable()->after('parent_summary_line_id'); // BIL-01 charge classification
             $table->string('package_ref')->nullable()->after('service_category_code');
             $table->string('wallet_type_code')->nullable()->after('package_ref');
-            $table->json('tax_breakdown')->nullable()->after('tax_amount');        // per-line components
+            $table->unsignedInteger('sort_order')->default(0)->after('wallet_type_code'); // R-GEN-01-L-4
+            $table->json('tax_breakdown')->nullable()->after('tax_amount'); // per-line components (R-GEN-01-L-2)
         });
 
         // The invoice records which grouping produced it (audit + read API).
         Schema::table('invoice', function (Blueprint $table) {
             $table->string('grouping_dimension')->nullable()->after('type'); // SINGLE | WALLET | PACKAGE | SERVICE_CATEGORY
-            $table->string('grouping_key')->nullable()->after('grouping_dimension'); // the group value this invoice covers
+            $table->string('grouping_key_values')->nullable()->after('grouping_dimension'); // R-GEN-01-F-5
         });
 
         // Operator grouping policy per billing trigger (R-GEN-01-C-3 / K-5).
@@ -48,10 +48,10 @@ return new class extends Migration
     {
         Schema::dropIfExists('invoice_grouping_config');
         Schema::table('invoice', function (Blueprint $table) {
-            $table->dropColumn(['grouping_dimension', 'grouping_key']);
+            $table->dropColumn(['grouping_dimension', 'grouping_key_values']);
         });
         Schema::table('invoice_line', function (Blueprint $table) {
-            $table->dropColumn(['line_type', 'parent_line_id', 'charge_type', 'service_category_code', 'package_ref', 'wallet_type_code', 'tax_breakdown']);
+            $table->dropColumn(['line_type', 'parent_summary_line_id', 'service_category_code', 'package_ref', 'wallet_type_code', 'sort_order', 'tax_breakdown']);
         });
     }
 };

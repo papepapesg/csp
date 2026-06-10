@@ -31,29 +31,29 @@ class ChargeComputeService
     {
         $charges = [];
 
-        // RECURRING: the package run-rate (BIL-01 fixed component).
+        // Recurring package fee — service_category SUBSCRIPTION (the DD's
+        // discriminator from usage; it is not a separate charge_type).
         $fee = $this->recurringFee($subscription);
         if ($fee > 0) {
             $charges[] = new Charge(
-                chargeType: Charge::RECURRING,
                 serviceCategoryCode: 'SUBSCRIPTION',
-                description: 'Recurring fee — '.$subscription->package_ref,
+                descriptionKey: 'billing.charge.recurring',
                 amount: $fee,
                 packageRef: $subscription->package_ref,
                 walletTypeCode: $subscription->default_wallet_ref ?? null,
             );
         }
 
-        // USAGE: one charge per service category, summed from rated events.
+        // Usage — one charge per service category (VOICE/DATA/SMS), summed from
+        // the cycle's rated events.
         $rated = RatedEvent::query()
             ->where('subscription_id', $subscription->subscription_id)
             ->where('billed', false)->get();
 
         foreach ($this->groupUsage($rated) as $category => $info) {
             $charges[] = new Charge(
-                chargeType: Charge::USAGE,
                 serviceCategoryCode: $category,
-                description: ucfirst(strtolower($category)).' usage',
+                descriptionKey: 'billing.charge.usage.'.strtolower($category),
                 amount: round($info['amount'], 2),
                 quantity: $info['count'],
                 packageRef: $subscription->package_ref,

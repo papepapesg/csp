@@ -74,14 +74,15 @@ class CycleCloseTest extends TestCase
         $this->assertEquals(3500.00, $invoice->total_amount);
         $this->assertSame('SINGLE', $invoice->grouping_dimension);
 
-        // SUMMARY/DETAIL structure: a package SUMMARY with RECURRING + USAGE detail
-        // leaves — the cycle fee and usage are distinct, typed charges.
+        // SUMMARY/DETAIL structure: a package SUMMARY with the subscription fee and
+        // the usage as DETAIL leaves — distinguished by service_category_code
+        // (the DD's discriminator), not a charge_type field.
         $summary = $invoice->lines()->where('line_type', 'SUMMARY')->firstOrFail();
         $details = $invoice->lines()->where('line_type', 'DETAIL')->get();
-        $this->assertEqualsCanonicalizing(['RECURRING', 'USAGE'], $details->pluck('charge_type')->all());
-        $this->assertTrue($details->every(fn ($d) => $d->parent_line_id === $summary->id));
-        $this->assertEquals(2500.00, $details->firstWhere('charge_type', 'RECURRING')->subtotal);
-        $this->assertSame('DATA', $details->firstWhere('charge_type', 'USAGE')->service_category_code);
+        $this->assertEqualsCanonicalizing(['SUBSCRIPTION', 'DATA'], $details->pluck('service_category_code')->all());
+        $this->assertTrue($details->every(fn ($d) => $d->parent_summary_line_id === $summary->id));
+        $this->assertEquals(2500.00, $details->firstWhere('service_category_code', 'SUBSCRIPTION')->subtotal);
+        $this->assertEquals(1000.00, $details->firstWhere('service_category_code', 'DATA')->subtotal);
 
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'CycleClosed']);
         $this->assertDatabaseHas('rated_event', ['subscription_id' => $sub->subscription_id, 'billed' => true]);
@@ -95,10 +96,11 @@ class CycleCloseTest extends TestCase
         $this->assertSame(0, app(CycleCloseService::class)->scan('WIK')['closed']);
     }
 
-    public function test_voice_and_data_usage_become_distinct_typed_charges(): void
+    public function test_voice_and_data_usage_become_distinct_service_category_charges(): void
     {
         // The user's point: usage (voice/data) is a different billing model than
-        // the flat cycle fee, and each usage category is its own line.
+        // the flat cycle fee, and each usage category is its own line — carried by
+        // service_category_code per the DD charge schema.
         $sub = $this->subscription('POSTPAID', $this->pricedPackage(1000));
         $med = app(MediationRatingService::class);
         $med->ingest([
@@ -109,11 +111,39 @@ class CycleCloseTest extends TestCase
 
         app(CycleCloseService::class)->scan('WIK');
         $invoice = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
-        $details = $invoice->lines()->where('line_type', 'DETAIL')->get();
+        $categories = $invoice->lines()->where('line_type', 'DETAIL')->pluck('service_category_code')->all();
 
-        // RECURRING + DATA usage + VOICE usage = three distinct detail leaves.
-        $this->assertContains('RECURRING', $details->pluck('charge_type')->all());
-        $this->assertEqualsCanonicalizing(['DATA', 'VOICE'], $details->where('charge_type', 'USAGE')->pluck('service_category_code')->all());
+        // Subscription fee + DATA usage + VOICE usage = three distinct detail leaves.
+        $this->assertContains('SUBSCRIPTION', $categories);
+        $this->assertContains('DATA', $categories);
+        $this->assertContains('VOICE', $categories);
+    }
+
+    public function test_per_line_tax_is_computed_and_aggregated_into_tax_summary(): void
+    {
+        // R-GEN-01-L-2: when the operator taxes the charge's category, the line
+        // carries tax (tax_breakdown) and the invoice aggregates tax_summary.
+        $this->seed(\Database\Seeders\RbacSeeder::class);
+        $this->seed(\Modules\Catalog\Database\Seeders\TaxCatalogSeeder::class);
+        // Map the SUBSCRIPTION category to the seeded WIK_INTERNET tax group.
+        \Modules\Rules\Models\DecisionTable::query()->create([
+            'table_id' => \App\Foundation\Support\Id::make('dt'),
+            'rule_set' => 'rules.tax-applicability', 'operator_code' => 'WIK', 'version' => 2,
+            'name' => 'WIK tax applicability (test)', 'hit_policy' => 'FIRST',
+            'rules' => [['ruleId' => 'R-T-1', 'when' => [['var' => 'taxableKind', 'op' => 'eq', 'value' => 'SUBSCRIPTION']], 'then' => ['taxGroup' => 'WIK_INTERNET']]],
+            'default_output' => ['taxGroup' => null], 'status' => 'DEPLOYED',
+        ]);
+
+        $sub = $this->subscription('POSTPAID', $this->pricedPackage(1000));
+        app(CycleCloseService::class)->scan('WIK');
+
+        $invoice = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
+        $recurring = $invoice->lines()->where('service_category_code', 'SUBSCRIPTION')->firstOrFail();
+        $this->assertGreaterThan(0, (float) $recurring->tax_amount);
+        $this->assertNotEmpty($recurring->tax_breakdown);
+        $this->assertGreaterThan(0, (float) $invoice->tax_amount_total);
+        $this->assertNotEmpty($invoice->tax_summary);
+        $this->assertEquals(round($invoice->subtotal_amount + $invoice->tax_amount_total, 2), (float) $invoice->total_amount);
     }
 
     public function test_flat_rate_subscription_with_no_usage_still_bills_the_recurring_fee(): void

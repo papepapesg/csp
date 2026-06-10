@@ -4,22 +4,31 @@ namespace Modules\Billing\Services;
 
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
+use App\Foundation\I18n\TranslationService;
+use App\Foundation\Models\OperatorConfig;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Models\Invoice;
+use Modules\Catalog\Services\TaxComputeService;
 
 /**
  * BIL-02 invoicing core. Generates invoices from charge lines, computes totals
  * and issues a gap-free legal invoice number per operator/fiscal-year/type.
  * The structured path (BIL-02-GEN-01) builds a SUMMARY/DETAIL line hierarchy
- * from typed BIL-01 charges and applies the operator's grouping policy.
+ * from typed BIL-01 charges, resolves description keys via the operator
+ * translation catalog (R-GEN-01-L-5), computes per-line tax through PLM-CFG-02
+ * (R-GEN-01-L-2), and applies the operator's grouping policy.
  */
 class InvoiceService
 {
-    public function __construct(private readonly EventBus $events) {}
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly TranslationService $translations,
+        private readonly TaxComputeService $tax,
+    ) {}
 
     /**
      * BIL-02-GEN-01: build invoice(s) from typed BIL-01 charges, applying the
@@ -54,8 +63,12 @@ class InvoiceService
     private function writeStructuredInvoice(array $header, string $operator, string $dimension, string $groupKey, array $charges): Invoice
     {
         $type = $header['type'] ?? 'STANDARD';
-        $subtotal = round(array_sum(array_map(fn (Charge $c) => $c->amount, $charges)), 2);
-        $tax = round((float) ($header['tax_amount_total'] ?? 0), 2);
+        $currency = $header['currency'] ?? 'KES';
+        // R-GEN-01-L-5: resolve description keys in the customer's language. We do
+        // not yet capture a customer_snapshot (documented gap), so we use the
+        // operator's configured locale as the language.
+        $locale = OperatorConfig::forOperator($operator)?->default_locale ?? 'en';
+        $resources = $this->translations->resources($locale, $operator);
 
         $invoice = Invoice::query()->create([
             'operator_code' => $operator,
@@ -64,60 +77,93 @@ class InvoiceService
             'subscription_id' => $header['subscription_id'] ?? null,
             'type' => $type,
             'grouping_dimension' => $dimension,
-            'grouping_key' => $groupKey,
-            'currency' => $header['currency'] ?? 'KES',
+            'grouping_key_values' => $groupKey,
+            'currency' => $currency,
             'billing_mode' => $header['billing_mode'] ?? 'POSTPAID',
             'status' => Invoice::OPEN,
             'issue_date' => now(),
             'due_date' => now()->addDays((int) ($header['due_date_grace_days'] ?? 14)),
-            'subtotal_amount' => $subtotal,
-            'tax_amount_total' => $tax,
-            'total_amount' => $subtotal + $tax,
-            'amount_paid' => 0,
-            'amount_due' => $subtotal + $tax,
+            'subtotal_amount' => 0, 'tax_amount_total' => 0, 'total_amount' => 0,
+            'amount_paid' => 0, 'amount_due' => 0,
             'legal_invoice_number' => $this->nextLegalNumber($operator, $type),
         ]);
 
-        // SUMMARY per package; DETAIL per charge under it (R-GEN-01-L).
+        $subtotal = 0.0;
+        $taxTotal = 0.0;
+        $taxSummary = [];            // aggregated per tax component across all lines
+        $summaryOrder = 0;
+
+        // SUMMARY per package; DETAIL per charge under it (R-GEN-01-L-1).
         foreach (collect($charges)->groupBy(fn (Charge $c) => $c->packageRef ?? 'GENERAL') as $pkg => $pkgCharges) {
-            $summaryAmount = round($pkgCharges->sum(fn (Charge $c) => $c->amount), 2);
+            $summaryOrder += 10;
             $summaryId = Id::make('invl');
+            $summaryAmount = round($pkgCharges->sum(fn (Charge $c) => $c->amount), 2);
             $invoice->lines()->create([
                 'id' => $summaryId,
                 'line_type' => 'SUMMARY',
-                'description' => $pkg === 'GENERAL' ? 'Charges' : 'Package — '.$pkg,
+                'description' => $pkg === 'GENERAL' ? ($resources['billing.line.charges'] ?? 'Charges') : ($resources['billing.line.package'] ?? 'Package').' — '.$pkg,
                 'package_ref' => $pkg === 'GENERAL' ? null : $pkg,
-                'quantity' => 1,
-                'unit_price' => $summaryAmount,
-                'subtotal' => $summaryAmount,
-                'tax_amount' => 0,
+                'quantity' => 1, 'unit_price' => $summaryAmount, 'subtotal' => $summaryAmount, 'tax_amount' => 0,
+                'sort_order' => $summaryOrder,
             ]);
+
+            $detailOrder = $summaryOrder;
             foreach ($pkgCharges as $charge) {
+                $detailOrder++;
+                // R-GEN-01-L-2: per-line tax via PLM-CFG-02. No tax config for the
+                // operator resolves to zero tax (R-PLM-02-AP-2/3), not a failure.
+                try {
+                    $taxResult = $this->tax->compute([
+                        'operatorCode' => $operator, 'baseAmount' => $charge->amount, 'currency' => $currency,
+                        'taxableKind' => $charge->serviceCategoryCode, 'taxableRef' => $charge->packageRef,
+                    ]);
+                } catch (\App\Foundation\Errors\DomainException) {
+                    $taxResult = ['totalTaxAmount' => 0, 'taxLines' => []];
+                }
+                $lineTax = round((float) ($taxResult['totalTaxAmount'] ?? 0), 2);
+                $taxTotal += $lineTax;
+                $subtotal += $charge->amount;
+                foreach (($taxResult['taxLines'] ?? []) as $tl) {
+                    $code = $tl['ruleCode'] ?? $tl['code'] ?? 'TAX';
+                    $taxSummary[$code] = round(($taxSummary[$code] ?? 0) + (float) ($tl['amount'] ?? 0), 2);
+                }
+
                 $invoice->lines()->create([
                     'line_type' => 'DETAIL',
-                    'parent_line_id' => $summaryId,
-                    'charge_type' => $charge->chargeType,
+                    'parent_summary_line_id' => $summaryId,
                     'service_category_code' => $charge->serviceCategoryCode,
                     'package_ref' => $charge->packageRef,
                     'wallet_type_code' => $charge->walletTypeCode,
-                    'description' => $charge->description,
+                    'description' => $resources[$charge->descriptionKey] ?? $charge->descriptionKey,
                     'quantity' => $charge->quantity,
                     'unit_price' => $charge->quantity > 0 ? round($charge->amount / $charge->quantity, 4) : $charge->amount,
                     'subtotal' => $charge->amount,
-                    'tax_amount' => 0,
+                    'tax_amount' => $lineTax,
+                    'tax_breakdown' => $taxResult['taxLines'] ?? [],
+                    'sort_order' => $detailOrder,
                 ]);
             }
         }
 
+        $subtotal = round($subtotal, 2);
+        $taxTotal = round($taxTotal, 2);
+        $invoice->update([
+            'subtotal_amount' => $subtotal,
+            'tax_amount_total' => $taxTotal,
+            'tax_summary' => $taxSummary,
+            'total_amount' => $subtotal + $taxTotal,
+            'amount_due' => $subtotal + $taxTotal,
+        ]);
+
         $this->events->publish(new DomainEvent(
             type: BillingEvents::INVOICE_GENERATED,
             topic: BillingEvents::TOPIC,
-            payload: ['invoiceId' => $invoice->invoice_id, 'accountId' => $invoice->account_id, 'total' => (string) ($subtotal + $tax), 'groupingDimension' => $dimension, 'groupingKey' => $groupKey],
+            payload: ['invoiceId' => $invoice->invoice_id, 'accountId' => $invoice->account_id, 'total' => (string) ($subtotal + $taxTotal), 'groupingDimension' => $dimension, 'groupingKeyValues' => $groupKey],
             aggregateType: 'Invoice',
             aggregateId: $invoice->invoice_id,
         ));
 
-        return $invoice;
+        return $invoice->refresh();
     }
 
     /**
