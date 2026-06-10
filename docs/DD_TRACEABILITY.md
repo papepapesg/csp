@@ -171,7 +171,7 @@ Status legend: **IMPLEMENTED** (behavior + tests) · **PARTIAL** (works, depth b
 | DD_ASR-03-Complaint-v1.0 | **IMPLEMENTED** | ASR intake + rules.asr.routing (queue/priority/auto-WO) via TicketService (tested) |
 | DD_ASR-04-Service_Request-v1.0 | **IMPLEMENTED** | ASR intake + rules.asr.routing (queue/priority/auto-WO) via TicketService (tested) |
 | DD_CUST-INT-01-Customer_Interaction_Timeline-v1.0 | **IMPLEMENTED** | Interaction timeline API + 360 panel |
-| DD_EM-01-Franchise_Management-v1.0 | **PARTIAL** | Franchise + leads (qualify/convert/lose) implemented; territory depth light |
+| DD_EM-01-Franchise_Management-v1.0 | **IMPLEMENTED** | Franchise + leads (qualify/convert/lose) + territory-based lead routing to covering franchise |
 | DD_EM-02-Contractor_and_Staff_Registry-v1.0 | **IMPLEMENTED** | Workforce registry (contractor/team/staff) |
 | DD_EM-03-CVM_Retention_and_Recovery-v1.0 | **IMPLEMENTED** | CVM activities + policies (recovery/winback offers) |
 | DD_EM-CFG-03-RBAC_Catalog-v1.0 | **IMPLEMENTED** | RBAC catalog + matrix + effective access + admin portal + change audit (scope system deferred w/ auth) |
@@ -182,7 +182,7 @@ Status legend: **IMPLEMENTED** (behavior + tests) · **PARTIAL** (works, depth b
 | DD_ICN-01-Internal_Communications-v1.0 | **IMPLEMENTED** | Notifications + internal comms + per-channel template studio (provider gateways stubbed) |
 | DD_NOT-01-Notification_Service-v1.3 | **IMPLEMENTED** | Notifications + internal comms + per-channel template studio (provider gateways stubbed) |
 | DD_REP-01-Reporting_Data_Mart_and_Dashboard_API-v1.0 | **IMPLEMENTED** | Daily metrics + export + reconcile (deep analytics external by decision) |
-| DD_SALES-01-Lead_Territory_and_Franchise_Sales_Management-v1.0 | **PARTIAL** | Franchise + leads (qualify/convert/lose) implemented; territory depth light |
+| DD_SALES-01-Lead_Territory_and_Franchise_Sales_Management-v1.0 | **IMPLEMENTED** | Franchise + leads + territory routing (lead → covering franchise) |
 | DD_TCK-01-Ticketing_and_Case_Management-v1.0 | **IMPLEMENTED** | Case lifecycle, category catalog + WO gating, WO-finalized loop, reopen, SLA + cockpit UI |
 
 ## 99_frontend

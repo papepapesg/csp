@@ -31,7 +31,8 @@ auto-interrupt, scheduled effective-timing. (M/L)
 - Wallet catalog (`wallet_catalog`, types, applicability, precedence, lifecycle, R-W rules) — ✅ 🔁
 - Multi-wallet ledger keyed by `walletRef`; charge-time precedence/applicability resolver — ✅ 🔁
 - Prepaid billing-intent settles from wallet (pay-from-balance + top-up-to-proceed) — ✅ 🔁
-- Open: per-customer (vs per-subscription) wallet sharing; expiry sweep; points redemption at charge. (M)
+- **Expiry sweep (R-W-9)** + **points redemption at charge (R-W-15)** — ✅ 🔁
+- Open (L): per-customer (vs per-subscription) wallet sharing. (low)
 
 ## Provisioning (PROV-INT-01) — audited 🔁
 - Per-target adapter resolution (`provisioning_adapter_config` → adapter_class) — ✅ 🔁
@@ -40,8 +41,9 @@ auto-interrupt, scheduled effective-timing. (M/L)
   APPROVED → execute; R-PROV-07 approve-before-execute; audited events) — ✅ 🔁
 - **Per-attempt ledger** (`provisioning_command_attempt`, §10.4: adapter, outcome,
   duration recorded per dispatch) — ✅ 🔁
-- Open (M): full §9 status model (`RECEIVED/DISPATCHING/…/SUCCEEDED` vs current
-  PENDING/SENT/CONFIRMED) + async `ASYNC_ACCEPTED` poll flow (coupled; deferred). ⚠️
+- **§9 status model** (RECEIVED/DISPATCHING/ACCEPTED/SUCCEEDED/FAILED_RETRYABLE/
+  FAILED_FINAL/TIMED_OUT/SUPERSEDED) + **§7.2 async accepted** flow with a status
+  worker (`sophix:provisioning:poll-async`) resolving ACCEPTED commands — ✅ 🔁
 
 ## Billing money path (BIL-01/02/04/05) — audited
 - Invoicing (assembler + gap-free legal number), payments (allocate→PAID, surplus→credit),
@@ -74,9 +76,7 @@ auto-interrupt, scheduled effective-timing. (M/L)
 - Open vs BIL-02-GEN-01 (structural, tracked — NOT silently skipped): the five
   generator classes + `InvoiceGeneratorRegistry` + `InvoiceGenerationContext`
   (R-GEN-01-F-1/2) are collapsed into `InvoiceService::generateFromCharges` (one path,
-  same outputs) — functional, not yet the registry structure; **generation failure
-  queue** (rule group Q) and **bulk reversal** (rule group R) not built; **pro forma
-  cycle generator** (PREPAID pre-cycle documents) not built; `invoice_line` table
+  same outputs) — functional, not yet the registry structure; `invoice_line` table
   retains its pre-existing name (DD calls it `invoice_line_item`); RAT-01 uses
   `billed`+`invoice_id` rather than the `POSTPAID_PENDING_INVOICE`→`INVOICED` status. ⚠️
 - **Cycle proration** — ✅ 🔁: CALENDAR cycles align the first cycle to the anchor day
@@ -87,9 +87,11 @@ auto-interrupt, scheduled effective-timing. (M/L)
   later success; operator-proposed, dual-controlled (approver≠proposer) batch cancel
   with eligible-vs-protected preview (signed-tax / cancelled / note-linked protected),
   per-invoice InvoiceCancelled events.
-- Open (M): data/SMS rating uses code constants (usage-tariff catalog exists as
-  fallback); payment reversal; account-credit auto-draw; pro-forma cycle generator
-  (PREPAID pre-cycle documents). ⚠️
+- **Pro-forma cycle generator** (Generator 3): pre-cycle projected documents for
+  prepaid subscriptions, idempotent + superseding — ✅ 🔁
+- **Wallet expiry sweep (R-W-9) + points redemption at charge (R-W-15)** — ✅ 🔁
+- Open (L): data/SMS rating uses code constants (usage-tariff catalog exists as
+  fallback); payment reversal; account-credit auto-draw. ⚠️ (low)
 
 ## Work Order (WO-01-FRAMEWORK) — audited 🔁
 - Ticket source link (`source_type`/`source_ref`; Ticketing creates + waits for finalize) — ✅
@@ -99,8 +101,8 @@ auto-interrupt, scheduled effective-timing. (M/L)
   **finalize checklist** (`wo_finalization_requirements`, §3/§4.4) — ✅ 🔁 (was ❌; terminal renamed FINALIZED→COMPLETED)
 - **Attachments** (`wo_attachment` + per-category min counts enforced in the finalize
   checklist, §1.4/§4.4) — ✅ 🔁
-- Open (M/L): master/sub linkage (`master_wo_id`/`link_type`) actively used; SLA
-  timestamp capture; skills-filtered auto-assign worker. ⚠️
+- **SLA due-time + first-response capture**, **skills-filtered auto-assign**,
+  **master/sub `link_type`** linkage — ✅ 🔁
 
 ## OSR — Stock & Equipment (OSR-01 / OSR-INSTANCE-01 / OSR-RMA-01) — audited
 - Equipment vs material distinction (`equipment_sku.is_serialized` + `ownership_semantics`
@@ -110,8 +112,8 @@ auto-interrupt, scheduled effective-timing. (M/L)
   **availability** API + event-driven **WO→install consumption** (WorkOrderFinalized
   consumes, WorkOrderCancelled releases) — ✅ 🔁 (was ❌). Cycle counts already present
   via `InventoryAuditService`.
-- Open (M/L): `stock_reason_code` catalog as a first-class table; two-tier transfer
-  helper; WO bill-of-materials (auto-reserve qty from the job's required SKUs).
+- **`stock_reason_code` catalog** (soft-enforced on movements), **two-tier transfer**,
+  **WO bill-of-materials** auto-reservation — ✅ 🔁
 
 ## Ticketing (TCK-01) — audited 🔁
 - Case lifecycle, SLA policy, ASR routing, WO creation + link — ✅
