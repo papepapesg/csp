@@ -154,12 +154,23 @@ class PaymentService
                 $reversedAllocations[] = ['invoice_id' => $alloc->invoice_id, 'amount' => (string) $alloc->allocated_amount];
             }
 
-            // Surplus that went to the credit balance is debited back (best-effort, RV-4).
+            // RV-4: surplus that went to the credit balance is debited back. If
+            // intervening invoices already consumed it, the reversal proceeds
+            // best-effort (debits what's available) and flags the shortfall.
+            $partialShortfall = 0.0;
             if ((float) $payment->unallocated_amount > 0) {
                 $credit = AccountCreditBalance::query()->find($payment->account_id);
+                $have = (float) ($credit?->balance ?? 0);
+                $want = (float) $payment->unallocated_amount;
                 if ($credit) {
-                    $credit->update(['balance' => max(round((float) $credit->balance - (float) $payment->unallocated_amount, 2), 0)]);
+                    $credit->update(['balance' => max(round($have - $want, 2), 0)]);
                 }
+                if ($have + 0.0001 < $want) {
+                    $partialShortfall = round($want - $have, 2);
+                }
+            }
+            if ($partialShortfall > 0) {
+                $this->events->publish($this->event('PartialReversalDueToConsumedBalance', $payment, ['shortfall' => (string) $partialShortfall]));
             }
 
             $payment->update(['status' => 'REVERSED', 'reversal_reason_code' => $reasonCode, 'reversed_by' => $actor]);
@@ -177,6 +188,57 @@ class PaymentService
             ]));
 
             return $reversal;
+        });
+    }
+
+    /**
+     * OV-2 auto-draw: when a new invoice is issued for an account that holds a
+     * positive credit balance, apply the credit against it as a synthetic payment
+     * (method CREDIT_BALANCE_APPLICATION). Idempotent per invoice.
+     */
+    public function applyCreditBalanceToInvoice(string $invoiceId): ?PaymentLedger
+    {
+        $invoice = Invoice::query()->find($invoiceId);
+        if (! $invoice || ! in_array($invoice->status, self::ALLOCATABLE, true) || (float) $invoice->amount_due <= 0) {
+            return null;
+        }
+        $credit = AccountCreditBalance::query()->find($invoice->account_id);
+        if (! $credit || (float) $credit->balance <= 0) {
+            return null;
+        }
+
+        return DB::transaction(function () use ($invoice, $credit) {
+            $apply = round(min((float) $credit->balance, (float) $invoice->amount_due), 2);
+            $reference = 'credit-apply:'.$invoice->invoice_id;
+            if (PaymentLedger::query()->where('account_id', $invoice->account_id)->where('payment_reference', $reference)->exists()) {
+                return null; // already drawn for this invoice
+            }
+
+            $before = (float) $credit->balance;
+            $credit->update(['balance' => round($before - $apply, 2)]);
+
+            $payment = PaymentLedger::query()->create([
+                'account_id' => $invoice->account_id, 'customer_id' => $invoice->customer_id, 'operator_code' => $invoice->operator_code,
+                'method' => 'CREDIT_BALANCE_APPLICATION', 'payment_reference' => $reference, 'currency' => $invoice->currency,
+                'paid_amount' => $apply, 'unallocated_amount' => 0, 'status' => 'APPLIED', 'received_at' => now(),
+            ]);
+            $newPaid = round((float) $invoice->amount_paid + $apply, 2);
+            $newDue = round((float) $invoice->total_amount - $newPaid, 2);
+            $payment->allocations()->create([
+                'invoice_id' => $invoice->invoice_id, 'allocated_amount' => $apply,
+                'outstanding_before' => (float) $invoice->amount_due, 'outstanding_after' => max($newDue, 0),
+                'allocation_strategy' => 'CREDIT_BALANCE_APPLICATION',
+            ]);
+            $invoice->update(['amount_paid' => $newPaid, 'amount_due' => max($newDue, 0), 'status' => $newDue <= 0.0001 ? Invoice::PAID : Invoice::PARTIALLY_PAID]);
+
+            $this->events->publish($this->event(BillingEvents::CREDIT_BALANCE_ADJUSTED, $payment, [
+                'direction' => 'DEBIT', 'amount' => (string) $apply, 'balanceBefore' => (string) $before,
+                'balanceAfter' => (string) $credit->balance, 'reasonCode' => 'INVOICE_APPLICATION',
+            ]));
+            $this->events->publish($this->event(BillingEvents::PAYMENT_APPLIED, $payment, ['invoiceId' => $invoice->invoice_id, 'applied' => (string) $apply]));
+            $this->clearDunningIfPaid($invoice->account_id);
+
+            return $payment;
         });
     }
 
@@ -199,7 +261,8 @@ class PaymentService
             return;
         }
 
-        $policy = (string) (DB::table('payment_config')->where('operator_code', $operator)->value('overpayment_policy') ?? 'APPLY_TO_NEXT_OPEN');
+        $config = DB::table('payment_config')->where('operator_code', $operator)->first();
+        $policy = $config->overpayment_policy ?? 'APPLY_TO_NEXT_OPEN';
 
         // OV-4 MANUAL_REVIEW: hold the surplus for an admin (unless forced via /allocate-surplus).
         if ($policy === 'MANUAL_REVIEW' && ! $force) {
@@ -207,6 +270,20 @@ class PaymentService
             $this->events->publish($this->event(BillingEvents::OVERPAYMENT_PENDING_REVIEW, $payment, ['surplus' => (string) $remaining]));
 
             return;
+        }
+
+        // OV-3 WALLET_TOPUP: surplus credits a designated overflow wallet (BIL-05);
+        // falls back to the credit balance when no overflow wallet is configured/resolvable.
+        if ($policy === 'WALLET_TOPUP' && ! empty($config->overpayment_overflow_wallet_ref)) {
+            $sub = Subscription::query()->where('account_id', $accountId)
+                ->whereNotIn('status_code', [Subscription::TERMINATED])->first();
+            if ($sub) {
+                $wallet = $this->wallets->ensureWallet($sub->subscription_id, $config->overpayment_overflow_wallet_ref, $accountId, $sub->customer_id);
+                $this->wallets->credit($wallet, $remaining, 'TOPUP', 'overpayment:'.$payment->payment_id);
+                $payment->update(['unallocated_amount' => 0, 'status' => $remaining >= $amount ? 'APPLIED' : 'APPLIED']);
+
+                return;
+            }
         }
 
         // OV-5: a payment with no allocation target at all is UNALLOCATED, not rejected.

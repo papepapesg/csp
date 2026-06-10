@@ -26,6 +26,9 @@ class BillingRuntimeProvider extends ServiceProvider
         // BIL-03: a wallet top-up may unfreeze a prepaid cycle that missed payment.
         Event::listen(OutboxEventPublished::class, [\Modules\Billing\Listeners\RetryFrozenCycleOnTopup::class, 'handle']);
 
+        // BIL-01-PAY-01 OV-2: a newly issued invoice auto-draws any account credit balance.
+        Event::listen(OutboxEventPublished::class, [\Modules\Billing\Listeners\ApplyCreditBalanceOnInvoice::class, 'handle']);
+
         // ADJ-01 approval routing fallback: when no decision table is deployed
         // for rules.billing.adjustment-approval, derive the same answer from
         // adjustment_limits_config (steps + auto_approve_under threshold).

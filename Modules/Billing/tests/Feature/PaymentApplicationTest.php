@@ -76,6 +76,54 @@ class PaymentApplicationTest extends TestCase
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'PaymentReceivedUnallocated']);
     }
 
+    public function test_ov2_credit_balance_auto_draws_against_a_new_invoice(): void
+    {
+        $svc = app(PaymentService::class);
+        // Overpay an invoice → 400 surplus on the account credit balance.
+        $first = $this->invoice(100);
+        $svc->receiveAndApply(['account_id' => 'acc_1', 'paid_amount' => 500, 'method' => 'MPESA', 'payment_reference' => 'ov2-pay', 'target_invoice_id' => $first->invoice_id]);
+        $this->assertDatabaseHas('account_credit_balance', ['account_id' => 'acc_1', 'balance' => 400.00]);
+
+        // A new invoice for the account auto-draws the credit (OV-2).
+        $next = $this->invoice(300);
+        $svc->applyCreditBalanceToInvoice($next->invoice_id);
+
+        $this->assertSame('PAID', $next->fresh()->status);
+        $this->assertDatabaseHas('account_credit_balance', ['account_id' => 'acc_1', 'balance' => 100.00]); // 400 - 300
+        $this->assertDatabaseHas('payment_ledger', ['account_id' => 'acc_1', 'method' => 'CREDIT_BALANCE_APPLICATION']);
+    }
+
+    public function test_ov2_listener_fires_on_invoice_generated(): void
+    {
+        $svc = app(PaymentService::class);
+        $first = $this->invoice(100);
+        $svc->receiveAndApply(['account_id' => 'acc_1', 'paid_amount' => 300, 'method' => 'MPESA', 'payment_reference' => 'ov2l', 'target_invoice_id' => $first->invoice_id]);
+
+        $next = $this->invoice(150);
+        $event = \App\Foundation\Events\Outbox\OutboxEvent::query()
+            ->where('event_type', 'InvoiceGenerated')->whereJsonContains('payload->invoiceId', $next->invoice_id)->firstOrFail();
+        app(\Modules\Billing\Listeners\ApplyCreditBalanceOnInvoice::class)->handle(new \App\Foundation\Events\OutboxEventPublished($event));
+
+        $this->assertSame('PAID', $next->fresh()->status);
+    }
+
+    public function test_ov3_wallet_topup_overflow_credits_the_wallet(): void
+    {
+        $this->seed(\Modules\Catalog\Database\Seeders\WalletCatalogSeeder::class);
+        DB::table('payment_config')->insert(['operator_code' => 'WIK', 'allocation_policy' => 'FIFO_DUE_DATE', 'overpayment_policy' => 'WALLET_TOPUP', 'overpayment_overflow_wallet_ref' => 'MONEY_KES', 'created_at' => now(), 'updated_at' => now()]);
+        \Modules\Subscription\Models\Subscription::query()->create([
+            'subscription_id' => \App\Foundation\Support\Id::make('sub'), 'customer_id' => 'c1', 'account_id' => 'acc_w',
+            'operator_code' => 'WIK', 'homepass_id' => 'h1', 'package_ref' => 'p', 'status_code' => 'ACTIVE', 'billing_mode' => 'POSTPAID', 'currency' => 'KES',
+        ]);
+        $inv = $this->invoice(200, 'acc_w');
+
+        // Pay 500 against a 200 invoice → 300 surplus routes to the overflow wallet.
+        app(PaymentService::class)->receiveAndApply(['account_id' => 'acc_w', 'paid_amount' => 500, 'method' => 'MPESA', 'payment_reference' => 'ov3', 'target_invoice_id' => $inv->invoice_id]);
+
+        $this->assertDatabaseHas('wallet', ['account_id' => 'acc_w', 'wallet_code' => 'MONEY_KES', 'balance' => 300.00]);
+        $this->assertDatabaseMissing('account_credit_balance', ['account_id' => 'acc_w']);
+    }
+
     public function test_reversal_restores_invoice_outstanding_and_writes_lineage(): void
     {
         $inv = $this->invoice(1000);
