@@ -79,9 +79,17 @@ auto-interrupt, scheduled effective-timing. (M/L)
   cycle generator** (PREPAID pre-cycle documents) not built; `invoice_line` table
   retains its pre-existing name (DD calls it `invoice_line_item`); RAT-01 uses
   `billed`+`invoice_id` rather than the `POSTPAID_PENDING_INVOICE`→`INVOICED` status. ⚠️
-- Open (M): data/SMS rating uses code constants instead of a usage-tariff catalog;
-  payment reversal; account-credit auto-draw; per-subscription cycle proration for
-  first/last partial cycle. ⚠️
+- **Cycle proration** — ✅ 🔁: CALENDAR cycles align the first cycle to the anchor day
+  at activation; the recurring fee is charged pro-rata by whole-day ratio for any
+  partial cycle (full cycles factor to 1.0).
+- **BIL-02-GEN-01 generation failure queue (group Q) + bulk reversal (group R)** — ✅ 🔁:
+  recoverable cycle-close failures persisted with context/backoff and resolved on a
+  later success; operator-proposed, dual-controlled (approver≠proposer) batch cancel
+  with eligible-vs-protected preview (signed-tax / cancelled / note-linked protected),
+  per-invoice InvoiceCancelled events.
+- Open (M): data/SMS rating uses code constants (usage-tariff catalog exists as
+  fallback); payment reversal; account-credit auto-draw; pro-forma cycle generator
+  (PREPAID pre-cycle documents). ⚠️
 
 ## Work Order (WO-01-FRAMEWORK) — audited 🔁
 - Ticket source link (`source_type`/`source_ref`; Ticketing creates + waits for finalize) — ✅
@@ -111,8 +119,10 @@ auto-interrupt, scheduled effective-timing. (M/L)
   (TCK-3 wo_allowed, TCK-7 terminal guard, one-active-WO) — ✅ 🔁
 - **WorkOrderFinalized → ticket** resolution loop (§9.2, was claimed but unwired) — ✅ 🔁
 - **Reopen** (RESOLVED→OPEN + reopened_count, §8.8) + **cancel** + comment visibility — ✅ 🔁
-- Open (M/L): `ticket_link` general multi-entity links + `ticket_attachment`; gap-free
-  `ticket_number`; full WAITING_*/UNDER_REVIEW status set. ⚠️
+- **Gap-free `ticket_number`** (UNIQUE per operator/year), **`ticket_attachment`** metadata,
+  **`ticket_link`** general multi-entity links, full §5 status set (TRIAGED / WAITING_* /
+  UNDER_REVIEW) — ✅ 🔁
+- Open (M/L): WAITING_* transition automation (status set present; auto-driven transitions light). ⚠️
 
 ## Catalog / SIP / PLM-CFG — audited 🔁
 - PLM-CFG-01 services (+classes, consumption model, wallet/tax refs), SIP-01 packages
