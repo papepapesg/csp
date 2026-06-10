@@ -16,7 +16,10 @@ use Modules\Ticketing\Services\TicketService;
  */
 class TicketController extends ApiController
 {
-    public function __construct(private readonly TicketService $tickets) {}
+    public function __construct(
+        private readonly TicketService $tickets,
+        private readonly \App\Foundation\Files\FileStorageService $files,
+    ) {}
 
     public function index(Request $request): JsonResponse
     {
@@ -71,12 +74,25 @@ class TicketController extends ApiController
     public function addAttachment(Request $request, Ticket $ticket): JsonResponse
     {
         $v = $request->validate([
-            'file_id' => ['required', 'string'], // a FOUNDATION_FILE_STORAGE file_id (upload via POST /api/files first)
-            'file_name' => ['nullable', 'string'], // defaults to the foundation file's authoritative name
+            // Post the binary directly (multipart) and we store it in the foundation here,
+            // OR reference a file already uploaded via POST /api/files by its file_id.
+            'file' => ['required_without:file_id', 'file', 'max:20480'],
+            'file_id' => ['required_without:file', 'string'],
+            'file_name' => ['nullable', 'string'],
             'content_type' => ['nullable', 'string'],
             'size_bytes' => ['nullable', 'integer'],
             'visibility' => ['nullable', 'in:INTERNAL,CUSTOMER_VISIBLE'],
         ]);
+
+        // TCK-9: binaries live in FOUNDATION_FILE_STORAGE. If one is posted, store it there
+        // (owned by the ticket) and attach the returned reference; TCK keeps only the file_id.
+        if ($request->hasFile('file')) {
+            $object = $this->files->store($request->file('file'), [
+                'owner_type' => 'TICKET', 'owner_id' => $ticket->ticket_id,
+                'category' => 'ticket', 'uploaded_by' => $request->user()?->uid,
+            ]);
+            $v['file_id'] = $object->file_id;
+        }
 
         return ApiResponse::item($this->tickets->addAttachment($ticket, $v, $request->user()?->uid), 201);
     }

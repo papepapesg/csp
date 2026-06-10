@@ -161,4 +161,35 @@ class AccountService
     {
         return CustomerAccountFlag::query()->where('account_id', $account->account_id)->where('state', CustomerAccountFlag::ACTIVE)->get();
     }
+
+    /**
+     * Read-only decision context for an account/customer (ILM-CFG-01). Returns plain
+     * data so any module can feed a *complete* fact set into its rule engine without
+     * reading ILM tables directly (cross-module rule). Every routing-relevant attribute
+     * lives here — operator/market, service class, account state, customer segment, and
+     * the VIP/loyalty flags — so a data-driven policy can branch on whatever a given
+     * country needs. Safe (empty-ish) when the references are unknown.
+     *
+     * @return array<string,mixed>
+     */
+    public function routingContext(?string $accountId, ?string $customerId = null): array
+    {
+        $account = $accountId ? CustomerAccount::query()->where('account_id', $accountId)->first() : null;
+        $customer = $account?->customer
+            ?? ($customerId ? \Modules\Ilm\Models\Customer::query()->where('customer_id', $customerId)->first() : null);
+        $flags = $account ? $this->activeFlags($account) : collect();
+
+        return [
+            'operatorCode' => $account?->operator_code ?? $customer?->operator_code,
+            'serviceClass' => $account?->service_class,
+            'accountStatus' => $account?->status,
+            'accountSubStatus' => $account?->sub_status,                         // 'vip', 'staff_account', …
+            'customerType' => $customer?->type,                                  // RES | SME | ENT — segment proxy
+            'vip' => $account?->sub_status === 'vip',                            // ILM-CFG-01 §3.5 VIP sub-status
+            'highValue' => $flags->contains(fn ($f) => $f->flag_code === 'HIGH_VALUE'),
+            'loyaltyTier' => optional($flags->firstWhere('flag_code', 'LOYALTY_TIER'))->text_value,
+            'attentionBanner' => $account?->attention_banner,
+            'flags' => $flags->pluck('flag_code')->values()->all(),
+        ];
+    }
 }

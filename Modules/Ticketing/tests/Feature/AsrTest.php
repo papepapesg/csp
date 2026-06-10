@@ -43,4 +43,29 @@ class AsrTest extends TestCase
         $this->postJson('/api/asr', ['asr_type' => 'SERVICE_REQUEST', 'subject' => 'Upgrade my plan'], ['Idempotency-Key' => 'asr-2'])
             ->assertCreated()->assertJsonPath('queue', 'FULFILLMENT')->assertJsonPath('category', 'SERVICE_REQUEST');
     }
+
+    public function test_routing_can_branch_on_vip_when_an_operator_configures_it(): void
+    {
+        // An operator adds a VIP rule on top — no code change, just data. The full
+        // context (incl. the vip account flag) is fed to the rule engine.
+        \Modules\Rules\Models\DecisionTable::query()->where('rule_set', 'rules.asr.routing')->update([
+            'rules' => [
+                ['ruleId' => 'R-VIP', 'when' => [['var' => 'vip', 'op' => 'eq', 'value' => true]], 'then' => ['queue' => 'VIP_DESK', 'priority' => 'URGENT']],
+                ['ruleId' => 'R-COMPLAINT', 'when' => [['var' => 'asrType', 'op' => 'eq', 'value' => 'COMPLAINT']], 'then' => ['queue' => 'QUALITY', 'priority' => 'HIGH']],
+            ],
+        ]);
+
+        $cid = \App\Foundation\Support\Id::make('cust');
+        \Modules\Ilm\Models\Customer::query()->create(['customer_id' => $cid, 'operator_code' => 'WIK', 'type' => 'RES', 'name' => 'V', 'primary_msisdn' => '+254700555000']);
+        // VIP is the account's sub-status (ILM-CFG-01 §3.5), fed to routing as vip == true.
+        \Modules\Ilm\Models\CustomerAccount::query()->create(['account_id' => 'acct_vip', 'customer_id' => $cid, 'operator_code' => 'WIK', 'account_number' => 'A-VIP', 'service_address' => 'x', 'status' => 'ACTIVE', 'sub_status' => 'vip']);
+
+        // A complaint from a VIP account is pulled to the VIP desk, not QUALITY.
+        $this->postJson('/api/asr', ['asr_type' => 'COMPLAINT', 'subject' => 'unhappy', 'customer_id' => $cid, 'account_id' => 'acct_vip'], ['Idempotency-Key' => 'asr-vip'])
+            ->assertCreated()->assertJsonPath('queue', 'VIP_DESK')->assertJsonPath('priority', 'URGENT');
+
+        // A non-VIP complaint still routes by type.
+        $this->postJson('/api/asr', ['asr_type' => 'COMPLAINT', 'subject' => 'also unhappy'], ['Idempotency-Key' => 'asr-novip'])
+            ->assertCreated()->assertJsonPath('queue', 'QUALITY');
+    }
 }

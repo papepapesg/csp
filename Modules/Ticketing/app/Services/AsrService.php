@@ -3,6 +3,7 @@
 namespace Modules\Ticketing\Services;
 
 use App\Foundation\Rules\RuleEngine;
+use Modules\Ilm\Services\AccountService;
 use Modules\Ticketing\Models\Ticket;
 
 /**
@@ -24,13 +25,28 @@ class AsrService
     public function __construct(
         private readonly TicketService $tickets,
         private readonly RuleEngine $rules,
+        private readonly AccountService $accounts,
     ) {}
 
     /** @param array<string,mixed> $data asr_type, subject, description?, customer_id?, account_id?, subscription_id?, opened_by? */
     public function create(array $data): Ticket
     {
         $asrType = $data['asr_type'];
-        $routing = $this->rules->evaluate('rules.asr.routing', ['asrType' => $asrType]);
+        // Feed the routing rule the *full* decision context — operator/market, service
+        // class, account state, customer segment, VIP/loyalty flags — not just the ASR
+        // type. The policy stays data; we only supply facts, so an operator can route on
+        // whatever a given country needs (e.g. VIP → dedicated queue) without code.
+        $facts = array_merge(
+            $this->accounts->routingContext($data['account_id'] ?? null, $data['customer_id'] ?? null),
+            [
+                'asrType' => $asrType,
+                'channel' => $data['channel'] ?? $data['source_channel'] ?? null,
+                'priorityHint' => $data['priority'] ?? null,
+                'subscriptionId' => $data['subscription_id'] ?? null,
+                'subcategory' => $data['subcategory'] ?? null,
+            ],
+        );
+        $routing = $this->rules->evaluate('rules.asr.routing', $facts);
 
         $ticket = $this->tickets->create([
             'asr_type' => $asrType,

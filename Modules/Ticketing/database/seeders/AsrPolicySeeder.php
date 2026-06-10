@@ -17,7 +17,10 @@ class AsrPolicySeeder extends Seeder
                 'table_id' => Id::make('dt'),
                 'name' => 'ASR routing',
                 'hit_policy' => 'FIRST',
-                'inputs' => ['asrType'],
+                // Full fact set the routing rule receives (operators may branch on any of
+                // these). The seeded defaults below stay ASR-type-only; a market adds rules
+                // on top — e.g. vip == true → dedicated queue / priority — without code.
+                'inputs' => ['asrType', 'operatorCode', 'serviceClass', 'accountStatus', 'accountSubStatus', 'customerType', 'vip', 'highValue', 'loyaltyTier', 'channel', 'flags'],
                 'rules' => [
                     ['ruleId' => 'R-ASR-RT-001', 'when' => [['var' => 'asrType', 'op' => 'eq', 'value' => 'TECHNICAL_TROUBLE']], 'then' => ['queue' => 'NOC', 'priority' => 'HIGH', 'autoCreateWorkOrder' => true]],
                     ['ruleId' => 'R-ASR-RT-002', 'when' => [['var' => 'asrType', 'op' => 'eq', 'value' => 'COMPLAINT']], 'then' => ['queue' => 'QUALITY', 'priority' => 'HIGH']],

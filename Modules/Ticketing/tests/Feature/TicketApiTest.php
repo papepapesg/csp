@@ -40,24 +40,25 @@ class TicketApiTest extends TestCase
         $this->assertSame('TCK-WIK-'.now()->year.'-000001', $a['ticket_number']);
         $this->assertSame('TCK-WIK-'.now()->year.'-000002', $b['ticket_number']);
 
-        // The binary is stored in FOUNDATION_FILE_STORAGE first; the ticket only references file_id.
+        // One-step: post the binary straight to the attachments endpoint — it stores the
+        // file in FOUNDATION_FILE_STORAGE and links the returned reference to the ticket.
         \Illuminate\Support\Facades\Storage::fake('local');
-        $upload = $this->post('/api/files', [
+        $att = $this->post("/api/tickets/{$a['ticket_id']}/attachments", [
             'file' => \Illuminate\Http\UploadedFile::fake()->image('speedtest.png'),
-            'category' => 'ticket',
-        ])->assertCreated()->json();
+            'visibility' => 'CUSTOMER_VISIBLE',
+        ])->assertCreated()->assertJsonPath('file_name', 'speedtest.png')->assertJsonPath('visibility', 'CUSTOMER_VISIBLE')->json();
+        // The binary really landed in the foundation registry (with a storage path).
+        $this->assertDatabaseHas('file_object', ['file_id' => $att['file_id'], 'owner_type' => 'TICKET', 'owner_id' => $a['ticket_id']]);
+        $this->assertNotNull(\App\Foundation\Files\FileObject::find($att['file_id'])->path);
 
-        // Attachment references the foundation file; name/type are taken from it.
-        $this->postJson("/api/tickets/{$a['ticket_id']}/attachments", ['file_id' => $upload['file_id'], 'visibility' => 'CUSTOMER_VISIBLE'])
-            ->assertCreated()->assertJsonPath('file_name', 'speedtest.png')->assertJsonPath('visibility', 'CUSTOMER_VISIBLE');
-        // An attachment that points at a non-existent foundation file is rejected (TCK-9).
+        // Referencing a non-existent foundation file is rejected (TCK-9).
         $this->postJson("/api/tickets/{$a['ticket_id']}/attachments", ['file_id' => 'file_does_not_exist'])
             ->assertStatus(404)->assertJsonPath('errorCode', 'TICKET_ATTACHMENT_FILE_NOT_FOUND');
 
         $this->postJson("/api/tickets/{$a['ticket_id']}/links", ['entity_type' => 'SUBSCRIPTION', 'entity_ref' => 'sub_1', 'relation' => 'RELATED'])
             ->assertCreated()->assertJsonPath('entity_ref', 'sub_1');
 
-        $this->assertDatabaseHas('ticket_attachment', ['ticket_id' => $a['ticket_id'], 'file_id' => $upload['file_id'], 'visibility' => 'CUSTOMER_VISIBLE']);
+        $this->assertDatabaseHas('ticket_attachment', ['ticket_id' => $a['ticket_id'], 'file_id' => $att['file_id'], 'visibility' => 'CUSTOMER_VISIBLE']);
         $this->assertDatabaseHas('ticket_link', ['ticket_id' => $a['ticket_id'], 'entity_type' => 'SUBSCRIPTION', 'entity_ref' => 'sub_1']);
     }
 
