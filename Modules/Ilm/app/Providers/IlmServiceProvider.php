@@ -22,7 +22,7 @@ class IlmServiceProvider extends ModuleServiceProvider
      *
      * @var string[]
      */
-    // protected array $commands = [];
+    protected array $commands = [\Modules\Ilm\Console\CvmFlagEvaluatorCommand::class];
 
     /**
      * Provider classes to register.

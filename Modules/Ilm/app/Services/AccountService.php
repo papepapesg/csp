@@ -61,6 +61,7 @@ class AccountService
         return DB::transaction(function () use ($account, $data) {
             $statusChanged = (isset($data['status']) && $data['status'] !== $account->status)
                 || (isset($data['sub_status']) && $data['sub_status'] !== $account->sub_status);
+            $before = ['status' => $account->status, 'sub_status' => $account->sub_status];
 
             if ($statusChanged) {
                 $data['sub_status_changed_at'] = now();
@@ -69,6 +70,16 @@ class AccountService
             $account->update($data);
 
             if ($statusChanged) {
+                // Append-only history (the Customer 360 status timeline).
+                DB::table('account_status_history')->insert([
+                    'account_id' => $account->account_id,
+                    'operator_code' => $account->operator_code,
+                    'prev_status' => $before['status'], 'new_status' => $account->status,
+                    'prev_sub_status' => $before['sub_status'], 'new_sub_status' => $account->sub_status,
+                    'reason' => $data['sub_status_reason'] ?? null,
+                    'changed_by' => $data['updated_by'] ?? null,
+                    'changed_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+                ]);
                 $this->events->publish(new DomainEvent(
                     type: IlmEvents::CUSTOMER_ACCOUNT_STATUS_CHANGED,
                     topic: IlmEvents::TOPIC,
