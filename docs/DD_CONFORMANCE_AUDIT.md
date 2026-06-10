@@ -107,8 +107,12 @@ auto-interrupt, scheduled effective-timing. (M/L)
 - **BIL-02-ADJ-01 / BIL-01-CN-01 invoice adjustments + note application** — ✅ 🔁
   (was the last missing money path): governed pipeline adjustment_request
   (FULL/LINE/AMOUNT scopes; operator reason-code catalog; adjustment_limits_config
-  + /override-limit; audited adjustment_approval_step rows; zero-step / threshold /
-  multi-step approval policy) → CREDIT_NOTE/DEBIT_NOTE invoices (CN-/DN- legal
+  + /override-limit; audited adjustment_approval_step rows). Approval ROUTING is
+  a rules-engine decision: `rules.billing.adjustment-approval` decision table
+  (operator-overridable, FIRST hit — limit escalation / debit standard / auto
+  small credit / dual control for large credits), answer {stepsRequired, ruleId}
+  PINNED on the proposal at filing; config steps + auto_approve_under remain the
+  registered fallback when no table is deployed → CREDIT_NOTE/DEBIT_NOTE invoices (CN-/DN- legal
   numbers, original_invoice_id) → note_application_ledger application: POSTPAID
   outstanding reduce/increase with surplus → account_credit_balance and FIFO
   auto-allocation; PREPAID wallet credit/debit where an insufficient wallet FAILS

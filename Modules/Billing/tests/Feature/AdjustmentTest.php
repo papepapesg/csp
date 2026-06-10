@@ -212,6 +212,56 @@ class AdjustmentTest extends TestCase
         ], ['Idempotency-Key' => 'adj-tax'])->assertStatus(422)->assertJsonPath('errorCode', 'CANNOT_ADJUST_TAX_INVOICE');
     }
 
+    public function test_approval_routing_is_a_rules_engine_decision_dual_control_for_large_credits(): void
+    {
+        // 25000 ≥ 20000 → R-ADJ-APPR-4 (DUAL_CONTROL): two audited approvals.
+        $invoice = $this->postpaidInvoice(25000, 'acc_dual', 'cust_dual');
+        $res = $this->postJson('/api/adjustments', [
+            'direction' => 'CREDIT', 'scope' => 'FULL',
+            'parent_invoice_id' => $invoice->invoice_id,
+            'reason_code' => 'DISPUTE_RESOLVED',
+        ], ['Idempotency-Key' => 'adj-dual-1'])->assertCreated();
+        $adjustmentId = $res->json('adjustment_id');
+
+        // The routing decision (and deciding rule) is pinned on the proposal.
+        $this->assertSame(2, $res->json('required_approvals'));
+        $this->assertSame('R-ADJ-APPR-4', $res->json('approval_rule_id'));
+
+        // First approval is not enough; the second one applies.
+        $this->postJson("/api/adjustments/{$adjustmentId}/approve", ['comment' => 'lead ok'])->assertOk()
+            ->assertJsonPath('status', 'PENDING_APPROVAL');
+        $this->postJson("/api/adjustments/{$adjustmentId}/approve", ['comment' => 'manager ok'])->assertOk()
+            ->assertJsonPath('status', 'APPLIED');
+        $this->assertSame(2, \Modules\Billing\Models\AdjustmentApprovalStep::query()
+            ->where('adjustment_id', $adjustmentId)->where('decision', 'APPROVED')->count());
+    }
+
+    public function test_operator_scoped_rule_table_overrides_the_global_routing(): void
+    {
+        // WIK deploys its own version of the rule set: every credit auto-approves.
+        \Modules\Rules\Models\DecisionTable::query()->create([
+            'table_id' => \App\Foundation\Support\Id::make('dt'),
+            'rule_set' => 'rules.billing.adjustment-approval',
+            'operator_code' => 'WIK', 'version' => 1,
+            'name' => 'WIK adjustment routing', 'hit_policy' => 'FIRST',
+            'inputs' => ['direction', 'amount'],
+            'rules' => [['ruleId' => 'R-WIK-ADJ-1', 'when' => [['var' => 'direction', 'op' => 'eq', 'value' => 'CREDIT']],
+                'then' => ['stepsRequired' => 0, 'decisionCode' => 'WIK_TRUSTS_CREDITS']]],
+            'default_output' => ['stepsRequired' => 1],
+            'status' => \Modules\Rules\Models\DecisionTable::DEPLOYED,
+        ]);
+
+        // 5000 would be SINGLE_APPROVAL globally — WIK's table auto-approves it.
+        $invoice = $this->postpaidInvoice(5000, 'acc_wik_rule', 'cust_wik_rule');
+        $this->postJson('/api/adjustments', [
+            'direction' => 'CREDIT', 'scope' => 'FULL',
+            'parent_invoice_id' => $invoice->invoice_id,
+            'reason_code' => 'GOODWILL_CREDIT',
+        ], ['Idempotency-Key' => 'adj-wik-rule'])->assertCreated()
+            ->assertJsonPath('status', 'APPLIED')
+            ->assertJsonPath('approval_rule_id', 'R-WIK-ADJ-1');
+    }
+
     public function test_small_credit_auto_approves_under_threshold_and_note_is_readable(): void
     {
         $invoice = $this->postpaidInvoice(400, 'acc_auto', 'cust_auto');

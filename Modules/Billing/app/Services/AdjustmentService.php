@@ -5,6 +5,7 @@ namespace Modules\Billing\Services;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
+use App\Foundation\Rules\RuleEngine;
 use App\Foundation\Support\Context;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
@@ -18,16 +19,26 @@ use Modules\Billing\Models\InvoiceLine;
  * application pipeline for credit and debit notes. Nobody edits an invoice in
  * place: an agent PROPOSES an adjustment (scoped FULL / LINE / AMOUNT, with a
  * mandatory operator reason code, guarded by adjustment_limits_config); the
- * operator's approval policy decides (zero-step auto-approve, threshold, or
- * one or more approval steps, each audited); on approval GEN-01 issues the
+ * operator's approval policy decides; on approval GEN-01 issues the
  * CREDIT_NOTE / DEBIT_NOTE invoice and BIL-01-CN-01 applies it.
+ *
+ * Approval ROUTING is a rules-engine decision: the
+ * `rules.billing.adjustment-approval` package (operator-overridable decision
+ * table) receives the proposal facts and answers {stepsRequired} — 0 means
+ * auto-approve, N means N audited approval steps. The decision (and the rule
+ * that made it) is PINNED on the proposal at filing time. When no table is
+ * deployed, a registered fallback derives the same answer from
+ * adjustment_limits_config (steps + auto_approve_under threshold).
  */
 class AdjustmentService
 {
+    public const APPROVAL_RULE_SET = 'rules.billing.adjustment-approval';
+
     public function __construct(
         private readonly EventBus $events,
         private readonly InvoiceService $invoices,
         private readonly NoteApplicationService $noteApplication,
+        private readonly RuleEngine $rules,
     ) {}
 
     /**
@@ -82,11 +93,21 @@ class AdjustmentService
             // explicit /override-limit (approver permission) lifts the block.
             $limitBreach = $this->checkLimits($operator, $data['customer_id'] ?? $parent?->customer_id, $amount);
 
-            $config = DB::table('adjustment_limits_config')->where('operator_code', $operator)->first();
-            $stepsRequired = (int) ($config->approval_steps_required ?? 1);
-            $autoUnder = $config->auto_approve_under ?? null;
-            $autoApprove = $limitBreach === null
-                && ($stepsRequired === 0 || ($autoUnder !== null && $amount < (float) $autoUnder));
+            // Approval routing: the rules engine decides (operator-overridable
+            // decision table; config-derived fallback when none is deployed).
+            $routing = $this->rules->evaluate(self::APPROVAL_RULE_SET, [
+                'operatorCode' => $operator,
+                'direction' => $direction,
+                'scope' => $scope,
+                'amount' => $amount,
+                'currency' => $currency,
+                'reasonCode' => $reason->code,
+                'billingMode' => $billingMode,
+                'customerId' => $data['customer_id'] ?? $parent?->customer_id,
+                'limitBreached' => $limitBreach !== null,
+            ]);
+            $stepsRequired = max(0, (int) ($routing['stepsRequired'] ?? 1));
+            $autoApprove = $limitBreach === null && $stepsRequired === 0;
 
             $adjustment = AdjustmentRequest::query()->create([
                 'operator_code' => $operator,
@@ -106,17 +127,20 @@ class AdjustmentService
                 'justification' => $data['justification'] ?? null,
                 'status' => $limitBreach ? AdjustmentRequest::PROPOSED : AdjustmentRequest::PENDING_APPROVAL,
                 'failure_reason' => $limitBreach,
+                'required_approvals' => $stepsRequired,
+                'approval_rule_id' => $routing['ruleId'] ?? null,
                 'proposed_by' => $proposedBy,
             ]);
 
             $this->emit($adjustment, BillingEvents::ADJUSTMENT_PROPOSED);
 
             if ($autoApprove) {
-                // Zero-step / under-threshold policy: approve + apply in-line, with
-                // an audit step recording the automatic decision.
+                // The rules engine answered zero steps: approve + apply in-line,
+                // with an audit step naming the deciding rule.
                 $adjustment->approvalSteps()->create([
                     'step_no' => 1, 'decision' => 'APPROVED', 'decided_by' => 'SYSTEM:AUTO_APPROVE',
-                    'comment' => $stepsRequired === 0 ? 'Zero-step approval policy' : "Under auto-approve threshold {$autoUnder}",
+                    'comment' => 'Zero-step routing by '.($routing['ruleId'] ?? 'approval policy')
+                        .(isset($routing['decisionCode']) ? " ({$routing['decisionCode']})" : ''),
                     'decided_at' => now(),
                 ]);
 
@@ -141,8 +165,12 @@ class AdjustmentService
                 'comment' => $comment, 'decided_at' => now(),
             ]);
 
-            $config = DB::table('adjustment_limits_config')->where('operator_code', $adjustment->operator_code)->first();
-            $required = max(1, (int) ($config->approval_steps_required ?? 1));
+            // The routing decision was pinned at proposal time; a human decision
+            // point always needs at least one approval (zero-step proposals never
+            // reach here — they auto-applied), and legacy rows fall back to config.
+            $required = $adjustment->required_approvals
+                ?? (int) (DB::table('adjustment_limits_config')->where('operator_code', $adjustment->operator_code)->value('approval_steps_required') ?? 1);
+            $required = max(1, $required);
             $approvals = $adjustment->approvalSteps()->where('decision', 'APPROVED')->count();
 
             if ($approvals < $required) {
