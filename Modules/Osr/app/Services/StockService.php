@@ -30,6 +30,13 @@ class StockService
         return DB::transaction(function () use ($data) {
             $operator = $data['operator_code'] ?? Context::operatorCode();
 
+            // OSR-01: when the operator governs a reason-code catalog, the movement
+            // reason must be an ACTIVE catalog code (soft-enforced like other catalogs).
+            $hasCatalog = DB::table('stock_reason_code')->where('operator_code', $operator)->where('active', true)->exists();
+            if ($hasCatalog && ! DB::table('stock_reason_code')->where('operator_code', $operator)->where('code', $data['reason_code'])->where('active', true)->exists()) {
+                throw DomainException::ruleRejected('UNKNOWN_STOCK_REASON', "Reason '{$data['reason_code']}' is not an ACTIVE stock reason code.");
+            }
+
             $movement = StockMovement::query()->create([
                 'operator_code' => $operator,
                 'sku_id' => $data['sku_id'],
@@ -64,6 +71,49 @@ class StockService
 
             return $movement;
         });
+    }
+
+    /**
+     * Two-tier transfer between locations: a TRANSFER_OUT at the source and a
+     * TRANSFER_IN at the destination, atomically. The pair keeps both balances
+     * correct and leaves an auditable in-transit trail via the reference.
+     *
+     * @return array{out: StockMovement, in: StockMovement}
+     */
+    public function transfer(string $skuId, string $fromLocationId, string $toLocationId, float $qty, ?string $reference = null): array
+    {
+        return DB::transaction(function () use ($skuId, $fromLocationId, $toLocationId, $qty, $reference) {
+            $ref = $reference ?? ('xfer:'.\App\Foundation\Support\Id::make('xf'));
+            $available = (float) (StockBalance::query()->where('location_id', $fromLocationId)->where('sku_id', $skuId)->value('quantity') ?? 0);
+            if ($available + 0.0001 < $qty) {
+                throw DomainException::ruleRejected('INSUFFICIENT_STOCK', "Only {$available} of {$skuId} at {$fromLocationId} to transfer.");
+            }
+
+            return [
+                'out' => $this->move(['sku_id' => $skuId, 'location_id' => $fromLocationId, 'quantity' => -$qty, 'reason_code' => 'TRANSFER_OUT', 'reference' => $ref]),
+                'in' => $this->move(['sku_id' => $skuId, 'location_id' => $toLocationId, 'quantity' => $qty, 'reason_code' => 'TRANSFER_IN', 'reference' => $ref]),
+            ];
+        });
+    }
+
+    /**
+     * WO bill-of-materials: reserve each material a job type requires from the
+     * given location (called when a WO is committed). Returns the reservations.
+     *
+     * @return array<int,StockReservation>
+     */
+    public function reserveForJob(string $jobTypeCode, string $locationId, string $woId): array
+    {
+        $required = DB::table('wo_material_requirement')
+            ->where('operator_code', Context::operatorCode())
+            ->where('job_type_code', $jobTypeCode)->get();
+
+        $reservations = [];
+        foreach ($required as $row) {
+            $reservations[] = $this->reserve($row->sku_id, $locationId, (float) $row->quantity, $woId, 'bom:'.$jobTypeCode);
+        }
+
+        return $reservations;
     }
 
     /**

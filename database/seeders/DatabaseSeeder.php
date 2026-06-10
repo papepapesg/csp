@@ -16,6 +16,7 @@ use Modules\Fulfillment\Database\Seeders\FulfillmentFlowSeeder;
 use Modules\Ilm\Database\Seeders\AccountFlagCatalogSeeder;
 use Modules\Ilm\Database\Seeders\CvmPolicySeeder;
 use Modules\Osr\Database\Seeders\OsrRmaSeeder;
+use Modules\Osr\Database\Seeders\StockReasonCodeSeeder;
 use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Subscription\Database\Seeders\RestrictionCatalogSeeder;
@@ -63,6 +64,7 @@ class DatabaseSeeder extends Seeder
             WoFrameworkSeeder::class,
             FieldAuditPolicySeeder::class,
             OsrRmaSeeder::class,
+            StockReasonCodeSeeder::class,
             CvmPolicySeeder::class,
             AccountFlagCatalogSeeder::class,
             SlaPolicySeeder::class,
