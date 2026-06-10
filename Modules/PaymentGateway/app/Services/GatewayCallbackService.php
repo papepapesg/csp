@@ -4,23 +4,28 @@ namespace Modules\PaymentGateway\Services;
 
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
+use App\Foundation\Support\Context;
 use Modules\Billing\Services\PaymentService;
+use Modules\Billing\Services\WalletService;
 use Modules\Ilm\Models\CustomerAccount;
 use Modules\PaymentGateway\Events\PaymentGatewayEvents;
 use Modules\PaymentGateway\Models\PaymentGatewayCallback;
+use Modules\Subscription\Models\Subscription;
 use Throwable;
 
 /**
  * PAY-GW-01 callback handling. Validates + dedupes the inbound gateway callback,
- * resolves the billing account (via ILM payment_account_number), then calls BIL
- * PaymentService to apply the money. PAY-GW does not own payment ledgers — it is
- * an integration adapter (MVP baseline §4).
+ * resolves the billing account (via ILM payment_account_number), then ROUTES the
+ * money by billing mode (PAY-GW-01 §3): a POSTPAID account's payment is applied
+ * to invoices (BIL-01-PAY-01); a PREPAID subscription's money is a wallet top-up
+ * (BIL-05). PAY-GW owns neither ledger — it is an integration adapter.
  */
 class GatewayCallbackService
 {
     public function __construct(
         private readonly EventBus $events,
         private readonly PaymentService $payments,
+        private readonly WalletService $wallets,
     ) {}
 
     /**
@@ -59,7 +64,27 @@ class GatewayCallbackService
                 return $callback;
             }
 
-            // Call the owning module (BIL) to receive + apply the payment.
+            // PAY-GW-01 §3 routing: PREPAID subscription → wallet top-up (BIL-05);
+            // POSTPAID account → invoice payment application (BIL-01-PAY-01).
+            $prepaid = Subscription::query()
+                ->where('account_id', $accountId)->where('billing_mode', 'PREPAID')
+                ->whereNotIn('status_code', [Subscription::TERMINATED])->first();
+
+            if ($prepaid) {
+                Context::setOperatorCode($prepaid->operator_code);
+                $wallet = $this->wallets->ensureWallet($prepaid->subscription_id, WalletService::DEFAULT_WALLET_CODE, $accountId, $prepaid->customer_id);
+                $this->wallets->credit($wallet, (float) $data['amount'], 'TOPUP', $data['external_ref']);
+                $callback->update([
+                    'status' => PaymentGatewayCallback::PROCESSED,
+                    'resolved_account_id' => $accountId,
+                    'reject_reason' => null,
+                ]);
+                $this->emit(PaymentGatewayEvents::CALLBACK_PROCESSED, $callback);
+
+                return $callback->refresh();
+            }
+
+            // POSTPAID: receive + apply against invoices.
             $payment = $this->payments->receiveAndApply([
                 'account_id' => $accountId,
                 'paid_amount' => $data['amount'],
