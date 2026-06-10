@@ -32,10 +32,15 @@ class WorkOrderService
         WorkOrder::FINALIZATION_PENDING => [WorkOrder::COMPLETED, WorkOrder::IN_PROGRESS, WorkOrder::CANCELLED],
     ];
 
+    /** SLA hours by priority (WO-01 SLA capture); operator-tunable defaults. */
+    private const SLA_HOURS = ['URGENT' => 4, 'HIGH' => 24, 'NORMAL' => 72, 'LOW' => 168];
+
     /** @param array<string,mixed> $data */
     public function create(array $data): WorkOrder
     {
         return DB::transaction(function () use ($data) {
+            // SLA due-time captured at creation from the priority.
+            $data['sla_due_at'] ??= now()->addHours(self::SLA_HOURS[$data['priority'] ?? 'NORMAL'] ?? 72);
             $wo = WorkOrder::query()->create($data + ['status' => WorkOrder::PENDING]);
             $this->recordHistory($wo, null, WorkOrder::PENDING, $data['created_by'] ?? null);
             $this->emit(WorkOrderEvents::CREATED, $wo, ['type' => $wo->type, 'accountId' => $wo->account_id]);
@@ -47,9 +52,42 @@ class WorkOrderService
     /** @param array<string,mixed> $assignment */
     public function assign(WorkOrder $wo, array $assignment, ?string $actor = null): WorkOrder
     {
-        return $this->transition($wo, WorkOrder::ASSIGNED, $actor, array_merge($assignment, [
-            'assigned_at' => now(),
-        ]), WorkOrderEvents::ASSIGNED);
+        // First assignment captures the SLA first-response timestamp.
+        $extra = array_merge($assignment, ['assigned_at' => now()]);
+        if (! $wo->first_response_at) {
+            $extra['first_response_at'] = now();
+        }
+
+        return $this->transition($wo, WorkOrder::ASSIGNED, $actor, $extra, WorkOrderEvents::ASSIGNED);
+    }
+
+    /**
+     * Skills-filtered auto-assign (WO-01): pick a staff member in the WO's tech
+     * region whose skills cover the WO's required_skills. Returns null when no
+     * eligible staff exists (the WO stays PENDING for manual routing).
+     */
+    public function autoAssign(WorkOrder $wo, ?string $actor = null): ?WorkOrder
+    {
+        $required = (array) ($wo->required_skills ?? []);
+        $candidate = \Modules\Workforce\Models\StaffMember::query()
+            ->where('operator_code', $wo->operator_code)
+            ->where('status', 'ACTIVE')
+            ->get()
+            ->first(fn ($staff) => empty($required) || empty(array_diff($required, (array) $staff->skills)));
+
+        if (! $candidate) {
+            return null;
+        }
+
+        return $this->assign($wo, ['assigned_technician_id' => $candidate->getKey()], $actor);
+    }
+
+    /** Link a sub work-order to its master (WO-01 master/sub linkage). */
+    public function linkToMaster(WorkOrder $sub, string $masterWoId, string $linkType = 'PARENT_CHILD'): WorkOrder
+    {
+        $sub->update(['master_wo_id' => $masterWoId, 'link_type' => $linkType]);
+
+        return $sub;
     }
 
     public function start(WorkOrder $wo, ?string $actor = null): WorkOrder

@@ -43,9 +43,12 @@ class WorkOrder extends Model
 
     protected $casts = [
         'findings' => 'array',
+        'required_skills' => 'array',
         'escalation_candidate' => 'boolean',
         'scheduled_at' => 'datetime',
+        'sla_due_at' => 'datetime',
         'assigned_at' => 'datetime',
+        'first_response_at' => 'datetime',
         'started_at' => 'datetime',
         'finalized_at' => 'datetime',
         'warranty_until' => 'datetime',
