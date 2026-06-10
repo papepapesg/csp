@@ -283,6 +283,24 @@ class CycleCloseTest extends TestCase
         $this->assertDatabaseHas('cycle_close_run', ['run_id' => $r['run_id'], 'subscriptions_closed' => 1]);
     }
 
+    public function test_partial_first_cycle_prorates_the_recurring_fee(): void
+    {
+        // A half-length first cycle (15 of 30 days) charges half the package fee.
+        $this->customer();
+        $sub = Subscription::query()->create([
+            'subscription_id' => Id::make('sub'), 'customer_id' => 'c1', 'account_id' => 'a1',
+            'operator_code' => 'WIK', 'homepass_id' => 'h1', 'package_ref' => 'pkg_home',
+            'package_version_id' => $this->pricedPackage(3000), 'status_code' => 'ACTIVE',
+            'currency' => 'KES', 'billing_mode' => 'POSTPAID', 'cycle_period_days' => 30,
+            'current_cycle_start' => now()->subDays(15), 'current_cycle_end' => now()->subMinute(),
+        ]);
+
+        app(CycleCloseService::class)->scan('WIK');
+        $invoice = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
+        // 15/30 of 3000 = 1500.
+        $this->assertEquals(1500.00, $invoice->lines()->where('service_category_code', 'SUBSCRIPTION')->first()->subtotal);
+    }
+
     public function test_invoice_captures_an_immutable_customer_snapshot_that_drives_language(): void
     {
         // R-GEN-01-F-6: snapshot frozen at generation; R-GEN-01-L-5: line wording in

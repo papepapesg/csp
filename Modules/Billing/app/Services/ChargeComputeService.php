@@ -119,7 +119,22 @@ class ChargeComputeService
         if (! $subscription->package_version_id) {
             return 0.0;
         }
+        $price = (float) (PackageVersion::query()->whereKey($subscription->package_version_id)->value('price') ?? 0);
 
-        return (float) (PackageVersion::query()->whereKey($subscription->package_version_id)->value('price') ?? 0);
+        // Proration: a partial cycle (the first calendar-aligned cycle, or a cycle
+        // cut short) is charged pro-rata by days. A full cycle factors to 1.0.
+        $start = $subscription->current_cycle_start;
+        $end = $subscription->current_cycle_end;
+        if ($price > 0 && $start && $end) {
+            // Whole-day counts (Carbon 3 diffInDays is fractional): a cycle that is
+            // a full period long factors to 1.0; only a genuinely shorter cycle prorates.
+            $nominalDays = (int) round((float) $start->diffInDays((clone $start)->add($subscription->cyclePeriod())));
+            $actualDays = (int) round((float) $start->diffInDays($end));
+            if ($nominalDays > 0 && $actualDays < $nominalDays) {
+                $price = round($price * ($actualDays / $nominalDays), 2);
+            }
+        }
+
+        return $price;
     }
 }

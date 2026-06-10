@@ -39,11 +39,30 @@ class ActivateHandler implements TaskHandler
             if (! $subscription->current_cycle_end) {
                 $start = now();
                 $extra['current_cycle_start'] = $start;
-                $extra['current_cycle_end'] = (clone $start)->add($subscription->cyclePeriod());
+                // CALENDAR cycles align to an anchor day: the first cycle runs
+                // from activation to the next anchor (a PARTIAL cycle, prorated at
+                // close). ANNIVERSARY/default cycles run a full period from start.
+                if (($subscription->cycle_model ?? 'CALENDAR') === 'CALENDAR' && $subscription->cycle_anchor_day) {
+                    $extra['current_cycle_end'] = $this->nextAnchor($start, (int) $subscription->cycle_anchor_day);
+                } else {
+                    $extra['current_cycle_end'] = (clone $start)->add($subscription->cyclePeriod());
+                }
             }
             $this->subscriptions->transitionStatus($subscription, Subscription::ACTIVE, $extra);
         }
 
         return TaskResult::success(['subscriptionStatus' => Subscription::ACTIVE]);
+    }
+
+    /** The next occurrence of the calendar anchor day strictly after $from. */
+    private function nextAnchor(\Carbon\Carbon $from, int $anchorDay): \Carbon\Carbon
+    {
+        $candidate = $from->copy()->day(min($anchorDay, $from->daysInMonth));
+        if ($candidate->lessThanOrEqualTo($from)) {
+            $next = $from->copy()->addMonthNoOverflow()->startOfMonth();
+            $candidate = $next->day(min($anchorDay, $next->daysInMonth));
+        }
+
+        return $candidate;
     }
 }
