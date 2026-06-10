@@ -46,10 +46,33 @@ auto-interrupt, scheduled effective-timing. (M/L)
 ## Billing money path (BIL-01/02/04/05) — audited
 - Invoicing (assembler + gap-free legal number), payments (allocate→PAID, surplus→credit),
   dunning ladder (rules.billing.dunning → SUB-WF ops), billing-intent bridge — ✅
-- **Automatic cycle billing** (`CycleBillingService`: unbilled rated_events settle at
-  cycle close — POSTPAID→invoice, PREPAID→wallet drain) — ✅ 🔁
+- **BIL-03 Cycle Close** — ✅ 🔁: per-subscription cycle anchor on the SUB-LM master
+  (current_cycle_start/end, last_cycle_closed_window_end), opened at activation
+  (R-BIL-03-V-2); `CycleCloseService` scanner (R-BIL-03-E-1/E-4) charges recurring +
+  usage at the boundary, advances the anchor idempotently (R-BIL-03-C-5), audited in
+  cycle_close_run; POSTPAID→cycle invoice (CycleClosed), PREPAID→wallet debit
+  (CycleActivated) / freeze on shortfall (CyclePaymentMissed, R-BIL-03-C-3/W-1) with
+  top-up unfreeze (R-BIL-03-W-4). Scheduled every 30 min.
+- **BIL-01 charge model + BIL-02-GEN-01 structured invoices** — ✅ 🔁: `ChargeComputeService`
+  returns typed charges per the DD schema (service_category_code distinguishes
+  RECURRING `SUBSCRIPTION` from USAGE `VOICE/DATA/SMS`); line builder produces a
+  SUMMARY/DETAIL hierarchy (parent_summary_line_id, sort_order R-GEN-01-L-1/L-4),
+  resolves description_key via the operator translation catalog (R-GEN-01-L-5),
+  computes per-line tax via PLM-CFG-02 → tax_breakdown + aggregated tax_summary
+  (R-GEN-01-L-2); operator grouping policy (`invoice_grouping_config`: SINGLE/WALLET/
+  PACKAGE/SERVICE_CATEGORY) may split into one invoice per group (R-GEN-01-C-3/4).
+- Open vs BIL-02-GEN-01 (structural, tracked — NOT silently skipped): the five
+  generator classes + `InvoiceGeneratorRegistry` + `InvoiceGenerationContext`
+  (R-GEN-01-F-1/2) are collapsed into `InvoiceService::generateFromCharges` (one path,
+  same outputs) — functional, not yet the registry structure. **`customer_snapshot`
+  capture (R-GEN-01-F-6) not implemented** — description language uses the operator
+  locale instead of the customer's; **generation failure queue** (rule group Q) and
+  **bulk reversal** (rule group R) not built; **pro forma cycle generator** (PREPAID
+  pre-cycle documents) not built; `invoice_line` table retains its pre-existing name
+  (DD calls it `invoice_line_item`). ⚠️
 - Open (M): data/SMS rating uses code constants instead of a usage-tariff catalog;
-  recurring package-fee generation; payment reversal; account-credit auto-draw. ⚠️
+  payment reversal; account-credit auto-draw; per-subscription cycle proration for
+  first/last partial cycle. ⚠️
 
 ## Work Order (WO-01-FRAMEWORK) — audited 🔁
 - Ticket source link (`source_type`/`source_ref`; Ticketing creates + waits for finalize) — ✅
