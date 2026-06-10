@@ -22,7 +22,9 @@ class OsrServiceProvider extends ModuleServiceProvider
      *
      * @var string[]
      */
-    // protected array $commands = [];
+    protected array $commands = [
+        \Modules\Osr\Console\ReservationExpiryCommand::class,
+    ];
 
     /**
      * Provider classes to register.

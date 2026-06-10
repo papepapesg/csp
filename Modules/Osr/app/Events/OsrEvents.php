@@ -18,6 +18,8 @@ final class OsrEvents
 
     public const STOCK_RESERVATION_RELEASED = 'StockReservationReleased';
 
+    public const STOCK_RESERVATION_EXPIRED = 'StockReservationExpired';
+
     public const INSTANCE_REGISTERED = 'EquipmentInstanceRegistered';
 
     public const INSTANCE_STATE_CHANGED = 'EquipmentInstanceStateChanged';

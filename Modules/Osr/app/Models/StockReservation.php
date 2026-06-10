@@ -17,6 +17,8 @@ class StockReservation extends Model
 
     public const RELEASED = 'RELEASED';
 
+    public const EXPIRED = 'EXPIRED';
+
     protected $table = 'stock_reservation';
 
     protected $primaryKey = 'reservation_id';
@@ -25,7 +27,7 @@ class StockReservation extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['qty' => 'decimal:2', 'resolved_at' => 'datetime'];
+    protected $casts = ['qty' => 'decimal:2', 'resolved_at' => 'datetime', 'expires_at' => 'datetime'];
 
     protected static function booted(): void
     {

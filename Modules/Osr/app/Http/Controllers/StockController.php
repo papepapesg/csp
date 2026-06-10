@@ -78,8 +78,9 @@ class StockController extends ApiController
             'sku_id' => ['required', 'string', 'exists:equipment_sku,sku_id'],
             'location_id' => ['required', 'string', 'exists:stock_location,location_id'],
             'quantity' => ['required', 'numeric', 'not_in:0'],
-            'reason_code' => ['required', 'in:RECEIPT,ISSUE,TRANSFER_IN,TRANSFER_OUT,INSTALL,RETURN,ADJUST'],
+            'reason_code' => ['required', 'in:RECEIPT,ISSUE,TRANSFER_IN,TRANSFER_OUT,INSTALL,RETURN,ADJUST,WRITE_OFF_DAMAGE,WRITE_OFF_LOSS,WRITE_OFF_OBSOLETE,CYCLE_COUNT_ADJUSTMENT_POS,CYCLE_COUNT_ADJUSTMENT_NEG'],
             'reference' => ['nullable', 'string'],
+            'approved_by' => ['nullable', 'string'], // R-OSR-SC-9: required for requires_approval reasons (enforced in service)
         ]);
 
         return ApiResponse::created($this->stock->move($data));

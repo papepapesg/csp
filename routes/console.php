@@ -34,3 +34,6 @@ Schedule::command('sophix:provisioning:reconcile')->hourly()->withoutOverlapping
 
 // SUB-WF-FRAMEWORK-01 operation timeout sweep (R-SUB-WF-FW-9/10).
 Schedule::command('sophix:subscription:operation-timeouts')->everyMinute()->withoutOverlapping();
+
+// OSR-01 reservation-expiry sweep (R-OSR-SC-7, every 10 min).
+Schedule::command('sophix:stock:expire-reservations')->everyTenMinutes()->withoutOverlapping();

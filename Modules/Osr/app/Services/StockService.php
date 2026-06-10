@@ -32,9 +32,27 @@ class StockService
 
             // OSR-01: when the operator governs a reason-code catalog, the movement
             // reason must be an ACTIVE catalog code (soft-enforced like other catalogs).
+            $reason = DB::table('stock_reason_code')->where('operator_code', $operator)->where('active', true)->where('code', $data['reason_code'])->first();
             $hasCatalog = DB::table('stock_reason_code')->where('operator_code', $operator)->where('active', true)->exists();
-            if ($hasCatalog && ! DB::table('stock_reason_code')->where('operator_code', $operator)->where('code', $data['reason_code'])->where('active', true)->exists()) {
+            if ($hasCatalog && ! $reason) {
                 throw DomainException::ruleRejected('UNKNOWN_STOCK_REASON', "Reason '{$data['reason_code']}' is not an ACTIVE stock reason code.");
+            }
+
+            // R-OSR-SC-9: write-off / cycle-count-adjustment reasons (requires_approval)
+            // must record a second-person approver; the API rejects the movement without one.
+            $approvedBy = $data['approved_by'] ?? null;
+            if ($reason && $reason->requires_approval && ! $approvedBy) {
+                throw DomainException::ruleRejected('APPROVAL_REQUIRED', "Reason '{$data['reason_code']}' requires an approver (approved_by).");
+            }
+
+            // R-OSR-SC-8: a movement may never drive on-hand negative — reject up front.
+            $balance = StockBalance::query()->lockForUpdate()->firstOrNew([
+                'location_id' => $data['location_id'],
+                'sku_id' => $data['sku_id'],
+            ]);
+            $newQty = (float) ($balance->quantity ?? 0) + (float) $data['quantity'];
+            if ($newQty + 0.0001 < 0) {
+                throw DomainException::ruleRejected('INSUFFICIENT_STOCK', "Movement would drive {$data['sku_id']} at {$data['location_id']} negative ({$newQty}).");
             }
 
             $movement = StockMovement::query()->create([
@@ -44,15 +62,12 @@ class StockService
                 'quantity' => $data['quantity'],
                 'reason_code' => $data['reason_code'],
                 'reference' => $data['reference'] ?? null,
+                'approved_by' => $approvedBy,
                 'created_at' => now(),
             ]);
 
-            $balance = StockBalance::query()->lockForUpdate()->firstOrNew([
-                'location_id' => $data['location_id'],
-                'sku_id' => $data['sku_id'],
-            ]);
             $balance->operator_code = $operator;
-            $balance->quantity = (float) ($balance->quantity ?? 0) + (float) $data['quantity'];
+            $balance->quantity = $newQty;
             $balance->save();
 
             $this->events->publish(new DomainEvent(
@@ -84,6 +99,17 @@ class StockService
     {
         return DB::transaction(function () use ($skuId, $fromLocationId, $toLocationId, $qty, $reference) {
             $ref = $reference ?? ('xfer:'.\App\Foundation\Support\Id::make('xf'));
+
+            // R-OSR-SC-4: two-tier topology — a transfer must move CENTRAL_WAREHOUSE↔CONTRACTOR_VAN.
+            // When both endpoints are classified, reject a same-tier hop (van-to-van or
+            // warehouse-to-warehouse); v1.0 routes everything through central.
+            $kinds = DB::table('stock_location')->whereIn('location_id', [$fromLocationId, $toLocationId])->pluck('type', 'location_id');
+            $fromKind = $kinds[$fromLocationId] ?? null;
+            $toKind = $kinds[$toLocationId] ?? null;
+            if ($fromKind !== null && $toKind !== null && $fromKind === $toKind) {
+                throw DomainException::ruleRejected('UNSUPPORTED_TRANSFER_TOPOLOGY', 'A transfer must move between the central warehouse and a contractor van (no van-to-van or warehouse-to-warehouse in v1.0).');
+            }
+
             $available = (float) (StockBalance::query()->where('location_id', $fromLocationId)->where('sku_id', $skuId)->value('quantity') ?? 0);
             if ($available + 0.0001 < $qty) {
                 throw DomainException::ruleRejected('INSUFFICIENT_STOCK', "Only {$available} of {$skuId} at {$fromLocationId} to transfer.");
@@ -121,9 +147,9 @@ class StockService
      * on-hand but not available for new commitments). Rejects when the available
      * qty (on_hand − reserved) cannot cover it.
      */
-    public function reserve(string $skuId, string $locationId, float $qty, ?string $woId = null, ?string $reference = null): StockReservation
+    public function reserve(string $skuId, string $locationId, float $qty, ?string $woId = null, ?string $reference = null, ?\DateTimeInterface $expiresAt = null): StockReservation
     {
-        return DB::transaction(function () use ($skuId, $locationId, $qty, $woId, $reference) {
+        return DB::transaction(function () use ($skuId, $locationId, $qty, $woId, $reference, $expiresAt) {
             $operator = Context::operatorCode();
             $balance = StockBalance::query()->lockForUpdate()->firstOrNew(['location_id' => $locationId, 'sku_id' => $skuId]);
             $available = (float) ($balance->quantity ?? 0) - (float) ($balance->qty_reserved ?? 0);
@@ -138,10 +164,39 @@ class StockService
             $reservation = StockReservation::query()->create([
                 'sku_id' => $skuId, 'location_id' => $locationId, 'qty' => $qty,
                 'wo_id' => $woId, 'reference' => $reference, 'status' => StockReservation::ACTIVE,
+                // R-OSR-SC-7: default auto-release window is 30 days from creation.
+                'expires_at' => $expiresAt ?? now()->addDays(30),
             ]);
             $this->emitReservation(OsrEvents::STOCK_RESERVED, $reservation);
 
             return $reservation;
+        });
+    }
+
+    /**
+     * R-OSR-SC-7 reservation-expiry sweep: any ACTIVE reservation past expires_at is
+     * auto-released (qty_reserved freed back to available) and marked EXPIRED. The WO is
+     * flagged via the emitted event (it has no committed stock anymore). Idempotent.
+     *
+     * @return int reservations expired
+     */
+    public function expireReservations(?string $operator = null): int
+    {
+        $operator ??= Context::operatorCode();
+
+        return DB::transaction(function () use ($operator) {
+            $expired = StockReservation::query()
+                ->where('operator_code', $operator)
+                ->where('status', StockReservation::ACTIVE)
+                ->whereNotNull('expires_at')->where('expires_at', '<', now())
+                ->lockForUpdate()->get();
+            foreach ($expired as $reservation) {
+                $this->releaseReservedQty($reservation);
+                $reservation->update(['status' => StockReservation::EXPIRED, 'resolved_at' => now()]);
+                $this->emitReservation(OsrEvents::STOCK_RESERVATION_EXPIRED, $reservation);
+            }
+
+            return $expired->count();
         });
     }
 
