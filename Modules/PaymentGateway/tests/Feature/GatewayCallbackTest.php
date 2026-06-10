@@ -76,9 +76,10 @@ class GatewayCallbackTest extends TestCase
             'external_ref' => 'MPESA-PREPAID-1', 'account_ref' => 'PB-PREPAID', 'amount' => 500,
         ])->assertStatus(202)->assertJsonPath('status', 'PROCESSED');
 
-        // Money landed in the wallet, NOT in a payment_ledger or account_credit_balance.
+        // Money landed in the wallet (BIL-05). The receipt is still audited in
+        // payment_ledger (status APPLIED), but NOT in account_credit_balance.
         $this->assertDatabaseHas('wallet', ['subscription_id' => $sub->subscription_id, 'wallet_code' => 'MONEY_KES', 'balance' => 500.00]);
-        $this->assertDatabaseMissing('payment_ledger', ['account_id' => $account->account_id]);
+        $this->assertDatabaseHas('payment_ledger', ['account_id' => $account->account_id, 'status' => 'APPLIED']);
         $this->assertDatabaseMissing('account_credit_balance', ['account_id' => $account->account_id]);
     }
 

@@ -41,8 +41,26 @@ class PaymentController extends ApiController
             'target_invoice_id' => ['nullable', 'string'],
         ]);
 
+        $data['payment_reference'] = $data['gateway_ref'] ?? null;
         $payment = $this->payments->receiveAndApply($data);
 
         return ApiResponse::created($payment);
+    }
+
+    /** POST /api/payments/{payment}/reverse (RV; PAYMENT_REVERSAL). */
+    public function reverse(Request $request, \Modules\Billing\Models\PaymentLedger $payment): JsonResponse
+    {
+        $data = $request->validate([
+            'reason_code' => ['required', 'string', 'max:64'],
+            'justification' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        return ApiResponse::item($this->payments->reverse($payment, $data['reason_code'], $request->user()?->uid ?? $request->user()?->email));
+    }
+
+    /** POST /api/payments/{payment}/allocate-surplus (OV-4 manual review release). */
+    public function allocateSurplus(\Modules\Billing\Models\PaymentLedger $payment): JsonResponse
+    {
+        return ApiResponse::item($this->payments->allocateSurplus($payment));
     }
 }

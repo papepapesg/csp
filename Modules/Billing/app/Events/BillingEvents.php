@@ -30,6 +30,14 @@ final class BillingEvents
 
     public const PAYMENT_APPLIED = 'PaymentApplied';
 
+    public const PAYMENT_RECEIVED_UNALLOCATED = 'PaymentReceivedUnallocated'; // OV-5
+
+    public const PAYMENT_REVERSED = 'PaymentReversed';                        // RV-3
+
+    public const OVERPAYMENT_PENDING_REVIEW = 'OverpaymentPendingReview';     // OV-4
+
+    public const CREDIT_BALANCE_ADJUSTED = 'CreditBalanceAdjusted';           // EV-6
+
     public const WALLET_CREDITED = 'WalletCredited';
 
     public const WALLET_DEBITED = 'WalletDebited';
