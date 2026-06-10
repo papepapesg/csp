@@ -28,6 +28,7 @@ class InvoiceService
         private readonly EventBus $events,
         private readonly TranslationService $translations,
         private readonly TaxComputeService $tax,
+        private readonly CustomerSnapshotService $snapshots,
     ) {}
 
     /**
@@ -47,11 +48,18 @@ class InvoiceService
             ->where('operator_code', $operator)->where('trigger_code', $triggerCode)
             ->value('grouping_dimension') ?? 'SINGLE');
 
+        // R-GEN-01-F-6: capture the customer snapshot ONCE, before charges, and
+        // reuse it across groups (same subscription, same moment). A fetch failure
+        // throws — no invoice is written with a partial snapshot.
+        $snapshot = ! empty($header['customer_id'])
+            ? $this->snapshots->captureSnapshot($header['customer_id'], $header['account_id'] ?? null)
+            : null;
+
         // One invoice per group in the policy (R-GEN-01-C-4).
         $groups = collect($charges)->groupBy(fn (Charge $c) => $c->groupKey($dimension));
 
         return $groups->map(fn (Collection $groupCharges, string $groupKey) => DB::transaction(
-            fn () => $this->writeStructuredInvoice($header, $operator, $dimension, $groupKey, $groupCharges->all())
+            fn () => $this->writeStructuredInvoice($header, $operator, $dimension, $groupKey, $groupCharges->all(), $snapshot)
         ))->values();
     }
 
@@ -60,20 +68,22 @@ class InvoiceService
      *
      * @param  array<int,Charge>  $charges
      */
-    private function writeStructuredInvoice(array $header, string $operator, string $dimension, string $groupKey, array $charges): Invoice
+    private function writeStructuredInvoice(array $header, string $operator, string $dimension, string $groupKey, array $charges, ?array $snapshot = null): Invoice
     {
         $type = $header['type'] ?? 'STANDARD';
         $currency = $header['currency'] ?? 'KES';
-        // R-GEN-01-L-5: resolve description keys in the customer's language. We do
-        // not yet capture a customer_snapshot (documented gap), so we use the
-        // operator's configured locale as the language.
-        $locale = OperatorConfig::forOperator($operator)?->default_locale ?? 'en';
+        // R-GEN-01-L-5: resolve description keys in the CUSTOMER's language
+        // (from the snapshot), falling back to the operator's configured locale.
+        $locale = $snapshot['preferredLanguage'] ?? OperatorConfig::forOperator($operator)?->default_locale ?? 'en';
         $resources = $this->translations->resources($locale, $operator);
+        $customerCategory = $snapshot['customerCategory'] ?? 'RESIDENTIAL';
+        $customerLocation = $snapshot['billingAddress'] ?? null;
 
         $invoice = Invoice::query()->create([
             'operator_code' => $operator,
             'account_id' => $header['account_id'],
             'customer_id' => $header['customer_id'] ?? null,
+            'customer_snapshot' => $snapshot,
             'subscription_id' => $header['subscription_id'] ?? null,
             'type' => $type,
             'grouping_dimension' => $dimension,
@@ -116,6 +126,7 @@ class InvoiceService
                     $taxResult = $this->tax->compute([
                         'operatorCode' => $operator, 'baseAmount' => $charge->amount, 'currency' => $currency,
                         'taxableKind' => $charge->serviceCategoryCode, 'taxableRef' => $charge->packageRef,
+                        'customerCategory' => $customerCategory, 'customerLocation' => $customerLocation,
                     ]);
                 } catch (\App\Foundation\Errors\DomainException) {
                     $taxResult = ['totalTaxAmount' => 0, 'taxLines' => []];

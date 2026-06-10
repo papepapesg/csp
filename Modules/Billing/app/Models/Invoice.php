@@ -45,6 +45,7 @@ class Invoice extends Model
         'issue_date' => 'datetime',
         'due_date' => 'datetime',
         'tax_summary' => 'array',
+        'customer_snapshot' => 'array',
         'subtotal_amount' => 'decimal:2',
         'tax_amount_total' => 'decimal:2',
         'total_amount' => 'decimal:2',

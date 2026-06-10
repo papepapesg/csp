@@ -41,6 +41,7 @@ class InvoiceController extends ApiController
         // Header fields stay top-level (back-compat); add the SUMMARY/DETAIL view.
         $payload = $invoice->toArray();
         $payload['grouping'] = ['dimension' => $invoice->grouping_dimension, 'key_values' => $invoice->grouping_key_values];
+        $payload['customer_snapshot'] = $invoice->customer_snapshot; // frozen at generation (R-GEN-01-F-6)
         $payload['summary'] = $invoice->lines
             ->where('line_type', \Modules\Billing\Models\InvoiceLine::SUMMARY)
             ->sortBy('sort_order')->values()

@@ -42,8 +42,23 @@ class CycleCloseTest extends TestCase
         return $pv->getKey();
     }
 
+    /** An ILM customer + account the snapshot service can resolve (R-GEN-01-F-6). */
+    private function customer(string $customerId = 'c1', string $accountId = 'a1', string $language = 'en', string $type = 'RES'): void
+    {
+        \Modules\Ilm\Models\Customer::query()->firstOrCreate(['customer_id' => $customerId], [
+            'operator_code' => 'WIK', 'type' => $type, 'name' => 'Jane Mwangi',
+            'primary_msisdn' => '+254700000001', 'preferred_language' => $language, 'kyc_status' => 'APPROVED',
+        ]);
+        \Modules\Ilm\Models\CustomerAccount::query()->firstOrCreate(['account_id' => $accountId], [
+            'account_number' => 'ACC-'.$accountId, 'customer_id' => $customerId, 'operator_code' => 'WIK',
+            'service_address' => '12 Riverside Dr, Nairobi', 'status' => 'ACTIVE',
+        ]);
+    }
+
     private function subscription(string $mode, ?string $packageVersionId, ?\Carbon\Carbon $cycleEnd = null): Subscription
     {
+        $this->customer();
+
         return Subscription::query()->create([
             'subscription_id' => Id::make('sub'), 'customer_id' => 'c1', 'account_id' => 'a1',
             'operator_code' => 'WIK', 'homepass_id' => 'h1', 'package_ref' => 'pkg_home',
@@ -92,6 +107,7 @@ class CycleCloseTest extends TestCase
             'package_id' => 'pkg_triple', 'price' => 4500, 'currency' => 'KES',
             'effective_from' => now()->subYear(), 'status' => PackageVersion::STATUS_ACTIVE,
         ]);
+        $this->customer();
         $sub = Subscription::query()->create([
             'subscription_id' => Id::make('sub'), 'customer_id' => 'c1', 'account_id' => 'a1',
             'operator_code' => 'WIK', 'homepass_id' => 'h1', 'package_ref' => 'pkg_triple',
@@ -265,5 +281,53 @@ class CycleCloseTest extends TestCase
         $this->subscription('POSTPAID', $this->pricedPackage(100));
         $r = app(CycleCloseService::class)->scan('WIK');
         $this->assertDatabaseHas('cycle_close_run', ['run_id' => $r['run_id'], 'subscriptions_closed' => 1]);
+    }
+
+    public function test_invoice_captures_an_immutable_customer_snapshot_that_drives_language(): void
+    {
+        // R-GEN-01-F-6: snapshot frozen at generation; R-GEN-01-L-5: line wording in
+        // the CUSTOMER's language, not the operator default.
+        \App\Foundation\Models\UiTranslation::query()->create([
+            'operator_code' => '*', 'locale' => 'sw', 'domain' => 'BILLING', 'section' => 'charge',
+            'key' => 'billing.charge.recurring', 'value' => 'Ada ya mwezi',
+        ]);
+        $this->customer('c1', 'a1', language: 'sw', type: 'COM');
+        $sub = $this->subscription('POSTPAID', $this->pricedPackage(2000));
+
+        app(CycleCloseService::class)->scan('WIK');
+        $invoice = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
+
+        // Snapshot frozen on the invoice.
+        $snap = $invoice->customer_snapshot;
+        $this->assertSame('Jane Mwangi', $snap['name']);
+        $this->assertSame('BUSINESS', $snap['customerCategory']);          // COM → BUSINESS
+        $this->assertSame('sw', $snap['preferredLanguage']);
+        $this->assertSame('12 Riverside Dr, Nairobi', $snap['billingAddress']);
+        $this->assertNotEmpty($snap['capturedAt']);
+
+        // Line description resolved in the customer's language.
+        $this->assertSame('Ada ya mwezi', $invoice->lines()->where('service_category_code', 'SUBSCRIPTION')->first()->description);
+
+        // Immutable: changing the customer master does NOT alter the stored snapshot.
+        \Modules\Ilm\Models\Customer::query()->where('customer_id', 'c1')->update(['name' => 'Renamed Co', 'preferred_language' => 'en']);
+        $this->assertSame('Jane Mwangi', $invoice->fresh()->customer_snapshot['name']);
+    }
+
+    public function test_missing_customer_fails_the_close_without_writing_a_partial_invoice(): void
+    {
+        // R-GEN-01-F-6: a snapshot fetch failure must NOT write an invoice.
+        $sub = Subscription::query()->create([
+            'subscription_id' => Id::make('sub'), 'customer_id' => 'ghost', 'account_id' => 'a1',
+            'operator_code' => 'WIK', 'homepass_id' => 'h1', 'package_ref' => 'pkg_home',
+            'package_version_id' => $this->pricedPackage(500), 'status_code' => 'ACTIVE',
+            'currency' => 'KES', 'billing_mode' => 'POSTPAID', 'cycle_frequency_months' => 1,
+            'current_cycle_start' => now()->subMonth(), 'current_cycle_end' => now()->subMinute(),
+        ]);
+
+        $r = app(CycleCloseService::class)->scan('WIK');
+        $this->assertSame(1, $r['failed']);
+        $this->assertDatabaseMissing('invoice', ['subscription_id' => $sub->subscription_id]);
+        $sub->refresh();
+        $this->assertNull($sub->last_cycle_closed_window_end); // not advanced
     }
 }
