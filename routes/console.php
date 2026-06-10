@@ -14,6 +14,9 @@ Schedule::command('sophix:outbox:dispatch')->everyMinute()->withoutOverlapping()
 // BIL-03 cycle-close scanner (per-subscription boundary; recurring fee + usage).
 Schedule::command('sophix:billing:cycle-close')->everyThirtyMinutes()->withoutOverlapping();
 
+// BIL-02-GEN-01 pro-forma pre-cycle scanner (prepaid, daily).
+Schedule::command('sophix:billing:pro-forma')->daily();
+
 // EM-03 CVM daily flag evaluator.
 Schedule::command('sophix:cvm:evaluate-flags')->daily();
 

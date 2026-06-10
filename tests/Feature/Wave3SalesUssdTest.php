@@ -40,6 +40,18 @@ class Wave3SalesUssdTest extends TestCase
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SalesLeadConverted']);
     }
 
+    public function test_lead_is_routed_to_the_franchise_covering_its_territory(): void
+    {
+        $this->postJson('/api/franchises', ['code' => 'KSM-01', 'name' => 'Kisumu', 'territory' => 'KSM', 'commission_rate' => 0.05])->assertCreated();
+
+        // No franchise_code given — the territory routes it to KSM-01.
+        $lead = $this->postJson('/api/leads', [
+            'name' => 'Territory Lead', 'msisdn' => '+254700333444', 'source' => 'FIELD', 'territory' => 'KSM',
+        ], ['Idempotency-Key' => 'lead-terr'])->assertCreated();
+
+        $this->assertSame('KSM-01', $lead->json('franchise_code'));
+    }
+
     public function test_ussd_balance_menu(): void
     {
         $cid = Id::make('cust');

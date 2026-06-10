@@ -40,7 +40,7 @@ class BillingRuntimeProvider extends ServiceProvider
         });
 
         if ($this->app->runningInConsole()) {
-            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, \Modules\Billing\Console\CycleCloseCommand::class, \Modules\Billing\Console\WalletExpiryCommand::class]);
+            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, \Modules\Billing\Console\CycleCloseCommand::class, \Modules\Billing\Console\WalletExpiryCommand::class, \Modules\Billing\Console\ProFormaScanCommand::class]);
         }
     }
 

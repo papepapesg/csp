@@ -22,6 +22,17 @@ class LeadService
     /** @param array<string,mixed> $data */
     public function capture(array $data): SalesLead
     {
+        // SALES-01 territory routing: a lead with a territory but no explicit
+        // franchise is attributed to the franchise covering that territory.
+        if (empty($data['franchise_code']) && ! empty($data['territory'])) {
+            $franchise = \App\Models\Franchise::query()
+                ->where('operator_code', $data['operator_code'] ?? \App\Foundation\Support\Context::operatorCode())
+                ->where('territory', $data['territory'])->where('status', 'ACTIVE')->first();
+            if ($franchise) {
+                $data['franchise_code'] = $franchise->code;
+            }
+        }
+
         $lead = SalesLead::query()->create($data + ['lead_id' => Id::make('lead'), 'status' => 'NEW']);
         $this->emit($lead, 'SalesLeadCaptured');
 
