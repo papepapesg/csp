@@ -120,10 +120,17 @@ class WalletService
      */
     public function settleFromWallets(string $subscriptionId, float $amount, string $reason, ?string $operator = null, ?string $reference = null): array
     {
+        $operator ??= Context::operatorCode();
         $amount = round($amount, 2);
         $wallets = $this->resolveChargingWallets($subscriptionId, 'PREPAID', $operator);
-        $available = (float) $wallets->sum(fn (Wallet $w) => (float) $w->balance);
+        $catalog = $this->catalogSet($operator);
 
+        // R-W-15: a points wallet's CURRENCY value is balance × points_to_currency_rate;
+        // a currency wallet's value is its balance. Settlement works in currency.
+        $rateOf = fn (Wallet $w) => (float) ($catalog[$w->wallet_code]->points_to_currency_rate ?? 0) ?: null;
+        $valueOf = fn (Wallet $w) => ($r = $rateOf($w)) ? (float) $w->balance * $r : (float) $w->balance;
+
+        $available = (float) $wallets->sum($valueOf);
         if ($available + 0.0001 < $amount) {
             return ['settled' => false, 'debited' => 0.0, 'available' => $available];
         }
@@ -133,15 +140,39 @@ class WalletService
             if ($remaining <= 0.0001) {
                 break;
             }
-            $take = min($remaining, (float) $wallet->balance);
-            if ($take <= 0) {
+            $rate = $rateOf($wallet);
+            $takeCurrency = min($remaining, $valueOf($wallet));
+            if ($takeCurrency <= 0) {
                 continue;
             }
-            $this->debit($wallet, $take, $reason, $reference);
-            $remaining -= $take;
+            // Points wallets are debited in points (currency ÷ rate).
+            $this->debit($wallet, $rate ? round($takeCurrency / $rate, 4) : round($takeCurrency, 2), $reason, $reference);
+            $remaining -= $takeCurrency;
         }
 
         return ['settled' => true, 'debited' => $amount, 'available' => $available];
+    }
+
+    /**
+     * R-W-9 expiry sweep: zero the balance of any expiring wallet past its
+     * expires_at. Returns the number of wallets expired.
+     */
+    public function expireBalances(?string $operator = null): int
+    {
+        $operator ??= Context::operatorCode();
+        $expired = 0;
+        Wallet::query()
+            ->where('operator_code', $operator)
+            ->whereNotNull('expires_at')->where('expires_at', '<', now())
+            ->where('balance', '>', 0)
+            ->get()
+            ->each(function (Wallet $wallet) use (&$expired) {
+                $this->post($wallet, 'DEBIT', (float) $wallet->balance, 'EXPIRY', 'wallet-expiry');
+                $wallet->update(['expires_at' => null]);
+                $expired++;
+            });
+
+        return $expired;
     }
 
     public function credit(Wallet $wallet, float $amount, string $reason = 'TOPUP', ?string $reference = null): WalletTransaction
@@ -154,6 +185,10 @@ class WalletService
                     'WALLET_NOT_REFILLABLE',
                     "Wallet {$wallet->wallet_code} does not accept top-ups.",
                 );
+            }
+            // R-W-9: a top-up to an expiring wallet (re)starts its validity window.
+            if ($catalog && $catalog->expires && $catalog->expiry_period_days) {
+                $wallet->update(['expires_at' => now()->addDays((int) $catalog->expiry_period_days)]);
             }
         }
 

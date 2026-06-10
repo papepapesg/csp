@@ -14,6 +14,9 @@ Schedule::command('sophix:outbox:dispatch')->everyMinute()->withoutOverlapping()
 // BIL-03 cycle-close scanner (per-subscription boundary; recurring fee + usage).
 Schedule::command('sophix:billing:cycle-close')->everyThirtyMinutes()->withoutOverlapping();
 
+// BIL-05 wallet expiry sweep (daily, R-W-9).
+Schedule::command('sophix:wallet:expire')->daily();
+
 // BIL-04 dunning scanner (daily).
 Schedule::command('sophix:billing:dunning-run')->daily();
 

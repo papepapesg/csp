@@ -24,7 +24,7 @@ class Wallet extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['balance' => 'decimal:2'];
+    protected $casts = ['balance' => 'decimal:2', 'expires_at' => 'datetime'];
 
     public function getRouteKeyName(): string
     {
