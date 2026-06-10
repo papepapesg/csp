@@ -61,15 +61,24 @@ auto-interrupt, scheduled effective-timing. (M/L)
   computes per-line tax via PLM-CFG-02 → tax_breakdown + aggregated tax_summary
   (R-GEN-01-L-2); operator grouping policy (`invoice_grouping_config`: SINGLE/WALLET/
   PACKAGE/SERVICE_CATEGORY) may split into one invoice per group (R-GEN-01-C-3/4).
+- **`customer_snapshot` (R-GEN-01-F-6)** — ✅ 🔁: `CustomerSnapshotService` captures an
+  immutable copy of the customer (identity, tax category, preferred language, billing
+  address) ONCE before charges, reused across grouped invoices; line wording resolves
+  in the customer's language (R-GEN-01-L-5), tax uses the snapshot's category/location
+  (R-GEN-01-L-2); a fetch failure writes NO invoice (no partial snapshot).
+- **Triple-play + itemized usage** — ✅ 🔁: catalog-driven wallet routing (package vs
+  PLM-CFG-01 USAGE service `default_wallet_ref`) so a WALLET grouping puts voice on its
+  own invoice; RAT-01 mark-invoiced links each rated call to its invoice; GET
+  /api/rated-events?invoice_id= returns the itemized call detail (destination, time,
+  duration).
 - Open vs BIL-02-GEN-01 (structural, tracked — NOT silently skipped): the five
   generator classes + `InvoiceGeneratorRegistry` + `InvoiceGenerationContext`
   (R-GEN-01-F-1/2) are collapsed into `InvoiceService::generateFromCharges` (one path,
-  same outputs) — functional, not yet the registry structure. **`customer_snapshot`
-  capture (R-GEN-01-F-6) not implemented** — description language uses the operator
-  locale instead of the customer's; **generation failure queue** (rule group Q) and
-  **bulk reversal** (rule group R) not built; **pro forma cycle generator** (PREPAID
-  pre-cycle documents) not built; `invoice_line` table retains its pre-existing name
-  (DD calls it `invoice_line_item`). ⚠️
+  same outputs) — functional, not yet the registry structure; **generation failure
+  queue** (rule group Q) and **bulk reversal** (rule group R) not built; **pro forma
+  cycle generator** (PREPAID pre-cycle documents) not built; `invoice_line` table
+  retains its pre-existing name (DD calls it `invoice_line_item`); RAT-01 uses
+  `billed`+`invoice_id` rather than the `POSTPAID_PENDING_INVOICE`→`INVOICED` status. ⚠️
 - Open (M): data/SMS rating uses code constants instead of a usage-tariff catalog;
   payment reversal; account-credit auto-draw; per-subscription cycle proration for
   first/last partial cycle. ⚠️
