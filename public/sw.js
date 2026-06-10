@@ -1,9 +1,11 @@
-// SOPHIX Field service worker — installable PWA shell + offline-tolerant reads.
-const SHELL = 'sophix-shell-v1';
+// SOPHIX service worker — installable PWA shell + offline-tolerant reads for
+// BOTH apps: /m (Field: sales & contractor) and /care (customer self-care).
+// Registered once per scope; the offline fallback is chosen by path.
+const SHELL = 'sophix-shell-v2';
 const API = 'sophix-api-v1';
 
 self.addEventListener('install', (e) => {
-    e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['/m'])));
+    e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['/m', '/care'])));
     self.skipWaiting();
 });
 
@@ -30,7 +32,8 @@ self.addEventListener('fetch', (event) => {
 
     // App navigation + built assets: cache-first shell fallback.
     if (request.mode === 'navigate') {
-        event.respondWith(fetch(request).catch(() => caches.match('/m')));
+        const shell = url.pathname.startsWith('/care') ? '/care' : '/m';
+        event.respondWith(fetch(request).catch(() => caches.match(shell)));
         return;
     }
     if (url.pathname.startsWith('/build/')) {
