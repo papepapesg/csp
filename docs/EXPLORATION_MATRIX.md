@@ -84,9 +84,9 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 
 | # | Feature | Command owner (DD) | Implementation entry points | Events | E2E proof (tests) | Tour |
 |---|---|---|---|---|---|---|
-| 36 | Workflow engine (definitions as data, external tasks, message catches) | FOUNDATION_CAMUNDA (local engine) | `Modules/Workflow`: ProcessDefinition graphs, TaskRegistry, `sophix:workflow:work`, correlateMessage | — | `WorkflowEngineTest` | ⬜ |
+| 36 | Workflow engine (definitions as data, external tasks, message catches) | FOUNDATION_CAMUNDA (local engine) | `Modules/Workflow`: ProcessDefinition graphs, TaskRegistry, `sophix:workflow:work`, correlateMessage | — | `WorkflowEngineTest` | ✅ |
 | 37 | Rules engine (decision tables, operator override) | FOUNDATION_DROOLS (local engine) | `DataDrivenRuleEngine` (FIRST/COLLECT, fallbacks, operator-scoped tables) | — | `DecisionTableTest`; `AdjustmentTest` routing | ⬜ |
-| 38 | Outbox/inbox event bus | FOUNDATION_KAFKA (local) | `EventBus` → outbox_events → `sophix:outbox:dispatch` → listeners; correlation ids | all | event tests throughout | ⬜ |
+| 38 | Outbox/inbox event bus | FOUNDATION_KAFKA (local) | `EventBus` → outbox_events → `sophix:outbox:dispatch` → listeners; correlation ids | all | event tests throughout | ✅ |
 | 39 | Cache foundation | FOUNDATION_CACHE | `SophixCache` (cache-aside, TTLs, event eviction, admin invalidate/stats) | — | `CacheFoundationTest` | ✅ |
 | 40 | RBAC + admin portal + change audit | EM-CFG-03 | spatie + `RbacController` + `rbac_change_audit`; `Rbac/Admin.vue` | — | `RbacApiTest` | ⬜ |
 | 41 | Approval workflow catalog | EM-CFG-04 | `ApprovalController` + definitions; consumed by force-sync, bundles | — | `FileAndApprovalTest`, `ReconciliationTest` | ⬜ |
@@ -127,7 +127,7 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | (earlier sessions) | #6–#10 MACD framework; #17 wallets; #15 mediation/rating; #11 prepaid intents; #23 provisioning; #22 WO framework; #2 order capture | style: mental model → flows → config knobs → config-based extension recipes → connections |
 | 2026-06-09 | #20 adjustments/notes; #12 billable-event catalog | incl. rules-routed approval (#37 partially) |
 | 2026-06-10 | #39 cache (earlier), #43–#45, #48–#49 verified | PWA installability fixes |
+| 2026-06-10 | #38 outbox/event bus (confirmed prior coverage); #36 workflow engine | engine internals: token walk, fetchAndLock, tick |
 
-**Next up (suggested order): #38 outbox/event bus → #36 workflow engine → #37 rules
-engine (the three engines everything rides on), then #13/#14/#16/#18 money paths,
+**Next up (suggested order): #37 rules engine, then #13/#14/#16/#18 money paths,
 then #30 ticketing/SLA, #24–#26 OSR, #34 campaigns/bundles, #4 ILM, #50/#47 channels.**
