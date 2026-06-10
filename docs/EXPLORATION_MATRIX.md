@@ -47,7 +47,7 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 11 | Billable-event intents (charge gateway) | BIL-01 / BIL-CFG-01 | `Modules/Billing/Services/BillingIntentService::emit` — catalog-validated, wallet/invoice/credit rails | SubscriptionBillingIntent* | `BillableEventCatalogTest`, upgrade tests | ✅ |
 | 12 | BillableEvent catalog (admin) | BIL-CFG-01 | `BillableEventCatalogService` + `/api/billing/billable-events` (DRAFT→ACTIVE→RETIRED, trigger taxonomy, sign policy) | BillableEventCatalogChanged | `BillableEventCatalogTest` | ✅ |
 | 13 | Invoice generation + legal numbering | BIL-02 / BIL-02-GEN-01 | `InvoiceService::generate` / `issueNote`; gap-free `invoice_sequence` (row-locked per operator/year/type) | InvoiceGenerated | `BillingApiTest` | ✅ |
-| 14 | Cycle billing (recurring) | BIL-03 | `CycleBillingService` + `sophix:billing:run-cycle` | SubscriptionCycleBilled | `CycleBillingTest` | ⬜ |
+| 14 | Cycle billing (recurring) | BIL-03 | `CycleBillingService` + `sophix:billing:run-cycle` (usage settlement; no cycle anchor / recurring fee yet) | SubscriptionCycleBilled | `CycleBillingTest` | ✅ |
 | 15 | Mediation + usage rating | MED-01 / RAT-01 | `MediationRatingService` (dedupe, voice/usage tariff catalogs) | UsageRated | `MediationRatingTest`, `UsageTariffTest` | ✅ |
 | 16 | Payments + allocation + gateway | BIL-01-PAY-01 / PAY-GW-01 | `PaymentService` (FIFO/directed, surplus credit), `Modules/PaymentGateway` webhook | PaymentReceived/Applied | `BillingApiTest`, `GatewayCallbackTest` | ⬜ |
 | 17 | Wallet & top-up (multi-wallet) | BIL-05/06 + PLM-CFG-03 | `WalletService` (catalog-driven wallets, precedence draining, cached catalog) | Wallet* | `WalletMultiWalletTest`, `WalletCatalogTest` | ✅ |
@@ -130,6 +130,7 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 2026-06-10 | #38 outbox/event bus (confirmed prior coverage); #36 workflow engine | engine internals: token walk, fetchAndLock, tick |
 | 2026-06-10 | #37 rules engine | table anatomy, hit policy, fallbacks, 14 consumers |
 | 2026-06-10 | #13 invoice generation + legal numbering | gap-free row-locked sequence; STA-01 lazy-status gap noted |
+| 2026-06-10 | #14 cycle billing | rate→billed-flag→settle by mode; gaps: no cycle anchor, no recurring package fee |
 
-**Next up (suggested order): #14 cycle billing → #16 payments → #18 dunning,
+**Next up (suggested order): #16 payments → #18 dunning,
 then #30 ticketing/SLA, #24–#26 OSR, #34 campaigns/bundles, #4 ILM, #50/#47 channels.**
