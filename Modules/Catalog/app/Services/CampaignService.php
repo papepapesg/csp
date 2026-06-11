@@ -9,6 +9,8 @@ use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Catalog\Events\CatalogEvents;
 use Modules\Catalog\Models\CampaignParticipation;
+use Modules\Catalog\Models\CommercialBundle;
+use Modules\Catalog\Models\Discount;
 use Modules\Catalog\Models\DiscountAssignment;
 use Modules\Catalog\Models\PromoCampaign;
 
@@ -67,10 +69,55 @@ class CampaignService
         });
     }
 
+    /**
+     * §7.4 launch validation — checks that gate activation (R-SIP-CAMP-02/03/04/05):
+     * valid dates, at least one active offer (or a MESSAGE_ONLY purpose), discount offers
+     * reference active PLM-CFG-04 discounts, and bundle offers reference active SIP-04
+     * bundles. Returns findings; a FAIL blocks activation.
+     *
+     * @return array<int,array{check:string,status:string,message:string}>
+     */
+    public function validate(PromoCampaign $campaign): array
+    {
+        $checks = [];
+
+        // R-SIP-CAMP-02: a campaign must have valid start/end dates.
+        if ($campaign->starts_at && $campaign->ends_at && $campaign->ends_at->lt($campaign->starts_at)) {
+            $checks[] = ['check' => 'DATES', 'status' => 'FAIL', 'message' => 'Campaign end date is before its start date.'];
+        }
+
+        $offers = $campaign->offers()->where('status', 'ACTIVE')->get();
+        // R-SIP-CAMP-03: an active campaign needs ≥1 active offer (MESSAGE_ONLY counts).
+        if ($offers->isEmpty()) {
+            $checks[] = ['check' => 'HAS_OFFER', 'status' => 'FAIL', 'message' => 'Campaign has no active offer (use a MESSAGE_ONLY offer for message-only campaigns).'];
+        }
+        foreach ($offers as $offer) {
+            // R-SIP-CAMP-04: discount offers must reference an active PLM-CFG-04 discount.
+            if ($offer->offer_type === 'DISCOUNT' && $offer->discount_code) {
+                $ok = Discount::query()->where('operator_code', $campaign->operator_code)->where('code', $offer->discount_code)->where('status', 'ACTIVE')->exists();
+                $checks[] = ['check' => 'DISCOUNT_ACTIVE', 'status' => $ok ? 'PASS' : 'FAIL', 'message' => $ok ? "Discount {$offer->discount_code} is active." : "Discount {$offer->discount_code} is missing or inactive."];
+            }
+            // R-SIP-CAMP-05: bundle offers must reference an active SIP-04 bundle.
+            if ($offer->offer_type === 'BUNDLE' && $offer->bundle_code) {
+                $ok = CommercialBundle::query()->where('operator_code', $campaign->operator_code)->where('bundle_code', $offer->bundle_code)->where('status', CommercialBundle::ACTIVE)->exists();
+                $checks[] = ['check' => 'BUNDLE_ACTIVE', 'status' => $ok ? 'PASS' : 'FAIL', 'message' => $ok ? "Bundle {$offer->bundle_code} is active." : "Bundle {$offer->bundle_code} is missing or not ACTIVE."];
+            }
+        }
+
+        return $checks;
+    }
+
     public function activate(PromoCampaign $campaign): PromoCampaign
     {
         if (! in_array($campaign->status, [PromoCampaign::DRAFT, PromoCampaign::APPROVED, PromoCampaign::PAUSED], true)) {
             throw DomainException::conflict("Campaign is {$campaign->status}; cannot activate.");
+        }
+        // A PAUSED campaign was already validated on first activation; only gate fresh launches.
+        if (in_array($campaign->status, [PromoCampaign::DRAFT, PromoCampaign::APPROVED], true)) {
+            $failures = collect($this->validate($campaign))->where('status', 'FAIL');
+            if ($failures->isNotEmpty()) {
+                throw DomainException::ruleRejected('CAMPAIGN_VALIDATION_FAILED', $failures->pluck('message')->implode(' '));
+            }
         }
         $campaign->update(['status' => PromoCampaign::ACTIVE]);
         $this->emit(CatalogEvents::CAMPAIGN_ACTIVATED, $campaign);

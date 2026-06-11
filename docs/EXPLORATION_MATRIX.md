@@ -77,7 +77,7 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 31 | Ticketing cockpit UI (added) | UI over TCK | `resources/js/Pages/Tickets/Index.vue` (queues, SLA, timeline, actions) | — | — | ⬜ |
 | 32 | Notifications + templates studio | NOT-01 / ICN-01 | `NotificationService` + `TemplateService` (per-channel/locale templates); `Notification/Studio.vue` | NotificationSent | `TemplateStudioTest` | ⬜ |
 | 33 | CVM retention | EM-03 | `CvmService` (rule-based case selection, action queues) | CvmCase* | `CvmTest` | ⬜ |
-| 34 | Campaigns designer + bundles launch | SIP-04 / SIP-05 | `BundleService` (launch checks pipeline), `CampaignService` (eligibility/participation); `Catalog/Commercial.vue` | Bundle*/Campaign* | `BundleAndCampaignTest` (6) | ⬜ |
+| 34 | Campaigns designer + bundles launch | SIP-04 / SIP-05 | `BundleService` (launch-check pipeline, lifecycle, availability, migration-preview→SUB), `CampaignService` (eligibility, unique participation→SIP-03 assignment, validate-gated activation R-SIP-CAMP-02/03/04/05); `Catalog/Commercial.vue` | Bundle*/Campaign* | `BundleAndCampaignTest` (7) | ✅ |
 | 35 | Catalog setup (service/package/tax/wallet/tariff) | PLM/SIP/BIL config | `Modules/Catalog` models + seeders; cache-aside consumers | CatalogChanged (evicts) | `CacheFoundationTest`, catalog tests | ⬜ |
 
 ### 1.6 Platform & cross-cutting

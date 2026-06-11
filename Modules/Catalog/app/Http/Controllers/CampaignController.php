@@ -56,6 +56,12 @@ class CampaignController extends ApiController
         return ApiResponse::created($this->campaigns->create($data));
     }
 
+    /** POST /api/campaigns/{campaign}/validate — auditable launch checks (R-SIP-CAMP-02/03/04/05). */
+    public function validate(PromoCampaign $campaign): JsonResponse
+    {
+        return ApiResponse::item(['checks' => $this->campaigns->validate($campaign)]);
+    }
+
     public function activate(PromoCampaign $campaign): JsonResponse
     {
         return ApiResponse::item($this->campaigns->activate($campaign));

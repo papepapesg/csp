@@ -126,8 +126,9 @@ class BundleAndCampaignTest extends TestCase
 
     public function test_campaign_pause_and_end_lifecycle(): void
     {
-        $c = $this->postJson('/api/campaigns', ['code' => 'LC_TEST', 'name' => 'Lifecycle'], ['Idempotency-Key' => 'camp-lc'])
-            ->assertCreated()->json();
+        $c = $this->postJson('/api/campaigns', ['code' => 'LC_TEST', 'name' => 'Lifecycle',
+            'offers' => [['offer_type' => 'MESSAGE_ONLY']], // R-SIP-CAMP-03: a message-only purpose satisfies the offer rule
+        ], ['Idempotency-Key' => 'camp-lc'])->assertCreated()->json();
         $this->postJson("/api/campaigns/{$c['campaign_id']}/activate")->assertOk()->assertJsonPath('status', 'ACTIVE');
         $this->postJson("/api/campaigns/{$c['campaign_id']}/pause")->assertOk()->assertJsonPath('status', 'PAUSED');
         $this->postJson("/api/campaigns/{$c['campaign_id']}/activate")->assertOk()->assertJsonPath('status', 'ACTIVE');
@@ -135,6 +136,23 @@ class BundleAndCampaignTest extends TestCase
         // Ended campaigns are no longer eligible.
         $this->postJson("/api/campaigns/{$c['campaign_id']}/check-eligibility", ['channelCode' => 'SALES_APP'])
             ->assertOk()->assertJsonPath('eligible', false);
+    }
+
+    public function test_campaign_activation_is_gated_by_validation(): void
+    {
+        // An empty campaign cannot activate (R-SIP-CAMP-03 needs an offer).
+        $empty = $this->postJson('/api/campaigns', ['code' => 'EMPTY_C', 'name' => 'Empty'], ['Idempotency-Key' => 'c-empty'])->json();
+        $this->postJson("/api/campaigns/{$empty['campaign_id']}/activate")
+            ->assertStatus(422)->assertJsonPath('errorCode', 'CAMPAIGN_VALIDATION_FAILED');
+
+        // A discount offer pointing at an unknown discount fails validation (R-SIP-CAMP-04).
+        $bad = $this->postJson('/api/campaigns', [
+            'code' => 'BAD_DISC', 'name' => 'Bad discount ref',
+            'offers' => [['offer_type' => 'DISCOUNT', 'discount_code' => 'NO_SUCH_DISCOUNT']],
+        ], ['Idempotency-Key' => 'c-bad'])->json();
+        $this->postJson("/api/campaigns/{$bad['campaign_id']}/validate")
+            ->assertOk()->assertJsonPath('checks.0.status', 'FAIL');
+        $this->postJson("/api/campaigns/{$bad['campaign_id']}/activate")->assertStatus(422);
     }
 
     public function test_campaign_eligibility_and_unique_redemption_with_discount_binding(): void
