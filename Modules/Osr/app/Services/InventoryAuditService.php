@@ -58,6 +58,13 @@ class InventoryAuditService
     /** Reconcile: post correction movements so system balances match the count. */
     public function reconcile(StockCountSession $session): StockCountSession
     {
+        // R-OSR-05-09: applying a resolution must be idempotent — only a COUNTED session
+        // posts corrections; a re-issued reconcile on an already-RECONCILED session is a no-op
+        // (otherwise the variance lines would be posted a second time and double-adjust stock).
+        if ($session->status !== 'COUNTED') {
+            return $session;
+        }
+
         return DB::transaction(function () use ($session) {
             foreach (StockCountLine::query()->where('session_id', $session->session_id)->where('variance', '!=', 0)->get() as $line) {
                 $this->stock->move([

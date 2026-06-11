@@ -36,6 +36,41 @@ class ProcurementAuditTest extends TestCase
         $this->assertDatabaseHas('stock_movement', ['location_id' => 'WH-MAIN', 'reason_code' => 'GOODS_RECEIPT']);
     }
 
+    public function test_serialized_receipt_creates_equipment_instances(): void
+    {
+        $this->postJson('/api/equipment-skus', [
+            'sku_id' => 'WIK-ONT-HW', 'name' => 'Huawei ONT', 'category' => 'ONT', 'is_serialized' => true,
+        ])->assertCreated();
+
+        $po = $this->postJson('/api/purchase-orders', [
+            'supplier' => 'Huawei', 'location_id' => 'WH-MAIN',
+            'lines' => [['sku_id' => 'WIK-ONT-HW', 'quantity' => 2, 'unit_cost' => 30]],
+        ])->json('po_id');
+        $this->postJson("/api/purchase-orders/{$po}/approve");
+        $this->postJson("/api/purchase-orders/{$po}/receive", ['serials' => ['WIK-ONT-HW' => ['SN-001', 'SN-002']]])
+            ->assertOk()->assertJsonPath('status', 'RECEIVED');
+
+        // R-OSR-02-08: each serialized unit is now an OSR-INSTANCE at the receiving location.
+        $this->assertDatabaseHas('equipment_instance', ['serial' => 'SN-001', 'sku_id' => 'WIK-ONT-HW', 'location_id' => 'WH-MAIN', 'state' => 'IN_MAIN_WAREHOUSE']);
+        $this->assertDatabaseHas('equipment_instance', ['serial' => 'SN-002', 'sku_id' => 'WIK-ONT-HW']);
+    }
+
+    public function test_reconcile_is_idempotent(): void
+    {
+        $po = $this->postJson('/api/purchase-orders', ['supplier' => 'S', 'location_id' => 'WH-I', 'lines' => [['sku_id' => 'sku_i', 'quantity' => 50]]])->json('po_id');
+        $this->postJson("/api/purchase-orders/{$po}/approve");
+        $this->postJson("/api/purchase-orders/{$po}/receive");
+
+        $session = $this->postJson('/api/stock-counts', ['location_id' => 'WH-I'])->json('session_id');
+        $this->postJson("/api/stock-counts/{$session}/count", ['counts' => [['sku_id' => 'sku_i', 'counted_qty' => 47]]]);
+        $this->postJson("/api/stock-counts/{$session}/reconcile")->assertOk();
+
+        // A second reconcile must NOT post the -3 correction again (R-OSR-05-09).
+        $this->postJson("/api/stock-counts/{$session}/reconcile")->assertOk();
+        $this->assertEquals(47, StockBalance::query()->where('location_id', 'WH-I')->where('sku_id', 'sku_i')->value('quantity'));
+        $this->assertSame(1, \Modules\Osr\Models\StockMovement::query()->where('reason_code', 'INVENTORY_AUDIT_ADJUSTMENT')->where('reference', $session)->count());
+    }
+
     public function test_inventory_audit_reconciles_variance(): void
     {
         // Seed 50 in stock.

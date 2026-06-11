@@ -45,9 +45,16 @@ class ProcurementController extends ApiController
         return ApiResponse::item($this->procurement->approve($purchaseOrder));
     }
 
-    public function receive(PurchaseOrder $purchaseOrder): JsonResponse
+    public function receive(Request $request, PurchaseOrder $purchaseOrder): JsonResponse
     {
-        return ApiResponse::item($this->procurement->receive($purchaseOrder));
+        // Optional per-SKU serial payload for serialized lines (registers OSR-INSTANCE records).
+        $data = $request->validate([
+            'serials' => ['nullable', 'array'],
+            'serials.*' => ['array'],
+            'serials.*.*' => ['string'],
+        ]);
+
+        return ApiResponse::item($this->procurement->receive($purchaseOrder, $data['serials'] ?? []));
     }
 
     // ---- OSR-05 inventory audit ----

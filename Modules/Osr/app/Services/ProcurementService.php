@@ -15,7 +15,10 @@ use Modules\Osr\Models\PurchaseOrderLine;
  */
 class ProcurementService
 {
-    public function __construct(private readonly StockService $stock) {}
+    public function __construct(
+        private readonly StockService $stock,
+        private readonly EquipmentInstanceService $instances,
+    ) {}
 
     /** @param array<string,mixed> $data supplier, location_id, lines:[{sku_id,quantity,unit_cost}] */
     public function create(array $data): PurchaseOrder
@@ -53,28 +56,49 @@ class ProcurementService
         return $po;
     }
 
-    /** Receive goods: post stock movements and advance status. */
-    public function receive(PurchaseOrder $po): PurchaseOrder
+    /**
+     * Receive goods: post stock movements and advance status. For serialized SKUs, the
+     * accepted serials are registered as OSR-INSTANCE records at the receiving location
+     * (R-OSR-02-08), so per-serial traceability starts at the warehouse door.
+     *
+     * @param  array<string,array<int,string>>  $serialsBySku  sku_id => [serial, …] for serialized lines
+     */
+    public function receive(PurchaseOrder $po, array $serialsBySku = []): PurchaseOrder
     {
         if (! in_array($po->status, ['APPROVED', 'PARTIALLY_RECEIVED'], true)) {
             throw DomainException::conflict('Purchase order must be APPROVED to receive.');
         }
 
-        return DB::transaction(function () use ($po) {
+        return DB::transaction(function () use ($po, $serialsBySku) {
+            $location = $po->location_id ?? 'WIK-WAREHOUSE-MAIN';
             foreach (PurchaseOrderLine::query()->where('po_id', $po->po_id)->get() as $line) {
                 $outstanding = $line->quantity_ordered - $line->quantity_received;
                 if ($outstanding <= 0) {
                     continue;
                 }
+                // R-OSR-02-07: accepted quantity becomes an OSR-01 stock movement.
                 $this->stock->move([
                     'operator_code' => $po->operator_code,
                     'sku_id' => $line->sku_id,
-                    'location_id' => $po->location_id ?? 'WIK-WAREHOUSE-MAIN',
+                    'location_id' => $location,
                     'quantity' => $outstanding,
                     'reason_code' => 'GOODS_RECEIPT',
                     'reference' => $po->po_id,
                 ]);
                 $line->update(['quantity_received' => $line->quantity_ordered]);
+
+                // R-OSR-02-08: serialized SKUs also create per-serial instance records.
+                $serialized = DB::table('equipment_sku')->where('sku_id', $line->sku_id)->value('is_serialized');
+                foreach ($serialsBySku[$line->sku_id] ?? [] as $serial) {
+                    if ($serialized) {
+                        $this->instances->register([
+                            'operator_code' => $po->operator_code,
+                            'sku_id' => $line->sku_id,
+                            'serial' => $serial,
+                            'location_id' => $location,
+                        ]);
+                    }
+                }
             }
             $po->update(['status' => 'RECEIVED']);
 
