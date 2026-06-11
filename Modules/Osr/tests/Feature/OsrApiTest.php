@@ -69,6 +69,45 @@ class OsrApiTest extends TestCase
 
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'EquipmentInstanceStateChanged']);
         $this->assertDatabaseHas('equipment_instance_lifecycle_event', ['instance_id' => $id, 'to_state' => 'IN_FIELD_ACTIVE']);
+        // INST-5: event_sequence is monotonic per instance (REGISTERED=1, then 2, 3).
+        $this->assertDatabaseHas('equipment_instance_lifecycle_event', ['instance_id' => $id, 'event_sequence' => 1]);
+        $this->assertDatabaseHas('equipment_instance_lifecycle_event', ['instance_id' => $id, 'event_sequence' => 3]);
+        // INST-8 binding event fires on entry to the field.
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'EquipmentInstanceBoundToCustomer']);
+    }
+
+    public function test_only_serialized_skus_get_instances_inst2(): void
+    {
+        $this->postJson('/api/equipment-skus', [
+            'sku_id' => 'WIK-CABLE-DROP', 'name' => 'Drop cable', 'category' => 'CABLE', 'is_serialized' => false,
+        ])->assertCreated();
+
+        $this->postJson('/api/equipment-instances', [
+            'sku_id' => 'WIK-CABLE-DROP', 'serial' => 'X1',
+        ], ['Idempotency-Key' => 'ns1'])->assertStatus(422)->assertJsonPath('errorCode', 'SKU_NOT_SERIALIZED');
+    }
+
+    public function test_recovery_requires_contractor_and_retired_is_terminal_inst7_9(): void
+    {
+        $this->seedSkuAndLocation();
+        $id = $this->postJson('/api/equipment-instances', [
+            'sku_id' => 'WIK-ONT-HUAWEI', 'serial' => 'SN-REC-1', 'location_id' => 'WIK-WAREHOUSE-MAIN',
+        ], ['Idempotency-Key' => 'r1'])->assertCreated()->json('instance_id');
+        $this->postJson("/api/equipment-instances/{$id}/transition", ['state' => 'IN_CONTRACTOR_STOCK', 'location_id' => 'WIK-VAN-1'])->assertOk();
+        $this->postJson("/api/equipment-instances/{$id}/transition", ['state' => 'IN_FIELD_ACTIVE', 'subscription_id' => 'sub_1'])->assertOk();
+
+        // INST-7: recovery without a contractor is rejected.
+        $this->postJson("/api/equipment-instances/{$id}/transition", ['state' => 'RECOVERED_BY_CONTRACTOR'])
+            ->assertStatus(422)->assertJsonPath('errorCode', 'CONTRACTOR_REQUIRED');
+        // With a contractor it succeeds and is recorded.
+        $this->postJson("/api/equipment-instances/{$id}/transition", ['state' => 'RECOVERED_BY_CONTRACTOR', 'contractor_id' => 'ctr_7'])
+            ->assertOk();
+        $this->assertDatabaseHas('equipment_instance_lifecycle_event', ['instance_id' => $id, 'to_state' => 'RECOVERED_BY_CONTRACTOR', 'contractor_id' => 'ctr_7']);
+
+        // INST-9: drive to RETIRED (terminal) and confirm no further transitions.
+        $this->postJson("/api/equipment-instances/{$id}/transition", ['state' => 'RETIRED'])->assertOk();
+        $this->assertDatabaseHas('equipment_instance', ['instance_id' => $id, 'active' => false]);
+        $this->postJson("/api/equipment-instances/{$id}/transition", ['state' => 'IN_MAIN_WAREHOUSE'])->assertStatus(409);
     }
 
     public function test_invalid_instance_transition_rejected(): void

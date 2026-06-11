@@ -60,6 +60,8 @@ class EquipmentInstanceController extends ApiController
             'customer_id' => ['nullable', 'string'],
             'subscription_id' => ['nullable', 'string'],
             'reference' => ['nullable', 'string'],
+            'contractor_id' => ['nullable', 'string'], // INST-7: required for RECOVERED_BY_CONTRACTOR (enforced in service)
+            'reason_code' => ['nullable', 'string'],
         ]);
 
         return ApiResponse::item($this->instances->transition($equipmentInstance, $data['state'], $data));

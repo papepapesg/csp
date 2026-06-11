@@ -24,6 +24,15 @@ final class OsrEvents
 
     public const INSTANCE_STATE_CHANGED = 'EquipmentInstanceStateChanged';
 
+    // OSR-INSTANCE-01 §6 named lifecycle events (specific consumers downstream).
+    public const INSTANCE_RECOVERED_BY_CONTRACTOR = 'EquipmentInstanceRecoveredByContractor';
+
+    public const INSTANCE_BOUND_TO_CUSTOMER = 'EquipmentInstanceBoundToCustomer';
+
+    public const INSTANCE_UNBOUND_FROM_CUSTOMER = 'EquipmentInstanceUnboundFromCustomer';
+
+    public const INSTANCE_DECOMMISSIONED = 'EquipmentInstanceDecommissioned';
+
     // OSR-RMA-01 swap events (topic sophix.osr.rma.*).
     public const SWAP_REQUESTED = 'EquipmentSwapRequested';
 

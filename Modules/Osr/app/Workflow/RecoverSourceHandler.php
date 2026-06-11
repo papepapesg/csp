@@ -70,6 +70,9 @@ class RecoverSourceHandler implements TaskHandler
         if ($source->state === EquipmentInstance::IN_FIELD_ACTIVE || $source->state === EquipmentInstance::IN_FIELD_DEFECTIVE) {
             $this->instances->transition($source, EquipmentInstance::RECOVERED_BY_CONTRACTOR, [
                 'reference' => $swap->swap_id,
+                // INST-7: stamp the recovering contractor onto the lifecycle ledger.
+                'contractor_id' => $contractorId,
+                'reason_code' => 'CONTRACTOR_RECOVERED_FROM_FIELD',
             ]);
         }
         $source->refresh();

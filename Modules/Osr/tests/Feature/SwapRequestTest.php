@@ -81,6 +81,13 @@ class SwapRequestTest extends TestCase
         $this->assertDatabaseHas('stock_movement', ['location_id' => $van, 'reason_code' => 'SWAP_RECOVERY']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'EquipmentSourceRecovered']);
         $this->assertDatabaseHas('vendor_rma_stub', ['swap_id' => $swapId]);
+        // INST-7: the recovering contractor is stamped on the instance lifecycle ledger — the
+        // field downstream routing reads to send the unit back to that contractor's warehouse.
+        $this->assertDatabaseHas('equipment_instance_lifecycle_event', [
+            'instance_id' => $source->instance_id, 'to_state' => 'RECOVERED_BY_CONTRACTOR',
+            'contractor_id' => 'ctr_99', 'reason_code' => 'CONTRACTOR_RECOVERED_FROM_FIELD',
+        ]);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'EquipmentInstanceRecoveredByContractor']);
     }
 
     public function test_eqp_pickup_recovers_equipment_at_termination(): void
