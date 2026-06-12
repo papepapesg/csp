@@ -35,6 +35,11 @@ class Template extends Model
     public const CHANNEL_FORMATS = [
         'EMAIL' => [self::FORMAT_EMAIL_SUBJECT, self::FORMAT_EMAIL_HTML, self::FORMAT_EMAIL_TEXT],
         'SMS' => [self::FORMAT_SMS_TEXT],
+        // Text-shaped push channels reuse the SMS_TEXT body (terse). New channels declare
+        // their required formats here; future rich formats (e.g. WHATSAPP_TEMPLATE_REF) add rows.
+        'WHATSAPP' => [self::FORMAT_SMS_TEXT],
+        'TELEGRAM' => [self::FORMAT_SMS_TEXT],
+        'PUSH' => [self::FORMAT_SMS_TEXT],
     ];
 
     protected $table = 'template';

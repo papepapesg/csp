@@ -29,6 +29,17 @@ class NotificationServiceProvider extends ModuleServiceProvider
         \Modules\Notification\Console\Icn\StaffExpireCommand::class,
     ];
 
+    public function boot(): void
+    {
+        parent::boot();
+        // NOT-01 consumes BIL-04 dunning level transitions and routes a customer notice per the
+        // operator's routing rules + the customer's channel preferences (channels are config).
+        \Illuminate\Support\Facades\Event::listen(
+            \App\Foundation\Events\OutboxEventPublished::class,
+            [\Modules\Notification\Listeners\DunningNotificationBridge::class, 'handle'],
+        );
+    }
+
     public function register(): void
     {
         parent::register();

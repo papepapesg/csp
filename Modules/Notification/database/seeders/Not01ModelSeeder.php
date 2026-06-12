@@ -41,6 +41,10 @@ class Not01ModelSeeder extends Seeder
             ['PtpRegistered', 'SMS', 1, 'NORMAL', 'TRANSACTIONAL', 'PTP_CONFIRMATION', false],
             ['PtpRegistered', 'EMAIL', 2, 'NORMAL', 'TRANSACTIONAL', 'PTP_CONFIRMATION', false],
             ['PaymentApplied', 'SMS', 1, 'NORMAL', 'TRANSACTIONAL', 'PAYMENT_RECEIPT', false],
+            // BIL-04 dunning notice — the operator picks the channels here (EMAIL + SMS by
+            // default; swap to WHATSAPP/etc. by editing these rows, no code change).
+            ['DunningStageAdvanced', 'EMAIL', 1, 'NORMAL', 'TRANSACTIONAL', 'DUNNING_NOTICE', false],
+            ['DunningStageAdvanced', 'SMS', 2, 'NORMAL', 'TRANSACTIONAL', 'DUNNING_NOTICE', false],
         ];
         foreach ($rules as [$event, $channel, $priority, $urgency, $category, $purpose, $needsPdf]) {
             NotificationRoutingRule::query()->updateOrCreate(
@@ -61,6 +65,10 @@ class Not01ModelSeeder extends Seeder
             ['EMAIL_HTML', 'PTP_CONFIRMATION', 'HANDLEBARS', '<p>Your promise to pay {{amount}} {{currency}} by {{payByDate}} is registered.</p>'],
             ['EMAIL_TEXT', 'PTP_CONFIRMATION', 'HANDLEBARS', 'Your promise to pay {{amount}} {{currency}} by {{payByDate}} is registered.'],
             ['SMS_TEXT', 'PAYMENT_RECEIPT', 'HANDLEBARS', 'Payment of {{currency}} {{amount}} received. Thank you.'],
+            ['SMS_TEXT', 'DUNNING_NOTICE', 'HANDLEBARS', 'Your account is overdue (stage {{levelName}}). Please pay to avoid service interruption.'],
+            ['EMAIL_SUBJECT', 'DUNNING_NOTICE', 'HANDLEBARS', 'Action needed: your account is overdue'],
+            ['EMAIL_HTML', 'DUNNING_NOTICE', 'HANDLEBARS', '<p>Your account is overdue (stage {{levelName}}). Please settle the balance to avoid service interruption.</p>'],
+            ['EMAIL_TEXT', 'DUNNING_NOTICE', 'HANDLEBARS', 'Your account is overdue (stage {{levelName}}). Please settle the balance to avoid service interruption.'],
         ];
         foreach ($templates as [$format, $purpose, $engine, $payload]) {
             Template::query()->updateOrCreate(

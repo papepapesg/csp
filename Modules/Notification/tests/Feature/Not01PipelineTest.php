@@ -320,6 +320,47 @@ class Not01PipelineTest extends TestCase
         $this->assertInstanceOf(FakeWhatsAppAdapter::class, $adapter);
     }
 
+    public function test_dunning_notice_channels_come_from_routing_not_hardcoded(): void
+    {
+        \Modules\Ilm\Models\Customer::query()->create([
+            'customer_id' => 'cust_D', 'operator_code' => 'WIK', 'name' => 'Dee', 'type' => 'RES',
+            'primary_msisdn' => '+254712345678', 'email' => 'dee@example.com',
+        ]);
+        \Modules\Subscription\Models\Subscription::query()->create([
+            'subscription_id' => 'sub_D', 'customer_id' => 'cust_D', 'account_id' => 'acct_D', 'operator_code' => 'WIK',
+            'homepass_id' => 'h1', 'package_ref' => 'p1', 'status_code' => 'ACTIVE', 'billing_mode' => 'POSTPAID', 'currency' => 'KES',
+        ]);
+
+        $fire = function (int $level) {
+            $event = new \App\Foundation\Events\Outbox\OutboxEvent;
+            $event->setRawAttributes([
+                'event_type' => 'DunningStageAdvanced', 'operator_code' => 'WIK',
+                'payload' => json_encode(['subscriptionId' => 'sub_D', 'accountId' => 'acct_D', 'level' => $level, 'levelName' => 'STAGE'.$level, 'debt' => '4500']),
+            ]);
+            app(\Modules\Notification\Listeners\DunningNotificationBridge::class)->handle(new \App\Foundation\Events\OutboxEventPublished($event));
+        };
+
+        // Default routing: the operator configured EMAIL + SMS — no channel is hardcoded.
+        $fire(1);
+        $log = NotificationLog::where('event_type', 'DunningStageAdvanced')->orderByDesc('id')->first();
+        $this->assertEqualsCanonicalizing(['EMAIL', 'SMS'], $log->channels_attempted);
+
+        // The operator switches the dunning notice to WhatsApp — purely a routing-rule change.
+        NotificationRoutingRule::where('event_type', 'DunningStageAdvanced')->delete();
+        NotificationRoutingRule::query()->create([
+            'operator_code' => 'WIK', 'event_type' => 'DunningStageAdvanced', 'channel' => 'WHATSAPP',
+            'template_purpose_code' => 'DUNNING_NOTICE', 'priority' => 1, 'category' => 'TRANSACTIONAL', 'enabled' => true,
+        ]);
+        Template::query()->create(['operator_code' => 'WIK', 'template_format' => 'SMS_TEXT', 'template_purpose_code' => 'DUNNING_NOTICE', 'locale' => 'en', 'version' => 2, 'status' => 'ACTIVE', 'engine_type' => 'HANDLEBARS', 'template_payload' => 'Overdue: {{levelName}}']);
+        config()->set('sophix.notification.adapter_implementations', config('sophix.notification.adapter_implementations') + ['whatsapp.meta' => FakeWhatsAppAdapter::class]);
+        config()->set('sophix.notification.default_adapter.WHATSAPP', 'whatsapp.meta');
+        ChannelOperatorConfig::query()->create(['operator_code' => 'WIK', 'channel' => 'WHATSAPP', 'adapter_implementation' => 'whatsapp.meta', 'sender_identifier' => 'WANANCHI_WA', 'enabled' => true]);
+
+        $fire(2);
+        $log = NotificationLog::where('event_type', 'DunningStageAdvanced')->orderByDesc('id')->first();
+        $this->assertEquals(['WHATSAPP'], $log->channels_attempted); // channel is config, not code
+    }
+
     public function test_unconfigured_channel_is_permanent_failure(): void
     {
         ChannelOperatorConfig::query()->where('channel', 'SMS')->update(['enabled' => false]);

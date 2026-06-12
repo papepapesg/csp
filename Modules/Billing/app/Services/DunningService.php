@@ -10,7 +10,6 @@ use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Models\DunningProgram;
 use Modules\Billing\Models\DunningState;
 use Modules\Billing\Models\Invoice;
-use Modules\Notification\Services\NotificationService;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Services\OperationFramework;
 use Modules\Subscription\Services\RestrictionService;
@@ -30,7 +29,6 @@ class DunningService
         private readonly EventBus $events,
         private readonly DunningProgramResolver $programs,
         private readonly OperationFramework $operations,
-        private readonly NotificationService $notifications,
         private readonly RestrictionService $restrictions,
     ) {}
 
@@ -216,18 +214,11 @@ class DunningService
         $payload = $program->actionPayload($level);
         $dunningRef = "dunning-{$state->account_id}-L{$level}";
 
-        if ($intent === DunningProgram::WARNING_ONLY) {
-            if ($subscription) {
-                $this->notifications->send([
-                    'channel' => 'SMS', 'recipient' => $subscription->customer_id, 'template_code' => 'DUNNING_WARNING',
-                    'reference' => $state->account_id, 'body' => 'Your account has an overdue balance.',
-                ]);
-            }
-
-            return;
-        }
-
-        if (! $subscription) {
+        // WARNING_ONLY does no workflow work — the customer-facing notice is owned by NOT-01,
+        // which routes the already-emitted DunningStageAdvanced event per the operator's routing
+        // rules and the customer's channel preferences (R-BIL-04 scope: "BIL-04 emits events at
+        // each level transition; notification consumes"). Channels are config, never hardcoded.
+        if ($intent === DunningProgram::WARNING_ONLY || ! $subscription) {
             return;
         }
 
