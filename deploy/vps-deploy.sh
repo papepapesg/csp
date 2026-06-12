@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# SOPHIX BSS — one-shot VPS deploy. Run as root from the repo root:
+#
+#   git clone -b claude/bss-docker-implementation-oj5JD https://github.com/papepapesg/csp.git sophix
+#   cd sophix && bash deploy/vps-deploy.sh
+#
+# Brings up the full native stack (postgres, redis, app, nginx, queue, scheduler, mailpit),
+# writes a production-ish .env, then seeds the `demo` profile so every surface opens populated.
+# Idempotent: re-running rebuilds and re-seeds (migrate:fresh) — safe on a disposable box.
+set -euo pipefail
+
+PUBLIC_HOST="${PUBLIC_HOST:-207.180.209.83}"
+APP_PORT="${APP_PORT:-80}"
+
+echo "==> SOPHIX deploy — host ${PUBLIC_HOST}, web port ${APP_PORT}"
+
+# 1. Docker + compose plugin.
+if ! command -v docker >/dev/null 2>&1; then
+    echo "==> Installing Docker..."
+    curl -fsSL https://get.docker.com | sh
+fi
+docker compose version >/dev/null 2>&1 || { echo "docker compose plugin missing"; exit 1; }
+
+# 2. .env (container-host networking is already the default in .env.example).
+[ -f .env ] || cp .env.example .env
+set_env() {
+    local k="$1" v="$2"
+    if grep -q "^${k}=" .env; then sed -i "s|^${k}=.*|${k}=${v}|" .env; else echo "${k}=${v}" >> .env; fi
+}
+set_env APP_ENV production
+set_env APP_DEBUG false
+set_env APP_URL "http://${PUBLIC_HOST}"
+set_env APP_PORT "${APP_PORT}"
+set_env MAIL_MAILER smtp
+set_env SESSION_SECURE_COOKIE false
+# Stable app key via env_file so sessions survive container restarts.
+grep -q '^APP_KEY=base64:' .env || set_env APP_KEY "base64:$(openssl rand -base64 32)"
+
+# 3. Build + start the stack.
+echo "==> Building and starting containers..."
+docker compose up -d --build
+
+# 4. Wait for postgres + app, then seed the demo profile.
+echo "==> Waiting for the database to be ready..."
+until docker compose exec -T postgres pg_isready -U sophix -d sophix >/dev/null 2>&1; do sleep 2; done
+echo "==> Seeding demo dataset (migrate:fresh + catalogs + admin + demo data)..."
+docker compose exec -T app php artisan sophix:setup demo -n
+# Drain the demo's queued workflow + outbox so projections/metrics are live.
+docker compose exec -T app php artisan sophix:workflow:work --once || true
+docker compose exec -T app php artisan sophix:outbox:dispatch || true
+docker compose exec -T app php artisan config:cache || true
+
+cat <<EOF
+
+================ SOPHIX BSS is up ================
+  UI            http://${PUBLIC_HOST}
+  API base      http://${PUBLIC_HOST}/api
+  Mailpit       http://${PUBLIC_HOST}:8025
+  Login         admin@sophix.local / password
+  Operator      WIK (Kenya, KES)
+
+  Postman       postman/collections/*.json  (19 bundles)
+  Postman env   postman/SOPHIX-VPS.postman_environment.json
+
+  Logs          docker compose logs -f app
+  Reset         docker compose down -v && bash deploy/vps-deploy.sh
+==================================================
+EOF
