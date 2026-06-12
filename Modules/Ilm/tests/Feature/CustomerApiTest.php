@@ -77,6 +77,29 @@ class CustomerApiTest extends TestCase
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'CustomerKycApproved']);
     }
 
+    public function test_kyc_approval_authority_is_config_driven(): void
+    {
+        // Operator has configured KYC authority per level (kyc_approval_role).
+        $this->actingAsAgent(['CUSTOMER_CARE_AGENT']);
+        $this->seed(\Modules\Ilm\Database\Seeders\AccountFlagCatalogSeeder::class);
+        $customer = Customer::factory()->create(['kyc_status' => 'PENDING', 'operator_code' => 'WIK']);
+
+        // A plain agent lacks the configured L1 role → rejected (R-ILM-K-3).
+        $this->postJson("/api/customers/{$customer->customer_id}/kyc/l1-approve")
+            ->assertStatus(403)->assertJsonPath('errorCode', 'KYC_APPROVER_ROLE_REQUIRED');
+
+        // The configured L1 supervisor role is authorized.
+        $this->actingAsAgent(['CUSTOMER_CARE_SUPERVISOR']);
+        $this->postJson("/api/customers/{$customer->customer_id}/kyc/l1-approve")
+            ->assertOk()->assertJsonPath('kycStatus', 'L1_APPROVED');
+
+        // An operator re-points L1 authority to a different role by editing config — no code change.
+        \Illuminate\Support\Facades\DB::table('kyc_approval_role')
+            ->where('operator_code', 'WIK')->where('approval_level', 2)->update(['required_role' => 'CUSTOMER_CARE_SUPERVISOR']);
+        $this->postJson("/api/customers/{$customer->customer_id}/kyc/final-approve")
+            ->assertOk()->assertJsonPath('kycStatus', 'APPROVED');
+    }
+
     public function test_create_account_for_customer(): void
     {
         $this->actingAsAgent(['SUPER_ADMIN']);

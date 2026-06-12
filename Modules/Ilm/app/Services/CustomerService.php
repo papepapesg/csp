@@ -72,6 +72,19 @@ class CustomerService
     {
         $isFinal = $level >= 2;
 
+        // R-ILM-K-3: when the operator has configured KYC authority for this level, the
+        // acting user must hold the configured role. The mapping is config (kyc_approval_role);
+        // no row means the operator hasn't gated that level. SUPER_ADMIN is always authorized.
+        $roleCfg = DB::table('kyc_approval_role')
+            ->where('operator_code', $customer->operator_code)->where('approval_level', $level)->first();
+        if ($roleCfg) {
+            $actor = $meta['actor'] ?? null;
+            $authorized = $actor && ($actor->hasRole($roleCfg->required_role) || $actor->hasRole('SUPER_ADMIN'));
+            if (! $authorized) {
+                throw new DomainException('KYC_APPROVER_ROLE_REQUIRED', "KYC level {$level} requires the '{$roleCfg->required_role}' role.", 403);
+            }
+        }
+
         if ($decision === 'APPROVED') {
             if ($isFinal && $customer->kyc_status !== Customer::KYC_L1_APPROVED) {
                 throw DomainException::ruleRejected(

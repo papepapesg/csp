@@ -44,6 +44,7 @@ class KycController extends ApiController
             'approvalLevelName' => ['nullable', 'string', 'max:64'],
             'comments' => ['nullable', 'string', 'max:1000'],
         ]);
+        $meta['actor'] = $request->user(); // R-ILM-K-3 authority check
 
         $this->customers->recordKycDecision($customer, $level, $decision, $meta);
 

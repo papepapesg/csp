@@ -83,6 +83,41 @@ class AccountFlagTest extends TestCase
         $svc = app(AccountService::class);
         $account = $this->account();
         $svc->update($account, ['sub_status' => 'seasonal_disconnect']);
+        // Main status is DERIVED from the catalog (seasonal_disconnect clones from ACTIVE).
         $this->assertSame('seasonal_disconnect', $account->refresh()->sub_status);
+        $this->assertSame('ACTIVE', $account->status);
+    }
+
+    public function test_sub_status_requiring_approval_needs_a_reference(): void
+    {
+        $svc = app(AccountService::class);
+        $account = $this->account();
+
+        // 'hold' is configured requires_approval=true — rejected without a reference (R-ILM-S-2).
+        try {
+            $svc->update($account, ['sub_status' => 'hold']);
+            $this->fail('expected SUB_STATUS_APPROVAL_REQUIRED');
+        } catch (\App\Foundation\Errors\DomainException $e) {
+            $this->assertSame('SUB_STATUS_APPROVAL_REQUIRED', $e->errorCode);
+        }
+
+        // With a reference it is accepted and the main status is derived as INACTIVE.
+        $svc->update($account, ['sub_status' => 'hold', 'approval_reference' => 'TKT-2026-01']);
+        $this->assertSame('hold', $account->refresh()->sub_status);
+        $this->assertSame('INACTIVE', $account->status);
+        $this->assertDatabaseHas('account_status_history', ['account_id' => $account->account_id, 'new_sub_status' => 'hold', 'approval_reference' => 'TKT-2026-01']);
+    }
+
+    public function test_approval_requirement_is_config_not_code(): void
+    {
+        $svc = app(AccountService::class);
+        $account = $this->account();
+
+        // An operator drops the approval requirement on 'hold' by editing the catalog row — no code change.
+        \Modules\Ilm\Models\CustomerSubStatusCatalog::query()
+            ->where('operator_code', 'WIK')->where('sub_status_code', 'hold')->update(['requires_approval' => false]);
+
+        $svc->update($account, ['sub_status' => 'hold']); // now accepted without a reference
+        $this->assertSame('hold', $account->refresh()->sub_status);
     }
 }

@@ -17,7 +17,7 @@ class CustomerSubStatusCatalog extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['active' => 'boolean'];
+    protected $casts = ['active' => 'boolean', 'requires_approval' => 'boolean', 'affects_provisioning' => 'boolean', 'customer_visible' => 'boolean', 'approval_roles_jsonb' => 'array'];
 
     public static function exists(string $operator, string $subStatus): bool
     {

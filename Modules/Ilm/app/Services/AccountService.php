@@ -51,14 +51,27 @@ class AccountService
      */
     public function update(CustomerAccount $account, array $data): CustomerAccount
     {
-        // Sub-status must come from the operator's registry when one is configured.
+        // The operator's sub-status catalog is config that DRIVES the change: it validates
+        // the code, supplies the main status it clones from, and says whether the change
+        // needs an approval reference and whether it affects provisioning. An operator
+        // tunes any of that by editing the catalog row — no code change.
+        $catalog = null;
         if (isset($data['sub_status'])
-            && CustomerSubStatusCatalog::query()->where('operator_code', $account->operator_code)->exists()
-            && ! CustomerSubStatusCatalog::exists($account->operator_code, $data['sub_status'])) {
-            throw DomainException::ruleRejected('UNKNOWN_SUB_STATUS', "Sub-status {$data['sub_status']} is not in the operator's registry.");
+            && CustomerSubStatusCatalog::query()->where('operator_code', $account->operator_code)->exists()) {
+            $catalog = CustomerSubStatusCatalog::query()
+                ->where('operator_code', $account->operator_code)->where('sub_status_code', $data['sub_status'])->first();
+            if (! $catalog) {
+                throw DomainException::ruleRejected('UNKNOWN_SUB_STATUS', "Sub-status {$data['sub_status']} is not in the operator's registry.");
+            }
+            // R-ILM-S-2: a sub-status whose catalog row requires_approval must carry a reference.
+            if ($catalog->requires_approval && empty($data['approval_reference'])) {
+                throw DomainException::ruleRejected('SUB_STATUS_APPROVAL_REQUIRED', "Sub-status '{$data['sub_status']}' requires an approval reference.");
+            }
+            // Main status is DERIVED from the catalog (cloned_from), not trusted from the caller.
+            $data['status'] = $catalog->main_status;
         }
 
-        return DB::transaction(function () use ($account, $data) {
+        return DB::transaction(function () use ($account, $data, $catalog) {
             $statusChanged = (isset($data['status']) && $data['status'] !== $account->status)
                 || (isset($data['sub_status']) && $data['sub_status'] !== $account->sub_status);
             $before = ['status' => $account->status, 'sub_status' => $account->sub_status];
@@ -67,19 +80,22 @@ class AccountService
                 $data['sub_status_changed_at'] = now();
             }
 
-            $account->update($data);
+            $account->update(array_diff_key($data, ['approval_reference' => null]));
 
             if ($statusChanged) {
-                // Append-only history (the Customer 360 status timeline).
+                // Append-only history (the Customer 360 status timeline). R-ILM-S-1.
                 DB::table('account_status_history')->insert([
                     'account_id' => $account->account_id,
                     'operator_code' => $account->operator_code,
                     'prev_status' => $before['status'], 'new_status' => $account->status,
                     'prev_sub_status' => $before['sub_status'], 'new_sub_status' => $account->sub_status,
                     'reason' => $data['sub_status_reason'] ?? null,
+                    'approval_reference' => $data['approval_reference'] ?? null,
                     'changed_by' => $data['updated_by'] ?? null,
                     'changed_at' => now(), 'created_at' => now(), 'updated_at' => now(),
                 ]);
+                // R-ILM-S-3 / §8.2: the event carries affects_provisioning + customer_visible
+                // (from the catalog) so FUL-03 and DD_NOT-01 decide without re-reading config.
                 $this->events->publish(new DomainEvent(
                     type: IlmEvents::CUSTOMER_ACCOUNT_STATUS_CHANGED,
                     topic: IlmEvents::TOPIC,
@@ -87,6 +103,8 @@ class AccountService
                         'accountId' => $account->account_id,
                         'status' => $account->status,
                         'subStatus' => $account->sub_status,
+                        'affectsProvisioning' => (bool) ($catalog?->affects_provisioning ?? false),
+                        'customerVisible' => (bool) ($catalog?->customer_visible ?? true),
                     ],
                     aggregateType: 'CustomerAccount',
                     aggregateId: $account->account_id,

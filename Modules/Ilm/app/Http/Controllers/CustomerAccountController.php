@@ -61,6 +61,7 @@ class CustomerAccountController extends ApiController
             'status' => ['sometimes', 'in:INACTIVE,ACTIVE'],
             'sub_status' => ['sometimes', 'string', 'max:64'],
             'sub_status_reason' => ['nullable', 'string', 'max:255'],
+            'approval_reference' => ['nullable', 'string', 'max:128'], // R-ILM-S-2 (required for requires_approval sub-statuses)
             'attention_banner' => ['nullable', 'string', 'max:255'],
             'service_class_1' => ['nullable', 'string', 'max:32'],
             'service_class_2' => ['nullable', 'string', 'max:32'],
