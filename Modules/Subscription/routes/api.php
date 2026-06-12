@@ -27,7 +27,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('subscriptions/{subscription}/migrate', [OperationController::class, 'migrate'])->middleware('permission:subscription.manage');
     Route::post('subscriptions/{subscription}/suspend-np', [OperationController::class, 'suspendNp'])->middleware('permission:subscription.manage');
 
-    // SUB-WF-RESTRICT-01 partial-service restriction sub-resource (ADD/REMOVE/LIST)
+    // SUB-WF-RESTRICT-01 partial-service restriction sub-resource (ADD/REMOVE/LIST) + platform monitor
+    Route::get('subscription-restrictions', [RestrictionController::class, 'monitor'])->middleware('permission:subscription.read');
     Route::get('subscriptions/{subscription}/restrictions', [RestrictionController::class, 'index'])->middleware('permission:subscription.read');
     Route::post('subscriptions/{subscription}/restrictions', [RestrictionController::class, 'store'])->middleware(['permission:subscription.manage', 'idempotency']);
     Route::delete('subscriptions/{subscription}/restrictions/{code}', [RestrictionController::class, 'destroy'])->middleware(['permission:subscription.manage', 'idempotency']);

@@ -27,6 +27,28 @@ class RestrictionController extends ApiController
         ]);
     }
 
+    /**
+     * GET /api/subscription-restrictions — platform-wide restriction monitor: every subscription
+     * currently carrying one or more active restrictions (FE-APP-01 §10 restriction monitor).
+     */
+    public function monitor(Request $request): JsonResponse
+    {
+        $operator = $request->query('operatorCode', \App\Foundation\Support\Context::operatorCode());
+        $items = Subscription::query()
+            ->where('operator_code', $operator)
+            ->whereNotNull('active_restrictions')
+            ->limit(500)
+            ->get(['subscription_id', 'customer_id', 'account_id', 'status_code', 'active_restrictions'])
+            ->filter(fn (Subscription $s) => ! empty($s->active_restrictions))
+            ->map(fn (Subscription $s) => [
+                'subscriptionId' => $s->subscription_id, 'customerId' => $s->customer_id,
+                'accountId' => $s->account_id, 'statusCode' => $s->status_code,
+                'restrictions' => $s->active_restrictions,
+            ])->values();
+
+        return ApiResponse::item(['items' => $items]);
+    }
+
     /** POST /api/subscriptions/{subscription}/restrictions (ADD) */
     public function store(Request $request, Subscription $subscription): JsonResponse
     {

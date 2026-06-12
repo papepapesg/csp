@@ -174,9 +174,24 @@ const activationColumns = [
     { key: 'created_at', label: 'Created' },
 ];
 
-// --- Restriction monitor (FUL-04 / SUB-WF-RESTRICT-01): no global list endpoint exists —
-// restrictions are a per-subscription sub-resource. Show "not available" rather than 404. ---
-const restrictionAvailable = false;
+// --- Restriction monitor (FUL-04 / SUB-WF-RESTRICT-01): platform-wide list of subscriptions
+// currently carrying active partial-service restrictions. ---
+const restrictions = ref([]);
+const loadingRestriction = ref(false);
+const restrictionColumns = [
+    { key: 'subscriptionId', label: 'Subscription', class: 'font-mono text-xs' },
+    { key: 'customerId', label: 'Customer', class: 'font-mono text-xs' },
+    { key: 'statusCode', label: 'Status' },
+    { key: 'restrictionCount', label: 'Active restrictions', align: 'right' },
+];
+async function loadRestrictions() {
+    loadingRestriction.value = true;
+    try {
+        restrictions.value = listOf((await window.axios.get('/api/subscription-restrictions')).data)
+            .map((r) => ({ ...r, restrictionCount: (r.restrictions ?? []).length }));
+    } catch (e) { restrictions.value = []; }
+    finally { loadingRestriction.value = false; }
+}
 
 // --- Termination monitor (FUL-05): Billing dunning pending-termination-review is the real
 // cross-module list of accounts queued for termination. ---
@@ -204,6 +219,7 @@ async function loadTerminations() {
 function selectTab(key) {
     tab.value = key;
     if (key === 'termination' && !terminations.value.length) loadTerminations();
+    if (key === 'restriction' && !restrictions.value.length) loadRestrictions();
 }
 function gotoStage(stage) { tab.value = 'orders'; }
 
@@ -259,11 +275,15 @@ onMounted(loadOrders);
                 </DataTable>
             </Panel>
 
-            <!-- RESTRICTION MONITOR (FUL-04) — no global list endpoint -->
-            <Panel v-if="tab === 'restriction'" title="Restriction monitor" subtitle="Partial-service restrictions (FUL-04 / SUB-WF-RESTRICT-01)">
-                <div v-if="!restrictionAvailable" class="rounded-lg bg-gray-50 p-6 text-center text-sm text-gray-400 ring-1 ring-gray-100">
-                    {{ t('Not available — restrictions are managed per subscription; no platform-wide restriction monitor is exposed yet.') }}
-                </div>
+            <!-- RESTRICTION MONITOR (FUL-04 / SUB-WF-RESTRICT-01) — platform-wide active restrictions -->
+            <Panel v-if="tab === 'restriction'" title="Restriction monitor" subtitle="Subscriptions carrying active partial-service restrictions (FUL-04 / SUB-WF-RESTRICT-01)">
+                <DataTable :columns="restrictionColumns" :rows="restrictions" row-key="subscriptionId" :loading="loadingRestriction" empty="No active restrictions.">
+                    <template #cell-statusCode="{ value }"><StatusBadge :status="value" /></template>
+                    <template #cell-restrictionCount="{ row }">
+                        <span class="font-mono">{{ row.restrictionCount }}</span>
+                        <span class="ml-2 text-xs text-gray-400">{{ (row.restrictions ?? []).map((r) => r.restrictionCode ?? r).join(', ') }}</span>
+                    </template>
+                </DataTable>
             </Panel>
 
             <!-- TERMINATION MONITOR (FUL-05) — Billing dunning pending-termination-review -->

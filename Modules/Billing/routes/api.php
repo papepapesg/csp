@@ -65,9 +65,13 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // BIL-01-PAY-01 — Payments
     Route::get('payments', [PaymentController::class, 'index'])->middleware('permission:payment.read');
+    Route::get('payments/{payment}', [PaymentController::class, 'show'])->middleware('permission:payment.read');
     Route::post('payments', [PaymentController::class, 'store'])->middleware(['permission:payment.apply', 'idempotency']);
     Route::post('payments/{payment}/reverse', [PaymentController::class, 'reverse'])->middleware('permission:payment.reverse');
     Route::post('payments/{payment}/allocate-surplus', [PaymentController::class, 'allocateSurplus'])->middleware('permission:payment.apply');
+
+    // BIL-CYCLE-01 — cycle-close run monitor (read-only)
+    Route::get('cycle-close-runs', [\Modules\Billing\Http\Controllers\CycleCloseController::class, 'index'])->middleware('permission:invoice.read');
 
     // BIL-05 — Wallet
     Route::get('wallets/{subscriptionId}/balance', [WalletController::class, 'balance'])->middleware('permission:wallet.read');

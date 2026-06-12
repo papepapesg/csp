@@ -21,12 +21,19 @@ class PaymentController extends ApiController
     {
         $params = $this->pageParams($request);
         $page = PaymentLedger::query()
+            ->with('allocations')
             ->where('operator_code', $request->query('operatorCode', Context::operatorCode()))
             ->when($request->query('account_id'), fn ($q, $a) => $q->where('account_id', $a))
             ->orderByDesc('received_at')
             ->paginate(perPage: $params['size'], page: $params['page'] + 1);
 
         return ApiResponse::paginated($page);
+    }
+
+    /** GET /api/payments/{payment} — the ledger row with its invoice allocation breakdown. */
+    public function show(PaymentLedger $payment): JsonResponse
+    {
+        return ApiResponse::item($payment->load('allocations'));
     }
 
     /** POST /api/payments */

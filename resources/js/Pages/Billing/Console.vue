@@ -22,7 +22,7 @@ const { t, money, dateFmt } = useI18n();
 const tab = ref('invoices');
 const tabs = [
     ['invoices', 'Invoices'], ['payments', 'Payments'], ['adjustments', 'Adjustments'],
-    ['wallet', 'Wallet'], ['dunning', 'Dunning'], ['tax', 'Tax invoices'],
+    ['wallet', 'Wallet'], ['dunning', 'Dunning'], ['tax', 'Tax invoices'], ['cycle', 'Cycle close'],
 ];
 
 const notice = ref(null);
@@ -255,11 +255,28 @@ async function loadTax() {
 }
 const taxPdfUrl = (row) => `/api/tax-invoices/${row.tax_invoice_id}/pdf`;
 
+// ---- Cycle close (BIL cycle-run monitor) ---------------------------------------------------
+const cycleRuns = ref([]);
+const loadingCycle = ref(false);
+const cycleColumns = [
+    { key: 'run_id', label: 'Run', class: 'font-mono text-xs' },
+    { key: 'started_at', label: 'Started' },
+    { key: 'completed_at', label: 'Completed' },
+    { key: 'closed', label: 'Closed', align: 'right' },
+    { key: 'failed', label: 'Failed', align: 'right' },
+];
+async function loadCycle() {
+    loadingCycle.value = true;
+    try { cycleRuns.value = rows((await window.axios.get('/api/cycle-close-runs')).data); }
+    catch (e) { cycleRuns.value = []; }
+    finally { loadingCycle.value = false; }
+}
+
 // ---- Tab orchestration ---------------------------------------------------------------------
 function loadTab() {
     const loaders = {
         invoices: loadInvoices, payments: loadPayments, adjustments: loadAdjustments,
-        wallet: () => {}, dunning: loadDunning, tax: loadTax,
+        wallet: () => {}, dunning: loadDunning, tax: loadTax, cycle: loadCycle,
     };
     (loaders[tab.value] ?? (() => {}))();
 }
@@ -440,6 +457,14 @@ onMounted(() => { loadSummary(); loadTab(); });
                     </DataTable>
                 </Panel>
             </div>
+
+            <!-- CYCLE CLOSE -->
+            <Panel v-if="tab === 'cycle'" title="Cycle close runs" subtitle="BIL cycle billing — recent close runs and their outcome">
+                <DataTable :columns="cycleColumns" :rows="cycleRuns" row-key="run_id" :loading="loadingCycle" empty="No cycle-close runs yet.">
+                    <template #cell-started_at="{ value }">{{ when(value) }}</template>
+                    <template #cell-completed_at="{ value }">{{ value ? when(value) : t('running…') }}</template>
+                </DataTable>
+            </Panel>
         </div>
 
         <!-- Invoice detail drawer -->
