@@ -44,8 +44,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('customer-accounts/{account}/flags/{flagCode}', [CustomerAccountController::class, 'setFlag'])->middleware('permission:customer.update');
     Route::delete('customer-accounts/{account}/flags/{flagCode}', [CustomerAccountController::class, 'clearFlag'])->middleware('permission:customer.update');
 
-    // EM-03 CVM
-    Route::get('cvm-activities', [CvmController::class, 'index'])->middleware('permission:customer.read');
-    Route::post('cvm-activities', [CvmController::class, 'store'])->middleware('permission:customer.update');
-    Route::post('cvm-activities/{cvmActivity}/decide', [CvmController::class, 'decide'])->middleware('permission:customer.update');
+    // EM-03 CVM — evaluation, signal profiles, activities, offers
+    Route::post('cvm/customers/{customerId}/evaluate', [CvmController::class, 'evaluate'])->middleware('permission:customer.update');
+    Route::get('cvm/profiles/{customerId}', [CvmController::class, 'profile'])->middleware('permission:customer.read');
+    Route::get('cvm-activities', [CvmController::class, 'activities'])->middleware('permission:customer.read');
+    Route::post('cvm-activities', [CvmController::class, 'createActivity'])->middleware(['permission:customer.update', 'idempotency']);
+    Route::post('cvm-activities/{cvmActivity}/close', [CvmController::class, 'closeActivity'])->middleware('permission:customer.update');
+    Route::post('cvm-offers', [CvmController::class, 'proposeOffer'])->middleware('permission:customer.update');
+    Route::post('cvm-offers/{cvmOffer}/accept', [CvmController::class, 'acceptOffer'])->middleware('permission:customer.update');
+    Route::post('cvm-offers/{cvmOffer}/reject', [CvmController::class, 'rejectOffer'])->middleware('permission:customer.update');
 });

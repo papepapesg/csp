@@ -70,6 +70,8 @@ class RbacSeeder extends Seeder
         'DUNNING_OPERATOR' => ['invoice.read'],
         // BIL-02-TAX-01: signed-tax-invoice cancellation requires this role (C-1 dual approval).
         'TAX_COMPLIANCE_OFFICER' => ['invoice.read', 'invoice.manage', 'tax.compliance'],
+        // EM-03 CVM commercial team: manage retention activities/offers, approve high-value offers.
+        'CVM_MANAGER' => ['customer.read', 'customer.update', 'subscription.read'],
     ];
 
     public function run(): void
