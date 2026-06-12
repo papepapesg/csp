@@ -36,4 +36,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('field-audits', [FieldAuditController::class, 'store'])->middleware('permission:workorder.assign');
     Route::get('field-audits/{fieldAudit}', [FieldAuditController::class, 'show'])->middleware('permission:workorder.read');
     Route::post('field-audits/{fieldAudit}/findings', [FieldAuditController::class, 'submitFindings'])->middleware('permission:workorder.execute');
+
+    // FA-01/02/03 campaign/task/observation/discrepancy model (the unified field-audit capability)
+    $fac = \Modules\WorkOrder\Http\Controllers\FieldAuditCampaignController::class;
+    Route::post('field-audit-campaigns', [$fac, 'createCampaign'])->middleware('permission:workorder.assign');
+    Route::get('field-audit-tasks', [$fac, 'tasks'])->middleware('permission:workorder.read');
+    Route::post('field-audit-tasks', [$fac, 'createTask'])->middleware(['permission:workorder.assign', 'idempotency']);
+    Route::get('field-audit-tasks/{fieldAuditTask}', [$fac, 'showTask'])->middleware('permission:workorder.read');
+    Route::post('field-audit-tasks/{fieldAuditTask}/observations', [$fac, 'submitObservation'])->middleware('permission:workorder.execute');
+    Route::get('field-audit-discrepancies', [$fac, 'discrepancies'])->middleware('permission:workorder.read');
+    Route::post('field-audit-discrepancies/{fieldAuditDiscrepancy}/approval-outcome', [$fac, 'approvalOutcome'])->middleware('permission:workorder.assign');
+    Route::post('field-audit-discrepancies/{fieldAuditDiscrepancy}/resolve', [$fac, 'resolveDiscrepancy'])->middleware('permission:workorder.assign');
 });

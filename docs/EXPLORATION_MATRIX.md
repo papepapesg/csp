@@ -66,7 +66,7 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 25 | Equipment instances, swap, RMA | OSR-INSTANCE / OSR-RMA-01 | `EquipmentInstanceService` state machine + swap/RMA flows; INST-2 serialized-only, INST-5 event_sequence, INST-7 contractor_id on recovery (the routing fix), INST-9 terminal active=false; named lifecycle events | Equipment* (Recovered/Bound/Unbound/Decommissioned) | `OsrApiTest`, `SwapRequestTest` | ✅ |
 | 26 | Procurement, receipt, audit, write-off | OSR-02/05 | `ProcurementService` (PO → approve → receive → OSR-01 movement + OSR-INSTANCE register for serialized, R-OSR-02-08), `InventoryAuditService` (count→variance→idempotent reconcile, R-OSR-05-09) | StockMoved | `ProcurementAuditTest` | ✅ |
 | 27 | Warehouse backoffice (added) | UI over OSR | `resources/js/Pages/Osr/Warehouse.vue` | — | UI route test | ⬜ |
-| 28 | Field audits | FA-01/02/03 | audit_type-driven process + FieldAuditPolicySeeder | Audit* | `FieldAuditTest` | ⬜ |
+| 28 | Field audits | FA-01/02/03 | Unified capability (audit_type-driven per DD MVP baseline). `FieldAuditCampaignService`: campaign→task→expected-item snapshot→observation (idempotent by offline ref)→**expected-vs-observed comparison** raising typed discrepancies (MISSING/WRONG_SERIAL/DAMAGED/FOUND_EXTRA/WRONG_LOCATION/NOT_ACCESSIBLE)→`rules.field_audit.<type>.discrepancy` severity+route→route (CREATE_TICKET/RMA_RECOVERY emit; OSR_CORRECTION/WRITE_OFF gated by EM-CFG-04)→auto-close on clean. FA never mutates OSR itself (boundary). Flat `field_audit` kept as the lightweight no-WO path | FieldAuditTaskCreated/Closed, FieldAuditDiscrepancyOpened/Routed | `FieldAuditCampaignTest` (6), `FieldAuditTest` (2) | ✅ |
 | 29 | Contractor / staff / team registry | EM-02 | `Modules/Workforce`: registry + capacity hot path — `ContractorAvailabilityService` (region-scope/skill/slot resolution R-EM-CS-1..6, atomic slot commitment R-EM-CS-6/7) | ContractorSlotCommitment* | `WorkforceApiTest` | ✅ |
 
 ### 1.5 Care, assurance & engagement
@@ -139,5 +139,6 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 2026-06-12 | #19 tax (BIL-02-TAX-01) | payment-triggered tax invoices; async signing state machine via config-driven pluggable signer; retry/give-up/validation; dual-approval cancel; Dunning channel fixed to NOT-01 routing + Dunning Program Studio (suite →379) |
 | 2026-06-12 | #33 CVM (EM-03) | full 5-table CVM (signal profile, segmentation, activities, offers w/ EM-CFG-04 approval, outcomes); rules-based segmentation; accept calls SIP-03; CUST-INT-01 interactions (suite →382) |
 | 2026-06-12 | #21 discounts (SIP-03 / DIS-OP-01) | SIP-03 assignment lifecycle (status machine, EM-CFG-04 approval, validity, history, cancel, effective-query); DIS-OP-01 compute honours status + window + stacking groups (suite →389) |
+| 2026-06-12 | #28 field audits (FA-01/02/03) | campaign→task→expected→observation→discrepancy model; expected-vs-observed comparison → typed discrepancies → Drools severity+route → EM-CFG-04-gated OSR corrections; idempotent tasks/observations (suite →394) |
 
-**Next up (suggested order): #50 USSD, #47 backoffice surfaces, #28 field audits, #35 catalog setup.**
+**Next up (suggested order): #50 USSD, #47 backoffice surfaces, #35 catalog setup, #40 RBAC.**

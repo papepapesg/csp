@@ -32,10 +32,34 @@ class FieldAuditPolicySeeder extends Seeder
             ['ruleId' => 'R-FA-KYC-002', 'when' => [['var' => 'addressMatch', 'op' => 'falsy']], 'then' => ['severity' => 'MEDIUM', 'outcome' => 'ADDRESS_DISCREPANCY']],
         ], ['severity' => 'OK', 'outcome' => 'VERIFIED'], ['identityMatch', 'addressMatch', 'kind']);
 
+        // Discrepancy routing rules (campaign/task model): discrepancyType -> {severity, routeAction}.
+        $this->deploy('rules.field_audit.equipment.discrepancy', [
+            ['ruleId' => 'R-FA-EQD-001', 'when' => [['var' => 'discrepancyType', 'op' => 'eq', 'value' => 'MISSING']], 'then' => ['severity' => 'HIGH', 'routeAction' => 'CREATE_RMA_RECOVERY']],
+            ['ruleId' => 'R-FA-EQD-002', 'when' => [['var' => 'discrepancyType', 'op' => 'eq', 'value' => 'WRONG_SERIAL']], 'then' => ['severity' => 'HIGH', 'routeAction' => 'REQUEST_OSR_CORRECTION']],
+            ['ruleId' => 'R-FA-EQD-003', 'when' => [['var' => 'discrepancyType', 'op' => 'eq', 'value' => 'DAMAGED']], 'then' => ['severity' => 'MEDIUM', 'routeAction' => 'CREATE_RMA_RECOVERY']],
+            ['ruleId' => 'R-FA-EQD-004', 'when' => [['var' => 'discrepancyType', 'op' => 'eq', 'value' => 'FOUND_EXTRA']], 'then' => ['severity' => 'MEDIUM', 'routeAction' => 'REQUEST_OSR_CORRECTION']],
+            ['ruleId' => 'R-FA-EQD-005', 'when' => [['var' => 'discrepancyType', 'op' => 'eq', 'value' => 'WRONG_LOCATION']], 'then' => ['severity' => 'MEDIUM', 'routeAction' => 'REQUEST_OSR_CORRECTION']],
+            ['ruleId' => 'R-FA-EQD-006', 'when' => [['var' => 'discrepancyType', 'op' => 'eq', 'value' => 'NOT_ACCESSIBLE']], 'then' => ['severity' => 'LOW', 'routeAction' => 'CREATE_TICKET']],
+        ], ['severity' => 'MEDIUM', 'routeAction' => 'CREATE_TICKET'], ['discrepancyType', 'auditType', 'conditionStatus']);
+
+        $this->deploy('rules.field_audit.network.discrepancy', [
+            ['ruleId' => 'R-FA-NWD-001', 'when' => [['var' => 'discrepancyType', 'op' => 'eq', 'value' => 'MISSING']], 'then' => ['severity' => 'HIGH', 'routeAction' => 'CREATE_TICKET']],
+            ['ruleId' => 'R-FA-NWD-002', 'when' => [['var' => 'discrepancyType', 'op' => 'eq', 'value' => 'DAMAGED']], 'then' => ['severity' => 'HIGH', 'routeAction' => 'CREATE_TICKET']],
+        ], ['severity' => 'MEDIUM', 'routeAction' => 'CREATE_TICKET'], ['discrepancyType', 'auditType', 'conditionStatus']);
+
+        $this->deploy('rules.field_audit.kyc.discrepancy', [
+            ['ruleId' => 'R-FA-KYD-001', 'when' => [['var' => 'discrepancyType', 'op' => 'eq', 'value' => 'WRONG_LOCATION']], 'then' => ['severity' => 'CRITICAL', 'routeAction' => 'CREATE_TICKET']],
+        ], ['severity' => 'CRITICAL', 'routeAction' => 'CREATE_TICKET'], ['discrepancyType', 'auditType', 'conditionStatus']);
+
         // Severe audits require a supervisor approval before close (EM-CFG-04).
         ApprovalDefinition::query()->updateOrCreate(
             ['operator_code' => config('sophix.default_operator', 'WIK'), 'entity_type' => 'FIELD_AUDIT', 'action' => null],
             ['definition_id' => Id::make('appd'), 'approver_roles' => ['OSR_SUPERVISOR', 'CUSTOMER_CARE_SUPERVISOR'], 'required_approvals' => 1, 'active' => true],
+        );
+        // Risky discrepancy routes (OSR correction / write-off) require approval before the OSR action.
+        ApprovalDefinition::query()->updateOrCreate(
+            ['operator_code' => config('sophix.default_operator', 'WIK'), 'entity_type' => 'FIELD_AUDIT_DISCREPANCY', 'action' => null],
+            ['definition_id' => Id::make('appd'), 'approver_roles' => ['OSR_SUPERVISOR'], 'required_approvals' => 1, 'active' => true],
         );
     }
 
