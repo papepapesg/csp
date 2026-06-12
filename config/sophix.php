@@ -130,4 +130,22 @@ return [
             'SMS' => ['start' => '07:00', 'end' => '21:00'],
         ],
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | ICN-01 Internal Communications (staff)
+    |--------------------------------------------------------------------------
+    | adapter_impl -> StaffChannelAdapter class. The string is what operators put
+    | in staff_notification_adapter_binding.adapter_impl. Adding a provider/channel
+    | = write the adapter class + add an entry here + insert a binding row.
+    */
+    'icn' => [
+        'adapter_implementations' => [
+            'smtp-classic' => \Modules\Notification\Icn\Adapters\SmtpClassicAdapter::class,
+            'microsoft-graph-mail' => \Modules\Notification\Icn\Adapters\GraphMailAdapter::class,
+            'slack-bot-api' => \Modules\Notification\Icn\Adapters\SlackBotAdapter::class,
+            'msteams-incoming-webhook' => \Modules\Notification\Icn\Adapters\TeamsWebhookAdapter::class,
+            'inapp-websocket-fanout' => \Modules\Notification\Icn\Adapters\InAppPushAdapter::class,
+        ],
+    ],
 ];

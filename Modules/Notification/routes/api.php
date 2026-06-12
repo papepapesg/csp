@@ -50,4 +50,31 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('invoice-templates', [TemplateStudioController::class, 'invoiceIndex'])->middleware('permission:notification.read');
     Route::post('invoice-templates', [TemplateStudioController::class, 'invoiceStore'])->middleware('permission:catalog.manage');
     Route::patch('invoice-templates/{invoiceTemplate}', [TemplateStudioController::class, 'invoiceUpdate'])->middleware('permission:catalog.manage');
+
+    // ICN-01 staff internal communications.
+    $icn = \Modules\Notification\Http\Controllers\Icn\StaffNotificationController::class;
+    $icnCat = \Modules\Notification\Http\Controllers\Icn\StaffCatalogController::class;
+
+    Route::post('staff-notifications', [$icn, 'dispatch'])->middleware('permission:staff_notification.dispatch');
+    Route::get('staff-notifications/inbox', [$icn, 'inbox']);                 // any authenticated staff user (own inbox)
+    Route::get('staff-notifications/stats', [$icn, 'stats'])->middleware('permission:staff_notification.manage');
+    Route::get('staff-notifications', [$icn, 'index'])->middleware('permission:staff_notification.manage');
+    Route::get('staff-notifications/{staffNotification}', [$icn, 'show'])->middleware('permission:staff_notification.manage');
+    Route::post('staff-notifications/{staffNotification}/ack', [$icn, 'ack']); // staff user acks their own
+
+    // ICN-01 catalog management
+    Route::get('staff-notification-templates', [$icnCat, 'templates'])->middleware('permission:staff_notification.manage');
+    Route::post('staff-notification-templates', [$icnCat, 'upsertTemplate'])->middleware('permission:staff_notification.manage');
+    Route::put('staff-notification-templates/{operator}/{code}/{channel}/disable', [$icnCat, 'disableTemplate'])->middleware('permission:staff_notification.manage');
+    Route::get('staff-notification-channel-config', [$icnCat, 'channelConfig'])->middleware('permission:staff_notification.manage');
+    Route::put('staff-notification-channel-config/{operator}', [$icnCat, 'putChannelConfig'])->middleware('permission:staff_notification.manage');
+    Route::get('staff-notification-adapter-bindings', [$icnCat, 'bindings'])->middleware('permission:staff_notification.manage');
+    Route::put('staff-notification-adapter-bindings/{operator}/{channel}', [$icnCat, 'putBinding'])->middleware('permission:staff_notification.manage');
+    Route::get('icn/adapter-registry', [$icnCat, 'adapterRegistry'])->middleware('permission:staff_notification.manage');
+    Route::get('staff-notification-user-pref/{userId}', [$icnCat, 'userPref']);
+    Route::put('staff-notification-user-pref/{userId}', [$icnCat, 'putUserPref']);
+    Route::get('staff-notification-user-channel-identity/{userId}', [$icnCat, 'userIdentities']);
+    Route::put('staff-notification-user-channel-identity/{userId}/{channel}', [$icnCat, 'putUserIdentity']);
+    Route::delete('staff-notification-user-channel-identity/{userId}/{channel}', [$icnCat, 'deleteUserIdentity'])->middleware('permission:staff_notification.manage');
+    Route::get('staff-groups/{group}/members', [$icnCat, 'groupMembers'])->middleware('permission:staff_notification.manage');
 });

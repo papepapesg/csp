@@ -28,6 +28,7 @@ class RbacSeeder extends Seeder
         'stock.read', 'stock.manage',
         'report.view',
         'notification.read', 'notification.send', 'notification.manage', 'notification.template.manage',
+        'staff_notification.dispatch', 'staff_notification.manage',
         'ticket.read', 'ticket.create', 'ticket.assign', 'ticket.manage',
         'franchise.manage', 'rbac.manage',
         'workforce.read', 'workforce.manage',
@@ -61,6 +62,9 @@ class RbacSeeder extends Seeder
         // NOT-01 notification operations team (FOUNDATION_AUTH roles).
         'NOTIFICATION_SENDER' => ['notification.read', 'notification.send', 'notification.manage'],
         'TEMPLATE_MANAGER' => ['notification.read', 'notification.template.manage'],
+        // ICN-01 staff comms: workflow service accounts dispatch; ops admins manage.
+        'ICN_SERVICE' => ['staff_notification.dispatch'],
+        'ICN_ADMIN' => ['staff_notification.dispatch', 'staff_notification.manage'],
     ];
 
     public function run(): void
