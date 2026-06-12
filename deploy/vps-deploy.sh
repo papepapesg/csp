@@ -10,6 +10,9 @@
 # Idempotent: re-running rebuilds and re-seeds (migrate:fresh) — safe on a disposable box.
 set -euo pipefail
 
+# Always operate from the repo root, regardless of where the script is invoked from.
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 PUBLIC_HOST="${PUBLIC_HOST:-207.180.209.83}"
 APP_PORT="${APP_PORT:-80}"
 
