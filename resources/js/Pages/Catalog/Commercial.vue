@@ -123,15 +123,15 @@ onMounted(() => { loadCampaigns(); loadBundles(); });
 
         <div class="py-6 max-w-7xl mx-auto sm:px-6 lg:px-8">
             <div class="mb-4 flex gap-2">
-                <button @click="tab = 'campaigns'" :class="tab === 'campaigns' ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Campaigns (SIP-05)') }}</button>
-                <button @click="tab = 'bundles'" :class="tab === 'bundles' ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Bundles (SIP-04)') }}</button>
+                <button @click="tab = 'campaigns'" :class="tab === 'campaigns' ? 'bg-op text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Campaigns (SIP-05)') }}</button>
+                <button @click="tab = 'bundles'" :class="tab === 'bundles' ? 'bg-op text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Bundles (SIP-04)') }}</button>
             </div>
             <div v-if="error" class="mb-3 p-2 bg-red-100 text-red-700 rounded text-sm">{{ error }}</div>
             <div v-if="notice" class="mb-3 p-2 bg-green-100 text-green-700 rounded text-sm">{{ notice }}</div>
 
             <!-- ============ CAMPAIGNS ============ -->
             <div v-if="tab === 'campaigns'">
-                <button @click="design" class="mb-3 px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('+ Design campaign') }}</button>
+                <button @click="design" class="mb-3 px-3 py-1 bg-op text-white rounded text-sm">{{ t('+ Design campaign') }}</button>
 
                 <!-- designer -->
                 <div v-if="showDesigner" class="bg-white rounded shadow p-4 mb-4 space-y-3">
@@ -166,10 +166,10 @@ onMounted(() => { loadCampaigns(); loadBundles(); });
                         <div class="text-xs font-semibold text-gray-500 mb-1">{{ t('Channels') }}</div>
                         <button v-for="c in channels" :key="c" @click="toggleChannel(c)"
                             class="px-2 py-0.5 rounded text-xs border mr-1"
-                            :class="draft.channels.includes(c) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-gray-50 text-gray-500'">{{ c }}</button>
+                            :class="draft.channels.includes(c) ? 'bg-op text-white border-op' : 'bg-gray-50 text-gray-500'">{{ c }}</button>
                     </div>
                     <div class="flex gap-2">
-                        <button @click="saveCampaign" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Save draft') }}</button>
+                        <button @click="saveCampaign" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Save draft') }}</button>
                         <button @click="showDesigner = false" class="px-3 py-1 bg-gray-200 rounded text-sm">{{ t('Cancel') }}</button>
                     </div>
                 </div>
@@ -197,7 +197,7 @@ onMounted(() => { loadCampaigns(); loadBundles(); });
                             <input v-model="eligibility.context.franchiseId" placeholder="franchiseId" class="border rounded px-1 py-0.5 text-xs" />
                             <input v-model="eligibility.context.regionCode" placeholder="regionCode" class="border rounded px-1 py-0.5 text-xs" />
                             <input v-model="eligibility.context.packageRef" placeholder="packageRef" class="border rounded px-1 py-0.5 text-xs" />
-                            <button @click="testEligibility(c)" class="px-2 py-0.5 bg-indigo-600 text-white rounded text-xs">{{ t('Check') }}</button>
+                            <button @click="testEligibility(c)" class="px-2 py-0.5 bg-op text-white rounded text-xs">{{ t('Check') }}</button>
                             <span v-if="eligibility.result" :class="eligibility.result.eligible ? 'text-green-600' : 'text-red-600'" class="text-xs font-semibold">
                                 {{ eligibility.result.eligible ? t('ELIGIBLE') : t('NOT ELIGIBLE: ') + eligibility.result.reasons.join(', ') }}
                             </span>
@@ -208,7 +208,7 @@ onMounted(() => { loadCampaigns(); loadBundles(); });
 
             <!-- ============ BUNDLES ============ -->
             <div v-else>
-                <button @click="bundleDraft = blankBundle(); showBundleDesigner = true" class="mb-3 px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('+ Compose bundle') }}</button>
+                <button @click="bundleDraft = blankBundle(); showBundleDesigner = true" class="mb-3 px-3 py-1 bg-op text-white rounded text-sm">{{ t('+ Compose bundle') }}</button>
 
                 <div v-if="showBundleDesigner" class="bg-white rounded shadow p-4 mb-4 space-y-2">
                     <div class="grid grid-cols-3 gap-2">
@@ -224,7 +224,7 @@ onMounted(() => { loadCampaigns(); loadBundles(); });
                         <input v-model="bundleDraft.franchise_id" :placeholder="t('franchiseId (blank = all)')" class="border rounded px-2 py-1 text-sm" />
                     </div>
                     <div class="flex gap-2">
-                        <button @click="saveBundle" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Save draft') }}</button>
+                        <button @click="saveBundle" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Save draft') }}</button>
                         <button @click="showBundleDesigner = false" class="px-3 py-1 bg-gray-200 rounded text-sm">{{ t('Cancel') }}</button>
                     </div>
                 </div>
@@ -235,13 +235,13 @@ onMounted(() => { loadCampaigns(); loadBundles(); });
                             <div>
                                 <span class="font-semibold">{{ b.bundle_code }}</span>
                                 <span class="ml-2 text-xs px-1.5 py-0.5 rounded"
-                                    :class="{ ACTIVE: 'bg-green-100 text-green-700', DRAFT: 'bg-gray-100 text-gray-600', READY_FOR_REVIEW: 'bg-blue-100 text-blue-700', APPROVED: 'bg-indigo-100 text-indigo-700', RETIRED: 'bg-red-100 text-red-600' }[b.status] ?? 'bg-gray-100'">{{ b.status }}</span>
+                                    :class="{ ACTIVE: 'bg-green-100 text-green-700', DRAFT: 'bg-gray-100 text-gray-600', READY_FOR_REVIEW: 'bg-blue-100 text-blue-700', APPROVED: 'bg-op-soft text-op', RETIRED: 'bg-red-100 text-red-600' }[b.status] ?? 'bg-gray-100'">{{ b.status }}</span>
                                 <span class="ml-2 text-xs text-gray-400">{{ (b.components ?? []).map((x) => x.package_ref).join(' + ') }}</span>
                             </div>
                             <div class="flex gap-1">
                                 <button v-for="a in nextActions(b.status)" :key="a" @click="bundleAction(b, a)"
                                     class="px-2 py-0.5 rounded text-xs"
-                                    :class="a === 'retire' ? 'bg-red-500 text-white' : a === 'activate' ? 'bg-green-600 text-white' : 'bg-indigo-600 text-white'">{{ a }}</button>
+                                    :class="a === 'retire' ? 'bg-red-500 text-white' : a === 'activate' ? 'bg-green-600 text-white' : 'bg-op text-white'">{{ a }}</button>
                             </div>
                         </div>
                         <div v-if="checks.open === b.bundle_id && checks.items.length" class="mt-2 bg-gray-50 rounded p-2 text-xs space-y-0.5">

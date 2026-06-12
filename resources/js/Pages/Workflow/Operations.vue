@@ -26,7 +26,7 @@ const badge = (s) => ({
     RUNNING: 'bg-blue-100 text-blue-700', COMPLETED: 'bg-green-100 text-green-700',
     FAILED: 'bg-red-100 text-red-700', INCIDENT: 'bg-red-100 text-red-700',
     CANCELLED: 'bg-gray-100 text-gray-600', CREATED: 'bg-amber-100 text-amber-700',
-    LOCKED: 'bg-indigo-100 text-indigo-700',
+    LOCKED: 'bg-op-soft text-op',
 }[s] ?? 'bg-gray-100 text-gray-600');
 
 async function loadInstances() {
@@ -140,7 +140,7 @@ onUnmounted(() => clearInterval(poll));
                                 <td class="px-3 py-2">{{ task.retries }}</td>
                                 <td class="px-3 py-2 text-xs text-red-500">{{ task.error_message }}</td>
                                 <td class="px-3 py-2">
-                                    <button v-if="task.status === 'INCIDENT' || task.status === 'FAILED'" class="rounded bg-indigo-50 px-2 py-1 text-xs text-indigo-600" @click="retry(task.task_id)">{{ t('Retry') }}</button>
+                                    <button v-if="task.status === 'INCIDENT' || task.status === 'FAILED'" class="rounded bg-op-soft px-2 py-1 text-xs text-op" @click="retry(task.task_id)">{{ t('Retry') }}</button>
                                 </td>
                             </tr>
                             <tr v-if="!tasks.length"><td colspan="6" class="px-3 py-6 text-center text-gray-400">{{ t('No active tasks or incidents.') }}</td></tr>

@@ -88,7 +88,7 @@ async function voicePlanAction(p, action) { try { await window.axios.post(`/api/
 
 const badge = (s) => ({
     ACTIVE: 'bg-green-100 text-green-700', DRAFT: 'bg-gray-100 text-gray-600', READY_FOR_REVIEW: 'bg-blue-100 text-blue-700',
-    PENDING_APPROVAL: 'bg-amber-100 text-amber-700', APPROVED: 'bg-indigo-100 text-indigo-700', SCHEDULED: 'bg-cyan-100 text-cyan-700',
+    PENDING_APPROVAL: 'bg-amber-100 text-amber-700', APPROVED: 'bg-op-soft text-op', SCHEDULED: 'bg-cyan-100 text-cyan-700',
     REJECTED: 'bg-red-100 text-red-600', SUSPENDED: 'bg-amber-100 text-amber-700', END_OF_SALE: 'bg-orange-100 text-orange-700',
     RETIRED: 'bg-red-50 text-red-500',
 }[s] ?? 'bg-gray-100 text-gray-600');
@@ -112,7 +112,7 @@ onMounted(loadTab);
 
             <div class="flex gap-2 flex-wrap">
                 <button v-for="[key, label] in tabs" :key="key" @click="selectTab(key)"
-                    :class="tab === key ? 'bg-indigo-600 text-white' : 'bg-white'"
+                    :class="tab === key ? 'bg-op text-white' : 'bg-white'"
                     class="px-3 py-1 rounded border text-sm">{{ t(label) }}</button>
             </div>
 
@@ -124,7 +124,7 @@ onMounted(loadTab);
                         <input v-model="newPackage.code" :placeholder="t('Package code')" class="border rounded px-2 py-1 text-sm" />
                         <input v-model="newPackage.name" :placeholder="t('Display name')" class="border rounded px-2 py-1 text-sm flex-1" />
                         <input v-model.number="newPackage.billing_frequency_days" type="number" :placeholder="t('Billing days')" class="border rounded px-2 py-1 text-sm w-28" />
-                        <button @click="createPackage" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Create') }}</button>
+                        <button @click="createPackage" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Create') }}</button>
                     </div>
                 </div>
 
@@ -172,7 +172,7 @@ onMounted(loadTab);
                 <div class="flex gap-2">
                     <input v-model="newService.code" :placeholder="t('Service code')" class="border rounded px-2 py-1 text-sm" />
                     <input v-model="newService.name" :placeholder="t('Service name')" class="border rounded px-2 py-1 text-sm flex-1" />
-                    <button @click="createService" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Create') }}</button>
+                    <button @click="createService" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Create') }}</button>
                 </div>
                 <div v-for="s in services" :key="s.id" class="flex justify-between text-sm border-t py-1">
                     <span class="font-mono text-xs">{{ s.code }}</span>
@@ -194,7 +194,7 @@ onMounted(loadTab);
                             <option value="BASE">{{ t('BASE') }}</option>
                             <option value="BASE_PLUS_PRIOR">{{ t('BASE_PLUS_PRIOR') }}</option>
                         </select>
-                        <button @click="createRule" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Save') }}</button>
+                        <button @click="createRule" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Save') }}</button>
                     </div>
                     <table class="w-full text-sm">
                         <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="py-1">{{ t('Code') }}</th><th>{{ t('Rate') }}</th><th>{{ t('Base') }}</th><th>{{ t('From') }}</th><th>{{ t('Until') }}</th></tr></thead>
@@ -231,7 +231,7 @@ onMounted(loadTab);
                         <option value="PREPAID_ONLY">{{ t('PREPAID_ONLY') }}</option>
                         <option value="POSTPAID_ONLY">{{ t('POSTPAID_ONLY') }}</option>
                     </select>
-                    <button @click="createWallet" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Create') }}</button>
+                    <button @click="createWallet" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Create') }}</button>
                 </div>
                 <div v-for="w in wallets" :key="w.wallet_catalog_id" class="flex justify-between items-center text-sm border-t py-1">
                     <span class="font-mono text-xs">{{ w.code }}</span>
@@ -254,7 +254,7 @@ onMounted(loadTab);
                         <option value="POSTPAID">{{ t('POSTPAID') }}</option>
                     </select>
                     <input v-model="newVoicePlan.currency_code" :placeholder="t('Currency')" class="border rounded px-2 py-1 text-sm w-20" />
-                    <button @click="createVoicePlan" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Create') }}</button>
+                    <button @click="createVoicePlan" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Create') }}</button>
                 </div>
                 <div v-for="p in voicePlans" :key="p.tariff_plan_id" class="flex justify-between items-center text-sm border-t py-1">
                     <span class="font-mono text-xs">{{ p.tariff_plan_code }}</span>

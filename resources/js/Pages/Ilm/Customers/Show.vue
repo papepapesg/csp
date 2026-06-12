@@ -152,7 +152,7 @@ onMounted(load);
                     <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('Notes') }}</div>
                     <div class="flex gap-2 mb-2">
                         <input v-model="newNote" @keyup.enter="addNote" :placeholder="t('Add a note…')" class="border rounded px-2 py-1 text-sm flex-1" />
-                        <button @click="addNote" class="px-2 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Add') }}</button>
+                        <button @click="addNote" class="px-2 py-1 bg-op text-white rounded text-sm">{{ t('Add') }}</button>
                     </div>
                     <div v-for="n in notes" :key="n.id" class="text-sm border-t py-1">
                         {{ n.body }} <span class="text-xs text-gray-400">— {{ n.created_at }}</span>

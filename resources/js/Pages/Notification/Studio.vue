@@ -97,8 +97,8 @@ onMounted(load);
 
         <div class="py-6 max-w-7xl mx-auto sm:px-6 lg:px-8">
             <div class="mb-4 flex gap-2">
-                <button @click="tab = 'notifications'" :class="tab === 'notifications' ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Notification templates') }}</button>
-                <button @click="tab = 'invoices'" :class="tab === 'invoices' ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Invoice layouts') }}</button>
+                <button @click="tab = 'notifications'" :class="tab === 'notifications' ? 'bg-op text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Notification templates') }}</button>
+                <button @click="tab = 'invoices'" :class="tab === 'invoices' ? 'bg-op text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Invoice layouts') }}</button>
             </div>
 
             <div v-if="error" class="mb-3 p-2 bg-red-100 text-red-700 rounded text-sm">{{ error }}</div>
@@ -108,13 +108,13 @@ onMounted(load);
             <div v-if="tab === 'notifications'" class="grid grid-cols-12 gap-4">
                 <!-- list: purpose -> formats -> versions -->
                 <div class="col-span-3 bg-white rounded shadow p-3">
-                    <button @click="create" class="w-full mb-3 px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('+ New template') }}</button>
+                    <button @click="create" class="w-full mb-3 px-3 py-1 bg-op text-white rounded text-sm">{{ t('+ New template') }}</button>
                     <div v-for="(byFormat, purpose) in grouped" :key="purpose" class="mb-3">
                         <div class="text-xs font-semibold text-gray-500">{{ purpose }}</div>
                         <template v-for="(versions, fmt) in byFormat" :key="fmt">
                             <button v-for="t in versions" :key="t.id" @click="open(t)"
                                 class="block w-full text-left px-2 py-1 rounded text-sm hover:bg-gray-100"
-                                :class="current && current.id === t.id ? 'bg-indigo-50' : ''">
+                                :class="current && current.id === t.id ? 'bg-op-soft' : ''">
                                 <span class="inline-block px-1.5 rounded text-xs bg-gray-200">{{ fmt }}</span>
                                 <span class="text-xs text-gray-400">{{ t.locale }} v{{ t.version }}</span>
                                 <span class="ml-1" :class="t.status === 'ACTIVE' ? 'text-green-600' : (t.status === 'DISABLED' ? 'text-red-400' : 'text-gray-400')">●</span>
@@ -136,7 +136,7 @@ onMounted(load);
                     <textarea v-model="current.template_payload" rows="9" :placeholder="isPdf ? t('HTML source — rendered to PDF') : t('Body — use {{ variable }} placeholders')"
                         class="border rounded px-2 py-1 text-sm w-full font-mono"></textarea>
                     <div class="flex gap-2">
-                        <button @click="save" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Save draft') }}</button>
+                        <button @click="save" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Save draft') }}</button>
                         <button @click="activate" :disabled="!current.id" class="px-3 py-1 bg-green-600 text-white rounded text-sm disabled:opacity-40">{{ t('Publish') }}</button>
                         <button @click="deactivate" :disabled="current.status !== 'ACTIVE'" class="px-3 py-1 bg-red-600 text-white rounded text-sm disabled:opacity-40">{{ t('Disable') }}</button>
                         <span class="text-xs self-center" :class="current.status === 'ACTIVE' ? 'text-green-600' : 'text-gray-400'">{{ current.status }}</span>

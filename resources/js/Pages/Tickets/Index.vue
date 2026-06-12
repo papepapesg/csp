@@ -25,7 +25,7 @@ const flash = (e) => { error.value = e.response?.data?.message ?? t('Request fai
 
 const isOverdue = (t) => t.sla_due_at && !['RESOLVED', 'CLOSED', 'CANCELLED'].includes(t.status) && new Date(t.sla_due_at) < new Date();
 const visible = computed(() => (filter.value.overdueOnly ? tickets.value.filter(isOverdue) : tickets.value));
-const statusChip = (s) => ({ OPEN: 'bg-blue-100 text-blue-700', ASSIGNED: 'bg-indigo-100 text-indigo-700', WAITING_WORK_ORDER: 'bg-amber-100 text-amber-700', WAITING_CUSTOMER: 'bg-amber-100 text-amber-700', WAITING_INTERNAL: 'bg-amber-100 text-amber-700', UNDER_REVIEW: 'bg-purple-100 text-purple-700', RESOLVED: 'bg-green-100 text-green-700', CLOSED: 'bg-gray-200 text-gray-600', CANCELLED: 'bg-red-100 text-red-600' }[s] ?? 'bg-gray-100');
+const statusChip = (s) => ({ OPEN: 'bg-blue-100 text-blue-700', ASSIGNED: 'bg-op-soft text-op', WAITING_WORK_ORDER: 'bg-amber-100 text-amber-700', WAITING_CUSTOMER: 'bg-amber-100 text-amber-700', WAITING_INTERNAL: 'bg-amber-100 text-amber-700', UNDER_REVIEW: 'bg-purple-100 text-purple-700', RESOLVED: 'bg-green-100 text-green-700', CLOSED: 'bg-gray-200 text-gray-600', CANCELLED: 'bg-red-100 text-red-600' }[s] ?? 'bg-gray-100');
 
 async function load() {
     const { data } = await window.axios.get('/api/tickets', {
@@ -75,20 +75,20 @@ onMounted(load);
                 </select>
                 <input v-model="filter.queue" @keyup.enter="load" :placeholder="t('queue')" class="border rounded px-2 py-1 text-sm w-36" />
                 <label class="text-sm"><input type="checkbox" v-model="filter.overdueOnly" /> {{ t('SLA overdue only') }}</label>
-                <button @click="showCreate = !showCreate" class="ml-auto px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('+ New ticket') }}</button>
+                <button @click="showCreate = !showCreate" class="ml-auto px-3 py-1 bg-op text-white rounded text-sm">{{ t('+ New ticket') }}</button>
             </div>
 
             <div v-if="showCreate" class="bg-white rounded shadow p-3 mb-3 grid grid-cols-5 gap-2">
                 <input v-model="createForm.subject" :placeholder="t('Subject')" class="border rounded px-2 py-1 text-sm col-span-2" />
                 <input v-model="createForm.category" :placeholder="t('Category (catalog)')" class="border rounded px-2 py-1 text-sm" />
                 <input v-model="createForm.customer_id" :placeholder="t('customer id')" class="border rounded px-2 py-1 text-sm" />
-                <button @click="createTicket" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Create') }}</button>
+                <button @click="createTicket" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Create') }}</button>
             </div>
 
             <div class="grid grid-cols-12 gap-4">
                 <div class="col-span-5 bg-white rounded shadow divide-y max-h-[40rem] overflow-auto">
                     <div v-for="t in visible" :key="t.ticket_id" @click="open(t)"
-                        class="p-2.5 cursor-pointer hover:bg-indigo-50" :class="current?.ticket_id === t.ticket_id ? 'bg-indigo-50' : ''">
+                        class="p-2.5 cursor-pointer hover:bg-op-soft" :class="current?.ticket_id === t.ticket_id ? 'bg-op-soft' : ''">
                         <div class="flex items-center gap-2">
                             <span class="text-xs px-1.5 py-0.5 rounded" :class="statusChip(t.status)">{{ t.status }}</span>
                             <span class="font-medium text-sm truncate flex-1">{{ t.subject }}</span>
@@ -119,7 +119,7 @@ onMounted(load);
 
                     <div class="flex flex-wrap gap-1 items-center border-y py-2">
                         <input v-model="assignee" :placeholder="t('assignee id')" class="border rounded px-1.5 py-0.5 text-xs w-28" />
-                        <button @click="act('assign', { assignee_id: assignee })" class="px-2 py-0.5 bg-indigo-600 text-white rounded text-xs">{{ t('Assign') }}</button>
+                        <button @click="act('assign', { assignee_id: assignee })" class="px-2 py-0.5 bg-op text-white rounded text-xs">{{ t('Assign') }}</button>
                         <button @click="act('work-orders', { tech_region_id: 'KE-NRB' })" class="px-2 py-0.5 bg-amber-500 text-white rounded text-xs">{{ t('Create WO') }}</button>
                         <input v-model="resolveForm.resolution_code" class="border rounded px-1.5 py-0.5 text-xs w-40" />
                         <button @click="act('resolve', resolveForm)" class="px-2 py-0.5 bg-green-600 text-white rounded text-xs">{{ t('Resolve') }}</button>
@@ -135,7 +135,7 @@ onMounted(load);
                                 <option>INTERNAL</option><option>CUSTOMER_VISIBLE</option>
                             </select>
                             <input v-model="comment.body" @keyup.enter="addComment" :placeholder="t('Add comment…')" class="border rounded px-2 py-1 text-sm flex-1" />
-                            <button @click="addComment" class="px-2 py-1 bg-indigo-600 text-white rounded text-xs">{{ t('Post') }}</button>
+                            <button @click="addComment" class="px-2 py-1 bg-op text-white rounded text-xs">{{ t('Post') }}</button>
                         </div>
                         <div v-for="c in current.comments ?? []" :key="c.id" class="text-sm border-t py-1">
                             <span class="text-xs px-1 rounded" :class="c.visibility === 'CUSTOMER_VISIBLE' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'">{{ c.visibility ?? 'INTERNAL' }}</span>
@@ -146,7 +146,7 @@ onMounted(load);
 
                     <div>
                         <div class="text-xs font-semibold text-gray-500 uppercase mb-1">{{ t('Timeline') }}</div>
-                        <div class="border-l-2 border-indigo-100 pl-3 space-y-1">
+                        <div class="border-l-2 border-op pl-3 space-y-1">
                             <div v-for="e in current.timeline ?? []" :key="e.id" class="text-xs">
                                 <span class="text-gray-400">{{ e.created_at }}</span>
                                 <span class="font-semibold ml-1">{{ e.event_type }}</span>

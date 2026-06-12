@@ -96,7 +96,7 @@ onMounted(load);
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100">
-                            <tr v-for="c in customers" :key="c.customerId" class="cursor-pointer hover:bg-indigo-50" @click="router.visit(`/customers/${c.customerId}`)">
+                            <tr v-for="c in customers" :key="c.customerId" class="cursor-pointer hover:bg-op-soft" @click="router.visit(`/customers/${c.customerId}`)">
                                 <td class="px-4 py-2 font-mono text-xs">{{ c.customerId }}</td>
                                 <td class="px-4 py-2">{{ c.name }}</td>
                                 <td class="px-4 py-2">{{ c.type }}</td>

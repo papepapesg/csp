@@ -31,6 +31,14 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/admin/rbac', fn () => Inertia::render('Rbac/Admin'))->name('rbac.admin');
     Route::get('/commercial/studio', fn () => Inertia::render('Catalog/Commercial'))->name('commercial.studio');
     Route::get('/catalog/setup', fn () => Inertia::render('Catalog/Setup'))->name('catalog.setup');
+    // FE-APP-01 operational surfaces (data client-side from each owning module's API).
+    Route::get('/subscriptions', fn () => Inertia::render('Subscriptions/Index'))->name('subscriptions.index');
+    Route::get('/billing', fn () => Inertia::render('Billing/Console'))->name('billing.console');
+    Route::get('/fulfillment', fn () => Inertia::render('Fulfillment/Console'))->name('fulfillment.console');
+    Route::get('/work-orders', fn () => Inertia::render('WorkOrders/Console'))->name('workorders.console');
+    Route::get('/workforce', fn () => Inertia::render('Workforce/Console'))->name('workforce.console');
+    Route::get('/equipment', fn () => Inertia::render('Osr/Equipment'))->name('equipment.console');
+    Route::get('/admin', fn () => Inertia::render('Admin/Console'))->name('admin.console');
     Route::get('/dunning/studio', fn () => Inertia::render('Billing/DunningStudio'))->name('dunning.studio');
     Route::get('/workflow/ops', fn () => Inertia::render('Workflow/Operations'))->name('workflow.ops');
     Route::get('/itops', fn () => Inertia::render('ItOps/Console'))->name('itops.console');

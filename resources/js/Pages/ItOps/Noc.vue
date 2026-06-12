@@ -50,7 +50,7 @@ async function restart(s) {
     await loadOverview();
 }
 
-const sourceColor = (s) => ({ EVENT: 'bg-blue-100 text-blue-700', WORKFLOW: 'bg-indigo-100 text-indigo-700', TASK: 'bg-purple-100 text-purple-700', PROVISIONING: 'bg-amber-100 text-amber-700', NOTIFICATION: 'bg-green-100 text-green-700', LOG: 'bg-gray-100 text-gray-600' }[s] ?? 'bg-gray-100');
+const sourceColor = (s) => ({ EVENT: 'bg-blue-100 text-blue-700', WORKFLOW: 'bg-op-soft text-op', TASK: 'bg-purple-100 text-purple-700', PROVISIONING: 'bg-amber-100 text-amber-700', NOTIFICATION: 'bg-green-100 text-green-700', LOG: 'bg-gray-100 text-gray-600' }[s] ?? 'bg-gray-100');
 
 onMounted(() => { loadOverview(); loadLogs(); loadSla(); timer = setInterval(loadOverview, 15000); });
 onUnmounted(() => clearInterval(timer));
@@ -64,11 +64,11 @@ onUnmounted(() => clearInterval(timer));
         <div class="py-6 max-w-7xl mx-auto sm:px-6 lg:px-8">
             <div class="mb-4 flex gap-2 items-center">
                 <button v-for="tb in ['overview', 'trace', 'logs', 'sla']" :key="tb" @click="tab = tb; tb === 'logs' && loadLogs(); tb === 'sla' && loadSla()"
-                    :class="tab === tb ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm capitalize">{{ t(tb) }}</button>
+                    :class="tab === tb ? 'bg-op text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm capitalize">{{ t(tb) }}</button>
                 <div class="ml-auto flex gap-1">
                     <input v-model="trace.key" @keyup.enter="runTrace()" :placeholder="t('Trace: sub_…, ford_…, op_…, correlation id')"
                         class="border rounded px-2 py-1 text-sm w-72" />
-                    <button @click="runTrace()" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Trace') }}</button>
+                    <button @click="runTrace()" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Trace') }}</button>
                 </div>
             </div>
 
@@ -113,7 +113,7 @@ onUnmounted(() => clearInterval(timer));
                         <span class="text-xs text-gray-400 ml-2">{{ t('correlations:') }} {{ trace.result.correlationIds.join(', ') }}</span>
                         <span class="text-xs text-gray-400 ml-2">{{ trace.result.timeline.length }} {{ t('steps') }}</span>
                     </div>
-                    <div class="border-l-2 border-indigo-200 pl-4 space-y-1.5">
+                    <div class="border-l-2 border-op pl-4 space-y-1.5">
                         <div v-for="(step, i) in trace.result.timeline" :key="i" class="text-sm flex gap-2 items-baseline">
                             <span class="text-xs text-gray-400 w-40 shrink-0">{{ step.at }}</span>
                             <span class="px-1.5 py-0.5 rounded text-xs shrink-0" :class="sourceColor(step.source)">{{ step.source }}</span>
@@ -137,7 +137,7 @@ onUnmounted(() => clearInterval(timer));
                         <span class="text-gray-400 w-40 shrink-0">{{ l.logged_at }}</span>
                         <span class="w-14 shrink-0 font-semibold" :class="{ error: 'text-red-600', critical: 'text-red-700', warning: 'text-amber-600' }[l.level] ?? 'text-gray-500'">{{ l.level }}</span>
                         <span class="flex-1">{{ l.message }}</span>
-                        <button v-if="l.correlation_id" @click="runTrace(l.correlation_id)" class="text-indigo-500 underline shrink-0">{{ t('trace') }}</button>
+                        <button v-if="l.correlation_id" @click="runTrace(l.correlation_id)" class="text-op underline shrink-0">{{ t('trace') }}</button>
                     </div>
                 </div>
             </div>
@@ -155,7 +155,7 @@ onUnmounted(() => clearInterval(timer));
                             <td>{{ row.status }}</td>
                             <td class="text-xs">{{ row.queue ?? '—' }}</td>
                             <td class="text-xs text-red-600">{{ row.sla_due_at }}</td>
-                            <td><button @click="runTrace(row.ticket_id)" class="text-indigo-500 underline text-xs">{{ t('trace') }}</button></td>
+                            <td><button @click="runTrace(row.ticket_id)" class="text-op underline text-xs">{{ t('trace') }}</button></td>
                         </tr>
                     </tbody>
                 </table>

@@ -101,9 +101,9 @@ onMounted(() => { load(); searchUsers(); loadAudit(); });
 
         <div class="py-6 max-w-7xl mx-auto sm:px-6 lg:px-8">
             <div class="mb-4 flex gap-2">
-                <button @click="tab = 'matrix'" :class="tab === 'matrix' ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Role ⇄ permission matrix') }}</button>
-                <button @click="tab = 'users'; searchUsers()" :class="tab === 'users' ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('User assignments') }}</button>
-                <button @click="tab = 'audit'; loadAudit()" :class="tab === 'audit' ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Change audit') }}</button>
+                <button @click="tab = 'matrix'" :class="tab === 'matrix' ? 'bg-op text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Role ⇄ permission matrix') }}</button>
+                <button @click="tab = 'users'; searchUsers()" :class="tab === 'users' ? 'bg-op text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('User assignments') }}</button>
+                <button @click="tab = 'audit'; loadAudit()" :class="tab === 'audit' ? 'bg-op text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Change audit') }}</button>
             </div>
 
             <div v-if="error" class="mb-3 p-2 bg-red-100 text-red-700 rounded text-sm">{{ error }}</div>
@@ -114,11 +114,11 @@ onMounted(() => { load(); searchUsers(); loadAudit(); });
                 <div class="col-span-3 bg-white rounded shadow p-3">
                     <div class="flex gap-1 mb-3">
                         <input v-model="newRole" placeholder="NEW_ROLE" class="border rounded px-2 py-1 text-sm w-full" />
-                        <button @click="createRole" class="px-2 bg-indigo-600 text-white rounded text-sm">+</button>
+                        <button @click="createRole" class="px-2 bg-op text-white rounded text-sm">+</button>
                     </div>
                     <button v-for="r in roles" :key="r.code" @click="openRole(r)"
                         class="block w-full text-left px-2 py-1 rounded text-sm hover:bg-gray-100"
-                        :class="currentRole && currentRole.code === r.code ? 'bg-indigo-50 font-semibold' : ''">
+                        :class="currentRole && currentRole.code === r.code ? 'bg-op-soft font-semibold' : ''">
                         {{ r.code }} <span class="text-xs text-gray-400">({{ r.permissions.length }})</span>
                     </button>
                 </div>
@@ -129,7 +129,7 @@ onMounted(() => { load(); searchUsers(); loadAudit(); });
                         <div class="flex gap-2">
                             <input v-model="newPermission" placeholder="module.action" class="border rounded px-2 py-1 text-sm" />
                             <button @click="createPermission" class="px-2 py-1 bg-gray-200 rounded text-sm">{{ t('+ permission') }}</button>
-                            <button @click="saveMatrix" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Save matrix') }}</button>
+                            <button @click="saveMatrix" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Save matrix') }}</button>
                         </div>
                     </div>
                     <div v-for="(perms, group) in permissionGroups" :key="group" class="mb-3">
@@ -151,19 +151,19 @@ onMounted(() => { load(); searchUsers(); loadAudit(); });
                     <input v-model="userQuery" @keyup.enter="searchUsers" :placeholder="t('Search name / email…')" class="border rounded px-2 py-1 text-sm w-full mb-2" />
                     <div v-for="u in users" :key="u.uid" @click="openUser(u)"
                         class="px-2 py-1 rounded text-sm hover:bg-gray-100 cursor-pointer"
-                        :class="selectedUser && selectedUser.uid === u.uid ? 'bg-indigo-50' : ''">
+                        :class="selectedUser && selectedUser.uid === u.uid ? 'bg-op-soft' : ''">
                         {{ u.name }} <span class="text-xs text-gray-400">{{ u.roles.join(', ') || '—' }}</span>
                     </div>
                 </div>
                 <div v-if="selectedUser" class="col-span-8 bg-white rounded shadow p-4">
                     <div class="flex justify-between items-center mb-3">
                         <div class="font-semibold">{{ selectedUser.name }} <span class="text-xs text-gray-400">{{ selectedUser.email }} · {{ selectedUser.operatorCode }}</span></div>
-                        <button @click="saveUserRoles" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Save roles') }}</button>
+                        <button @click="saveUserRoles" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Save roles') }}</button>
                     </div>
                     <div class="flex flex-wrap gap-1 mb-4">
                         <button v-for="r in roles" :key="r.code" @click="toggleUserRole(r.code)"
                             class="px-2 py-0.5 rounded text-xs border"
-                            :class="selectedUser.roles.includes(r.code) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-gray-50 text-gray-500'">
+                            :class="selectedUser.roles.includes(r.code) ? 'bg-op text-white border-op' : 'bg-gray-50 text-gray-500'">
                             {{ r.code }}
                         </button>
                     </div>

@@ -24,6 +24,7 @@ use Illuminate\Support\Facades\Route;
 // --- Platform / foundation ---
 Route::get('/health', [PlatformController::class, 'health']);
 Route::get('/platform/config', [PlatformController::class, 'runtimeConfig']);
+Route::middleware('auth:sanctum')->get('/dashboard/summary', [\App\Http\Controllers\DashboardController::class, 'summary']);
 
 // --- Mobile token auth (FE-APP-02/03 PWAs) ---
 Route::post('/auth/token', [AuthTokenController::class, 'token']);

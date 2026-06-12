@@ -72,7 +72,7 @@ onUnmounted(() => clearInterval(poll));
                                 <span class="rounded-full px-2 py-0.5 text-xs" :class="badge(s.status)">{{ s.status }}</span>
                             </div>
                             <div class="mt-1 text-xs text-gray-400">{{ t('seen') }} {{ s.lastSeenAt?.substring(11,19) || '—' }}</div>
-                            <button class="mt-2 w-full rounded bg-indigo-50 px-2 py-1 text-xs text-indigo-700" @click="restart(s.service)">{{ t('Restart') }}</button>
+                            <button class="mt-2 w-full rounded bg-op-soft px-2 py-1 text-xs text-op" @click="restart(s.service)">{{ t('Restart') }}</button>
                         </div>
                         <div v-if="!services.length" class="col-span-full rounded-lg bg-white p-4 text-sm text-gray-400 shadow-sm">
                             {{ t('No heartbeats yet. Start a worker:') }} <code>php artisan sophix:workflow:work</code>
@@ -103,7 +103,7 @@ onUnmounted(() => clearInterval(poll));
                             <span class="ml-2 uppercase" :class="levelClass(l.level)">{{ l.level }}</span>
                             <span class="ml-2 text-gray-400">[{{ l.channel }}]</span>
                             <span class="ml-2">{{ l.message }}</span>
-                            <span v-if="l.correlation_id" class="ml-2 text-indigo-300">{{ l.correlation_id }}</span>
+                            <span v-if="l.correlation_id" class="ml-2 text-op">{{ l.correlation_id }}</span>
                         </div>
                         <div v-if="!logs.length" class="text-gray-500">{{ t('No log entries match.') }}</div>
                     </div>

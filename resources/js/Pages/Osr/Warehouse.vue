@@ -75,7 +75,7 @@ onMounted(() => { loadStock(); loadPos(); loadEquipment(); loadSwaps(); });
         <div class="py-6 max-w-7xl mx-auto sm:px-6 lg:px-8">
             <div class="mb-4 flex gap-2">
                 <button v-for="tb in [['stock', 'Stock chain'], ['pos', 'Purchase orders'], ['equipment', 'Equipment'], ['swaps', 'Swaps / RMA']]" :key="tb[0]"
-                    @click="tab = tb[0]" :class="tab === tb[0] ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t(tb[1]) }}</button>
+                    @click="tab = tb[0]" :class="tab === tb[0] ? 'bg-op text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t(tb[1]) }}</button>
             </div>
             <div v-if="error" class="mb-3 p-2 bg-red-100 text-red-700 rounded text-sm">{{ error }}</div>
             <div v-if="notice" class="mb-3 p-2 bg-green-100 text-green-700 rounded text-sm">{{ notice }}</div>
@@ -116,7 +116,7 @@ onMounted(() => { loadStock(); loadPos(); loadEquipment(); loadSwaps(); });
                         </select>
                     </div>
                     <input v-model="move.reference" :placeholder="t('reference (WO / PO …)')" class="border rounded px-2 py-1 text-sm w-full" />
-                    <button @click="postMove" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm w-full">{{ t('Post movement') }}</button>
+                    <button @click="postMove" class="px-3 py-1 bg-op text-white rounded text-sm w-full">{{ t('Post movement') }}</button>
                     <p class="text-xs text-gray-400">{{ t('Signed qty: + inbound, − outbound. Reservations are driven by work orders automatically.') }}</p>
                 </div>
             </div>
@@ -130,7 +130,7 @@ onMounted(() => { loadStock(); loadPos(); loadEquipment(); loadSwaps(); });
                         <span class="ml-2 text-xs text-gray-400">{{ po.vendor_name ?? po.vendor ?? '' }}</span>
                     </div>
                     <div class="flex gap-1">
-                        <button v-if="['DRAFT', 'PENDING_APPROVAL', 'PENDING'].includes(po.status)" @click="poAction(po, 'approve')" class="px-2 py-0.5 bg-indigo-600 text-white rounded text-xs">{{ t('Approve') }}</button>
+                        <button v-if="['DRAFT', 'PENDING_APPROVAL', 'PENDING'].includes(po.status)" @click="poAction(po, 'approve')" class="px-2 py-0.5 bg-op text-white rounded text-xs">{{ t('Approve') }}</button>
                         <button v-if="po.status === 'APPROVED'" @click="poAction(po, 'receive')" class="px-2 py-0.5 bg-green-600 text-white rounded text-xs">{{ t('Receive') }}</button>
                     </div>
                 </div>

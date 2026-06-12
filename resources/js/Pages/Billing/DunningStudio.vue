@@ -100,12 +100,12 @@ onMounted(load);
             <div class="grid grid-cols-12 gap-4">
                 <!-- program list -->
                 <div class="col-span-3 bg-white rounded shadow p-3">
-                    <button @click="blankProgram" class="w-full mb-3 px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('+ New program') }}</button>
+                    <button @click="blankProgram" class="w-full mb-3 px-3 py-1 bg-op text-white rounded text-sm">{{ t('+ New program') }}</button>
                     <div v-for="(versions, code) in grouped" :key="code" class="mb-3">
                         <div class="text-xs font-semibold text-gray-500">{{ code }}</div>
                         <button v-for="p in versions" :key="p.id" @click="open(p)"
                             class="block w-full text-left px-2 py-1 rounded text-sm hover:bg-gray-100"
-                            :class="current && current.code === p.code && current.version === p.version ? 'bg-indigo-50' : ''">
+                            :class="current && current.code === p.code && current.version === p.version ? 'bg-op-soft' : ''">
                             <span class="text-xs">{{ p.operator_code }} · {{ p.billing_mode }}</span>
                             <span class="text-xs text-gray-400">v{{ p.version }}</span>
                             <span class="ml-1" :class="isActive(p) ? 'text-green-600' : 'text-gray-300'">●</span>

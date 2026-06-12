@@ -41,7 +41,13 @@ class HandleInertiaRequests extends Middleware
                 ->resources(app()->getLocale(), $request->user()?->operator_code),
             'auth' => [
                 'user' => $request->user(),
+                // UI-convenience role/permission lists for nav + action gating (never security;
+                // the API permission middleware remains the real enforcement — FE-APP-01 §4).
+                'roles' => fn () => $request->user()?->getRoleNames()->all() ?? [],
+                'permissions' => fn () => $request->user()?->getAllPermissions()->pluck('name')->all() ?? [],
             ],
+            // Deployment environment marker (visible in non-prod, hidden in prod — FE-APP-01 §6).
+            'appEnv' => fn () => app()->environment(),
         ];
     }
 }

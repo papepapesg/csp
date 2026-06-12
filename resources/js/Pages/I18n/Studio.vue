@@ -123,7 +123,7 @@ onMounted(async () => { await loadMeta(); await load(); });
                     <div class="flex gap-1">
                         <button v-for="l in locales.filter((x) => x !== 'en')" :key="l" @click="switchLocale(l)"
                             class="px-2 py-1 rounded text-sm border"
-                            :class="locale === l ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600'">{{ l }}</button>
+                            :class="locale === l ? 'bg-op text-white border-op' : 'bg-white text-gray-600'">{{ l }}</button>
                     </div>
                 </div>
                 <div>
@@ -159,7 +159,7 @@ onMounted(async () => { await loadMeta(); await load(); });
                     <input v-model="search" @keyup.enter="load" placeholder="key or value…" class="border rounded px-2 py-1 text-sm w-full" />
                 </div>
                 <button @click="load" class="px-3 py-1.5 bg-gray-700 text-white rounded text-sm">{{ t('Search') }}</button>
-                <button @click="saveDirty" class="px-3 py-1.5 bg-indigo-600 text-white rounded text-sm">{{ t('Save') }} ✓</button>
+                <button @click="saveDirty" class="px-3 py-1.5 bg-op text-white rounded text-sm">{{ t('Save') }} ✓</button>
             </div>
 
             <!-- Resource table -->
@@ -183,7 +183,7 @@ onMounted(async () => { await loadMeta(); await load(); });
                             </td>
                             <td>
                                 <span class="text-xs px-1.5 py-0.5 rounded"
-                                    :class="r.operator_code === '*' ? 'bg-gray-100 text-gray-600' : 'bg-indigo-50 text-indigo-700 font-semibold'">
+                                    :class="r.operator_code === '*' ? 'bg-gray-100 text-gray-600' : 'bg-op-soft text-op font-semibold'">
                                     {{ r.operator_code === '*' ? 'global' : r.operator_code }}
                                 </span>
                             </td>
@@ -207,7 +207,7 @@ onMounted(async () => { await loadMeta(); await load(); });
                         </div>
                         <input v-model="draft.key" placeholder="key — the en source text" class="border rounded px-2 py-1 text-sm w-full" />
                         <input v-model="draft.value" :placeholder="`${locale} translation`" class="border rounded px-2 py-1 text-sm w-full" @keyup.enter="addRow()" />
-                        <button @click="addRow()" class="px-3 py-1.5 bg-indigo-600 text-white rounded text-sm">{{ t('Create') }}</button>
+                        <button @click="addRow()" class="px-3 py-1.5 bg-op text-white rounded text-sm">{{ t('Create') }}</button>
                     </div>
                 </div>
                 <div class="col-span-7 bg-white rounded shadow p-4">
@@ -221,7 +221,7 @@ onMounted(async () => { await loadMeta(); await load(); });
                             <span class="font-mono text-xs flex-1 truncate">{{ m.key }}</span>
                             <span class="text-xs text-gray-400 truncate max-w-40">{{ m.locale }}: {{ m.value }}</span>
                             <button @click="draft = { domain: m.domain, section: m.section, key: m.key, value: '' }"
-                                class="text-xs text-indigo-600 hover:underline">translate</button>
+                                class="text-xs text-op hover:underline">translate</button>
                         </div>
                         <div v-if="!missingKeys.length" class="text-sm text-gray-400">Nothing missing — this culture covers every key.</div>
                     </div>

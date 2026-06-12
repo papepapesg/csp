@@ -141,16 +141,16 @@ onMounted(load);
                                     <input v-model="c.value" :placeholder="t('value')" class="w-24 rounded border-gray-300 text-xs" />
                                     <button class="px-1 text-red-400" @click="removeCond(rule, ci)">×</button>
                                 </div>
-                                <button class="text-xs text-indigo-600" @click="addCond(rule)">{{ t('+ condition') }}</button>
+                                <button class="text-xs text-op" @click="addCond(rule)">{{ t('+ condition') }}</button>
                                 <div class="mt-1 text-xs text-gray-500">{{ t('THEN (output JSON)') }}</div>
                                 <input v-model="rule.thenJson" class="w-full rounded border-gray-300 font-mono text-xs" />
                             </div>
-                            <button class="mt-2 text-sm text-indigo-600" @click="addRule">{{ t('+ rule') }}</button>
+                            <button class="mt-2 text-sm text-op" @click="addRule">{{ t('+ rule') }}</button>
 
                             <div class="mt-3 text-xs text-gray-500">{{ t('Default output (no rule matched)') }}</div>
                             <input v-model="current.defaultJson" class="w-full rounded border-gray-300 font-mono text-xs" />
 
-                            <button class="mt-3 w-full rounded bg-indigo-600 py-2 text-sm font-semibold text-white" @click="save">{{ current.table_id ? t('Save table') : t('Deploy new table') }}</button>
+                            <button class="mt-3 w-full rounded bg-op py-2 text-sm font-semibold text-white" @click="save">{{ current.table_id ? t('Save table') : t('Deploy new table') }}</button>
                         </div>
                         <p v-else class="text-sm text-gray-400">{{ t('Select or create a decision table.') }}</p>
                     </div>

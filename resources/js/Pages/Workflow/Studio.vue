@@ -178,7 +178,7 @@ onMounted(loadLists);
                             <button class="rounded border px-2 py-1" @click="addNode('exclusiveGateway','Gateway')">{{ t('+ Gateway') }}</button>
                             <button class="rounded border px-2 py-1" @click="addNode('endEvent','End')">{{ t('+ End') }}</button>
                             <button class="rounded bg-gray-800 px-3 py-1 text-white" @click="saveDraft">{{ t('Save draft') }}</button>
-                            <button class="rounded bg-indigo-600 px-3 py-1 text-white" @click="deploy">{{ t('Deploy') }}</button>
+                            <button class="rounded bg-op px-3 py-1 text-white" @click="deploy">{{ t('Deploy') }}</button>
                         </div>
                         <VueFlow v-model:nodes="nodes" v-model:edges="edges" fit-view-on-init
                                  @node-click="onNodeClick" class="wf-canvas">
@@ -192,7 +192,7 @@ onMounted(loadLists);
                         <div class="rounded-lg bg-white p-3 shadow-sm">
                             <h3 class="mb-2 text-xs font-semibold uppercase text-gray-500">{{ t('Toolbox (steps)') }}</h3>
                             <button v-for="s in palette.steps" :key="s.topic"
-                                    class="mb-1 w-full truncate rounded border px-2 py-1 text-left text-xs hover:bg-indigo-50"
+                                    class="mb-1 w-full truncate rounded border px-2 py-1 text-left text-xs hover:bg-op-soft"
                                     :title="s.topic" @click="addStep(s.topic, s.label)">+ {{ s.label }}</button>
                             <p v-if="!palette.steps.length" class="text-xs text-gray-400">{{ t('No steps registered.') }}</p>
                         </div>
