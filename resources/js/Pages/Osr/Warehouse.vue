@@ -2,6 +2,9 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import { Head } from '@inertiajs/vue3';
 import { ref, onMounted } from 'vue';
+import { useI18n } from '@/i18n';
+
+const { t } = useI18n();
 
 // Warehouse backoffice (OSR-01/02/05 + OSR-INSTANCE/RMA). The services were already
 // there — stock chain with reservations, procurement with approval, counts,
@@ -9,7 +12,7 @@ import { ref, onMounted } from 'vue';
 const tab = ref('stock'); // stock | pos | equipment | swaps
 const error = ref(null);
 const notice = ref(null);
-const flash = (e) => { error.value = e.response?.data?.message ?? 'Request failed'; setTimeout(() => (error.value = null), 6000); };
+const flash = (e) => { error.value = e.response?.data?.message ?? t('Request failed'); setTimeout(() => (error.value = null), 6000); };
 
 const locations = ref([]);
 const balances = ref([]);
@@ -29,7 +32,7 @@ async function loadStock() {
 async function postMove() {
     try {
         await window.axios.post('/api/stock-movements', { ...move.value, quantity: Number(move.value.quantity) }, { headers: { 'Idempotency-Key': `mv-${Date.now()}` } });
-        notice.value = 'Movement recorded'; await loadStock();
+        notice.value = t('Movement recorded'); await loadStock();
     } catch (e) { flash(e); }
 }
 async function loadPos() {
@@ -65,14 +68,14 @@ onMounted(() => { loadStock(); loadPos(); loadEquipment(); loadSwaps(); });
 </script>
 
 <template>
-    <Head title="Warehouse" />
+    <Head :title="t('Warehouse')" />
     <AuthenticatedLayout>
-        <template #header><h2 class="font-semibold text-xl text-gray-800">Warehouse — stock, procurement & equipment</h2></template>
+        <template #header><h2 class="font-semibold text-xl text-gray-800">{{ t('Warehouse — stock, procurement & equipment') }}</h2></template>
 
         <div class="py-6 max-w-7xl mx-auto sm:px-6 lg:px-8">
             <div class="mb-4 flex gap-2">
-                <button v-for="t in [['stock', 'Stock chain'], ['pos', 'Purchase orders'], ['equipment', 'Equipment'], ['swaps', 'Swaps / RMA']]" :key="t[0]"
-                    @click="tab = t[0]" :class="tab === t[0] ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t[1] }}</button>
+                <button v-for="tb in [['stock', 'Stock chain'], ['pos', 'Purchase orders'], ['equipment', 'Equipment'], ['swaps', 'Swaps / RMA']]" :key="tb[0]"
+                    @click="tab = tb[0]" :class="tab === tb[0] ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t(tb[1]) }}</button>
             </div>
             <div v-if="error" class="mb-3 p-2 bg-red-100 text-red-700 rounded text-sm">{{ error }}</div>
             <div v-if="notice" class="mb-3 p-2 bg-green-100 text-green-700 rounded text-sm">{{ notice }}</div>
@@ -82,12 +85,12 @@ onMounted(() => { loadStock(); loadPos(); loadEquipment(); loadSwaps(); });
                 <div class="col-span-8 bg-white rounded shadow p-4">
                     <div class="flex gap-2 mb-2">
                         <select v-model="balanceFilter" @change="loadStock" class="border rounded px-2 py-1 text-sm">
-                            <option value="">all locations</option>
+                            <option value="">{{ t('all locations') }}</option>
                             <option v-for="l in locations" :key="l.location_id" :value="l.location_id">{{ l.name }}</option>
                         </select>
                     </div>
                     <table class="w-full text-sm">
-                        <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="py-1">Location</th><th>SKU</th><th class="text-right">On hand</th><th class="text-right">Reserved</th><th class="text-right">Available</th></tr></thead>
+                        <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="py-1">{{ t('Location') }}</th><th>{{ t('SKU') }}</th><th class="text-right">{{ t('On hand') }}</th><th class="text-right">{{ t('Reserved') }}</th><th class="text-right">{{ t('Available') }}</th></tr></thead>
                         <tbody>
                             <tr v-for="b in balances" :key="b.id" class="border-t">
                                 <td class="py-1 text-xs">{{ b.location_id }}</td>
@@ -100,10 +103,10 @@ onMounted(() => { loadStock(); loadPos(); loadEquipment(); loadSwaps(); });
                     </table>
                 </div>
                 <div class="col-span-4 bg-white rounded shadow p-4 space-y-2">
-                    <div class="font-semibold text-sm">Record movement</div>
-                    <input v-model="move.sku_id" placeholder="SKU id" class="border rounded px-2 py-1 text-sm w-full" />
+                    <div class="font-semibold text-sm">{{ t('Record movement') }}</div>
+                    <input v-model="move.sku_id" :placeholder="t('SKU id')" class="border rounded px-2 py-1 text-sm w-full" />
                     <select v-model="move.location_id" class="border rounded px-2 py-1 text-sm w-full">
-                        <option value="">— location —</option>
+                        <option value="">{{ t('— location —') }}</option>
                         <option v-for="l in locations" :key="l.location_id" :value="l.location_id">{{ l.name }}</option>
                     </select>
                     <div class="flex gap-2">
@@ -112,9 +115,9 @@ onMounted(() => { loadStock(); loadPos(); loadEquipment(); loadSwaps(); });
                             <option v-for="r in ['RECEIPT', 'ISSUE', 'TRANSFER_IN', 'TRANSFER_OUT', 'INSTALL', 'RETURN', 'ADJUST']" :key="r">{{ r }}</option>
                         </select>
                     </div>
-                    <input v-model="move.reference" placeholder="reference (WO / PO …)" class="border rounded px-2 py-1 text-sm w-full" />
-                    <button @click="postMove" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm w-full">Post movement</button>
-                    <p class="text-xs text-gray-400">Signed qty: + inbound, − outbound. Reservations are driven by work orders automatically.</p>
+                    <input v-model="move.reference" :placeholder="t('reference (WO / PO …)')" class="border rounded px-2 py-1 text-sm w-full" />
+                    <button @click="postMove" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm w-full">{{ t('Post movement') }}</button>
+                    <p class="text-xs text-gray-400">{{ t('Signed qty: + inbound, − outbound. Reservations are driven by work orders automatically.') }}</p>
                 </div>
             </div>
 
@@ -127,17 +130,17 @@ onMounted(() => { loadStock(); loadPos(); loadEquipment(); loadSwaps(); });
                         <span class="ml-2 text-xs text-gray-400">{{ po.vendor_name ?? po.vendor ?? '' }}</span>
                     </div>
                     <div class="flex gap-1">
-                        <button v-if="['DRAFT', 'PENDING_APPROVAL', 'PENDING'].includes(po.status)" @click="poAction(po, 'approve')" class="px-2 py-0.5 bg-indigo-600 text-white rounded text-xs">Approve</button>
-                        <button v-if="po.status === 'APPROVED'" @click="poAction(po, 'receive')" class="px-2 py-0.5 bg-green-600 text-white rounded text-xs">Receive</button>
+                        <button v-if="['DRAFT', 'PENDING_APPROVAL', 'PENDING'].includes(po.status)" @click="poAction(po, 'approve')" class="px-2 py-0.5 bg-indigo-600 text-white rounded text-xs">{{ t('Approve') }}</button>
+                        <button v-if="po.status === 'APPROVED'" @click="poAction(po, 'receive')" class="px-2 py-0.5 bg-green-600 text-white rounded text-xs">{{ t('Receive') }}</button>
                     </div>
                 </div>
-                <div v-if="!pos.length" class="p-3 text-sm text-gray-400">No purchase orders.</div>
+                <div v-if="!pos.length" class="p-3 text-sm text-gray-400">{{ t('No purchase orders.') }}</div>
             </div>
 
             <!-- Equipment -->
             <div v-else-if="tab === 'equipment'" class="bg-white rounded shadow p-4">
                 <table class="w-full text-sm">
-                    <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="py-1">Serial</th><th>SKU</th><th>State</th><th>Subscription</th><th>Transition</th></tr></thead>
+                    <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="py-1">{{ t('Serial') }}</th><th>{{ t('SKU') }}</th><th>{{ t('State') }}</th><th>{{ t('Subscription') }}</th><th>{{ t('Transition') }}</th></tr></thead>
                     <tbody>
                         <tr v-for="e in equipment" :key="e.instance_id" class="border-t">
                             <td class="py-1 font-mono text-xs">{{ e.serial }}</td>
@@ -146,7 +149,7 @@ onMounted(() => { loadStock(); loadPos(); loadEquipment(); loadSwaps(); });
                             <td class="text-xs">{{ e.subscription_id ?? '—' }}</td>
                             <td>
                                 <select @change="transition(e, $event.target.value); $event.target.value = ''" class="border rounded px-1 py-0.5 text-xs">
-                                    <option value="">→ move to…</option>
+                                    <option value="">{{ t('→ move to…') }}</option>
                                     <option v-for="s in nextStates[e.state] ?? []" :key="s">{{ s }}</option>
                                 </select>
                             </td>
@@ -163,7 +166,7 @@ onMounted(() => { loadStock(); loadPos(); loadEquipment(); loadSwaps(); });
                     <span class="ml-2 text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">{{ s.status }}</span>
                     <span class="ml-2 text-xs text-gray-400">{{ s.subscription_id ?? '' }} · {{ s.source_instance_id ?? '' }}</span>
                 </div>
-                <div v-if="!swaps.length" class="p-3 text-sm text-gray-400">No swap requests.</div>
+                <div v-if="!swaps.length" class="p-3 text-sm text-gray-400">{{ t('No swap requests.') }}</div>
             </div>
         </div>
     </AuthenticatedLayout>

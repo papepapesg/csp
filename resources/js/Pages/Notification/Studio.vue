@@ -2,6 +2,9 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import { Head } from '@inertiajs/vue3';
 import { ref, computed, onMounted } from 'vue';
+import { useI18n } from '@/i18n';
+
+const { t } = useI18n();
 
 // Template Studio (NOT-01, O-3). Designs the DD-authoritative `template` model: one row
 // per (operator, template_format, template_purpose_code, locale, version). A "purpose"
@@ -65,20 +68,20 @@ async function save() {
         });
         current.value.id = data.template_id; current.value.version = data.version; current.value.status = data.status;
         notice.value = `Saved draft v${data.version}`; await load();
-    } catch (e) { error.value = e.response?.data?.message ?? 'Save failed'; }
+    } catch (e) { error.value = e.response?.data?.message ?? t('Save failed'); }
 }
 async function activate() {
     await window.axios.post(`/api/admin/templates/${current.value.id}/activate`);
-    current.value.status = 'ACTIVE'; notice.value = 'Published'; await load();
+    current.value.status = 'ACTIVE'; notice.value = t('Published'); await load();
 }
 async function deactivate() {
     await window.axios.post(`/api/admin/templates/${current.value.id}/deactivate`);
-    current.value.status = 'DISABLED'; notice.value = 'Disabled'; await load();
+    current.value.status = 'DISABLED'; notice.value = t('Disabled'); await load();
 }
 // Server-side render — the only way to preview a PDF (returns byte size) and to see the
 // real engine output for a saved version.
 async function previewOnServer() {
-    if (!current.value?.id) { error.value = 'Save the draft first to render on the server'; return; }
+    if (!current.value?.id) { error.value = t('Save the draft first to render on the server'); return; }
     let sample = {}; try { sample = JSON.parse(sampleVars.value || '{}'); } catch { /* ignore */ }
     const { data } = await window.axios.post(`/api/admin/templates/${current.value.id}/preview`, { sample_data: sample });
     serverPreview.value = data;
@@ -88,14 +91,14 @@ onMounted(load);
 </script>
 
 <template>
-    <Head title="Template Studio" />
+    <Head :title="t('Template Studio')" />
     <AuthenticatedLayout>
-        <template #header><h2 class="font-semibold text-xl text-gray-800">Template Studio</h2></template>
+        <template #header><h2 class="font-semibold text-xl text-gray-800">{{ t('Template Studio') }}</h2></template>
 
         <div class="py-6 max-w-7xl mx-auto sm:px-6 lg:px-8">
             <div class="mb-4 flex gap-2">
-                <button @click="tab = 'notifications'" :class="tab === 'notifications' ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">Notification templates</button>
-                <button @click="tab = 'invoices'" :class="tab === 'invoices' ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">Invoice layouts</button>
+                <button @click="tab = 'notifications'" :class="tab === 'notifications' ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Notification templates') }}</button>
+                <button @click="tab = 'invoices'" :class="tab === 'invoices' ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Invoice layouts') }}</button>
             </div>
 
             <div v-if="error" class="mb-3 p-2 bg-red-100 text-red-700 rounded text-sm">{{ error }}</div>
@@ -105,7 +108,7 @@ onMounted(load);
             <div v-if="tab === 'notifications'" class="grid grid-cols-12 gap-4">
                 <!-- list: purpose -> formats -> versions -->
                 <div class="col-span-3 bg-white rounded shadow p-3">
-                    <button @click="create" class="w-full mb-3 px-3 py-1 bg-indigo-600 text-white rounded text-sm">+ New template</button>
+                    <button @click="create" class="w-full mb-3 px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('+ New template') }}</button>
                     <div v-for="(byFormat, purpose) in grouped" :key="purpose" class="mb-3">
                         <div class="text-xs font-semibold text-gray-500">{{ purpose }}</div>
                         <template v-for="(versions, fmt) in byFormat" :key="fmt">
@@ -123,36 +126,36 @@ onMounted(load);
                 <!-- editor -->
                 <div v-if="current" class="col-span-5 bg-white rounded shadow p-4 space-y-3">
                     <div class="flex gap-2">
-                        <input v-model="current.template_purpose_code" placeholder="PURPOSE_CODE" class="border rounded px-2 py-1 text-sm flex-1" />
+                        <input v-model="current.template_purpose_code" :placeholder="t('PURPOSE_CODE')" class="border rounded px-2 py-1 text-sm flex-1" />
                         <select v-model="current.template_format" @change="onFormatChange" class="border rounded px-2 py-1 text-sm">
                             <option v-for="f in formats" :key="f">{{ f }}</option>
                         </select>
                         <input v-model="current.locale" class="border rounded px-2 py-1 text-sm w-16" />
                     </div>
-                    <div class="text-xs text-gray-500">engine: <span class="font-mono">{{ current.engine_type }}</span><span v-if="current.version"> · v{{ current.version }}</span></div>
-                    <textarea v-model="current.template_payload" rows="9" :placeholder="isPdf ? 'HTML source — rendered to PDF' : 'Body — use {{ variable }} placeholders'"
+                    <div class="text-xs text-gray-500">{{ t('engine:') }} <span class="font-mono">{{ current.engine_type }}</span><span v-if="current.version"> · v{{ current.version }}</span></div>
+                    <textarea v-model="current.template_payload" rows="9" :placeholder="isPdf ? t('HTML source — rendered to PDF') : t('Body — use {{ variable }} placeholders')"
                         class="border rounded px-2 py-1 text-sm w-full font-mono"></textarea>
                     <div class="flex gap-2">
-                        <button @click="save" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">Save draft</button>
-                        <button @click="activate" :disabled="!current.id" class="px-3 py-1 bg-green-600 text-white rounded text-sm disabled:opacity-40">Publish</button>
-                        <button @click="deactivate" :disabled="current.status !== 'ACTIVE'" class="px-3 py-1 bg-red-600 text-white rounded text-sm disabled:opacity-40">Disable</button>
+                        <button @click="save" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Save draft') }}</button>
+                        <button @click="activate" :disabled="!current.id" class="px-3 py-1 bg-green-600 text-white rounded text-sm disabled:opacity-40">{{ t('Publish') }}</button>
+                        <button @click="deactivate" :disabled="current.status !== 'ACTIVE'" class="px-3 py-1 bg-red-600 text-white rounded text-sm disabled:opacity-40">{{ t('Disable') }}</button>
                         <span class="text-xs self-center" :class="current.status === 'ACTIVE' ? 'text-green-600' : 'text-gray-400'">{{ current.status }}</span>
                     </div>
-                    <p class="text-xs text-gray-400">Each save creates the next DRAFT version; resolve() always prefers the highest ACTIVE version.</p>
+                    <p class="text-xs text-gray-400">{{ t('Each save creates the next DRAFT version; resolve() always prefers the highest ACTIVE version.') }}</p>
                 </div>
 
                 <!-- preview -->
                 <div v-if="current" class="col-span-4 space-y-3">
                     <div class="bg-white rounded shadow p-3">
-                        <div class="text-xs font-semibold text-gray-500 mb-1">Sample variables (JSON)</div>
+                        <div class="text-xs font-semibold text-gray-500 mb-1">{{ t('Sample variables (JSON)') }}</div>
                         <textarea v-model="sampleVars" rows="6" class="border rounded px-2 py-1 text-xs w-full font-mono"></textarea>
-                        <button @click="previewOnServer" class="mt-2 px-2 py-1 bg-gray-800 text-white rounded text-xs">Render on server</button>
+                        <button @click="previewOnServer" class="mt-2 px-2 py-1 bg-gray-800 text-white rounded text-xs">{{ t('Render on server') }}</button>
                     </div>
                     <div class="bg-gray-900 text-gray-100 rounded shadow p-3">
-                        <div class="text-xs text-gray-400 mb-1">Preview — {{ current.template_format }}</div>
+                        <div class="text-xs text-gray-400 mb-1">{{ t('Preview —') }} {{ current.template_format }}</div>
                         <div v-if="isPdf" class="text-sm">
-                            <span v-if="serverPreview">PDF rendered — {{ serverPreview.bytes }} bytes</span>
-                            <span v-else class="text-gray-500">Save + “Render on server” to produce the PDF.</span>
+                            <span v-if="serverPreview">{{ t('PDF rendered —') }} {{ serverPreview.bytes }} {{ t('bytes') }}</span>
+                            <span v-else class="text-gray-500">{{ t('Save + “Render on server” to produce the PDF.') }}</span>
                         </div>
                         <pre v-else class="whitespace-pre-wrap text-sm">{{ serverPreview ? serverPreview.rendered : localPreview }}</pre>
                     </div>
@@ -170,7 +173,7 @@ onMounted(load);
                 <div v-if="currentInvoice" class="col-span-8 bg-white rounded shadow p-4">
                     <div class="font-semibold mb-2">{{ currentInvoice.name }}</div>
                     <pre class="bg-gray-50 rounded p-3 text-xs overflow-auto">{{ JSON.stringify(currentInvoice.layout, null, 2) }}</pre>
-                    <p class="text-xs text-gray-500 mt-2">Section toggles (header / billTo / lines / totals / footer) define the rendered invoice document.</p>
+                    <p class="text-xs text-gray-500 mt-2">{{ t('Section toggles (header / billTo / lines / totals / footer) define the rendered invoice document.') }}</p>
                 </div>
             </div>
         </div>

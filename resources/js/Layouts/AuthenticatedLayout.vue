@@ -72,7 +72,7 @@ watchEffect(() => {
                                     :href="route('workflow.studio')"
                                     :active="route().current('workflow.studio')"
                                 >
-                                    Studio
+                                    {{ t('Studio') }}
                                 </NavLink>
                                 <NavLink
                                     :href="route('rules.studio')"
@@ -108,7 +108,7 @@ watchEffect(() => {
                                     :href="route('workflow.ops')"
                                     :active="route().current('workflow.ops')"
                                 >
-                                    Ops
+                                    {{ t('Ops') }}
                                 </NavLink>
                                 <NavLink
                                     :href="route('noc.console')"
@@ -126,7 +126,7 @@ watchEffect(() => {
                                     :href="route('itops.console')"
                                     :active="route().current('itops.console')"
                                 >
-                                    IT-Ops
+                                    {{ t('IT-Ops') }}
                                 </NavLink>
                             </div>
                         </div>
@@ -163,14 +163,14 @@ watchEffect(() => {
                                         <DropdownLink
                                             :href="route('profile.edit')"
                                         >
-                                            Profile
+                                            {{ t('Profile') }}
                                         </DropdownLink>
                                         <DropdownLink
                                             :href="route('logout')"
                                             method="post"
                                             as="button"
                                         >
-                                            Log Out
+                                            {{ t('Log Out') }}
                                         </DropdownLink>
                                     </template>
                                 </Dropdown>
@@ -233,7 +233,7 @@ watchEffect(() => {
                             :href="route('dashboard')"
                             :active="route().current('dashboard')"
                         >
-                            Dashboard
+                            {{ t('Dashboard') }}
                         </ResponsiveNavLink>
                     </div>
 
@@ -254,14 +254,14 @@ watchEffect(() => {
 
                         <div class="mt-3 space-y-1">
                             <ResponsiveNavLink :href="route('profile.edit')">
-                                Profile
+                                {{ t('Profile') }}
                             </ResponsiveNavLink>
                             <ResponsiveNavLink
                                 :href="route('logout')"
                                 method="post"
                                 as="button"
                             >
-                                Log Out
+                                {{ t('Log Out') }}
                             </ResponsiveNavLink>
                         </div>
                     </div>

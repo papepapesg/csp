@@ -2,6 +2,9 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import { Head } from '@inertiajs/vue3';
 import { ref, computed, onMounted } from 'vue';
+import { useI18n } from '@/i18n';
+
+const { t } = useI18n();
 
 // Dunning Program Studio (BIL-04). A dunning program is basically an escalation workflow:
 // an ordered ladder of levels, each with a grace period and an action (warn / restrict /
@@ -71,7 +74,7 @@ async function publish() {
                 code: current.value.code, operator_code: current.value.operator_code || undefined,
                 billing_mode: current.value.billing_mode, ...body,
             });
-            notice.value = 'Program created (v1)';
+            notice.value = t('Program created (v1)');
         } else {
             // Editing an existing program ALWAYS publishes a new version (immutability).
             const { data } = await window.axios.post(`/api/dunning-programs/${current.value.code}/new-version`, body);
@@ -79,16 +82,16 @@ async function publish() {
         }
         dirty.value = false;
         await load();
-    } catch (e) { error.value = e.response?.data?.message ?? 'Publish failed'; }
+    } catch (e) { error.value = e.response?.data?.message ?? t('Publish failed'); }
 }
 
 onMounted(load);
 </script>
 
 <template>
-    <Head title="Dunning Studio" />
+    <Head :title="t('Dunning Studio')" />
     <AuthenticatedLayout>
-        <template #header><h2 class="font-semibold text-xl text-gray-800">Dunning Program Studio</h2></template>
+        <template #header><h2 class="font-semibold text-xl text-gray-800">{{ t('Dunning Program Studio') }}</h2></template>
 
         <div class="py-6 max-w-7xl mx-auto sm:px-6 lg:px-8">
             <div v-if="error" class="mb-3 p-2 bg-red-100 text-red-700 rounded text-sm">{{ error }}</div>
@@ -97,7 +100,7 @@ onMounted(load);
             <div class="grid grid-cols-12 gap-4">
                 <!-- program list -->
                 <div class="col-span-3 bg-white rounded shadow p-3">
-                    <button @click="blankProgram" class="w-full mb-3 px-3 py-1 bg-indigo-600 text-white rounded text-sm">+ New program</button>
+                    <button @click="blankProgram" class="w-full mb-3 px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('+ New program') }}</button>
                     <div v-for="(versions, code) in grouped" :key="code" class="mb-3">
                         <div class="text-xs font-semibold text-gray-500">{{ code }}</div>
                         <button v-for="p in versions" :key="p.id" @click="open(p)"
@@ -113,55 +116,55 @@ onMounted(load);
                 <!-- ladder editor -->
                 <div v-if="current" class="col-span-9 bg-white rounded shadow p-4 space-y-4">
                     <div class="flex flex-wrap gap-2 items-center">
-                        <input v-model="current.code" :disabled="!current._new" placeholder="program_code" class="border rounded px-2 py-1 text-sm font-mono disabled:bg-gray-100" />
+                        <input v-model="current.code" :disabled="!current._new" :placeholder="t('program_code')" class="border rounded px-2 py-1 text-sm font-mono disabled:bg-gray-100" />
                         <select v-model="current.billing_mode" :disabled="!current._new" @change="dirty = true" class="border rounded px-2 py-1 text-sm disabled:bg-gray-100">
                             <option>POSTPAID</option><option>PREPAID</option><option>PREPAYMENT</option>
                         </select>
-                        <input v-if="current._new" v-model="current.operator_code" placeholder="operator (blank = current)" class="border rounded px-2 py-1 text-sm" />
-                        <span v-if="!current._new" class="text-xs text-gray-500">editing v{{ current.version }} — publishing creates v{{ current.version + 1 }}</span>
+                        <input v-if="current._new" v-model="current.operator_code" :placeholder="t('operator (blank = current)')" class="border rounded px-2 py-1 text-sm" />
+                        <span v-if="!current._new" class="text-xs text-gray-500">{{ t('editing') }} v{{ current.version }} — {{ t('publishing creates') }} v{{ current.version + 1 }}</span>
                         <label class="text-xs flex items-center gap-1 ml-auto">
-                            <input type="checkbox" v-model="current.pre_termination_review_required" @change="dirty = true" /> require review before terminate
+                            <input type="checkbox" v-model="current.pre_termination_review_required" @change="dirty = true" /> {{ t('require review before terminate') }}
                         </label>
                     </div>
-                    <input v-model="current.description" @input="dirty = true" placeholder="Description" class="border rounded px-2 py-1 text-sm w-full" />
+                    <input v-model="current.description" @input="dirty = true" :placeholder="t('Description')" class="border rounded px-2 py-1 text-sm w-full" />
 
                     <!-- the escalation ladder -->
                     <div class="space-y-2">
                         <div v-for="(level, i) in current.level_definitions" :key="i" class="flex gap-2 items-start border rounded p-2">
                             <div class="w-6 text-center font-bold text-gray-400 pt-1">{{ level.level }}</div>
                             <div class="flex-1 grid grid-cols-12 gap-2">
-                                <input v-model="level.name" @input="dirty = true" placeholder="NAME" class="col-span-3 border rounded px-2 py-1 text-sm" />
+                                <input v-model="level.name" @input="dirty = true" :placeholder="t('NAME')" class="col-span-3 border rounded px-2 py-1 text-sm" />
                                 <div class="col-span-3 flex items-center gap-1">
                                     <input type="number" min="0" v-model.number="level.grace_period_days" @input="dirty = true" class="border rounded px-2 py-1 text-sm w-16" />
-                                    <span class="text-xs text-gray-400">days grace</span>
+                                    <span class="text-xs text-gray-400">{{ t('days grace') }}</span>
                                 </div>
                                 <select v-model="level.action_workflow_intent" @change="dirty = true" class="col-span-3 border rounded px-2 py-1 text-sm"
                                     :class="intentColor[level.action_workflow_intent]">
                                     <option v-for="x in intents" :key="x" :value="x">{{ intentLabel[x] }}</option>
                                 </select>
-                                <button @click="removeLevel(i)" class="col-span-3 text-xs text-red-500 hover:underline text-right pr-1">remove</button>
+                                <button @click="removeLevel(i)" class="col-span-3 text-xs text-red-500 hover:underline text-right pr-1">{{ t('remove') }}</button>
 
                                 <!-- action payload, per intent -->
                                 <input v-if="level.action_workflow_intent === 'RESTRICTION_ADD'" :value="codesFor(level)" @input="setCodes(level, $event.target.value)"
-                                    placeholder="restriction codes (comma-separated, from SUB-LM-01 catalog)" class="col-span-12 border rounded px-2 py-1 text-xs font-mono" />
+                                    :placeholder="t('restriction codes (comma-separated, from SUB-LM-01 catalog)')" class="col-span-12 border rounded px-2 py-1 text-xs font-mono" />
                                 <input v-if="level.action_workflow_intent === 'SUSPEND_NP'" v-model="level.action_payload.reason_code" @input="dirty = true"
-                                    placeholder="suspend reason_code" class="col-span-6 border rounded px-2 py-1 text-xs font-mono" />
+                                    :placeholder="t('suspend reason_code')" class="col-span-6 border rounded px-2 py-1 text-xs font-mono" />
                                 <template v-if="level.action_workflow_intent === 'TERMINATION'">
-                                    <input v-model="level.action_payload.reason_code" @input="dirty = true" placeholder="termination reason_code" class="col-span-6 border rounded px-2 py-1 text-xs font-mono" />
-                                    <input v-model="level.action_payload.equipment_disposition" @input="dirty = true" placeholder="equipment_disposition" class="col-span-6 border rounded px-2 py-1 text-xs font-mono" />
+                                    <input v-model="level.action_payload.reason_code" @input="dirty = true" :placeholder="t('termination reason_code')" class="col-span-6 border rounded px-2 py-1 text-xs font-mono" />
+                                    <input v-model="level.action_payload.equipment_disposition" @input="dirty = true" :placeholder="t('equipment_disposition')" class="col-span-6 border rounded px-2 py-1 text-xs font-mono" />
                                 </template>
                             </div>
                         </div>
                     </div>
 
                     <div class="flex items-center gap-3">
-                        <button @click="addLevel" class="px-3 py-1 border rounded text-sm">+ Add level</button>
-                        <span class="text-xs text-gray-500">Total cycle: {{ totalCycle }} days</span>
+                        <button @click="addLevel" class="px-3 py-1 border rounded text-sm">{{ t('+ Add level') }}</button>
+                        <span class="text-xs text-gray-500">{{ t('Total cycle:') }} {{ totalCycle }} {{ t('days') }}</span>
                         <button @click="publish" :disabled="!dirty" class="ml-auto px-3 py-1 bg-green-600 text-white rounded text-sm disabled:opacity-40">
-                            {{ current._new ? 'Create program' : 'Publish new version' }}
+                            {{ current._new ? t('Create program') : t('Publish new version') }}
                         </button>
                     </div>
-                    <p class="text-xs text-gray-400">Channels for the dunning notice are not configured here — they live in NOT-01 routing rules (per operator + customer preference). This studio owns the escalation policy only.</p>
+                    <p class="text-xs text-gray-400">{{ t('Channels for the dunning notice are not configured here — they live in NOT-01 routing rules (per operator + customer preference). This studio owns the escalation policy only.') }}</p>
                 </div>
             </div>
         </div>

@@ -2,6 +2,9 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import { Head, Link } from '@inertiajs/vue3';
 import { ref, onMounted } from 'vue';
+import { useI18n } from '@/i18n';
+
+const { t } = useI18n();
 
 // Customer 360 — the workshop's "single pane of glass any internal agent opens
 // before any action" (ILM-CFG-01). Identity + KYC on the Customer; everything
@@ -41,7 +44,7 @@ async function load() {
         tickets.value = ok('tickets') ?? [];
         notes.value = ok('notes') ?? [];
         interactions.value = ok('interactions') ?? [];
-    } catch (e) { error.value = e.response?.data?.message ?? 'Failed to load customer'; }
+    } catch (e) { error.value = e.response?.data?.message ?? t('Failed to load customer'); }
 }
 async function addNote() {
     if (!newNote.value) return;
@@ -56,14 +59,14 @@ onMounted(load);
 </script>
 
 <template>
-    <Head :title="customer?.name ?? 'Customer'" />
+    <Head :title="customer?.name ?? t('Customer')" />
     <AuthenticatedLayout>
         <template #header>
             <div class="flex items-center gap-3">
-                <Link :href="route('customers.index')" class="text-sm text-gray-400 hover:text-gray-600">← Customers</Link>
+                <Link :href="route('customers.index')" class="text-sm text-gray-400 hover:text-gray-600">← {{ t('Customers') }}</Link>
                 <h2 class="text-xl font-semibold text-gray-800">{{ customer?.name ?? '…' }}</h2>
                 <span v-if="customer" class="rounded-full px-2 py-0.5 text-xs"
-                    :class="customer.kycStatus === 'APPROVED' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'">KYC {{ customer.kycStatus }}</span>
+                    :class="customer.kycStatus === 'APPROVED' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'">{{ t('KYC') }} {{ customer.kycStatus }}</span>
             </div>
         </template>
 
@@ -73,18 +76,18 @@ onMounted(load);
             <div class="grid grid-cols-12 gap-4">
                 <!-- Identity -->
                 <div class="col-span-4 bg-white rounded shadow p-4">
-                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">Identity (legal entity)</div>
+                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('Identity (legal entity)') }}</div>
                     <dl v-if="customer" class="text-sm space-y-1">
-                        <div class="flex justify-between"><dt class="text-gray-500">Customer ID</dt><dd class="font-mono text-xs">{{ customer.customerId }}</dd></div>
-                        <div class="flex justify-between"><dt class="text-gray-500">Type</dt><dd>{{ customer.type }}</dd></div>
-                        <div class="flex justify-between"><dt class="text-gray-500">MSISDN</dt><dd>{{ customer.primaryMsisdn }}</dd></div>
-                        <div class="flex justify-between"><dt class="text-gray-500">Email</dt><dd>{{ customer.email ?? '—' }}</dd></div>
+                        <div class="flex justify-between"><dt class="text-gray-500">{{ t('Customer ID') }}</dt><dd class="font-mono text-xs">{{ customer.customerId }}</dd></div>
+                        <div class="flex justify-between"><dt class="text-gray-500">{{ t('Type') }}</dt><dd>{{ customer.type }}</dd></div>
+                        <div class="flex justify-between"><dt class="text-gray-500">{{ t('MSISDN') }}</dt><dd>{{ customer.primaryMsisdn }}</dd></div>
+                        <div class="flex justify-between"><dt class="text-gray-500">{{ t('Email') }}</dt><dd>{{ customer.email ?? '—' }}</dd></div>
                     </dl>
                 </div>
 
                 <!-- Accounts (operational anchor) -->
                 <div class="col-span-8 bg-white rounded shadow p-4">
-                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">Accounts (operational anchor)</div>
+                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('Accounts (operational anchor)') }}</div>
                     <div v-for="a in accounts" :key="a.accountId ?? a.account_id" class="border rounded p-2 mb-2">
                         <div class="flex items-center gap-2 text-sm">
                             <span class="font-mono text-xs">{{ a.accountNumber ?? a.account_number }}</span>
@@ -98,15 +101,15 @@ onMounted(load);
                             ⚠ {{ a.attentionBanner ?? a.attention_banner }}
                         </div>
                     </div>
-                    <div v-if="!accounts.length" class="text-sm text-gray-400">No accounts.</div>
+                    <div v-if="!accounts.length" class="text-sm text-gray-400">{{ t('No accounts.') }}</div>
                 </div>
             </div>
 
             <!-- Subscriptions -->
             <div class="bg-white rounded shadow p-4">
-                <div class="text-xs font-semibold text-gray-500 uppercase mb-2">Subscriptions (SUB-LM)</div>
+                <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('Subscriptions (SUB-LM)') }}</div>
                 <table class="w-full text-sm">
-                    <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="py-1">Id</th><th>Package</th><th>Status</th><th>Billing</th><th>HomePass</th></tr></thead>
+                    <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="py-1">{{ t('Id') }}</th><th>{{ t('Package') }}</th><th>{{ t('Status') }}</th><th>{{ t('Billing') }}</th><th>{{ t('HomePass') }}</th></tr></thead>
                     <tbody>
                         <tr v-for="s in subscriptions" :key="s.subscription_id" class="border-t">
                             <td class="py-1 font-mono text-xs">{{ s.subscription_id }}</td>
@@ -117,39 +120,39 @@ onMounted(load);
                         </tr>
                     </tbody>
                 </table>
-                <div v-if="!subscriptions.length" class="text-sm text-gray-400">No subscriptions.</div>
+                <div v-if="!subscriptions.length" class="text-sm text-gray-400">{{ t('No subscriptions.') }}</div>
             </div>
 
             <div class="grid grid-cols-12 gap-4">
                 <!-- Invoices -->
                 <div class="col-span-6 bg-white rounded shadow p-4">
-                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">Recent invoices (BIL)</div>
+                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('Recent invoices (BIL)') }}</div>
                     <div v-for="i in invoices" :key="i.invoice_id" class="flex justify-between text-sm border-t py-1">
                         <span class="font-mono text-xs">{{ i.legal_invoice_number ?? i.invoice_id }}</span>
                         <span>{{ i.currency }} {{ i.total_amount }}</span>
                         <span class="text-xs px-1.5 py-0.5 rounded" :class="i.status === 'PAID' ? 'bg-green-100 text-green-700' : i.status === 'OVERDUE' ? 'bg-red-100 text-red-600' : 'bg-gray-100'">{{ i.status }}</span>
                     </div>
-                    <div v-if="!invoices.length" class="text-sm text-gray-400">No invoices.</div>
+                    <div v-if="!invoices.length" class="text-sm text-gray-400">{{ t('No invoices.') }}</div>
                 </div>
                 <!-- Tickets -->
                 <div class="col-span-6 bg-white rounded shadow p-4">
-                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">Tickets (TCK)</div>
+                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('Tickets (TCK)') }}</div>
                     <div v-for="t in tickets" :key="t.ticket_id" class="flex justify-between text-sm border-t py-1">
                         <span class="truncate">{{ t.subject }}</span>
                         <span class="text-xs">{{ t.priority }}</span>
                         <span class="text-xs px-1.5 py-0.5 rounded bg-gray-100">{{ t.status }}</span>
                     </div>
-                    <div v-if="!tickets.length" class="text-sm text-gray-400">No tickets.</div>
+                    <div v-if="!tickets.length" class="text-sm text-gray-400">{{ t('No tickets.') }}</div>
                 </div>
             </div>
 
             <div class="grid grid-cols-12 gap-4">
                 <!-- Notes -->
                 <div class="col-span-6 bg-white rounded shadow p-4">
-                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">Notes</div>
+                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('Notes') }}</div>
                     <div class="flex gap-2 mb-2">
-                        <input v-model="newNote" @keyup.enter="addNote" placeholder="Add a note…" class="border rounded px-2 py-1 text-sm flex-1" />
-                        <button @click="addNote" class="px-2 py-1 bg-indigo-600 text-white rounded text-sm">Add</button>
+                        <input v-model="newNote" @keyup.enter="addNote" :placeholder="t('Add a note…')" class="border rounded px-2 py-1 text-sm flex-1" />
+                        <button @click="addNote" class="px-2 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Add') }}</button>
                     </div>
                     <div v-for="n in notes" :key="n.id" class="text-sm border-t py-1">
                         {{ n.body }} <span class="text-xs text-gray-400">— {{ n.created_at }}</span>
@@ -157,12 +160,12 @@ onMounted(load);
                 </div>
                 <!-- Interactions -->
                 <div class="col-span-6 bg-white rounded shadow p-4">
-                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">Interaction history</div>
+                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('Interaction history') }}</div>
                     <div v-for="i in interactions" :key="i.id" class="text-sm border-t py-1">
                         <span class="text-xs px-1 bg-gray-100 rounded">{{ i.channel ?? i.kind }}</span>
                         {{ i.summary ?? i.body }} <span class="text-xs text-gray-400">{{ i.created_at }}</span>
                     </div>
-                    <div v-if="!interactions.length" class="text-sm text-gray-400">No interactions.</div>
+                    <div v-if="!interactions.length" class="text-sm text-gray-400">{{ t('No interactions.') }}</div>
                 </div>
             </div>
         </div>

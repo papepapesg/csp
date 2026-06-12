@@ -8,6 +8,9 @@ import { Controls } from '@vue-flow/controls';
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
 import '@vue-flow/controls/dist/style.css';
+import { useI18n } from '@/i18n';
+
+const { t } = useI18n();
 
 // Workflow studio (FOUNDATION_CAMUNDA). Flows are DATA: load a process_definition
 // graph, drag steps from the toolbox, connect them, save a draft, deploy.
@@ -104,7 +107,7 @@ async function saveDraft() {
         const graph = fromVf();
         if (current.value && current.value.status === 'DRAFT') {
             await window.axios.put(`/api/workflow/definitions/${current.value.definition_id}`, { graph });
-            status.value = 'Draft saved';
+            status.value = t('Draft saved');
         } else {
             const { data } = await window.axios.post('/api/workflow/definitions', {
                 process_key: current.value?.process_key ?? prompt('Process key (e.g. sub-pause)') ?? 'new-flow',
@@ -113,20 +116,20 @@ async function saveDraft() {
                 graph,
             });
             current.value = data;
-            status.value = 'New draft v' + data.version + ' created';
+            status.value = t('New draft v') + data.version + t(' created');
         }
         await loadLists();
-    } catch (e) { error.value = e.response?.data?.message ?? 'Save failed'; }
+    } catch (e) { error.value = e.response?.data?.message ?? t('Save failed'); }
 }
 
 async function deploy() {
     if (!current.value) return;
     try {
         await window.axios.post(`/api/workflow/definitions/${current.value.definition_id}/deploy`);
-        status.value = 'Deployed — now the active version (no code change)';
+        status.value = t('Deployed — now the active version (no code change)');
         await loadLists();
         await open(current.value.definition_id);
-    } catch (e) { error.value = e.response?.data?.message ?? 'Deploy failed'; }
+    } catch (e) { error.value = e.response?.data?.message ?? t('Deploy failed'); }
 }
 
 const stepConfigJson = computed({
@@ -138,22 +141,22 @@ onMounted(loadLists);
 </script>
 
 <template>
-    <Head title="Workflow Studio" />
+    <Head :title="t('Workflow Studio')" />
     <AuthenticatedLayout>
         <template #header>
-            <h2 class="text-xl font-semibold leading-tight text-gray-800">Workflow Studio (FOUNDATION_CAMUNDA)</h2>
+            <h2 class="text-xl font-semibold leading-tight text-gray-800">{{ t('Workflow Studio (FOUNDATION_CAMUNDA)') }}</h2>
         </template>
 
         <div class="py-6">
             <div class="mx-auto max-w-[110rem] px-4 sm:px-6 lg:px-8">
-                <p class="mb-3 text-sm text-gray-500">Flows are configuration, not code. Edit a draft, deploy it, and the engine runs the new shape — an operator can override any flow without a redeploy.</p>
+                <p class="mb-3 text-sm text-gray-500">{{ t('Flows are configuration, not code. Edit a draft, deploy it, and the engine runs the new shape — an operator can override any flow without a redeploy.') }}</p>
                 <p v-if="error" class="mb-3 rounded bg-red-50 p-2 text-sm text-red-600">{{ error }}</p>
                 <p v-if="status" class="mb-3 rounded bg-green-50 p-2 text-sm text-green-700">{{ status }}</p>
 
                 <div class="grid grid-cols-12 gap-4">
                     <!-- Definitions list -->
                     <div class="col-span-2 rounded-lg bg-white p-3 shadow-sm">
-                        <h3 class="mb-2 text-xs font-semibold uppercase text-gray-500">Definitions</h3>
+                        <h3 class="mb-2 text-xs font-semibold uppercase text-gray-500">{{ t('Definitions') }}</h3>
                         <ul class="space-y-1 text-sm">
                             <li v-for="d in definitions" :key="d.definition_id">
                                 <button class="w-full rounded px-2 py-1 text-left hover:bg-gray-100"
@@ -170,12 +173,12 @@ onMounted(loadLists);
                     <!-- Canvas -->
                     <div class="col-span-8 rounded-lg bg-white shadow-sm" style="height: 70vh">
                         <div class="flex items-center gap-2 border-b p-2 text-sm">
-                            <strong>{{ current ? current.process_key + ' v' + current.version : 'Select a flow' }}</strong>
+                            <strong>{{ current ? current.process_key + ' v' + current.version : t('Select a flow') }}</strong>
                             <span class="flex-1"></span>
-                            <button class="rounded border px-2 py-1" @click="addNode('exclusiveGateway','Gateway')">+ Gateway</button>
-                            <button class="rounded border px-2 py-1" @click="addNode('endEvent','End')">+ End</button>
-                            <button class="rounded bg-gray-800 px-3 py-1 text-white" @click="saveDraft">Save draft</button>
-                            <button class="rounded bg-indigo-600 px-3 py-1 text-white" @click="deploy">Deploy</button>
+                            <button class="rounded border px-2 py-1" @click="addNode('exclusiveGateway','Gateway')">{{ t('+ Gateway') }}</button>
+                            <button class="rounded border px-2 py-1" @click="addNode('endEvent','End')">{{ t('+ End') }}</button>
+                            <button class="rounded bg-gray-800 px-3 py-1 text-white" @click="saveDraft">{{ t('Save draft') }}</button>
+                            <button class="rounded bg-indigo-600 px-3 py-1 text-white" @click="deploy">{{ t('Deploy') }}</button>
                         </div>
                         <VueFlow v-model:nodes="nodes" v-model:edges="edges" fit-view-on-init
                                  @node-click="onNodeClick" class="wf-canvas">
@@ -187,22 +190,22 @@ onMounted(loadLists);
                     <!-- Toolbox + inspector -->
                     <div class="col-span-2 space-y-4">
                         <div class="rounded-lg bg-white p-3 shadow-sm">
-                            <h3 class="mb-2 text-xs font-semibold uppercase text-gray-500">Toolbox (steps)</h3>
+                            <h3 class="mb-2 text-xs font-semibold uppercase text-gray-500">{{ t('Toolbox (steps)') }}</h3>
                             <button v-for="s in palette.steps" :key="s.topic"
                                     class="mb-1 w-full truncate rounded border px-2 py-1 text-left text-xs hover:bg-indigo-50"
                                     :title="s.topic" @click="addStep(s.topic, s.label)">+ {{ s.label }}</button>
-                            <p v-if="!palette.steps.length" class="text-xs text-gray-400">No steps registered.</p>
+                            <p v-if="!palette.steps.length" class="text-xs text-gray-400">{{ t('No steps registered.') }}</p>
                         </div>
 
                         <div v-if="selected" class="rounded-lg bg-white p-3 shadow-sm">
-                            <h3 class="mb-2 text-xs font-semibold uppercase text-gray-500">Node</h3>
-                            <label class="block text-xs text-gray-500">Label</label>
+                            <h3 class="mb-2 text-xs font-semibold uppercase text-gray-500">{{ t('Node') }}</h3>
+                            <label class="block text-xs text-gray-500">{{ t('Label') }}</label>
                             <input v-model="selected.data.label" class="mb-2 w-full rounded border-gray-300 text-sm" />
-                            <p class="mb-2 text-xs text-gray-500">Type: <code>{{ selected.data.domainType }}</code></p>
-                            <p v-if="selected.data.topic" class="mb-2 text-xs text-gray-500">Topic: <code>{{ selected.data.topic }}</code></p>
-                            <label class="block text-xs text-gray-500">Config (JSON)</label>
+                            <p class="mb-2 text-xs text-gray-500">{{ t('Type:') }} <code>{{ selected.data.domainType }}</code></p>
+                            <p v-if="selected.data.topic" class="mb-2 text-xs text-gray-500">{{ t('Topic:') }} <code>{{ selected.data.topic }}</code></p>
+                            <label class="block text-xs text-gray-500">{{ t('Config (JSON)') }}</label>
                             <textarea v-model="stepConfigJson" rows="5" class="w-full rounded border-gray-300 font-mono text-xs"></textarea>
-                            <button class="mt-2 w-full rounded bg-red-50 px-2 py-1 text-xs text-red-600" @click="deleteSelected">Delete node</button>
+                            <button class="mt-2 w-full rounded bg-red-50 px-2 py-1 text-xs text-red-600" @click="deleteSelected">{{ t('Delete node') }}</button>
                         </div>
                     </div>
                 </div>

@@ -48,7 +48,7 @@ async function load() {
         const all = await window.axios.get('/api/i18n/translations');
         allRows.value = all.data.items ?? [];
         dirty.value = {};
-    } catch (e) { error.value = e.response?.data?.message ?? 'Failed to load'; }
+    } catch (e) { error.value = e.response?.data?.message ?? t('Failed to load'); }
 }
 
 // Keys translated in OTHER cultures but absent from this one → translation debt.

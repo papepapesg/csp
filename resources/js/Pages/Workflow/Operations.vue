@@ -6,6 +6,9 @@ import { VueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
+import { useI18n } from '@/i18n';
+
+const { t } = useI18n();
 
 // IT-Ops console: monitor running processes, replay an end-to-end execution
 // trace on the flow graph, and act on stuck external-task incidents.
@@ -62,7 +65,7 @@ async function refresh() {
     try {
         await Promise.all([loadInstances(), loadTasks()]);
         if (detail.value) await openInstance(detail.value.instance.instance_id);
-    } catch (e) { error.value = e.response?.data?.message ?? 'Load failed'; }
+    } catch (e) { error.value = e.response?.data?.message ?? t('Load failed'); }
 }
 
 onMounted(() => { refresh(); poll = setInterval(refresh, 5000); });
@@ -70,19 +73,19 @@ onUnmounted(() => clearInterval(poll));
 </script>
 
 <template>
-    <Head title="Workflow Ops" />
+    <Head :title="t('Workflow Ops')" />
     <AuthenticatedLayout>
         <template #header>
-            <h2 class="text-xl font-semibold leading-tight text-gray-800">IT-Ops · Process Monitor</h2>
+            <h2 class="text-xl font-semibold leading-tight text-gray-800">{{ t('IT-Ops · Process Monitor') }}</h2>
         </template>
 
         <div class="py-6">
             <div class="mx-auto max-w-[110rem] space-y-4 px-4 sm:px-6 lg:px-8">
                 <div class="flex gap-2 text-sm">
-                    <button class="rounded px-3 py-1" :class="tab==='instances' ? 'bg-gray-800 text-white' : 'bg-white'" @click="tab='instances'">Instances</button>
-                    <button class="rounded px-3 py-1" :class="tab==='tasks' ? 'bg-gray-800 text-white' : 'bg-white'" @click="tab='tasks'">Tasks &amp; Incidents</button>
+                    <button class="rounded px-3 py-1" :class="tab==='instances' ? 'bg-gray-800 text-white' : 'bg-white'" @click="tab='instances'">{{ t('Instances') }}</button>
+                    <button class="rounded px-3 py-1" :class="tab==='tasks' ? 'bg-gray-800 text-white' : 'bg-white'" @click="tab='tasks'">{{ t('Tasks & Incidents') }}</button>
                     <span class="flex-1"></span>
-                    <button class="rounded border bg-white px-3 py-1" @click="refresh">Refresh</button>
+                    <button class="rounded border bg-white px-3 py-1" @click="refresh">{{ t('Refresh') }}</button>
                 </div>
                 <p v-if="error" class="rounded bg-red-50 p-2 text-sm text-red-600">{{ error }}</p>
 
@@ -90,7 +93,7 @@ onUnmounted(() => clearInterval(poll));
                     <div class="col-span-5 overflow-hidden rounded-lg bg-white shadow-sm">
                         <table class="min-w-full divide-y text-sm">
                             <thead class="bg-gray-50 text-left text-xs uppercase text-gray-500">
-                                <tr><th class="px-3 py-2">Process</th><th class="px-3 py-2">Business key</th><th class="px-3 py-2">Status</th></tr>
+                                <tr><th class="px-3 py-2">{{ t('Process') }}</th><th class="px-3 py-2">{{ t('Business key') }}</th><th class="px-3 py-2">{{ t('Status') }}</th></tr>
                             </thead>
                             <tbody class="divide-y divide-gray-100">
                                 <tr v-for="i in instances" :key="i.instance_id" class="cursor-pointer hover:bg-gray-50" @click="openInstance(i.instance_id)">
@@ -98,7 +101,7 @@ onUnmounted(() => clearInterval(poll));
                                     <td class="px-3 py-2 font-mono text-xs">{{ i.business_key }}</td>
                                     <td class="px-3 py-2"><span class="rounded-full px-2 py-0.5 text-xs" :class="badge(i.status)">{{ i.status }}</span></td>
                                 </tr>
-                                <tr v-if="!instances.length"><td colspan="3" class="px-3 py-6 text-center text-gray-400">No instances.</td></tr>
+                                <tr v-if="!instances.length"><td colspan="3" class="px-3 py-6 text-center text-gray-400">{{ t('No instances.') }}</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -106,19 +109,19 @@ onUnmounted(() => clearInterval(poll));
                     <div class="col-span-7 space-y-3">
                         <div class="rounded-lg bg-white shadow-sm" style="height: 42vh">
                             <div class="border-b p-2 text-sm font-medium">
-                                Execution trace
+                                {{ t('Execution trace') }}
                                 <span v-if="detail" class="text-xs text-gray-400">— {{ detail.instance.instance_id }}</span>
                             </div>
                             <VueFlow v-if="detail" v-model:nodes="traceNodes" v-model:edges="traceEdges" fit-view-on-init :nodes-draggable="false" :elements-selectable="false" class="tr-canvas">
                                 <Background pattern-color="#e2e8f0" :gap="16" />
                             </VueFlow>
-                            <p v-else class="p-4 text-sm text-gray-400">Select an instance to replay its path.</p>
+                            <p v-else class="p-4 text-sm text-gray-400">{{ t('Select an instance to replay its path.') }}</p>
                         </div>
                         <div v-if="detail" class="max-h-44 overflow-auto rounded-lg bg-white p-3 text-xs shadow-sm">
-                            <div v-for="t in detail.trace" :key="t.id" class="flex gap-2 border-b py-1 last:border-0">
-                                <span class="font-mono text-gray-400">{{ t.created_at?.substring(11,19) }}</span>
-                                <span class="font-medium">{{ t.event }}</span>
-                                <span class="text-gray-500">{{ t.node_id }}</span>
+                            <div v-for="tr in detail.trace" :key="tr.id" class="flex gap-2 border-b py-1 last:border-0">
+                                <span class="font-mono text-gray-400">{{ tr.created_at?.substring(11,19) }}</span>
+                                <span class="font-medium">{{ tr.event }}</span>
+                                <span class="text-gray-500">{{ tr.node_id }}</span>
                             </div>
                         </div>
                     </div>
@@ -127,20 +130,20 @@ onUnmounted(() => clearInterval(poll));
                 <div v-show="tab==='tasks'" class="overflow-hidden rounded-lg bg-white shadow-sm">
                     <table class="min-w-full divide-y text-sm">
                         <thead class="bg-gray-50 text-left text-xs uppercase text-gray-500">
-                            <tr><th class="px-3 py-2">Task</th><th class="px-3 py-2">Topic</th><th class="px-3 py-2">Status</th><th class="px-3 py-2">Retries</th><th class="px-3 py-2">Error</th><th class="px-3 py-2"></th></tr>
+                            <tr><th class="px-3 py-2">{{ t('Task') }}</th><th class="px-3 py-2">{{ t('Topic') }}</th><th class="px-3 py-2">{{ t('Status') }}</th><th class="px-3 py-2">{{ t('Retries') }}</th><th class="px-3 py-2">{{ t('Error') }}</th><th class="px-3 py-2"></th></tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100">
-                            <tr v-for="t in tasks" :key="t.task_id">
-                                <td class="px-3 py-2 font-mono text-xs">{{ t.task_id }}</td>
-                                <td class="px-3 py-2">{{ t.topic }}</td>
-                                <td class="px-3 py-2"><span class="rounded-full px-2 py-0.5 text-xs" :class="badge(t.status)">{{ t.status }}</span></td>
-                                <td class="px-3 py-2">{{ t.retries }}</td>
-                                <td class="px-3 py-2 text-xs text-red-500">{{ t.error_message }}</td>
+                            <tr v-for="task in tasks" :key="task.task_id">
+                                <td class="px-3 py-2 font-mono text-xs">{{ task.task_id }}</td>
+                                <td class="px-3 py-2">{{ task.topic }}</td>
+                                <td class="px-3 py-2"><span class="rounded-full px-2 py-0.5 text-xs" :class="badge(task.status)">{{ task.status }}</span></td>
+                                <td class="px-3 py-2">{{ task.retries }}</td>
+                                <td class="px-3 py-2 text-xs text-red-500">{{ task.error_message }}</td>
                                 <td class="px-3 py-2">
-                                    <button v-if="t.status === 'INCIDENT' || t.status === 'FAILED'" class="rounded bg-indigo-50 px-2 py-1 text-xs text-indigo-600" @click="retry(t.task_id)">Retry</button>
+                                    <button v-if="task.status === 'INCIDENT' || task.status === 'FAILED'" class="rounded bg-indigo-50 px-2 py-1 text-xs text-indigo-600" @click="retry(task.task_id)">{{ t('Retry') }}</button>
                                 </td>
                             </tr>
-                            <tr v-if="!tasks.length"><td colspan="6" class="px-3 py-6 text-center text-gray-400">No active tasks or incidents.</td></tr>
+                            <tr v-if="!tasks.length"><td colspan="6" class="px-3 py-6 text-center text-gray-400">{{ t('No active tasks or incidents.') }}</td></tr>
                         </tbody>
                     </table>
                 </div>

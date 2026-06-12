@@ -2,6 +2,9 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import { Head } from '@inertiajs/vue3';
 import { ref, onMounted, onUnmounted } from 'vue';
+import { useI18n } from '@/i18n';
+
+const { t } = useI18n();
 
 // NOC Console: one pane of glass over everything running — service heartbeats with
 // start/stop/restart, workflow incidents, provisioning mismatches, outbox backlog,
@@ -54,35 +57,35 @@ onUnmounted(() => clearInterval(timer));
 </script>
 
 <template>
-    <Head title="NOC Console" />
+    <Head :title="t('NOC Console')" />
     <AuthenticatedLayout>
-        <template #header><h2 class="font-semibold text-xl text-gray-800">NOC Console</h2></template>
+        <template #header><h2 class="font-semibold text-xl text-gray-800">{{ t('NOC Console') }}</h2></template>
 
         <div class="py-6 max-w-7xl mx-auto sm:px-6 lg:px-8">
             <div class="mb-4 flex gap-2 items-center">
-                <button v-for="t in ['overview', 'trace', 'logs', 'sla']" :key="t" @click="tab = t; t === 'logs' && loadLogs(); t === 'sla' && loadSla()"
-                    :class="tab === t ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm capitalize">{{ t }}</button>
+                <button v-for="tb in ['overview', 'trace', 'logs', 'sla']" :key="tb" @click="tab = tb; tb === 'logs' && loadLogs(); tb === 'sla' && loadSla()"
+                    :class="tab === tb ? 'bg-indigo-600 text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm capitalize">{{ t(tb) }}</button>
                 <div class="ml-auto flex gap-1">
-                    <input v-model="trace.key" @keyup.enter="runTrace()" placeholder="Trace: sub_…, ford_…, op_…, correlation id"
+                    <input v-model="trace.key" @keyup.enter="runTrace()" :placeholder="t('Trace: sub_…, ford_…, op_…, correlation id')"
                         class="border rounded px-2 py-1 text-sm w-72" />
-                    <button @click="runTrace()" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">Trace</button>
+                    <button @click="runTrace()" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">{{ t('Trace') }}</button>
                 </div>
             </div>
 
             <!-- Overview -->
             <div v-if="tab === 'overview' && overview" class="space-y-4">
                 <div class="grid grid-cols-5 gap-3">
-                    <div class="bg-white rounded shadow p-3"><div class="text-xs text-gray-500">Running flows</div><div class="text-2xl font-bold">{{ overview.runningInstances }}</div></div>
-                    <div class="bg-white rounded shadow p-3" :class="overview.workflowIncidents ? 'ring-2 ring-red-300' : ''"><div class="text-xs text-gray-500">Workflow incidents</div><div class="text-2xl font-bold" :class="overview.workflowIncidents ? 'text-red-600' : ''">{{ overview.workflowIncidents }}</div></div>
-                    <div class="bg-white rounded shadow p-3" :class="overview.provisioningMismatches ? 'ring-2 ring-amber-300' : ''"><div class="text-xs text-gray-500">Provisioning mismatches</div><div class="text-2xl font-bold" :class="overview.provisioningMismatches ? 'text-amber-600' : ''">{{ overview.provisioningMismatches }}</div></div>
-                    <div class="bg-white rounded shadow p-3"><div class="text-xs text-gray-500">Outbox backlog</div><div class="text-2xl font-bold">{{ overview.outboxBacklog }}</div></div>
-                    <div class="bg-white rounded shadow p-3" :class="overview.slaOverdueTickets ? 'ring-2 ring-red-300' : ''"><div class="text-xs text-gray-500">SLA-overdue tickets</div><div class="text-2xl font-bold" :class="overview.slaOverdueTickets ? 'text-red-600' : ''">{{ overview.slaOverdueTickets }}</div></div>
+                    <div class="bg-white rounded shadow p-3"><div class="text-xs text-gray-500">{{ t('Running flows') }}</div><div class="text-2xl font-bold">{{ overview.runningInstances }}</div></div>
+                    <div class="bg-white rounded shadow p-3" :class="overview.workflowIncidents ? 'ring-2 ring-red-300' : ''"><div class="text-xs text-gray-500">{{ t('Workflow incidents') }}</div><div class="text-2xl font-bold" :class="overview.workflowIncidents ? 'text-red-600' : ''">{{ overview.workflowIncidents }}</div></div>
+                    <div class="bg-white rounded shadow p-3" :class="overview.provisioningMismatches ? 'ring-2 ring-amber-300' : ''"><div class="text-xs text-gray-500">{{ t('Provisioning mismatches') }}</div><div class="text-2xl font-bold" :class="overview.provisioningMismatches ? 'text-amber-600' : ''">{{ overview.provisioningMismatches }}</div></div>
+                    <div class="bg-white rounded shadow p-3"><div class="text-xs text-gray-500">{{ t('Outbox backlog') }}</div><div class="text-2xl font-bold">{{ overview.outboxBacklog }}</div></div>
+                    <div class="bg-white rounded shadow p-3" :class="overview.slaOverdueTickets ? 'ring-2 ring-red-300' : ''"><div class="text-xs text-gray-500">{{ t('SLA-overdue tickets') }}</div><div class="text-2xl font-bold" :class="overview.slaOverdueTickets ? 'text-red-600' : ''">{{ overview.slaOverdueTickets }}</div></div>
                 </div>
 
                 <div class="bg-white rounded shadow p-4">
-                    <div class="font-semibold mb-2">Platform services</div>
+                    <div class="font-semibold mb-2">{{ t('Platform services') }}</div>
                     <table class="w-full text-sm">
-                        <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="py-1">Service</th><th>Status</th><th>Last seen</th><th>Metrics</th><th class="text-right">Control</th></tr></thead>
+                        <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="py-1">{{ t('Service') }}</th><th>{{ t('Status') }}</th><th>{{ t('Last seen') }}</th><th>{{ t('Metrics') }}</th><th class="text-right">{{ t('Control') }}</th></tr></thead>
                         <tbody>
                             <tr v-for="s in overview.services" :key="s.service" class="border-t">
                                 <td class="py-1.5 font-mono text-xs">{{ s.service }}</td>
@@ -90,9 +93,9 @@ onUnmounted(() => clearInterval(timer));
                                 <td class="text-xs text-gray-500">{{ s.last_seen_at }}</td>
                                 <td class="text-xs font-mono text-gray-500">{{ JSON.stringify(s.metrics ?? {}) }}</td>
                                 <td class="text-right space-x-1">
-                                    <button v-if="s.status === 'UP'" @click="service(s.service, 'stop')" class="px-2 py-0.5 bg-red-500 text-white rounded text-xs">Stop</button>
-                                    <button v-else @click="service(s.service, 'start')" class="px-2 py-0.5 bg-green-600 text-white rounded text-xs">Start</button>
-                                    <button @click="restart(s.service)" class="px-2 py-0.5 bg-gray-200 rounded text-xs">Restart</button>
+                                    <button v-if="s.status === 'UP'" @click="service(s.service, 'stop')" class="px-2 py-0.5 bg-red-500 text-white rounded text-xs">{{ t('Stop') }}</button>
+                                    <button v-else @click="service(s.service, 'start')" class="px-2 py-0.5 bg-green-600 text-white rounded text-xs">{{ t('Start') }}</button>
+                                    <button @click="restart(s.service)" class="px-2 py-0.5 bg-gray-200 rounded text-xs">{{ t('Restart') }}</button>
                                 </td>
                             </tr>
                         </tbody>
@@ -102,20 +105,20 @@ onUnmounted(() => clearInterval(timer));
 
             <!-- Trace -->
             <div v-else-if="tab === 'trace'" class="bg-white rounded shadow p-4">
-                <div v-if="trace.loading" class="text-sm text-gray-500">Tracing…</div>
-                <div v-else-if="!trace.result" class="text-sm text-gray-500">Enter a subscription / order / operation / correlation id above and hit Trace.</div>
+                <div v-if="trace.loading" class="text-sm text-gray-500">{{ t('Tracing…') }}</div>
+                <div v-else-if="!trace.result" class="text-sm text-gray-500">{{ t('Enter a subscription / order / operation / correlation id above and hit Trace.') }}</div>
                 <div v-else>
                     <div class="mb-2 text-sm">
                         <span class="font-semibold">{{ trace.result.key }}</span>
-                        <span class="text-xs text-gray-400 ml-2">correlations: {{ trace.result.correlationIds.join(', ') }}</span>
-                        <span class="text-xs text-gray-400 ml-2">{{ trace.result.timeline.length }} steps</span>
+                        <span class="text-xs text-gray-400 ml-2">{{ t('correlations:') }} {{ trace.result.correlationIds.join(', ') }}</span>
+                        <span class="text-xs text-gray-400 ml-2">{{ trace.result.timeline.length }} {{ t('steps') }}</span>
                     </div>
                     <div class="border-l-2 border-indigo-200 pl-4 space-y-1.5">
-                        <div v-for="(t, i) in trace.result.timeline" :key="i" class="text-sm flex gap-2 items-baseline">
-                            <span class="text-xs text-gray-400 w-40 shrink-0">{{ t.at }}</span>
-                            <span class="px-1.5 py-0.5 rounded text-xs shrink-0" :class="sourceColor(t.source)">{{ t.source }}</span>
-                            <span class="font-medium">{{ t.label }}</span>
-                            <span class="text-xs text-gray-400">{{ t.detail }}</span>
+                        <div v-for="(step, i) in trace.result.timeline" :key="i" class="text-sm flex gap-2 items-baseline">
+                            <span class="text-xs text-gray-400 w-40 shrink-0">{{ step.at }}</span>
+                            <span class="px-1.5 py-0.5 rounded text-xs shrink-0" :class="sourceColor(step.source)">{{ step.source }}</span>
+                            <span class="font-medium">{{ step.label }}</span>
+                            <span class="text-xs text-gray-400">{{ step.detail }}</span>
                         </div>
                     </div>
                 </div>
@@ -125,38 +128,38 @@ onUnmounted(() => clearInterval(timer));
             <div v-else-if="tab === 'logs'" class="bg-white rounded shadow p-4">
                 <div class="flex gap-2 mb-2">
                     <select v-model="logFilter.level" @change="loadLogs" class="border rounded px-2 py-1 text-sm">
-                        <option value="">all levels</option><option>error</option><option>warning</option><option>info</option><option>debug</option>
+                        <option value="">{{ t('all levels') }}</option><option>error</option><option>warning</option><option>info</option><option>debug</option>
                     </select>
-                    <input v-model="logFilter.channel" @keyup.enter="loadLogs" placeholder="channel" class="border rounded px-2 py-1 text-sm" />
+                    <input v-model="logFilter.channel" @keyup.enter="loadLogs" :placeholder="t('channel')" class="border rounded px-2 py-1 text-sm" />
                 </div>
                 <div class="font-mono text-xs space-y-0.5 max-h-[32rem] overflow-auto">
                     <div v-for="l in logs" :key="l.id" class="flex gap-2">
                         <span class="text-gray-400 w-40 shrink-0">{{ l.logged_at }}</span>
                         <span class="w-14 shrink-0 font-semibold" :class="{ error: 'text-red-600', critical: 'text-red-700', warning: 'text-amber-600' }[l.level] ?? 'text-gray-500'">{{ l.level }}</span>
                         <span class="flex-1">{{ l.message }}</span>
-                        <button v-if="l.correlation_id" @click="runTrace(l.correlation_id)" class="text-indigo-500 underline shrink-0">trace</button>
+                        <button v-if="l.correlation_id" @click="runTrace(l.correlation_id)" class="text-indigo-500 underline shrink-0">{{ t('trace') }}</button>
                     </div>
                 </div>
             </div>
 
             <!-- SLA -->
             <div v-else-if="tab === 'sla'" class="bg-white rounded shadow p-4">
-                <div class="font-semibold mb-2">Tickets breaching SLA</div>
+                <div class="font-semibold mb-2">{{ t('Tickets breaching SLA') }}</div>
                 <table class="w-full text-sm">
-                    <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="py-1">Ticket</th><th>Subject</th><th>Priority</th><th>Status</th><th>Queue</th><th>Due</th><th></th></tr></thead>
+                    <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="py-1">{{ t('Ticket') }}</th><th>{{ t('Subject') }}</th><th>{{ t('Priority') }}</th><th>{{ t('Status') }}</th><th>{{ t('Queue') }}</th><th>{{ t('Due') }}</th><th></th></tr></thead>
                     <tbody>
-                        <tr v-for="t in sla" :key="t.ticket_id" class="border-t">
-                            <td class="py-1 font-mono text-xs">{{ t.ticket_id }}</td>
-                            <td>{{ t.subject }}</td>
-                            <td>{{ t.priority }}</td>
-                            <td>{{ t.status }}</td>
-                            <td class="text-xs">{{ t.queue ?? '—' }}</td>
-                            <td class="text-xs text-red-600">{{ t.sla_due_at }}</td>
-                            <td><button @click="runTrace(t.ticket_id)" class="text-indigo-500 underline text-xs">trace</button></td>
+                        <tr v-for="row in sla" :key="row.ticket_id" class="border-t">
+                            <td class="py-1 font-mono text-xs">{{ row.ticket_id }}</td>
+                            <td>{{ row.subject }}</td>
+                            <td>{{ row.priority }}</td>
+                            <td>{{ row.status }}</td>
+                            <td class="text-xs">{{ row.queue ?? '—' }}</td>
+                            <td class="text-xs text-red-600">{{ row.sla_due_at }}</td>
+                            <td><button @click="runTrace(row.ticket_id)" class="text-indigo-500 underline text-xs">{{ t('trace') }}</button></td>
                         </tr>
                     </tbody>
                 </table>
-                <div v-if="!sla.length" class="text-sm text-green-600">No SLA breaches. 🎉</div>
+                <div v-if="!sla.length" class="text-sm text-green-600">{{ t('No SLA breaches.') }} 🎉</div>
             </div>
         </div>
     </AuthenticatedLayout>
