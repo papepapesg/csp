@@ -6,10 +6,8 @@ use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
-use Modules\Notification\Dispatch\Adapters\EmailAdapter;
-use Modules\Notification\Dispatch\Adapters\SmsAdapter;
 use Modules\Notification\Dispatch\AdapterConfigurationException;
-use Modules\Notification\Dispatch\ChannelAdapter;
+use Modules\Notification\Dispatch\ChannelAdapterRegistry;
 use Modules\Notification\Dispatch\DeliveryResult;
 use Modules\Notification\Dispatch\Dispatch;
 use Modules\Notification\Dispatch\FailureCategory;
@@ -31,6 +29,7 @@ class NotificationService
     public function __construct(
         private readonly EventBus $events,
         private readonly TemplateService $templates,
+        private readonly ChannelAdapterRegistry $adapters,
     ) {}
 
     /** @param array<string,mixed> $data */
@@ -93,17 +92,16 @@ class NotificationService
     }
 
     /**
-     * Dispatch through the channel's provider adapter and return its result. Resolves the
-     * adapter for the channel, initializes it with the operator's channel_operator_config
-     * (or a sensible default when the operator hasn't configured the channel yet), builds the
-     * Dispatch the adapter expects, and calls send(). This is the concrete delivery path —
-     * the adapter is the swappable SMTP / SMSC integration point.
+     * Dispatch through the channel's provider adapter and return its result. The adapter is
+     * resolved by the registry from channel_operator_config.adapter_implementation (falling
+     * back to the channel's configured default implementation when the operator has no row
+     * yet) — never by a channel switch in code, so a new channel/gateway needs only an
+     * adapter class + config entries.
      */
     private function dispatchToProvider(Notification $notification): DeliveryResult
     {
-        $adapter = $this->providerFor($notification->channel);
         try {
-            $adapter->initialize($this->channelConfig($notification->operator_code, $notification->channel));
+            $adapter = $this->adapters->make($this->channelConfig($notification->operator_code, $notification->channel));
         } catch (AdapterConfigurationException $e) {
             return DeliveryResult::failed(FailureCategory::PERMANENT_TEMPLATE, $e->getMessage());
         }
@@ -122,38 +120,49 @@ class NotificationService
         return $adapter->send($dispatch, (int) config('sophix.notification.send_timeout_seconds', 15));
     }
 
-    /** The provider adapter for a channel. EMAIL -> EmailAdapter; everything text-shaped -> SmsAdapter. */
-    private function providerFor(string $channel): ChannelAdapter
-    {
-        return $channel === 'EMAIL' ? new EmailAdapter() : new SmsAdapter();
-    }
-
     /**
-     * Map the flat subject/body onto the format-keyed artifact map the adapters read: EMAIL
-     * needs subject + HTML + text; the text channels need a single body.
+     * Map the flat subject/body onto the format-keyed artifact map the adapter reads, driven
+     * by the channel's declared formats (Template::CHANNEL_FORMATS): the subject fills the
+     * subject-format, the body fills every other format. Channels without a declaration get
+     * a single text body.
      *
      * @return array<string,string>
      */
     private function artifactsFor(Notification $notification): array
     {
-        if ($notification->channel === 'EMAIL') {
-            return [
-                Template::FORMAT_EMAIL_SUBJECT => (string) ($notification->subject ?? ''),
-                Template::FORMAT_EMAIL_HTML => (string) ($notification->body ?? ''),
-                Template::FORMAT_EMAIL_TEXT => (string) ($notification->body ?? ''),
-            ];
+        $formats = Template::CHANNEL_FORMATS[$notification->channel] ?? [Template::FORMAT_SMS_TEXT];
+
+        $artifacts = [];
+        foreach ($formats as $format) {
+            $artifacts[$format] = $format === Template::FORMAT_EMAIL_SUBJECT
+                ? (string) ($notification->subject ?? '')
+                : (string) ($notification->body ?? '');
         }
 
-        return [Template::FORMAT_SMS_TEXT => (string) ($notification->body ?? '')];
+        return $artifacts;
     }
 
-    /** Persisted operator channel config, or a transient default so the stub providers run unconfigured. */
+    /**
+     * Persisted operator channel config, or a transient default (using the channel's
+     * configured default adapter_implementation) so the shipped stub providers run for
+     * operators that haven't configured the channel yet.
+     */
     private function channelConfig(string $operator, string $channel): ChannelOperatorConfig
     {
-        return ChannelOperatorConfig::resolve($operator, $channel) ?? new ChannelOperatorConfig([
+        $persisted = ChannelOperatorConfig::resolve($operator, $channel);
+        if ($persisted && $persisted->enabled) {
+            return $persisted;
+        }
+
+        $impl = $this->adapters->defaultImplementationFor($channel);
+        if (! $impl) {
+            throw new AdapterConfigurationException("Channel {$channel} has no configuration and no default adapter");
+        }
+
+        return new ChannelOperatorConfig([
             'operator_code' => $operator,
             'channel' => $channel,
-            'adapter_implementation' => $channel === 'EMAIL' ? 'smtp.default' : 'sms.default',
+            'adapter_implementation' => $impl,
             'sender_identifier' => $channel === 'EMAIL' ? "no-reply@{$operator}.sophix.local" : strtoupper($operator),
             'enabled' => true,
         ]);

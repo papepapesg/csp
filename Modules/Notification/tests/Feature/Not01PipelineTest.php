@@ -296,6 +296,30 @@ class Not01PipelineTest extends TestCase
         $this->assertSame('PERMANENT_RECIPIENT', $bad->failure_reason);
     }
 
+    public function test_new_channel_provider_plugs_in_via_config_only(): void
+    {
+        // Adding WhatsApp = (1) an adapter class, (2) a config map entry, (3) an operator
+        // channel row. No edits to the registry, dispatcher, or NotificationService.
+        config()->set('sophix.notification.adapter_implementations',
+            config('sophix.notification.adapter_implementations') + ['whatsapp.meta' => FakeWhatsAppAdapter::class]);
+        config()->set('sophix.notification.default_adapter.WHATSAPP', 'whatsapp.meta');
+        ChannelOperatorConfig::query()->create([
+            'operator_code' => 'WIK', 'channel' => 'WHATSAPP',
+            'adapter_implementation' => 'whatsapp.meta', 'sender_identifier' => 'WANANCHI_WA', 'enabled' => true,
+        ]);
+
+        // Legacy imperative path resolves the new provider through the registry.
+        $n = app(\Modules\Notification\Services\NotificationService::class)->send([
+            'channel' => 'WHATSAPP', 'recipient' => '+254712345678', 'body' => 'Hello via WhatsApp',
+        ]);
+        $this->assertSame('SENT', $n->status);
+        $this->assertSame(['+254712345678' => 'Hello via WhatsApp'], FakeWhatsAppAdapter::$delivered);
+
+        // The event-driven registry resolves it too.
+        $adapter = app(\Modules\Notification\Dispatch\ChannelAdapterRegistry::class)->for('WIK', 'WHATSAPP');
+        $this->assertInstanceOf(FakeWhatsAppAdapter::class, $adapter);
+    }
+
     public function test_unconfigured_channel_is_permanent_failure(): void
     {
         ChannelOperatorConfig::query()->where('channel', 'SMS')->update(['enabled' => false]);
@@ -307,4 +331,27 @@ class Not01PipelineTest extends TestCase
         $attempt = NotificationDeliveryAttempt::where('notification_id', $log->id)->first();
         $this->assertSame('PERMANENT_TEMPLATE', $attempt->failure_category);
     }
+}
+
+/** A third-party channel provider, exactly as a deployment would ship one. */
+class FakeWhatsAppAdapter implements \Modules\Notification\Dispatch\ChannelAdapter
+{
+    /** @var array<string,string> recipient => text, captured for assertions */
+    public static array $delivered = [];
+
+    public function channel(): string
+    {
+        return 'WHATSAPP';
+    }
+
+    public function initialize(ChannelOperatorConfig $config): void {}
+
+    public function send(\Modules\Notification\Dispatch\Dispatch $dispatch, int $timeoutSeconds): \Modules\Notification\Dispatch\DeliveryResult
+    {
+        self::$delivered[$dispatch->recipient] = (string) $dispatch->artifact(Template::FORMAT_SMS_TEXT);
+
+        return \Modules\Notification\Dispatch\DeliveryResult::sent('wa_'.bin2hex(random_bytes(4)));
+    }
+
+    public function shutdown(): void {}
 }

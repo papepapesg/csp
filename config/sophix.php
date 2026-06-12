@@ -93,6 +93,29 @@ return [
     | operator's config; these are the platform defaults.
     */
     'notification' => [
+        /*
+        | adapter_implementation -> adapter class. The string is what operators put in
+        | channel_operator_config; the class is the ChannelAdapter that handles it.
+        | Adding a channel/gateway = write the adapter class + add one entry here
+        | (or register() it from a service provider) — no registry/dispatcher edits.
+        */
+        'adapter_implementations' => [
+            'smtp.default' => \Modules\Notification\Dispatch\Adapters\EmailAdapter::class,
+            'smtp.transac' => \Modules\Notification\Dispatch\Adapters\EmailAdapter::class,
+            'sms.default' => \Modules\Notification\Dispatch\Adapters\SmsAdapter::class,
+            'sms.africastalking' => \Modules\Notification\Dispatch\Adapters\SmsAdapter::class,
+            'sms.beemafrica' => \Modules\Notification\Dispatch\Adapters\SmsAdapter::class,
+            'sms.orange-sn' => \Modules\Notification\Dispatch\Adapters\SmsAdapter::class,
+            'sms.twilio' => \Modules\Notification\Dispatch\Adapters\SmsAdapter::class,
+        ],
+        // Fallback adapter_implementation per channel when an operator has no
+        // channel_operator_config row yet (used only by the legacy imperative send()).
+        'default_adapter' => [
+            'EMAIL' => 'smtp.default',
+            'SMS' => 'sms.default',
+            'PUSH' => 'sms.default',
+            'WHATSAPP' => 'sms.default',
+        ],
         'default_locale' => env('SOPHIX_NOTIFICATION_LOCALE', 'en'),
         'timezone' => env('SOPHIX_NOTIFICATION_TZ', config('app.timezone', 'UTC')),
         'send_timeout_seconds' => (int) env('SOPHIX_NOTIFICATION_SEND_TIMEOUT', 15),
