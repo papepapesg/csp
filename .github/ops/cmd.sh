@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
 # Current ops command (executed by .github/workflows/ops.yml on the VPS runner).
-# Rebuild with the Tailwind + statefulApi fixes, then verify: containers, real CSS
-# size, and the health endpoint.
+# Rebuild the web image with the published /postman/ kit and verify it serves.
 set -euxo pipefail
 
-docker compose build
+docker compose build web
 docker compose up -d
-sleep 8
-docker compose ps
+sleep 5
 
-CSS=$(curl -s http://localhost/login | grep -oE '/build/assets/app-[A-Za-z0-9_-]+\.css' | head -1)
-echo "css=$CSS"
-curl -sI "http://localhost$CSS" | grep -iE 'HTTP|content-length|content-type'
-
-curl -s http://localhost/api/health
-echo
-echo DEPLOY_VERIFY_DONE
+echo "--- postman index:"
+curl -s http://localhost/postman/ | grep -oE 'href="[^"]+"' | head -10
+echo "--- one collection header:"
+curl -sI http://localhost/postman/collections/billing.postman_collection.json | head -3
+echo "--- env file header:"
+curl -sI http://localhost/postman/SOPHIX-VPS.postman_environment.json | head -3
+echo OPS_DONE

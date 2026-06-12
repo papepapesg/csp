@@ -72,3 +72,6 @@ CMD ["php-fpm"]
 FROM nginx:1.27-alpine AS web
 COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
 COPY --from=vendor /var/www/html/public /var/www/html/public
+# Publish the API test kit: Postman collections + environments are downloadable
+# from the deployment itself at /postman/ (browsable directory listing).
+COPY --from=vendor /var/www/html/postman /var/www/html/public/postman
