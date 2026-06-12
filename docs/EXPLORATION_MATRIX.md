@@ -26,7 +26,7 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 |---|---|---|---|---|---|---|
 | 1 | Lead → customer conversion (sales) | SALES-01 | Full pre-order pipeline: `sales_territory`, rich `sales_lead` lifecycle (DRAFT→NEW→ASSIGNED→CONTACTED/FOLLOW_UP→QUALIFIED→CONVERTED/LOST/DUPLICATE), `sales_lead_assignment` history, `sales_activity`, `sales_lead_package_interest`, `sales_conversion`, immutable `sales_attribution_event`. `SalesService` (createLead: lead_number, territory→franchise routing, duplicate detection SALES-1/7, auto-assign; assign SALES-6; activity-driven progression; qualify; convertToOrder→FUL-02 capture + attribution SALES-2/5); daily-work for FE-APP-02. Legacy `LeadController` kept | SalesLeadCreated/Assigned/Qualified/Converted/Lost, SalesAttributionRecorded | `Sales01PipelineTest` (6), `Wave3SalesUssdTest` | ✅ |
 | 2 | New customer sale to activation | FUL-02 order capture | `Modules/Fulfillment/Services/OrderCaptureService::capture` → seeded `ful-order-capture` process; 6 handlers in `Modules/Fulfillment/app/Workflow`; KYC gate + install-WO message catches | OrderCaptured, CustomerKycApproved, WorkOrderFinalized, SubscriptionActivated | `FulfillmentJourneyTest` (5 journeys incl. KYC park/resume); `DemoJourneySeeder` end-to-end | ✅ |
-| 3 | Customer 360 (composition screen) | read-only composition | `resources/js/Pages/Ilm/Customers/Show.vue` reading ILM/SUB/BIL/TCK APIs per panel | consumes module events indirectly | UI smoke via route tests | ⬜ |
+| 3 | Customer 360 (composition screen) | read-only composition | `CustomerOverviewService` one-round-trip aggregator (profile/accounts+flags/subscriptions/billing/tickets/interactions/notes) with **per-panel isolation** — a failing module degrades only its panel; `GET /api/customers/{id}/overview`; `Show.vue` rewired to it | consumes module events indirectly | `CustomerOverviewTest` (3, incl. partial-failure) | ✅ |
 | 4 | Customer/account/KYC master (ILM) | ILM-CFG-01 | `AccountService` (catalog-driven sub-status: derives main status, enforces requires_approval R-ILM-S-2, carries affects_provisioning), `CustomerService` (KYC state machine + config-driven approval authority per level R-ILM-K-3), flag system (Drools catalog) | CustomerKycApproved, CustomerAccountStatusChanged, flag events | `AccountFlagTest`, `CustomerApiTest`, `CvmFlagEvaluatorTest` | ✅ |
 | 5 | HomePass / serviceability (RLM) | RLM-CFG-01 | `Modules/Catalog` HomePass + `homepass_status_code` config catalog (semantic flags, not a hardcoded enum); `CatalogService::changeHomePassStatus` (flag-driven, first-sellable `HomePassReachedSellable` R-RLM-CFG-01-H-6); `/homepass/eligible` reads is_sellable | HomePassReachedSellable, StatusChanged | `CatalogApiTest` | ✅ |
 
@@ -117,7 +117,7 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | Dunning suspension | `DunningTest` (ladder → suspend-np flow → restriction) | ✅ |
 | Relocation | `SubscriptionRelocationTest` (target HomePass validation → WO) | ✅ |
 | Equipment swap | `SwapRequestTest` (serials, stock movement, instance states) | ✅ |
-| Customer 360 partial failure | per-panel client fetches degrade independently (no test yet) | ⬜ gap |
+| Customer 360 partial failure | `CustomerOverviewService` per-panel isolation (`CustomerOverviewTest`: a throwing panel degrades alone) | ✅ |
 | Reporting reconciliation | `ReportExportReconcileTest` (dashboard totals vs source modules) | ✅ |
 
 ## 3. Tour log
@@ -143,5 +143,6 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 2026-06-12 | #50 USSD (FE-CH-USSD-01) | config-driven menus (ussd_menu_definition per operator+language); stateful menu engine dispatching to owning module reads/writes; normalized gateway endpoint; request-log trace; en/sw (suite →401) |
 | 2026-06-12 | #40 RBAC (EM-CFG-03) | added user scopes + withinScope enforcement, role/permission metadata, frontend-action visibility matrix + per-user navigation, scopes in effective-access, RBAC events — Spatie stays the engine (suite →406) |
 | 2026-06-12 | #1 sales (SALES-01) | full pre-order pipeline (territory, rich lead lifecycle, assignment history, activities, package interest, conversion→FUL-02, immutable attribution events); duplicate detection; daily-work (suite →412) |
+| 2026-06-12 | #3 customer 360 | resilient one-round-trip `/overview` composition with per-panel isolation (closes the CROSS-00 §12 partial-failure gap); Show.vue rewired (suite →415) |
 
-**Next up (suggested order): #35 catalog setup, #3 customer 360, #46 reporting, #47/#27/#31/#42 UI surfaces.**
+**Next up (suggested order): #35 catalog setup, #46 reporting, #47/#27/#31/#42 UI surfaces.**

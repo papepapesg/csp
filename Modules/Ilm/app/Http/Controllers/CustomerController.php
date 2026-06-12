@@ -76,6 +76,16 @@ class CustomerController extends ApiController
         return ApiResponse::item(new CustomerResource($customer));
     }
 
+    /**
+     * GET /api/customers/{customer}/overview — the Customer 360 composition in one round trip.
+     * Each panel (profile/accounts/subscriptions/billing/tickets/interactions/notes) resolves
+     * independently; a failing module degrades only its panel.
+     */
+    public function overview(Customer $customer, \Modules\Ilm\Services\CustomerOverviewService $overview): JsonResponse
+    {
+        return ApiResponse::item($overview->overview($customer->customer_id));
+    }
+
     /** PATCH /api/customers/{customer} */
     public function update(UpdateCustomerRequest $request, Customer $customer): JsonResponse
     {

@@ -19,6 +19,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('customers', [CustomerController::class, 'index'])->middleware('permission:customer.read');
     Route::post('customers', [CustomerController::class, 'store'])->middleware(['permission:customer.create', 'idempotency']);
     Route::get('customers/{customer}', [CustomerController::class, 'show'])->middleware('permission:customer.read');
+    Route::get('customers/{customer}/overview', [CustomerController::class, 'overview'])->middleware('permission:customer.read');
     Route::patch('customers/{customer}', [CustomerController::class, 'update'])->middleware('permission:customer.update');
 
     // --- Customer contact methods / notes / interactions ---

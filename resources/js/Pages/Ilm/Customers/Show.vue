@@ -20,30 +20,27 @@ const notes = ref([]);
 const interactions = ref([]);
 const newNote = ref('');
 const error = ref(null);
+const panelErrors = ref({}); // per-panel availability — a failing panel degrades alone
 
+// Customer 360 loads in ONE round trip via the resilient /overview composition: each panel
+// resolves independently server-side, so a failing module (e.g. billing down) only blanks its
+// own panel instead of breaking the whole screen.
 async function load() {
     try {
-        const c = await window.axios.get(`/api/customers/${props.customerId}`);
-        customer.value = c.data;
-        const a = await window.axios.get('/api/customer-accounts', { params: { customerId: props.customerId } });
-        accounts.value = a.data.items ?? [];
+        const { data } = await window.axios.get(`/api/customers/${props.customerId}/overview`);
+        const p = data.panels ?? {};
+        const ok = (name) => { panelErrors.value[name] = !(p[name]?.available); return p[name]?.data; };
+
+        customer.value = ok('profile') ?? null;
+        accounts.value = ok('accounts') ?? [];
         for (const acc of accounts.value) {
-            const f = await window.axios.get(`/api/customer-accounts/${acc.accountId ?? acc.account_id}/flags`);
-            flags.value[acc.accountId ?? acc.account_id] = f.data.items ?? [];
+            flags.value[acc.accountId] = (acc.flags ?? []).map((code) => ({ flag_code: code }));
         }
-        const s = await window.axios.get('/api/subscriptions', { params: { customerId: props.customerId } });
-        subscriptions.value = s.data.items ?? [];
-        const accountIds = accounts.value.map((x) => x.accountId ?? x.account_id);
-        if (accountIds.length) {
-            const inv = await window.axios.get('/api/invoices', { params: { account_id: accountIds[0], size: 10 } });
-            invoices.value = inv.data.items ?? [];
-        }
-        const t = await window.axios.get('/api/tickets', { params: { customerId: props.customerId, size: 10 } });
-        tickets.value = t.data.items ?? [];
-        const n = await window.axios.get(`/api/customers/${props.customerId}/notes`);
-        notes.value = n.data.items ?? [];
-        const i = await window.axios.get(`/api/customers/${props.customerId}/interactions`);
-        interactions.value = i.data.items ?? [];
+        subscriptions.value = ok('subscriptions') ?? [];
+        invoices.value = (ok('billing') ?? {}).recentInvoices ?? [];
+        tickets.value = ok('tickets') ?? [];
+        notes.value = ok('notes') ?? [];
+        interactions.value = ok('interactions') ?? [];
     } catch (e) { error.value = e.response?.data?.message ?? 'Failed to load customer'; }
 }
 async function addNote() {
