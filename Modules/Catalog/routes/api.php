@@ -7,10 +7,12 @@ use Modules\Catalog\Http\Controllers\CampaignController;
 use Modules\Catalog\Http\Controllers\DiscountController;
 use Modules\Catalog\Http\Controllers\HomePassController;
 use Modules\Catalog\Http\Controllers\PackageController;
+use Modules\Catalog\Http\Controllers\PackageLaunchController;
 use Modules\Catalog\Http\Controllers\ServiceClassController;
 use Modules\Catalog\Http\Controllers\ServiceController;
 use Modules\Catalog\Http\Controllers\TaxController;
 use Modules\Catalog\Http\Controllers\TechRegionController;
+use Modules\Catalog\Http\Controllers\VoiceTariffController;
 use Modules\Catalog\Http\Controllers\WalletCatalogController;
 
 /*
@@ -32,10 +34,26 @@ Route::middleware('auth:sanctum')->group(function () {
     // SIP — Packages
     Route::get('packages', [PackageController::class, 'index'])->middleware('permission:catalog.read');
     Route::post('packages', [PackageController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
+    // SIP-02 sellable-package read model (Backoffice/sales/order-capture/self-care). Declared
+    // before packages/{package} so the literal segment is not bound as a package id.
+    Route::get('packages/available', [PackageLaunchController::class, 'available'])->middleware('permission:catalog.read');
     Route::get('packages/{package}', [PackageController::class, 'show'])->middleware('permission:catalog.read');
     Route::patch('packages/{package}', [PackageController::class, 'update'])->middleware('permission:catalog.manage');
     Route::post('packages/{package}/versions', [PackageController::class, 'addVersion'])->middleware('permission:catalog.manage');
     Route::post('packages/{package}/activate', [PackageController::class, 'activate'])->middleware(['permission:catalog.manage', 'idempotency']);
+    Route::post('packages/{package}/availability/suspend', [PackageLaunchController::class, 'suspendAvailability'])->middleware('permission:catalog.manage');
+    Route::post('packages/{package}/availability/resume', [PackageLaunchController::class, 'resumeAvailability'])->middleware('permission:catalog.manage');
+
+    // SIP-02 package launch lifecycle (launch plan → validate → review/approve → activate → retire).
+    Route::get('package-launch-plans', [PackageLaunchController::class, 'index'])->middleware('permission:catalog.read');
+    Route::post('package-launch-plans', [PackageLaunchController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
+    Route::get('package-launch-plans/{launchPlan}', [PackageLaunchController::class, 'show'])->middleware('permission:catalog.read');
+    Route::post('package-launch-plans/{launchPlan}/validate', [PackageLaunchController::class, 'validatePlan'])->middleware('permission:catalog.manage');
+    Route::post('package-launch-plans/{launchPlan}/submit-review', [PackageLaunchController::class, 'submitReview'])->middleware('permission:catalog.manage');
+    Route::post('package-launch-plans/{launchPlan}/approval-outcome', [PackageLaunchController::class, 'approvalOutcome'])->middleware('permission:catalog.manage');
+    Route::post('package-launch-plans/{launchPlan}/activate', [PackageLaunchController::class, 'activate'])->middleware(['permission:catalog.manage', 'idempotency']);
+    Route::post('package-launch-plans/run-due', [PackageLaunchController::class, 'runDue'])->middleware('permission:catalog.manage');
+    Route::post('package-retirement-plans', [PackageLaunchController::class, 'storeRetirement'])->middleware(['permission:catalog.manage', 'idempotency']);
 
     // ILM-CFG-02 — Tech regions
     Route::get('tech-regions', [TechRegionController::class, 'index'])->middleware('permission:catalog.read');
@@ -73,8 +91,45 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('house-types', [\Modules\Catalog\Http\Controllers\NetworkCatalogController::class, 'houseTypes'])->middleware('permission:catalog.read');
     Route::post('house-types', [\Modules\Catalog\Http\Controllers\NetworkCatalogController::class, 'storeHouseType'])->middleware('permission:catalog.manage');
 
-    // PLM-CFG-02 tax compute
+    // PLM-CFG-02 tax compute + admin config (rules/groups, effective-dated versioning)
     Route::post('tax/compute', [TaxController::class, 'compute'])->middleware('permission:catalog.read');
+    Route::get('tax/rules', [TaxController::class, 'rules'])->middleware('permission:catalog.read');
+    Route::post('tax/rules', [TaxController::class, 'storeRule'])->middleware('permission:catalog.manage');
+    Route::patch('tax/rules/{taxRule}', [TaxController::class, 'updateRule'])->middleware('permission:catalog.manage');
+    Route::get('tax/groups', [TaxController::class, 'groups'])->middleware('permission:catalog.read');
+    Route::post('tax/groups', [TaxController::class, 'storeGroup'])->middleware('permission:catalog.manage');
+    Route::patch('tax/groups/{taxGroup}', [TaxController::class, 'updateGroup'])->middleware('permission:catalog.manage');
+
+    // PLM-CFG-07 voice tariff catalog (plans / zones / prefixes / time bands / rates / allowances / bindings)
+    Route::get('plm/voice-tariff-plans', [VoiceTariffController::class, 'plans'])->middleware('permission:catalog.read');
+    Route::post('plm/voice-tariff-plans', [VoiceTariffController::class, 'storePlan'])->middleware(['permission:catalog.manage', 'idempotency']);
+    Route::get('plm/voice-tariff-plans/{tariffPlan}', [VoiceTariffController::class, 'showPlan'])->middleware('permission:catalog.read');
+    Route::patch('plm/voice-tariff-plans/{tariffPlan}', [VoiceTariffController::class, 'updatePlan'])->middleware('permission:catalog.manage');
+    Route::post('plm/voice-tariff-plans/{tariffPlan}/activate', [VoiceTariffController::class, 'activatePlan'])->middleware('permission:catalog.manage');
+    Route::post('plm/voice-tariff-plans/{tariffPlan}/retire', [VoiceTariffController::class, 'retirePlan'])->middleware('permission:catalog.manage');
+
+    Route::get('plm/voice-destination-zones', [VoiceTariffController::class, 'zones'])->middleware('permission:catalog.read');
+    Route::post('plm/voice-destination-zones', [VoiceTariffController::class, 'storeZone'])->middleware('permission:catalog.manage');
+
+    Route::get('plm/voice-time-bands', [VoiceTariffController::class, 'timeBands'])->middleware('permission:catalog.read');
+    Route::post('plm/voice-time-bands', [VoiceTariffController::class, 'storeTimeBand'])->middleware('permission:catalog.manage');
+
+    Route::get('plm/voice-destination-prefixes', [VoiceTariffController::class, 'prefixes'])->middleware('permission:catalog.read');
+    Route::post('plm/voice-destination-prefixes', [VoiceTariffController::class, 'storePrefix'])->middleware('permission:catalog.manage');
+    Route::post('plm/voice-destination-prefixes/bulk-import', [VoiceTariffController::class, 'bulkImportPrefixes'])->middleware('permission:catalog.manage');
+
+    Route::get('plm/voice-tariff-rates', [VoiceTariffController::class, 'rates'])->middleware('permission:catalog.read');
+    Route::post('plm/voice-tariff-rates', [VoiceTariffController::class, 'storeRate'])->middleware('permission:catalog.manage');
+    Route::post('plm/voice-tariff-rates/bulk-import', [VoiceTariffController::class, 'bulkImportRates'])->middleware('permission:catalog.manage');
+    Route::post('plm/voice-tariff-rates/validate-overlap', [VoiceTariffController::class, 'validateOverlap'])->middleware('permission:catalog.read');
+
+    Route::get('plm/voice-tariff-allowances', [VoiceTariffController::class, 'allowances'])->middleware('permission:catalog.read');
+    Route::post('plm/voice-tariff-allowances', [VoiceTariffController::class, 'storeAllowance'])->middleware('permission:catalog.manage');
+
+    Route::get('plm/voice-tariff-bindings', [VoiceTariffController::class, 'bindings'])->middleware('permission:catalog.read');
+    Route::post('plm/voice-tariff-bindings', [VoiceTariffController::class, 'storeBinding'])->middleware('permission:catalog.manage');
+
+    Route::post('plm/voice-rating/lookup', [VoiceTariffController::class, 'ratingLookup'])->middleware('permission:catalog.read');
 
     // PLM-CFG-04 / SIP-03 / DIS-OP-01 discounts
     Route::get('discounts', [DiscountController::class, 'index'])->middleware('permission:catalog.read');

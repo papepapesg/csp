@@ -87,6 +87,12 @@ watchEffect(() => {
                                     {{ t('Commercial') }}
                                 </NavLink>
                                 <NavLink
+                                    :href="route('catalog.setup')"
+                                    :active="route().current('catalog.setup')"
+                                >
+                                    {{ t('Catalog') }}
+                                </NavLink>
+                                <NavLink
                                     :href="route('templates.studio')"
                                     :active="route().current('templates.studio')"
                                 >

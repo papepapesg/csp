@@ -64,6 +64,7 @@ class TaxComputeService
             $rule = TaxRule::query()->where('operator_code', $operator)->where('code', $ruleCode)
                 ->where(fn ($q) => $q->whereNull('effective_from')->orWhere('effective_from', '<=', $taxableAt))
                 ->where(fn ($q) => $q->whereNull('effective_until')->orWhere('effective_until', '>', $taxableAt))
+                ->orderByDesc('effective_from') // newest applicable version wins (R-PLM-02-CT-1)
                 ->first();
             if (! $rule) {
                 continue;

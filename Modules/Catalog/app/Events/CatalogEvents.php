@@ -66,4 +66,37 @@ final class CatalogEvents
     public const CAMPAIGN_ACTIVATED = 'PromotionCampaignActivated';
 
     public const CAMPAIGN_REDEEMED = 'PromotionCampaignRedeemed';
+
+    // SIP-02 package launch lifecycle.
+    public const PACKAGE_LAUNCH_PLAN_CREATED = 'PackageLaunchPlanCreated';
+
+    public const PACKAGE_LAUNCH_VALIDATED = 'PackageLaunchValidated';
+
+    public const PACKAGE_LAUNCH_APPROVAL_REQUIRED = 'PackageLaunchApprovalRequired';
+
+    public const PACKAGE_LAUNCH_APPROVED = 'PackageLaunchApproved';
+
+    public const PACKAGE_LAUNCH_REJECTED = 'PackageLaunchRejected';
+
+    public const PACKAGE_AVAILABILITY_CHANGED = 'PackageAvailabilityChanged';
+
+    public const PACKAGE_END_OF_SALE = 'PackageEndOfSale';
+
+    public const PACKAGE_RETIRED = 'PackageRetired';
+
+    // PLM-CFG-07 voice tariff catalog.
+    public const VOICE_TARIFF_PLAN_CREATED = 'VoiceTariffPlanCreated';
+
+    public const VOICE_TARIFF_PLAN_ACTIVATED = 'VoiceTariffPlanActivated';
+
+    public const VOICE_TARIFF_PLAN_RETIRED = 'VoiceTariffPlanRetired';
+
+    public const VOICE_TARIFF_RATE_CHANGED = 'VoiceTariffRateChanged';
+
+    public const VOICE_DESTINATION_PREFIX_CHANGED = 'VoiceDestinationPrefixChanged';
+
+    public const VOICE_TARIFF_BINDING_CHANGED = 'VoiceTariffBindingChanged';
+
+    // PLM-CFG-02 tax configuration changes.
+    public const TAX_CONFIG_CHANGED = 'TaxConfigChanged';
 }
