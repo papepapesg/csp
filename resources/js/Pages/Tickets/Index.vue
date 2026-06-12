@@ -1,20 +1,28 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+import PageHeader from '@/Components/Bss/PageHeader.vue';
+import Panel from '@/Components/Bss/Panel.vue';
+import StatCard from '@/Components/Bss/StatCard.vue';
+import DataTable from '@/Components/Bss/DataTable.vue';
+import Drawer from '@/Components/Bss/Drawer.vue';
+import StatusBadge from '@/Components/Bss/StatusBadge.vue';
+import Timeline from '@/Components/Bss/Timeline.vue';
 import { Head } from '@inertiajs/vue3';
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from '@/i18n';
 
-const { t } = useI18n();
-// Alias for use inside template scopes where `t` is shadowed by a ticket row variable.
-const tr = t;
+const { t, dateFmt } = useI18n();
 
-// TCK-01 §13 backoffice cockpit: queues by status/priority with SLA-overdue
-// indicators; detail panel with the full timeline (comments, status changes, WO
-// events), customer-visible/internal comment distinction, and the lifecycle
-// actions (assign, create WO, resolve, reopen, cancel, close).
+// TCK-01 §13 / FE-APP-01 §7.3 backoffice cockpit: queues by status/priority with
+// SLA-overdue indicators; detail drawer with the full timeline (comments, status
+// changes, WO events), customer-visible/internal comment distinction, and the
+// lifecycle actions (assign, create WO, resolve, reopen, cancel, close).
+// Restyled onto the shared visual kit; the data layer is unchanged.
 const tickets = ref([]);
 const filter = ref({ status: '', queue: '', overdueOnly: false });
 const current = ref(null);
+const drawerOpen = ref(false);
+const loading = ref(true);
 const comment = ref({ body: '', visibility: 'INTERNAL' });
 const assignee = ref('');
 const resolveForm = ref({ resolution_code: 'RESOLVED_ON_SITE' });
@@ -23,18 +31,75 @@ const showCreate = ref(false);
 const error = ref(null);
 const flash = (e) => { error.value = e.response?.data?.message ?? t('Request failed'); setTimeout(() => (error.value = null), 6000); };
 
-const isOverdue = (t) => t.sla_due_at && !['RESOLVED', 'CLOSED', 'CANCELLED'].includes(t.status) && new Date(t.sla_due_at) < new Date();
+const STATUSES = ['OPEN', 'TRIAGED', 'ASSIGNED', 'WAITING_CUSTOMER', 'WAITING_INTERNAL', 'WAITING_WORK_ORDER', 'UNDER_REVIEW', 'RESOLVED', 'CLOSED', 'CANCELLED'];
+const TERMINAL = ['RESOLVED', 'CLOSED', 'CANCELLED'];
+
+// SLA-overdue logic — preserved exactly. (`tk` not `t`: keep the i18n helper free.)
+const isOverdue = (tk) => tk.sla_due_at && !TERMINAL.includes(tk.status) && new Date(tk.sla_due_at) < new Date();
 const visible = computed(() => (filter.value.overdueOnly ? tickets.value.filter(isOverdue) : tickets.value));
-const statusChip = (s) => ({ OPEN: 'bg-blue-100 text-blue-700', ASSIGNED: 'bg-op-soft text-op', WAITING_WORK_ORDER: 'bg-amber-100 text-amber-700', WAITING_CUSTOMER: 'bg-amber-100 text-amber-700', WAITING_INTERNAL: 'bg-amber-100 text-amber-700', UNDER_REVIEW: 'bg-purple-100 text-purple-700', RESOLVED: 'bg-green-100 text-green-700', CLOSED: 'bg-gray-200 text-gray-600', CANCELLED: 'bg-red-100 text-red-600' }[s] ?? 'bg-gray-100');
+
+// --- summary tiles (derived from the already-loaded tickets) ------------------
+const openCount = computed(() => tickets.value.filter((tk) => !TERMINAL.includes(tk.status)).length);
+const unassignedCount = computed(() => tickets.value.filter((tk) => !tk.assignee_id && !TERMINAL.includes(tk.status)).length);
+const breachedCount = computed(() => tickets.value.filter(isOverdue).length);
+const resolvedCount = computed(() => tickets.value.filter((tk) => tk.status === 'RESOLVED').length);
+
+// --- queue table -------------------------------------------------------------
+const columns = [
+    { key: 'status', label: 'Status' },
+    { key: 'subject', label: 'Subject' },
+    { key: 'priority', label: 'Priority' },
+    { key: 'queue', label: 'Queue' },
+    { key: 'assignee_id', label: 'Assignee' },
+    { key: 'sla', label: 'SLA' },
+];
+const priorityClass = (p) => ({ URGENT: 'text-red-600 font-bold', HIGH: 'text-amber-600 font-semibold' }[p] ?? 'text-gray-500');
+
+// --- detail timeline (status/WO events + comments → one Timeline) -------------
+const timelineEvents = computed(() => {
+    const c = current.value;
+    if (!c) return [];
+    const events = (c.timeline ?? []).map((e) => ({
+        title: e.from_status ? `${e.from_status} → ${e.to_status}` : (e.event_type ?? t('Event')),
+        subtitle: [e.from_status ? e.event_type : null, e.actor_id ? `${t('by')} ${e.actor_id}` : null].filter(Boolean).join(' · ') || undefined,
+        at: dateFmt(e.created_at),
+        tone: 'indigo',
+        _ts: e.created_at,
+    }));
+    const comments = (c.comments ?? []).map((cm) => ({
+        title: cm.body,
+        subtitle: `${cm.visibility ?? 'INTERNAL'} · ${cm.author_id ?? t('system')}`,
+        at: dateFmt(cm.created_at),
+        tone: cm.visibility === 'CUSTOMER_VISIBLE' ? 'green' : 'gray',
+        _ts: cm.created_at,
+    }));
+    return [...events, ...comments].sort((a, b) => String(b._ts ?? '').localeCompare(String(a._ts ?? '')));
+});
+
+const detailFields = computed(() => {
+    const c = current.value ?? {};
+    return [
+        ['Category', c.category],
+        ['Priority', c.priority],
+        ['Queue', c.queue],
+        ['Customer', c.customer_id],
+        ['Work order', c.work_order_id],
+        ['SLA due', c.sla_due_at ? dateFmt(c.sla_due_at) : null],
+    ].filter(([, v]) => v);
+});
 
 async function load() {
-    const { data } = await window.axios.get('/api/tickets', {
-        params: { status: filter.value.status || undefined, queue: filter.value.queue || undefined, size: 50 },
-    });
-    tickets.value = data.items ?? [];
+    loading.value = true;
+    try {
+        const { data } = await window.axios.get('/api/tickets', {
+            params: { status: filter.value.status || undefined, queue: filter.value.queue || undefined, size: 50 },
+        });
+        tickets.value = data.items ?? [];
+    } finally { loading.value = false; }
 }
-async function open(t) {
-    const { data } = await window.axios.get(`/api/tickets/${t.ticket_id}`);
+async function open(tk) {
+    drawerOpen.value = true;
+    const { data } = await window.axios.get(`/api/tickets/${tk.ticket_id}`);
     current.value = data;
 }
 async function act(action, payload = {}) {
@@ -63,103 +128,147 @@ onMounted(load);
 <template>
     <Head :title="t('Tickets')" />
     <AuthenticatedLayout>
-        <template #header><h2 class="text-xl font-semibold text-gray-800">{{ t('Ticketing cockpit (TCK-01)') }}</h2></template>
+        <template #header>
+            <PageHeader title="Tickets" :crumbs="[{ label: 'Operations' }, { label: 'Tickets' }]">
+                <template #actions>
+                    <button class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50" @click="load">
+                        {{ t('Refresh') }}
+                    </button>
+                    <button class="rounded-lg bg-op px-3 py-1.5 text-xs font-medium text-white hover:bg-op-dark" @click="showCreate = !showCreate">
+                        {{ t('New ticket') }}
+                    </button>
+                </template>
+            </PageHeader>
+        </template>
 
-        <div class="py-6 mx-auto max-w-7xl sm:px-6 lg:px-8">
-            <p v-if="error" class="mb-3 p-2 bg-red-100 text-red-700 rounded text-sm">{{ error }}</p>
+        <div class="mx-auto max-w-7xl space-y-5">
+            <p v-if="error" class="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-red-100">{{ error }}</p>
 
-            <div class="mb-3 flex gap-2 items-center">
-                <select v-model="filter.status" @change="load" class="border rounded px-2 py-1 text-sm">
-                    <option value="">{{ t('all statuses') }}</option>
-                    <option v-for="s in ['OPEN', 'TRIAGED', 'ASSIGNED', 'WAITING_CUSTOMER', 'WAITING_INTERNAL', 'WAITING_WORK_ORDER', 'UNDER_REVIEW', 'RESOLVED', 'CLOSED', 'CANCELLED']" :key="s">{{ s }}</option>
-                </select>
-                <input v-model="filter.queue" @keyup.enter="load" :placeholder="t('queue')" class="border rounded px-2 py-1 text-sm w-36" />
-                <label class="text-sm"><input type="checkbox" v-model="filter.overdueOnly" /> {{ t('SLA overdue only') }}</label>
-                <button @click="showCreate = !showCreate" class="ml-auto px-3 py-1 bg-op text-white rounded text-sm">{{ t('+ New ticket') }}</button>
+            <!-- Summary -->
+            <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                <StatCard label="Open" :value="openCount" sub="Active tickets" tone="indigo" :loading="loading" />
+                <StatCard label="Unassigned" :value="unassignedCount" sub="Awaiting an owner" tone="amber" :loading="loading" />
+                <StatCard label="SLA breached" :value="breachedCount" sub="Past SLA due" tone="red" :loading="loading" />
+                <StatCard label="Resolved" :value="resolvedCount" sub="Awaiting close" tone="emerald" :loading="loading" />
             </div>
 
-            <div v-if="showCreate" class="bg-white rounded shadow p-3 mb-3 grid grid-cols-5 gap-2">
-                <input v-model="createForm.subject" :placeholder="t('Subject')" class="border rounded px-2 py-1 text-sm col-span-2" />
-                <input v-model="createForm.category" :placeholder="t('Category (catalog)')" class="border rounded px-2 py-1 text-sm" />
-                <input v-model="createForm.customer_id" :placeholder="t('customer id')" class="border rounded px-2 py-1 text-sm" />
-                <button @click="createTicket" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Create') }}</button>
-            </div>
-
-            <div class="grid grid-cols-12 gap-4">
-                <div class="col-span-5 bg-white rounded shadow divide-y max-h-[40rem] overflow-auto">
-                    <div v-for="t in visible" :key="t.ticket_id" @click="open(t)"
-                        class="p-2.5 cursor-pointer hover:bg-op-soft" :class="current?.ticket_id === t.ticket_id ? 'bg-op-soft' : ''">
-                        <div class="flex items-center gap-2">
-                            <span class="text-xs px-1.5 py-0.5 rounded" :class="statusChip(t.status)">{{ t.status }}</span>
-                            <span class="font-medium text-sm truncate flex-1">{{ t.subject }}</span>
-                            <span class="text-xs" :class="{ URGENT: 'text-red-600 font-bold', HIGH: 'text-amber-600 font-semibold' }[t.priority]">{{ t.priority }}</span>
-                        </div>
-                        <div class="text-xs text-gray-400 flex gap-2 mt-0.5">
-                            <span>{{ t.queue ?? '—' }}</span>
-                            <span>{{ t.assignee_id ?? tr('unassigned') }}</span>
-                            <span v-if="isOverdue(t)" class="text-red-600 font-semibold">⏰ {{ tr('SLA BREACHED') }}</span>
-                            <span v-else-if="t.sla_due_at">{{ tr('due') }} {{ t.sla_due_at }}</span>
-                        </div>
-                    </div>
-                    <div v-if="!visible.length" class="p-4 text-sm text-gray-400">{{ t('No tickets match.') }}</div>
+            <!-- Create ticket -->
+            <Panel v-if="showCreate" title="New ticket" subtitle="Open a ticket in the cockpit">
+                <template #actions>
+                    <button class="rounded-lg border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50" @click="showCreate = false">
+                        {{ t('Cancel') }}
+                    </button>
+                </template>
+                <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    <input v-model="createForm.subject" :placeholder="t('Subject')" class="rounded-lg border border-gray-200 px-2 py-1.5 text-sm sm:col-span-2" />
+                    <input v-model="createForm.category" :placeholder="t('Category (catalog)')" class="rounded-lg border border-gray-200 px-2 py-1.5 text-sm" />
+                    <input v-model="createForm.customer_id" :placeholder="t('Customer ID')" class="rounded-lg border border-gray-200 px-2 py-1.5 text-sm" />
                 </div>
+                <button class="mt-3 rounded-lg bg-op px-3 py-1.5 text-sm font-medium text-white hover:bg-op-dark" @click="createTicket">
+                    {{ t('Create') }}
+                </button>
+            </Panel>
 
-                <div v-if="current" class="col-span-7 bg-white rounded shadow p-4 space-y-3 max-h-[40rem] overflow-auto">
-                    <div class="flex items-center gap-2">
-                        <span class="font-semibold">{{ current.subject }}</span>
-                        <span class="text-xs px-1.5 py-0.5 rounded" :class="statusChip(current.status)">{{ current.status }}</span>
-                        <span v-if="isOverdue(current)" class="text-xs text-red-600 font-semibold">⏰ {{ t('SLA breached') }}</span>
-                        <span class="text-xs text-gray-400 font-mono ml-auto">{{ current.ticket_id }}</span>
-                    </div>
-                    <div class="text-xs text-gray-500">
-                        {{ current.category }} · {{ current.priority }} · {{ t('queue') }} {{ current.queue ?? '—' }} ·
-                        {{ t('customer') }} {{ current.customer_id ?? '—' }} ·
-                        <span v-if="current.work_order_id">{{ t('WO') }} <span class="font-mono">{{ current.work_order_id }}</span></span>
-                    </div>
+            <!-- Ticket queue -->
+            <Panel title="Ticket queue" subtitle="Filter by status or queue — select a row for detail">
+                <template #actions>
+                    <select v-model="filter.status" @change="load" class="rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-700">
+                        <option value="">{{ t('All statuses') }}</option>
+                        <option v-for="s in STATUSES" :key="s" :value="s">{{ t(s.replaceAll('_', ' ')) }}</option>
+                    </select>
+                    <input v-model="filter.queue" @keyup.enter="load" :placeholder="t('Queue')" class="w-32 rounded-lg border border-gray-200 px-2 py-1 text-xs" />
+                    <label class="flex items-center gap-1 text-xs text-gray-600">
+                        <input type="checkbox" v-model="filter.overdueOnly" class="rounded border-gray-300 text-op focus:ring-op" />
+                        {{ t('SLA overdue only') }}
+                    </label>
+                </template>
 
-                    <div class="flex flex-wrap gap-1 items-center border-y py-2">
-                        <input v-model="assignee" :placeholder="t('assignee id')" class="border rounded px-1.5 py-0.5 text-xs w-28" />
-                        <button @click="act('assign', { assignee_id: assignee })" class="px-2 py-0.5 bg-op text-white rounded text-xs">{{ t('Assign') }}</button>
-                        <button @click="act('work-orders', { tech_region_id: 'KE-NRB' })" class="px-2 py-0.5 bg-amber-500 text-white rounded text-xs">{{ t('Create WO') }}</button>
-                        <input v-model="resolveForm.resolution_code" class="border rounded px-1.5 py-0.5 text-xs w-40" />
-                        <button @click="act('resolve', resolveForm)" class="px-2 py-0.5 bg-green-600 text-white rounded text-xs">{{ t('Resolve') }}</button>
-                        <button v-if="current.status === 'RESOLVED'" @click="act('reopen', { reason_code: 'ISSUE_RECURRED' })" class="px-2 py-0.5 bg-blue-500 text-white rounded text-xs">{{ t('Reopen') }}</button>
-                        <button v-if="current.status === 'RESOLVED'" @click="act('close')" class="px-2 py-0.5 bg-gray-600 text-white rounded text-xs">{{ t('Close') }}</button>
-                        <button @click="act('cancel', { reason: 'duplicate' })" class="px-2 py-0.5 bg-red-500 text-white rounded text-xs">{{ t('Cancel') }}</button>
-                    </div>
-
-                    <div>
-                        <div class="text-xs font-semibold text-gray-500 uppercase mb-1">{{ t('Comments') }}</div>
-                        <div class="flex gap-1 mb-2">
-                            <select v-model="comment.visibility" class="border rounded px-1 py-0.5 text-xs">
-                                <option>INTERNAL</option><option>CUSTOMER_VISIBLE</option>
-                            </select>
-                            <input v-model="comment.body" @keyup.enter="addComment" :placeholder="t('Add comment…')" class="border rounded px-2 py-1 text-sm flex-1" />
-                            <button @click="addComment" class="px-2 py-1 bg-op text-white rounded text-xs">{{ t('Post') }}</button>
-                        </div>
-                        <div v-for="c in current.comments ?? []" :key="c.id" class="text-sm border-t py-1">
-                            <span class="text-xs px-1 rounded" :class="c.visibility === 'CUSTOMER_VISIBLE' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'">{{ c.visibility ?? 'INTERNAL' }}</span>
-                            {{ c.body }}
-                            <span class="text-xs text-gray-400">— {{ c.author_id ?? t('system') }}, {{ c.created_at }}</span>
-                        </div>
-                    </div>
-
-                    <div>
-                        <div class="text-xs font-semibold text-gray-500 uppercase mb-1">{{ t('Timeline') }}</div>
-                        <div class="border-l-2 border-op pl-3 space-y-1">
-                            <div v-for="e in current.timeline ?? []" :key="e.id" class="text-xs">
-                                <span class="text-gray-400">{{ e.created_at }}</span>
-                                <span class="font-semibold ml-1">{{ e.event_type }}</span>
-                                <span v-if="e.from_status" class="text-gray-500 ml-1">{{ e.from_status }} → {{ e.to_status }}</span>
-                                <span v-if="e.actor_id" class="text-gray-400 ml-1">{{ t('by') }} {{ e.actor_id }}</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div v-else class="col-span-7 bg-white rounded shadow p-8 text-center text-sm text-gray-400">
-                    {{ t('Select a ticket to see its timeline and actions.') }}
-                </div>
-            </div>
+                <DataTable :columns="columns" :rows="visible" row-key="ticket_id"
+                    :loading="loading" empty="No tickets match." @select="open">
+                    <template #cell-status="{ value }"><StatusBadge :status="value" /></template>
+                    <template #cell-subject="{ value }">
+                        <span class="font-medium text-gray-800">{{ value }}</span>
+                    </template>
+                    <template #cell-priority="{ value }">
+                        <span class="text-xs" :class="priorityClass(value)">{{ value }}</span>
+                    </template>
+                    <template #cell-queue="{ value }">{{ value ?? '—' }}</template>
+                    <template #cell-assignee_id="{ value }">
+                        <span v-if="value" class="text-gray-700">{{ value }}</span>
+                        <span v-else class="text-xs text-amber-600">{{ t('unassigned') }}</span>
+                    </template>
+                    <template #cell-sla="{ row }">
+                        <StatusBadge v-if="isOverdue(row)" status="SLA BREACHED" :map="{ 'SLA BREACHED': 'bg-red-100 text-red-700 ring-red-600/20' }" />
+                        <span v-else-if="row.sla_due_at" class="text-xs text-gray-400">{{ dateFmt(row.sla_due_at) }}</span>
+                        <span v-else class="text-xs text-gray-300">—</span>
+                    </template>
+                </DataTable>
+            </Panel>
         </div>
+
+        <!-- Ticket detail drawer -->
+        <Drawer v-model:open="drawerOpen" title="Ticket" width="max-w-2xl">
+            <div v-if="current" class="space-y-5">
+                <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                        <div class="font-mono text-xs text-gray-400">{{ current.ticket_id }}</div>
+                        <div class="text-base font-semibold text-gray-800">{{ current.subject }}</div>
+                    </div>
+                    <div class="flex shrink-0 flex-col items-end gap-1">
+                        <StatusBadge :status="current.status" />
+                        <StatusBadge v-if="isOverdue(current)" status="SLA BREACHED" :map="{ 'SLA BREACHED': 'bg-red-100 text-red-700 ring-red-600/20' }" />
+                    </div>
+                </div>
+
+                <!-- Details -->
+                <div class="rounded-xl bg-white p-4 ring-1 ring-gray-100">
+                    <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('Details') }}</div>
+                    <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                        <div v-for="[label, value] in detailFields" :key="label" class="min-w-0">
+                            <dt class="text-xs text-gray-400">{{ t(label) }}</dt>
+                            <dd class="truncate text-gray-700">{{ value }}</dd>
+                        </div>
+                    </dl>
+                    <p v-if="!detailFields.length" class="text-sm text-gray-400">{{ t('No details.') }}</p>
+                </div>
+
+                <!-- Lifecycle actions -->
+                <div class="rounded-xl bg-white p-4 ring-1 ring-gray-100">
+                    <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('Actions') }}</div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <input v-model="assignee" :placeholder="t('Assignee ID')" class="w-32 rounded-lg border border-gray-200 px-2 py-1 text-xs" />
+                        <button class="rounded-lg bg-op px-2.5 py-1 text-xs font-medium text-white hover:bg-op-dark" @click="act('assign', { assignee_id: assignee })">{{ t('Assign') }}</button>
+                        <button class="rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-600" @click="act('work-orders', { tech_region_id: 'KE-NRB' })">{{ t('Create WO') }}</button>
+                    </div>
+                    <div class="mt-2 flex flex-wrap items-center gap-2">
+                        <input v-model="resolveForm.resolution_code" class="w-44 rounded-lg border border-gray-200 px-2 py-1 text-xs" />
+                        <button class="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700" @click="act('resolve', resolveForm)">{{ t('Resolve') }}</button>
+                        <button v-if="current.status === 'RESOLVED'" class="rounded-lg bg-blue-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-600" @click="act('reopen', { reason_code: 'ISSUE_RECURRED' })">{{ t('Reopen') }}</button>
+                        <button v-if="current.status === 'RESOLVED'" class="rounded-lg bg-gray-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-gray-700" @click="act('close')">{{ t('Close') }}</button>
+                        <button class="rounded-lg bg-red-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-600" @click="act('cancel', { reason: 'duplicate' })">{{ t('Cancel') }}</button>
+                    </div>
+                </div>
+
+                <!-- Add comment -->
+                <div class="rounded-xl bg-white p-4 ring-1 ring-gray-100">
+                    <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('Add comment') }}</div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <select v-model="comment.visibility" class="rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+                            <option value="INTERNAL">{{ t('INTERNAL') }}</option>
+                            <option value="CUSTOMER_VISIBLE">{{ t('CUSTOMER_VISIBLE') }}</option>
+                        </select>
+                        <input v-model="comment.body" @keyup.enter="addComment" :placeholder="t('Add comment…')" class="min-w-0 flex-1 rounded-lg border border-gray-200 px-2 py-1.5 text-sm" />
+                        <button class="rounded-lg bg-op px-3 py-1.5 text-sm font-medium text-white hover:bg-op-dark" @click="addComment">{{ t('Post') }}</button>
+                    </div>
+                </div>
+
+                <!-- Activity timeline -->
+                <div class="rounded-xl bg-white p-4 ring-1 ring-gray-100">
+                    <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('Timeline') }}</div>
+                    <Timeline :events="timelineEvents" />
+                </div>
+            </div>
+            <p v-else class="text-sm text-gray-400">{{ t('Select a ticket to see its timeline and actions.') }}</p>
+        </Drawer>
     </AuthenticatedLayout>
 </template>
