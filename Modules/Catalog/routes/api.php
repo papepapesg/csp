@@ -52,6 +52,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('homepass/{homepass}/network-path', [HomePassController::class, 'setNetworkPath'])->middleware('permission:catalog.manage');
     Route::get('homepass/{homepass}/eligible-contractors', [HomePassController::class, 'eligibleContractors'])->middleware('permission:catalog.read');
 
+    // RLM-CFG-01 network_node + house_type reference catalogs.
+    Route::get('network-nodes', [\Modules\Catalog\Http\Controllers\NetworkCatalogController::class, 'nodes'])->middleware('permission:catalog.read');
+    Route::post('network-nodes', [\Modules\Catalog\Http\Controllers\NetworkCatalogController::class, 'storeNode'])->middleware('permission:catalog.manage');
+    Route::post('network-nodes/{networkNode}/retire', [\Modules\Catalog\Http\Controllers\NetworkCatalogController::class, 'retireNode'])->middleware('permission:catalog.manage');
+    Route::get('house-types', [\Modules\Catalog\Http\Controllers\NetworkCatalogController::class, 'houseTypes'])->middleware('permission:catalog.read');
+    Route::post('house-types', [\Modules\Catalog\Http\Controllers\NetworkCatalogController::class, 'storeHouseType'])->middleware('permission:catalog.manage');
+
     // PLM-CFG-02 tax compute
     Route::post('tax/compute', [TaxController::class, 'compute'])->middleware('permission:catalog.read');
 

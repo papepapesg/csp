@@ -114,6 +114,30 @@ class CatalogApiTest extends TestCase
             ->assertJsonPath('totalElements', 1);
     }
 
+    public function test_network_node_catalog_parent_chain_and_referenced_guard(): void
+    {
+        // A node chain OLT ← SPLITTER ← FAT.
+        $this->postJson('/api/network-nodes', ['code' => 'OLT-1', 'type' => 'OLT', 'name' => 'OLT One'])->assertCreated();
+        $this->postJson('/api/network-nodes', ['code' => 'SPL-1', 'type' => 'SPLITTER', 'name' => 'Splitter', 'parent_node_code' => 'OLT-1'])->assertCreated();
+        $fat = $this->postJson('/api/network-nodes', ['code' => 'FAT-1', 'type' => 'FAT', 'name' => 'FAT', 'parent_node_code' => 'SPL-1'])->assertCreated()->json('node_id');
+
+        // R-RLM-CFG-01-N-3: invalid type rejected.
+        $this->postJson('/api/network-nodes', ['code' => 'X', 'type' => 'WIMAX', 'name' => 'x'])
+            ->assertStatus(422)->assertJsonPath('errorCode', 'INVALID_NODE_TYPE');
+        // R-RLM-CFG-01-N-4: unknown parent rejected; a cycle (OLT-1 parented under FAT-1) rejected.
+        $this->postJson('/api/network-nodes', ['code' => 'Y', 'type' => 'ONT', 'name' => 'y', 'parent_node_code' => 'NOPE'])
+            ->assertStatus(422)->assertJsonPath('errorCode', 'UNKNOWN_PARENT_NODE');
+        \Modules\Catalog\Models\NetworkNode::query()->where('code', 'OLT-1')->update(['parent_node_code' => 'FAT-1']);
+        $this->postJson('/api/network-nodes', ['code' => 'Z', 'type' => 'ONT', 'name' => 'z', 'parent_node_code' => 'OLT-1'])
+            ->assertStatus(422)->assertJsonPath('errorCode', 'NODE_PARENT_CYCLE');
+        \Modules\Catalog\Models\NetworkNode::query()->where('code', 'OLT-1')->update(['parent_node_code' => null]);
+
+        // R-RLM-CFG-01-N-5: a node referenced by a HomePass network_path cannot be retired.
+        $hp = $this->postJson('/api/homepass', ['address' => '1 Node Rd', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
+        $this->patchJson("/api/homepass/{$hp}/network-path", ['nodes' => [['type' => 'FAT', 'code' => 'FAT-1', 'role' => 'passive']]])->assertOk();
+        $this->postJson("/api/network-nodes/{$fat}/retire")->assertStatus(422)->assertJsonPath('errorCode', 'NODE_REFERENCED');
+    }
+
     public function test_homepass_network_path_derives_services_and_endpoints(): void
     {
         $hp = $this->postJson('/api/homepass', ['address' => '7 Topo Rd', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
