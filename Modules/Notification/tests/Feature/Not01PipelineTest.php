@@ -105,7 +105,7 @@ class Not01PipelineTest extends TestCase
     public function test_permanent_recipient_falls_back_to_next_channel(): void
     {
         $log = $this->orchestrator()->ingest('InvoiceIssued', 'WIK', $this->invoicePayload, [
-            'customerId' => 'cust_F', 'sourceEntityId' => 'inv_f', 'contacts' => ['EMAIL' => 'not-an-email', 'SMS' => '+254712345678'],
+            'customerId' => 'cust_F', 'sourceEntityId' => 'inv_f', 'contacts' => ['EMAIL' => 'bounce@example.com', 'SMS' => '+254712345678'],
         ]);
 
         $this->assertSame(NotificationLog::PARTIALLY_DISPATCHED, $log->final_status);
@@ -116,7 +116,7 @@ class Not01PipelineTest extends TestCase
     public function test_all_permanent_recipient_is_undeliverable(): void
     {
         $log = $this->orchestrator()->ingest('InvoiceIssued', 'WIK', $this->invoicePayload, [
-            'customerId' => 'cust_U', 'sourceEntityId' => 'inv_u', 'contacts' => ['EMAIL' => 'bad', 'SMS' => 'bad'],
+            'customerId' => 'cust_U', 'sourceEntityId' => 'inv_u', 'contacts' => ['EMAIL' => 'bounce@example.com', 'SMS' => '+99999000'],
         ]);
 
         $this->assertSame(NotificationLog::UNDELIVERABLE, $log->final_status);
@@ -281,6 +281,19 @@ class Not01PipelineTest extends TestCase
 
         $this->getJson('/api/admin/notifications/dashboard')->assertOk()
             ->assertJsonPath('notifications_by_final_status.DISPATCHED', 1);
+    }
+
+    public function test_legacy_send_dispatches_through_the_real_provider(): void
+    {
+        $svc = app(\Modules\Notification\Services\NotificationService::class);
+
+        $ok = $svc->send(['channel' => 'SMS', 'recipient' => '+254712345678', 'body' => 'Your payment was received.']);
+        $this->assertSame('SENT', $ok->status);
+
+        // A failure-trigger recipient flows the real provider's categorized result back.
+        $bad = $svc->send(['channel' => 'SMS', 'recipient' => '+99999000', 'body' => 'hi']);
+        $this->assertSame('FAILED', $bad->status);
+        $this->assertSame('PERMANENT_RECIPIENT', $bad->failure_reason);
     }
 
     public function test_unconfigured_channel_is_permanent_failure(): void

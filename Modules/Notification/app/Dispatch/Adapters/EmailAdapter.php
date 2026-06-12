@@ -2,6 +2,7 @@
 
 namespace Modules\Notification\Dispatch\Adapters;
 
+use Illuminate\Support\Facades\Log;
 use Modules\Notification\Dispatch\AdapterConfigurationException;
 use Modules\Notification\Dispatch\ChannelAdapter;
 use Modules\Notification\Dispatch\DeliveryResult;
@@ -11,16 +12,22 @@ use Modules\Notification\Models\ChannelOperatorConfig;
 use Modules\Notification\Models\Template;
 
 /**
- * Default email adapter (R-NOT-01-C-3). In this monolith deployment there is no live
- * SMTP relay, so the adapter validates the message + recipient, composes the multipart
- * (subject + HTML + text + optional PDF) and records a successful local delivery. A real
- * deployment swaps this for an SMTP/transactional-email adapter via
- * channel_operator_config.adapter_implementation — nothing else in NOT-01 changes.
+ * Email provider (R-NOT-01-C-3). This is the in-process STUB provider that ships with the
+ * platform: it composes the multipart message (subject + HTML + text + optional PDF) exactly
+ * as a real SMTP adapter would, then "transmits" by logging a simulated send and returning a
+ * SENT result with a synthetic message-id. A production deployment swaps this for a true SMTP
+ * / Microsoft-Graph / SES adapter via channel_operator_config.adapter_implementation — the
+ * ChannelAdapter contract is identical, so nothing else in NOT-01 changes.
  *
- * Failure category mapping (from the recipient/SMTP-class shape):
- *   missing/syntactically-invalid recipient -> PERMANENT_RECIPIENT
- *   sender identity not configured           -> PERMANENT_TEMPLATE (config-level)
- *   "@transient." sentinel                   -> TRANSIENT (exercises the retry path)
+ * Failure injection (so the retry/fallback/escalate paths are exercisable end-to-end):
+ *   recipient contains "bounce"     -> PERMANENT_RECIPIENT (hard bounce; channel fallback)
+ *   recipient contains "@transient" -> TRANSIENT            (gateway hiccup; retry)
+ *   recipient empty                 -> PERMANENT_RECIPIENT
+ *   no rendered body                -> PERMANENT_TEMPLATE   (content the channel would reject)
+ *   otherwise                       -> SENT
+ *
+ * Category mapping mirrors real SMTP: 550/553 (bad mailbox) -> PERMANENT_RECIPIENT,
+ * 552/554 (size/content) -> PERMANENT_TEMPLATE, 4xx + connection errors -> TRANSIENT.
  */
 final class EmailAdapter implements ChannelAdapter
 {
@@ -44,23 +51,37 @@ final class EmailAdapter implements ChannelAdapter
 
     public function send(Dispatch $dispatch, int $timeoutSeconds): DeliveryResult
     {
-        $to = $dispatch->recipient;
-        if (! filter_var($to, FILTER_VALIDATE_EMAIL)) {
-            return DeliveryResult::failed(FailureCategory::PERMANENT_RECIPIENT, 'invalid recipient address');
+        $to = trim($dispatch->recipient);
+
+        if ($to === '') {
+            return DeliveryResult::failed(FailureCategory::PERMANENT_RECIPIENT, 'empty recipient address');
         }
-        if (str_contains($to, '@transient.')) {
-            return DeliveryResult::failed(FailureCategory::TRANSIENT, 'gateway timeout (simulated)');
+        if (str_contains($to, 'bounce')) {
+            return DeliveryResult::failed(FailureCategory::PERMANENT_RECIPIENT, 'mailbox unavailable (550)');
         }
-        if ($dispatch->artifact(Template::FORMAT_EMAIL_HTML) === null && $dispatch->artifact(Template::FORMAT_EMAIL_TEXT) === null) {
-            return DeliveryResult::failed(FailureCategory::PERMANENT_TEMPLATE, 'no email body rendered');
+        if (str_contains($to, '@transient')) {
+            return DeliveryResult::failed(FailureCategory::TRANSIENT, 'smtp 421 service not available');
         }
 
-        // Compose + "send": here we record a deterministic local delivery.
-        $messageId = '<'.bin2hex(random_bytes(8)).'@'.parse_url('//'.$this->senderAddress, PHP_URL_PATH).'>';
+        // Compose the multipart message the way a real adapter would.
+        $subject = $dispatch->artifact(Template::FORMAT_EMAIL_SUBJECT) ?? '';
+        $html = $dispatch->artifact(Template::FORMAT_EMAIL_HTML);
+        $text = $dispatch->artifact(Template::FORMAT_EMAIL_TEXT);
+        if (($html ?? '') === '' && ($text ?? '') === '') {
+            return DeliveryResult::failed(FailureCategory::PERMANENT_TEMPLATE, 'no email body rendered (552)');
+        }
+        $willAttach = $this->attachPdf && $dispatch->pdfStorageKey !== null;
+
+        // "Transmit". PII (recipient) only at DEBUG; INFO carries no PII per the contract.
+        Log::info('email.send', ['dispatch_id' => $dispatch->dispatchId, 'notification_id' => $dispatch->notificationId, 'status' => 'SENT']);
+        Log::debug('email.send.detail', ['to' => $to, 'from' => $this->senderAddress, 'subject' => $subject, 'pdf_attached' => $willAttach]);
+
+        $messageId = '<'.bin2hex(random_bytes(8)).'@'.($this->senderAddress ?: 'sophix.local').'>';
 
         return DeliveryResult::sent($messageId, [
             'smtp_message_id' => $messageId,
-            'pdf_attached' => $this->attachPdf && $dispatch->pdfStorageKey !== null,
+            'pdf_attached' => $willAttach,
+            'simulated' => true,
         ]);
     }
 

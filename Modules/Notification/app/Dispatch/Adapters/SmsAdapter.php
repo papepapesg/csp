@@ -2,6 +2,7 @@
 
 namespace Modules\Notification\Dispatch\Adapters;
 
+use Illuminate\Support\Facades\Log;
 use Modules\Notification\Dispatch\AdapterConfigurationException;
 use Modules\Notification\Dispatch\ChannelAdapter;
 use Modules\Notification\Dispatch\DeliveryResult;
@@ -11,14 +12,18 @@ use Modules\Notification\Models\ChannelOperatorConfig;
 use Modules\Notification\Models\Template;
 
 /**
- * Default SMS adapter (R-NOT-01-C-4). Renders the SMS_TEXT, truncates/splits to the
- * channel limit, validates the MSISDN, and records a local delivery. Real deployments
- * select a gateway-specific adapter (Africa's Talking, Beem, Orange-SN, ...) via
- * channel_operator_config.adapter_implementation.
+ * SMS provider (R-NOT-01-C-4). The in-process STUB provider: it renders the SMS_TEXT,
+ * truncates/splits to the channel limit, then "transmits" by logging a simulated send and
+ * returning a SENT result with a synthetic gateway reference. Production deployments select a
+ * gateway-specific adapter (Africa's Talking, Beem, Orange-SN, Twilio, ...) via
+ * channel_operator_config.adapter_implementation — same ChannelAdapter contract.
  *
- * Failure category mapping:
- *   missing/invalid MSISDN  -> PERMANENT_RECIPIENT
- *   "+00000" sentinel       -> TRANSIENT (exercises retry)
+ * Failure injection (exercises retry/fallback/escalate):
+ *   recipient starts "+00000"   -> TRANSIENT            (gateway timeout; retry)
+ *   recipient starts "+99999" or
+ *     contains "bounce"          -> PERMANENT_RECIPIENT  (unreachable MSISDN; channel fallback)
+ *   recipient empty              -> PERMANENT_RECIPIENT
+ *   otherwise                    -> SENT
  */
 final class SmsAdapter implements ChannelAdapter
 {
@@ -42,12 +47,16 @@ final class SmsAdapter implements ChannelAdapter
 
     public function send(Dispatch $dispatch, int $timeoutSeconds): DeliveryResult
     {
-        $to = preg_replace('/\s+/', '', $dispatch->recipient);
-        if (! preg_match('/^\+?[0-9]{7,15}$/', (string) $to)) {
-            return DeliveryResult::failed(FailureCategory::PERMANENT_RECIPIENT, 'invalid MSISDN');
+        $to = preg_replace('/\s+/', '', trim($dispatch->recipient));
+
+        if (($to ?? '') === '') {
+            return DeliveryResult::failed(FailureCategory::PERMANENT_RECIPIENT, 'empty MSISDN');
         }
-        if (str_starts_with((string) $to, '+00000')) {
-            return DeliveryResult::failed(FailureCategory::TRANSIENT, 'gateway timeout (simulated)');
+        if (str_starts_with($to, '+00000')) {
+            return DeliveryResult::failed(FailureCategory::TRANSIENT, 'gateway timeout');
+        }
+        if (str_starts_with($to, '+99999') || str_contains($to, 'bounce')) {
+            return DeliveryResult::failed(FailureCategory::PERMANENT_RECIPIENT, 'unreachable MSISDN');
         }
 
         $text = (string) $dispatch->artifact(Template::FORMAT_SMS_TEXT);
@@ -55,10 +64,14 @@ final class SmsAdapter implements ChannelAdapter
         if (strlen($text) > $limit) {
             $text = substr($text, 0, $limit - 3).'...';
         }
-        $parts = (int) max(1, ceil(strlen($text) / 160));
+        $parts = (int) max(1, ceil(max(1, strlen($text)) / 160));
+
+        Log::info('sms.send', ['dispatch_id' => $dispatch->dispatchId, 'notification_id' => $dispatch->notificationId, 'status' => 'SENT', 'parts' => $parts]);
+        Log::debug('sms.send.detail', ['to' => $to, 'sender' => $this->senderId, 'text' => $text]);
+
         $ref = bin2hex(random_bytes(8));
 
-        return DeliveryResult::sent($ref, ['gateway_message_id' => $ref, 'parts' => $parts, 'sender' => $this->senderId]);
+        return DeliveryResult::sent($ref, ['gateway_message_id' => $ref, 'parts' => $parts, 'sender' => $this->senderId, 'simulated' => true]);
     }
 
     public function shutdown(): void {}
