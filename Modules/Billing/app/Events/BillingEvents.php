@@ -59,6 +59,8 @@ final class BillingEvents
 
     public const DUNNING_RECOVERY_FAILED = 'SubscriptionDunningRecoveryFailed';
 
+    public const DUNNING_ADMIN_OVERRIDE = 'DunningAdminOverride';
+
     public const SUBSCRIPTION_SUSPENDED_NP = 'SubscriptionSuspendedForNonPayment';
 
     // BIL-02-ADJ-01 adjustment lifecycle

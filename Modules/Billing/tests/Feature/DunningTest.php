@@ -25,6 +25,7 @@ class DunningTest extends TestCase
         $this->seed(RbacSeeder::class);
         $this->seed(ProcessDefinitionSeeder::class);
         $this->seed(DecisionTableSeeder::class);
+        $this->seed(\Modules\Subscription\Database\Seeders\RestrictionCatalogSeeder::class);
         $this->seed(DunningPolicySeeder::class);
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('SUPER_ADMIN');
@@ -74,17 +75,73 @@ class DunningTest extends TestCase
 
     public function test_advance_is_monotonic_never_skips_a_level(): void
     {
-        // A misconfigured policy that jumps 0 → 3 may only advance one level.
-        \Modules\Rules\Models\DecisionTable::query()->create([
-            'table_id' => \App\Foundation\Support\Id::make('dt'), 'rule_set' => 'rules.billing.dunning', 'operator_code' => 'WIK', 'version' => 2,
-            'name' => 'jumpy', 'hit_policy' => 'FIRST',
-            'rules' => [['ruleId' => 'R-J', 'when' => [['var' => 'currentLevel', 'op' => 'eq', 'value' => 0]], 'then' => ['nextLevel' => 3, 'action' => 'SUSPEND']]],
-            'default_output' => [], 'status' => 'DEPLOYED',
-        ]);
+        // Even with the grace clock long elapsed at entry, the engine advances exactly one
+        // level per evaluation (D-2) — 0 → 1, never jumping straight to 2+.
         $this->overdueInvoice('acct_m');
 
         app(\Modules\Billing\Services\DunningService::class)->scan();
-        $this->assertDatabaseHas('dunning_state', ['account_id' => 'acct_m', 'current_level' => 1]); // not 3
+        $this->assertDatabaseHas('dunning_state', ['account_id' => 'acct_m', 'current_level' => 1]); // not 2/3
+        // The episode pinned the program version at entry (R-BIL-04-C-1).
+        $this->assertDatabaseHas('dunning_state', ['account_id' => 'acct_m', 'dunning_program_ref' => 'WIK_postpaid_standard', 'dunning_program_version' => 1]);
+    }
+
+    public function test_level2_recovery_removes_restriction_and_archives_on_clear(): void
+    {
+        // A single-restriction program keeps the SUB-WF RESTRICT (one-in-flight) serialization
+        // deterministic; multi-code accumulation is exercised separately.
+        \Modules\Billing\Models\DunningProgram::query()->create([
+            'code' => 'wik_single_restrict', 'version' => 1, 'operator_code' => 'WIK', 'billing_mode' => 'POSTPAID',
+            'pre_termination_review_required' => true, 'published_at' => now(), 'created_by' => 'test',
+            'level_definitions' => [
+                ['level' => 1, 'name' => 'WARNING', 'grace_period_days' => 7, 'action_workflow_intent' => 'WARNING_ONLY', 'action_payload' => []],
+                ['level' => 2, 'name' => 'RESTRICTED', 'grace_period_days' => 7, 'action_workflow_intent' => 'RESTRICTION_ADD', 'action_payload' => ['restriction_codes' => ['OUTGOING_VOICE_BARRED']]],
+                ['level' => 3, 'name' => 'SUSPENDED', 'grace_period_days' => 14, 'action_workflow_intent' => 'SUSPEND_NP', 'action_payload' => ['reason_code' => 'DUNNING_GRACE_EXPIRED']],
+                ['level' => 4, 'name' => 'TERMINATED', 'grace_period_days' => 30, 'action_workflow_intent' => 'TERMINATION', 'action_payload' => []],
+            ],
+        ]);
+        $subId = $this->postJson('/api/subscriptions', ['customer_id' => 'c1', 'account_id' => 'acct_r2', 'homepass_id' => 'h1', 'package_ref' => 'p1'])->json('subscription_id');
+        Subscription::find($subId)->update(['status_code' => 'ACTIVE']);
+        $this->overdueInvoice('acct_r2', 800);
+        DunningState::query()->create([
+            'operator_code' => 'WIK', 'account_id' => 'acct_r2', 'subscription_id' => $subId,
+            'dunning_program_ref' => 'wik_single_restrict', 'dunning_program_version' => 1,
+            'current_level' => 1, 'entered_level_at' => now()->subDays(8), 'entered_dunning_at' => now()->subDays(8), 'status' => 'ACTIVE',
+        ]);
+
+        $svc = app(\Modules\Billing\Services\DunningService::class);
+        $svc->scan(); // advance to level 2 → apply the restriction
+        $state = DunningState::query()->where('account_id', 'acct_r2')->first();
+        $this->assertSame(2, $state->current_level);
+        $this->assertSame(['OUTGOING_VOICE_BARRED'], $state->applied_restriction_codes);
+        for ($i = 0; $i < 3; $i++) {
+            Artisan::call('sophix:workflow:work', ['--once' => true]); // finalize the ADD
+        }
+
+        // Clear (debt settled) — recovery removes the dunning-applied restriction and archives.
+        $svc->clear('acct_r2');
+        $state->refresh();
+        $this->assertSame('CLEARED', $state->status);
+        $this->assertSame(0, $state->current_level);
+        $this->assertSame([], $state->applied_restriction_codes);
+        $this->assertDatabaseHas('dunning_state_archive', ['account_id' => 'acct_r2', 'archive_reason' => 'CLEARED_FULLY_PAID']);
+    }
+
+    public function test_program_new_version_retires_prior_and_pins_inflight(): void
+    {
+        // An in-flight episode on v1.
+        DunningState::query()->create(['operator_code' => 'WIK', 'account_id' => 'acct_v1', 'dunning_program_ref' => 'WIK_postpaid_standard', 'dunning_program_version' => 1, 'current_level' => 1, 'entered_level_at' => now(), 'status' => 'ACTIVE']);
+
+        $this->postJson('/api/dunning-programs/WIK_postpaid_standard/new-version', [
+            'level_definitions' => [
+                ['level' => 1, 'grace_period_days' => 1, 'action_workflow_intent' => 'WARNING_ONLY'],
+                ['level' => 2, 'grace_period_days' => 1, 'action_workflow_intent' => 'TERMINATION'],
+            ],
+        ])->assertCreated()->assertJsonPath('version', 2);
+
+        // v1 retired, v2 active; the in-flight state still references v1.
+        $this->assertDatabaseHas('dunning_program', ['code' => 'WIK_postpaid_standard', 'version' => 1]);
+        $this->assertNotNull(\Modules\Billing\Models\DunningProgram::query()->where('code', 'WIK_postpaid_standard')->where('version', 1)->first()->retired_at);
+        $this->assertDatabaseHas('dunning_state', ['account_id' => 'acct_v1', 'dunning_program_version' => 1]);
     }
 
     public function test_prepaid_cycle_payment_missed_enters_dunning(): void
@@ -101,7 +158,7 @@ class DunningTest extends TestCase
 
         app(\Modules\Billing\Listeners\DunningEventBridge::class)->handle(new \App\Foundation\Events\OutboxEventPublished($event));
 
-        $this->assertDatabaseHas('dunning_state', ['account_id' => 'acct_pp', 'current_level' => 1, 'billing_mode' => 'PREPAID', 'triggering_event_type' => 'CyclePaymentMissed']);
+        $this->assertDatabaseHas('dunning_state', ['account_id' => 'acct_pp', 'current_level' => 1, 'billing_mode' => 'PREPAID', 'triggering_event_type' => 'CYCLE_PAYMENT_MISSED']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionEnteredDunning']);
     }
 

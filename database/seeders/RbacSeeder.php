@@ -65,6 +65,9 @@ class RbacSeeder extends Seeder
         // ICN-01 staff comms: workflow service accounts dispatch; ops admins manage.
         'ICN_SERVICE' => ['staff_notification.dispatch'],
         'ICN_ADMIN' => ['staff_notification.dispatch', 'staff_notification.manage'],
+        // BIL-04 dunning: admin overrides vs read-only investigation.
+        'DUNNING_ADMIN' => ['invoice.read', 'invoice.manage', 'dunning.admin'],
+        'DUNNING_OPERATOR' => ['invoice.read'],
     ];
 
     public function run(): void

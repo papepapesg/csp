@@ -37,6 +37,8 @@ class DunningState extends Model
 
     public const STATUS_RECOVERY_FAILED = 'RECOVERY_FAILED';
 
+    public const STATUS_ARCHIVED = 'ARCHIVED';
+
     protected $table = 'dunning_state';
 
     protected $primaryKey = 'dunning_id';
@@ -47,12 +49,29 @@ class DunningState extends Model
 
     protected $casts = [
         'current_level' => 'integer',
+        'dunning_program_version' => 'integer',
+        'workflow_failure_attempts' => 'integer',
         'outstanding_debt_amount' => 'decimal:2',
+        'applied_restriction_codes' => 'array',
         'entered_level_at' => 'datetime',
+        'entered_dunning_at' => 'datetime',
         'last_scanned_at' => 'datetime',
         'next_evaluation_at' => 'datetime',
         'review_due_at' => 'datetime',
+        'last_workflow_failure_at' => 'datetime',
+        'cleared_at' => 'datetime',
+        'archived_at' => 'datetime',
     ];
+
+    public function program(): ?DunningProgram
+    {
+        if (! $this->dunning_program_ref) {
+            return null;
+        }
+
+        return DunningProgram::query()->where('code', $this->dunning_program_ref)
+            ->where('version', $this->dunning_program_version)->first();
+    }
 
     protected static function booted(): void
     {
