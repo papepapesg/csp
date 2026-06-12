@@ -18,6 +18,7 @@ class CatalogApiTest extends TestCase
         parent::setUp();
         $this->seed(RbacSeeder::class);
         $this->seed(CatalogPolicySeeder::class); // rules.service-catalog / rules.homepass-catalog
+        $this->seed(\Modules\Catalog\Database\Seeders\HomePassStatusSeeder::class); // homepass_status_code catalog
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('CATALOG_ADMIN');
         Sanctum::actingAs($user);
@@ -111,6 +112,34 @@ class CatalogApiTest extends TestCase
         $this->getJson('/api/homepass?techRegionId=KE-NRB-KAREN&status=SERVICEABLE')
             ->assertOk()
             ->assertJsonPath('totalElements', 1);
+    }
+
+    public function test_homepass_status_is_a_config_catalog_with_semantic_flags(): void
+    {
+        $this->postJson('/api/tech-regions', ['tech_region_id' => 'KE-NRB-X', 'display_name_primary' => 'X', 'region_type' => 'NEIGHBORHOOD'])->assertCreated();
+        $hp = $this->postJson('/api/homepass', ['address' => '1 X Rd', 'tech_region_id' => 'KE-NRB-X', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
+        $count = fn () => \Illuminate\Support\Facades\DB::table('outbox_events')->where('event_type', 'HomePassReachedSellable')->count();
+
+        // First transition into a sellable status (RFS) fires the lead-notify event (R-RLM-CFG-01-H-6).
+        $this->patchJson("/api/homepass/{$hp}/status", ['status' => 'RFS'])->assertOk()->assertJsonPath('has_been_sellable', true);
+        $this->assertSame(1, $count());
+
+        // Re-entering a sellable status does NOT re-emit (latched): ACT (active, not sellable) then RFS again.
+        $this->patchJson("/api/homepass/{$hp}/status", ['status' => 'ACT'])->assertOk();
+        $this->patchJson("/api/homepass/{$hp}/status", ['status' => 'RFS'])->assertOk();
+        $this->assertSame(1, $count());
+
+        // Serviceability lookup returns the sellable HomePass — read by the is_sellable flag, not a literal code.
+        $this->getJson('/api/homepass/eligible?techRegionId=KE-NRB-X')->assertOk()->assertJsonPath('items.0.id', $hp);
+
+        // An operator adds a custom sellable code (config, no code change) — eligibility honours it.
+        \Modules\Catalog\Models\HomePassStatusCode::query()->create(['operator_code' => 'WIK', 'code' => 'LIVE', 'is_sellable' => true, 'active' => true]);
+        $this->patchJson("/api/homepass/{$hp}/status", ['status' => 'LIVE'])->assertOk();
+        $this->getJson('/api/homepass/eligible?techRegionId=KE-NRB-X')->assertOk()->assertJsonPath('items.0.id', $hp);
+
+        // An unknown code is rejected — status is catalog-governed, not a free string.
+        $this->patchJson("/api/homepass/{$hp}/status", ['status' => 'BOGUS'])
+            ->assertStatus(422)->assertJsonPath('errorCode', 'UNKNOWN_HOMEPASS_STATUS');
     }
 
     public function test_read_requires_permission(): void

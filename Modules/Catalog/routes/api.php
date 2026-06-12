@@ -45,6 +45,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // RLM-CFG-01 — HomePass serviceability
     Route::get('homepass', [HomePassController::class, 'index'])->middleware('permission:catalog.read');
+    Route::get('homepass/eligible', [HomePassController::class, 'eligible'])->middleware('permission:catalog.read');
     Route::post('homepass', [HomePassController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
     Route::get('homepass/{homepass}', [HomePassController::class, 'show'])->middleware('permission:catalog.read');
     Route::patch('homepass/{homepass}/status', [HomePassController::class, 'changeStatus'])->middleware('permission:catalog.manage');

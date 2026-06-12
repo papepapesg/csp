@@ -119,14 +119,33 @@ class CatalogService
 
     public function changeHomePassStatus(HomePass $homepass, string $status): HomePass
     {
-        return DB::transaction(function () use ($homepass, $status) {
+        // RLM-CFG-01 §1: status semantics come from the operator's config catalog, never a
+        // hardcoded code. The catalog row's flags (is_sellable / is_active / …) drive behaviour.
+        $code = \Modules\Catalog\Models\HomePassStatusCode::resolve($homepass->operator_code, $status);
+        $hasCatalog = \Modules\Catalog\Models\HomePassStatusCode::query()->where('operator_code', $homepass->operator_code)->where('active', true)->exists();
+        if ($hasCatalog && (! $code || ! $code->active)) {
+            throw \App\Foundation\Errors\DomainException::ruleRejected('UNKNOWN_HOMEPASS_STATUS', "Status '{$status}' is not an active HomePass status code.");
+        }
+
+        return DB::transaction(function () use ($homepass, $status, $code) {
+            // R-RLM-CFG-01-H-6: the lead-notify event fires only on the FIRST transition into a
+            // sellable status (latched via has_been_sellable); re-entry does not re-emit.
+            $firstSellable = $code && $code->is_sellable && $code->triggers_lead_notification && ! $homepass->has_been_sellable;
+
             $homepass->update([
                 'status' => $status,
-                'has_been_active' => $homepass->has_been_active || $status === HomePass::STATUS_SERVICEABLE,
+                'has_been_active' => $homepass->has_been_active || (bool) ($code?->is_active),
+                'has_been_sellable' => $homepass->has_been_sellable || (bool) ($code?->is_sellable),
             ]);
             $this->emit(CatalogEvents::HOMEPASS_STATUS_CHANGED, 'HomePass', $homepass->id, [
                 'homepassId' => $homepass->id, 'status' => $status,
+                'isSellable' => (bool) ($code?->is_sellable), 'isActive' => (bool) ($code?->is_active),
             ]);
+            if ($firstSellable) {
+                $this->emit(CatalogEvents::HOMEPASS_REACHED_SELLABLE, 'HomePass', $homepass->id, [
+                    'homepassId' => $homepass->id, 'techRegionId' => $homepass->tech_region_id, 'status' => $status,
+                ]);
+            }
 
             return $homepass;
         });

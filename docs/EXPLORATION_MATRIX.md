@@ -28,7 +28,7 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 2 | New customer sale to activation | FUL-02 order capture | `Modules/Fulfillment/Services/OrderCaptureService::capture` → seeded `ful-order-capture` process; 6 handlers in `Modules/Fulfillment/app/Workflow`; KYC gate + install-WO message catches | OrderCaptured, CustomerKycApproved, WorkOrderFinalized, SubscriptionActivated | `FulfillmentJourneyTest` (5 journeys incl. KYC park/resume); `DemoJourneySeeder` end-to-end | ✅ |
 | 3 | Customer 360 (composition screen) | read-only composition | `resources/js/Pages/Ilm/Customers/Show.vue` reading ILM/SUB/BIL/TCK APIs per panel | consumes module events indirectly | UI smoke via route tests | ⬜ |
 | 4 | Customer/account/KYC master (ILM) | ILM-CFG-01 | `AccountService` (catalog-driven sub-status: derives main status, enforces requires_approval R-ILM-S-2, carries affects_provisioning), `CustomerService` (KYC state machine + config-driven approval authority per level R-ILM-K-3), flag system (Drools catalog) | CustomerKycApproved, CustomerAccountStatusChanged, flag events | `AccountFlagTest`, `CustomerApiTest`, `CvmFlagEvaluatorTest` | ✅ |
-| 5 | HomePass / serviceability (RLM) | RLM-CFG-01 | `Modules/Rlm` HomePassController + serviceability checks consumed by FUL/SUB | — | covered via journey tests | ⬜ |
+| 5 | HomePass / serviceability (RLM) | RLM-CFG-01 | `Modules/Catalog` HomePass + `homepass_status_code` config catalog (semantic flags, not a hardcoded enum); `CatalogService::changeHomePassStatus` (flag-driven, first-sellable `HomePassReachedSellable` R-RLM-CFG-01-H-6); `/homepass/eligible` reads is_sellable | HomePassReachedSellable, StatusChanged | `CatalogApiTest` | ✅ |
 
 ### 1.2 Subscription lifecycle (framework + MACD)
 

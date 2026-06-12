@@ -57,11 +57,31 @@ class HomePassController extends ApiController
         return ApiResponse::item($homepass);
     }
 
-    /** PATCH /api/homepass/{homepass}/status */
+    /**
+     * GET /api/homepass/eligible?techRegionId= — the serviceability lookup (SIP-03 coverage
+     * check at acquisition). Returns HomePasses whose current status has is_sellable=true in
+     * the catalog — read by the flag, never by a literal status code.
+     */
+    public function eligible(Request $request): JsonResponse
+    {
+        $operator = $request->query('operatorCode', Context::operatorCode());
+        $sellableCodes = \Modules\Catalog\Models\HomePassStatusCode::query()
+            ->where('operator_code', $operator)->where('is_sellable', true)->where('active', true)->pluck('code');
+
+        $items = HomePass::query()
+            ->where('operator_code', $operator)
+            ->when($request->query('techRegionId'), fn ($q, $r) => $q->where('tech_region_id', $r))
+            ->whereIn('status', $sellableCodes)
+            ->orderByDesc('created_at')->limit(200)->get();
+
+        return ApiResponse::item(['items' => $items, 'sellableStatuses' => $sellableCodes]);
+    }
+
+    /** PATCH /api/homepass/{homepass}/status — the code is governed by the status catalog, not an enum. */
     public function changeStatus(Request $request, HomePass $homepass): JsonResponse
     {
         $data = $request->validate([
-            'status' => ['required', 'in:DRAFT,SERVICEABLE,RESERVED,RETIRED'],
+            'status' => ['required', 'string', 'max:32'], // validated against homepass_status_code in the service
         ]);
 
         return ApiResponse::item($this->catalog->changeHomePassStatus($homepass, $data['status']));

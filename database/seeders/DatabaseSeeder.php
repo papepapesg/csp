@@ -52,6 +52,7 @@ class DatabaseSeeder extends Seeder
             ProvisioningTargetSeeder::class,
             DecisionTableSeeder::class,
             CatalogPolicySeeder::class,
+            \Modules\Catalog\Database\Seeders\HomePassStatusSeeder::class,
             WalletCatalogSeeder::class,
             TaxCatalogSeeder::class,
             DunningPolicySeeder::class,

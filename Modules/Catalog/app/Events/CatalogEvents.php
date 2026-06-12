@@ -23,6 +23,8 @@ final class CatalogEvents
 
     public const HOMEPASS_STATUS_CHANGED = 'HomePassStatusChanged';
 
+    public const HOMEPASS_REACHED_SELLABLE = 'HomePassReachedSellable'; // R-RLM-CFG-01-H-6 lead-notify hook
+
     // PLM-CFG-03 wallet catalog lifecycle.
     public const WALLET_CREATED = 'WalletCreated';
 
