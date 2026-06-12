@@ -55,9 +55,29 @@ const visibleGroups = computed(() => groups
     .filter(([, items]) => items.length));
 
 const isActive = (name) => route().current(name);
-function submitSearch() {
+
+// Federated global search (FE-APP-01 §16): debounced query → grouped hits. A customer/account
+// hit deep-links to its 360; other types open their owning console (which carries its own search).
+const searchGroups = ref([]);
+const searchOpen = ref(false);
+let searchTimer = null;
+const consoleRoute = { subscription: 'subscriptions.index', invoice: 'billing.console', payment: 'billing.console', workorder: 'workorders.console', equipment: 'equipment.console', ticket: 'tickets.index' };
+function onSearchInput() {
+    clearTimeout(searchTimer);
     const q = search.value.trim();
-    if (q) router.visit(route('customers.index') + '?q=' + encodeURIComponent(q));
+    if (q.length < 2) { searchGroups.value = []; searchOpen.value = false; return; }
+    searchTimer = setTimeout(async () => {
+        try {
+            const { data } = await window.axios.get('/api/search', { params: { q } });
+            searchGroups.value = data.groups ?? [];
+            searchOpen.value = true;
+        } catch (e) { searchGroups.value = []; }
+    }, 250);
+}
+function goToHit(type, item) {
+    searchOpen.value = false; search.value = '';
+    if (type === 'customer' || type === 'account') router.visit(route('customers.show', item.id));
+    else if (consoleRoute[type]) router.visit(route(consoleRoute[type]));
 }
 </script>
 
@@ -91,10 +111,22 @@ function submitSearch() {
         <div class="lg:pl-60">
             <header class="sticky top-0 z-10 flex h-16 items-center gap-3 border-b border-gray-200 bg-white/80 px-4 backdrop-blur sm:px-6">
                 <button class="rounded p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden" @click="sidebarOpen = !sidebarOpen" :aria-label="t('Menu')">☰</button>
-                <form class="hidden flex-1 sm:block" @submit.prevent="submitSearch">
-                    <input v-model="search" :placeholder="t('Search customers, accounts, tickets…')"
+                <div class="relative hidden flex-1 sm:block">
+                    <input v-model="search" @input="onSearchInput" @focus="searchGroups.length && (searchOpen = true)"
+                        @blur="setTimeout(() => (searchOpen = false), 150)" :placeholder="t('Search customers, accounts, subscriptions, invoices, tickets…')"
                         class="w-full max-w-md rounded-lg border-gray-200 bg-gray-50 text-sm focus:border-op focus:ring-op" />
-                </form>
+                    <div v-if="searchOpen && searchGroups.length" class="absolute left-0 top-10 z-20 max-h-96 w-full max-w-md overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                        <div v-for="g in searchGroups" :key="g.type">
+                            <div class="px-3 pt-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400">{{ t(g.label) }}</div>
+                            <button v-for="item in g.items" :key="g.type + item.id" @mousedown.prevent="goToHit(g.type, item)"
+                                class="flex w-full items-baseline justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-gray-50">
+                                <span class="truncate font-medium text-gray-700">{{ item.title }}</span>
+                                <span class="shrink-0 truncate text-xs text-gray-400">{{ item.subtitle }}</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div v-else-if="searchOpen && search.trim().length >= 2" class="absolute left-0 top-10 z-20 w-full max-w-md rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-400 shadow-lg">{{ t('No matches.') }}</div>
+                </div>
                 <span v-if="!isProd" class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold uppercase text-amber-700" :title="t('Non-production environment')">{{ env }}</span>
                 <Dropdown align="right" width="48">
                     <template #trigger>

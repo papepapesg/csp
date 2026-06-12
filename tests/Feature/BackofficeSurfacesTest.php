@@ -38,6 +38,24 @@ class BackofficeSurfacesTest extends TestCase
             ->assertJsonPath('widgets.kycPending.available', true);
     }
 
+    public function test_global_search_federates_across_entities_with_isolation(): void
+    {
+        Sanctum::actingAs($this->user());
+        \Modules\Ilm\Models\Customer::query()->create([
+            'customer_id' => \App\Foundation\Support\Id::make('cust'), 'operator_code' => 'WIK',
+            'type' => 'RES', 'name' => 'Ada Lovelace', 'primary_msisdn' => '+254712345678',
+        ]);
+
+        $res = $this->getJson('/api/search?q=Ada')->assertOk();
+        $groups = collect($res->json('groups'));
+        $this->assertTrue($groups->contains(fn ($g) => $g['type'] === 'customer'));
+        $customer = $groups->firstWhere('type', 'customer');
+        $this->assertSame('Ada Lovelace', $customer['items'][0]['title']);
+
+        // Sub-2-char queries return nothing (no expensive fan-out).
+        $this->getJson('/api/search?q=A')->assertOk()->assertJsonPath('groups', []);
+    }
+
     public function test_each_backoffice_surface_renders_its_page(): void
     {
         $user = $this->user();
