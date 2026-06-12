@@ -33,6 +33,10 @@ class BillingRuntimeProvider extends ServiceProvider
         // → suspend/resume dunning; WalletToppedUp → prepaid recovery.
         Event::listen(OutboxEventPublished::class, [\Modules\Billing\Listeners\DunningEventBridge::class, 'handle']);
 
+        // BIL-02-TAX-01: every payment moment (PaymentApplied / WalletToppedUp /
+        // PaymentReceived) generates a tax invoice when the operator has it enabled.
+        Event::listen(OutboxEventPublished::class, [\Modules\Billing\Listeners\TaxEventBridge::class, 'handle']);
+
         // ADJ-01 approval routing fallback: when no decision table is deployed
         // for rules.billing.adjustment-approval, derive the same answer from
         // adjustment_limits_config (steps + auto_approve_under threshold).
@@ -47,7 +51,7 @@ class BillingRuntimeProvider extends ServiceProvider
         });
 
         if ($this->app->runningInConsole()) {
-            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, \Modules\Billing\Console\CycleCloseCommand::class, \Modules\Billing\Console\WalletExpiryCommand::class, \Modules\Billing\Console\ProFormaScanCommand::class]);
+            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, \Modules\Billing\Console\CycleCloseCommand::class, \Modules\Billing\Console\WalletExpiryCommand::class, \Modules\Billing\Console\ProFormaScanCommand::class, \Modules\Billing\Console\TaxSignScanCommand::class, \Modules\Billing\Console\TaxRetryScanCommand::class]);
         }
     }
 
@@ -58,5 +62,7 @@ class BillingRuntimeProvider extends ServiceProvider
                 default => new StubTaxGateway,
             };
         });
+        // BIL-02-TAX-01 signer registry caches initialized signers; keep it a singleton.
+        $this->app->singleton(\Modules\Billing\Tax\TaxSignerRegistry::class);
     }
 }

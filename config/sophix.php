@@ -139,6 +139,20 @@ return [
     | in staff_notification_adapter_binding.adapter_impl. Adding a provider/channel
     | = write the adapter class + add an entry here + insert a binding row.
     */
+    /*
+    |--------------------------------------------------------------------------
+    | BIL-02-TAX-01 tax-authority signers
+    |--------------------------------------------------------------------------
+    | signing_service_implementation_ref -> TaxInvoiceSigner class. Onboarding a
+    | new authority = a signer class + an entry here + the operator's
+    | tax_operator_config row. No framework edit.
+    */
+    'tax' => [
+        'signer_implementations' => [
+            'stub' => \Modules\Billing\Tax\Signers\StubTaxSigner::class,
+        ],
+    ],
+
     'icn' => [
         'adapter_implementations' => [
             'smtp-classic' => \Modules\Notification\Icn\Adapters\SmtpClassicAdapter::class,

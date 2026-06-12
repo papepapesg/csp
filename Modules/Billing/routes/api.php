@@ -32,6 +32,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('dunning/{account}/force-terminate', [DunningController::class, 'forceTerminate'])->middleware('permission:dunning.admin');
     Route::post('dunning/{account}/extend-review', [DunningController::class, 'extendReview'])->middleware('permission:dunning.admin');
 
+    // BIL-02-TAX-01 tax invoice & gateway
+    $tax = \Modules\Billing\Http\Controllers\TaxInvoiceController::class;
+    Route::get('tax-invoices/dashboard', [$tax, 'dashboard'])->middleware('permission:invoice.read');
+    Route::get('tax-invoices', [$tax, 'index'])->middleware('permission:invoice.read');
+    Route::post('tax-invoices/manual', [$tax, 'manual'])->middleware(['permission:invoice.manage', 'idempotency']);
+    Route::get('tax-invoices/{taxInvoice}', [$tax, 'show'])->middleware('permission:invoice.read');
+    Route::get('tax-invoices/{taxInvoice}/pdf', [$tax, 'pdf'])->middleware('permission:invoice.read');
+    Route::get('tax-invoices/{taxInvoice}/signing-history', [$tax, 'signingHistory'])->middleware('permission:invoice.read');
+    Route::post('tax-invoices/{taxInvoice}/retry-signing', [$tax, 'retrySigning'])->middleware('permission:invoice.manage');
+    Route::post('tax-invoices/{taxInvoice}/resolve-no-action', [$tax, 'resolveNoAction'])->middleware('permission:invoice.manage');
+    Route::post('tax-invoices/{taxInvoice}/cancel', [$tax, 'cancel'])->middleware('permission:invoice.manage');
+    Route::post('tax-invoices/{taxInvoice}/cancel/approve', [$tax, 'approveCancel'])->middleware('permission:tax.compliance');
+
     // BIL-04 dunning program catalog (versioned policy)
     Route::get('dunning-programs', [\Modules\Billing\Http\Controllers\DunningProgramController::class, 'index'])->middleware('permission:invoice.read');
     Route::post('dunning-programs', [\Modules\Billing\Http\Controllers\DunningProgramController::class, 'store'])->middleware('permission:dunning.admin');

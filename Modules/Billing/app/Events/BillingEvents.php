@@ -46,6 +46,14 @@ final class BillingEvents
 
     public const TAX_INVOICE_ISSUED = 'TaxInvoiceIssued';
 
+    public const TAX_INVOICE_SIGNED = 'TaxInvoiceSigned';
+
+    public const TAX_INVOICE_SIGNING_FAILED = 'TaxInvoiceSigningFailed';
+
+    public const TAX_INVOICE_GAVE_UP = 'TaxInvoiceSigningGaveUp';
+
+    public const TAX_INVOICE_CANCELLED = 'TaxInvoiceCancelled';
+
     public const DUNNING_STAGE_ADVANCED = 'DunningStageAdvanced';
 
     public const DUNNING_CLEARED = 'DunningCleared';

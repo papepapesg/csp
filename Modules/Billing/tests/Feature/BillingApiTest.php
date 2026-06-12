@@ -106,15 +106,17 @@ class BillingApiTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_issue_tax_invoice_fiscalises_via_gateway(): void
+    public function test_issue_tax_invoice_generates_and_signs(): void
     {
         $invoice = $this->makeInvoice(2000.0);
 
+        // The legacy endpoint runs the real generator + signer inline: GENERATED -> SIGNED.
         $this->postJson("/api/invoices/{$invoice['invoice_id']}/tax-invoice", [], ['Idempotency-Key' => 'tax-1'])
             ->assertCreated()
-            ->assertJsonPath('status', 'FISCALISED');
+            ->assertJsonPath('status', 'SIGNED');
 
-        $this->assertDatabaseHas('tax_invoice', ['invoice_id' => $invoice['invoice_id'], 'status' => 'FISCALISED']);
+        $this->assertDatabaseHas('tax_invoice', ['original_invoice_id' => $invoice['invoice_id'], 'status' => 'SIGNED']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'TaxInvoiceIssued']);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'TaxInvoiceSigned']);
     }
 }

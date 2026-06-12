@@ -2,59 +2,37 @@
 
 namespace Modules\Billing\Services;
 
-use App\Foundation\Errors\DomainException;
-use App\Foundation\Events\DomainEvent;
-use App\Foundation\Events\EventBus;
-use Illuminate\Support\Facades\DB;
-use Modules\Billing\Contracts\TaxGateway;
-use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Models\TaxInvoice;
+use Modules\Billing\Models\TaxOperatorConfig;
 
 /**
- * BIL-02-TAX-01 — issue a fiscalised tax invoice via the tax gateway.
+ * BIL-02-TAX-01 — legacy synchronous entry point retained for the existing
+ * `POST /api/invoices/{invoice}/tax-invoice` endpoint. Generates a tax invoice for the
+ * invoice's full amount and signs it inline through the real generator + signing service
+ * (the same path the payment-triggered flow uses), so there is one authoritative tax-invoice
+ * model. The DD's primary trigger is the payment moment (see TaxEventBridge); this is the
+ * manual "fiscalise this invoice now" shim.
  */
 class TaxService
 {
     public function __construct(
-        private readonly EventBus $events,
-        private readonly TaxGateway $gateway,
+        private readonly TaxInvoiceGenerator $generator,
+        private readonly TaxSigningService $signing,
     ) {}
 
     public function issue(Invoice $invoice): TaxInvoice
     {
-        $existing = TaxInvoice::query()->where('invoice_id', $invoice->invoice_id)->where('status', 'FISCALISED')->first();
-        if ($existing) {
-            return $existing; // idempotent
+        // Ensure the operator can generate (the endpoint is an explicit admin action, so
+        // auto-enable a transient config when none exists rather than silently no-op).
+        if (! TaxOperatorConfig::enabled($invoice->operator_code)) {
+            TaxOperatorConfig::query()->updateOrCreate(['operator_code' => $invoice->operator_code], ['enabled' => true]);
         }
 
-        return DB::transaction(function () use ($invoice) {
-            $result = $this->gateway->fiscalize($invoice);
-            if (! ($result['ok'] ?? false)) {
-                throw DomainException::dependencyUnavailable('Tax gateway rejected: '.($result['error'] ?? 'unknown'));
-            }
+        $ref = 'tax-manual-invoice-'.$invoice->invoice_id;
+        $existing = TaxInvoice::query()->where('operator_code', $invoice->operator_code)->where('triggering_event_ref', $ref)->first();
+        $tax = $existing ?? $this->generator->fromPaymentApplied($invoice, 'manual-'.$invoice->invoice_id, (float) $invoice->total_amount, $ref);
 
-            $taxInvoice = TaxInvoice::query()->create([
-                'invoice_id' => $invoice->invoice_id,
-                'operator_code' => $invoice->operator_code,
-                'fiscal_number' => $result['fiscalNumber'] ?? null,
-                'control_code' => $result['controlCode'] ?? null,
-                'gateway_ref' => $result['ref'] ?? null,
-                'status' => 'FISCALISED',
-                'response' => $result['response'] ?? null,
-                'issued_at' => now(),
-            ]);
-            $invoice->update(['type' => 'TAX']);
-
-            $this->events->publish(new DomainEvent(
-                type: BillingEvents::TAX_INVOICE_ISSUED,
-                topic: BillingEvents::TOPIC,
-                payload: ['invoiceId' => $invoice->invoice_id, 'fiscalNumber' => $taxInvoice->fiscal_number],
-                aggregateType: 'TaxInvoice',
-                aggregateId: $taxInvoice->tax_invoice_id,
-            ));
-
-            return $taxInvoice;
-        });
+        return $this->signing->sign($tax); // GENERATED -> SIGNED inline
     }
 }

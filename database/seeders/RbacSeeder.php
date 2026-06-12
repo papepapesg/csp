@@ -20,7 +20,7 @@ class RbacSeeder extends Seeder
         'customer.read', 'customer.update', 'customer.create',
         'subscription.read', 'subscription.create', 'subscription.activate', 'subscription.manage',
         'catalog.read', 'catalog.manage',
-        'invoice.read', 'invoice.manage', 'payment.read', 'payment.apply', 'payment.reverse', 'dunning.admin',
+        'invoice.read', 'invoice.manage', 'payment.read', 'payment.apply', 'payment.reverse', 'dunning.admin', 'tax.compliance',
         'wallet.read', 'wallet.manage', 'adjustment.create', 'adjustment.approve',
         'ticket.create', 'ticket.read', 'ticket.assign',
         'fulfillment.read', 'fulfillment.manage',
@@ -68,6 +68,8 @@ class RbacSeeder extends Seeder
         // BIL-04 dunning: admin overrides vs read-only investigation.
         'DUNNING_ADMIN' => ['invoice.read', 'invoice.manage', 'dunning.admin'],
         'DUNNING_OPERATOR' => ['invoice.read'],
+        // BIL-02-TAX-01: signed-tax-invoice cancellation requires this role (C-1 dual approval).
+        'TAX_COMPLIANCE_OFFICER' => ['invoice.read', 'invoice.manage', 'tax.compliance'],
     ];
 
     public function run(): void
