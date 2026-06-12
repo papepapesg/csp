@@ -63,8 +63,30 @@ class GeneratePostmanCommand extends Command
         }
 
         $this->info('Generated '.count($bundles).' bundle collection(s).');
+        $this->zipKit($outputDir);
 
         return self::SUCCESS;
+    }
+
+    /** One importable zip: every collection + environment (Postman accepts the zip as-is). */
+    private function zipKit(string $outputDir): void
+    {
+        $zipPath = dirname($outputDir).'/SOPHIX-postman.zip';
+        $zip = new \ZipArchive;
+        if ($zip->open($zipPath, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) !== true) {
+            $this->warn('Could not write '.$zipPath);
+
+            return;
+        }
+        foreach (glob($outputDir.'/*.json') as $file) {
+            $zip->addFile($file, basename($file));
+        }
+        foreach (glob(dirname($outputDir).'/*.postman_environment.json') as $file) {
+            $zip->addFile($file, basename($file));
+        }
+        $count = $zip->numFiles;
+        $zip->close();
+        $this->line("  <info>✓</info> kit zip ({$count} files) -> ".Str::after($zipPath, base_path().'/'));
     }
 
     private function bundleFor(RoutingRoute $route): string
