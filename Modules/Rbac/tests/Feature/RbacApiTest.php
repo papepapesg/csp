@@ -85,4 +85,60 @@ class RbacApiTest extends TestCase
 
         $this->getJson('/api/rbac/roles')->assertForbidden();
     }
+
+    public function test_user_scope_assignment_and_enforcement_check(): void
+    {
+        $user = User::factory()->create(['operator_code' => 'WIK']);
+
+        // Grant a franchise scope — the user may act on that franchise only.
+        $this->postJson("/api/rbac/users/{$user->uid}/scopes", ['scopeType' => 'FRANCHISE', 'scopeValue' => 'fr-NRB-002', 'scopeLabel' => 'Nairobi 002'])
+            ->assertCreated();
+        $this->assertDatabaseHas('rbac_user_scope_assignment', ['auth_user_id' => $user->uid, 'scope_type' => 'FRANCHISE', 'scope_value' => 'fr-NRB-002', 'active' => true]);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'RbacUserScopeAssigned']);
+
+        // The enforcement check modules call: in scope for the granted franchise, out for another.
+        $this->getJson("/api/rbac/users/{$user->uid}/within-scope?scopeType=FRANCHISE&scopeValue=fr-NRB-002")->assertOk()->assertJsonPath('within', true);
+        $this->getJson("/api/rbac/users/{$user->uid}/within-scope?scopeType=FRANCHISE&scopeValue=fr-MSA-001")->assertOk()->assertJsonPath('within', false);
+
+        // Effective access now reports scopes alongside roles + permissions.
+        $this->getJson("/api/rbac/users/{$user->uid}/effective-access")->assertOk()->assertJsonPath('scopes.0.type', 'FRANCHISE');
+    }
+
+    public function test_global_scope_passes_any_check(): void
+    {
+        $user = User::factory()->create(['operator_code' => 'WIK']);
+        $this->postJson("/api/rbac/users/{$user->uid}/scopes", ['scopeType' => 'GLOBAL', 'scopeValue' => '*'])->assertCreated();
+
+        $this->getJson("/api/rbac/users/{$user->uid}/within-scope?scopeType=TECH_REGION&scopeValue=anything")->assertOk()->assertJsonPath('within', true);
+    }
+
+    public function test_scope_revocation_removes_access(): void
+    {
+        $user = User::factory()->create(['operator_code' => 'WIK']);
+        $scope = $this->postJson("/api/rbac/users/{$user->uid}/scopes", ['scopeType' => 'TEAM', 'scopeValue' => 'team-1'])->assertCreated()->json('scope_assignment_id');
+
+        $this->postJson("/api/rbac/scopes/{$scope}/revoke")->assertOk();
+        $this->getJson("/api/rbac/users/{$user->uid}/within-scope?scopeType=TEAM&scopeValue=team-1")->assertOk()->assertJsonPath('within', false);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'RbacUserScopeRevoked']);
+    }
+
+    public function test_frontend_action_matrix_filters_by_permission(): void
+    {
+        $this->postJson('/api/rbac/frontend-actions', ['app_code' => 'FE-APP-01', 'action_code' => 'backoffice.tickets.create', 'action_type' => 'BUTTON', 'display_name' => 'Create Ticket', 'required_permission_code' => 'ticket.create'])->assertCreated();
+        $this->postJson('/api/rbac/frontend-actions', ['app_code' => 'FE-APP-01', 'action_code' => 'backoffice.billing.adjust', 'action_type' => 'BUTTON', 'display_name' => 'Adjust', 'required_permission_code' => 'invoice.manage'])->assertCreated();
+
+        $agent = User::factory()->create(['operator_code' => 'WIK']);
+        $agent->assignRole('CUSTOMER_CARE_AGENT'); // has ticket.create, not invoice.manage
+
+        $nav = $this->getJson("/api/rbac/users/{$agent->uid}/navigation?appCode=FE-APP-01")->assertOk()->json('actions');
+        $codes = collect($nav)->pluck('actionCode')->all();
+        $this->assertContains('backoffice.tickets.create', $codes);
+        $this->assertNotContains('backoffice.billing.adjust', $codes); // hidden — lacks the permission
+    }
+
+    public function test_permission_metadata_marks_scope_required(): void
+    {
+        $this->putJson('/api/rbac/permissions/franchise.manage/meta', ['module_code' => 'EM-01', 'risk_level' => 'HIGH', 'scope_required' => true])->assertOk();
+        $this->assertDatabaseHas('rbac_permission_meta', ['permission_code' => 'franchise.manage', 'scope_required' => true, 'risk_level' => 'HIGH']);
+    }
 }

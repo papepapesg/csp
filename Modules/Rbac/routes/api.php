@@ -18,4 +18,17 @@ Route::middleware(['auth:sanctum', 'permission:rbac.manage'])->group(function ()
     Route::get('rbac/audit', [RbacController::class, 'audit']);
     Route::post('rbac/users/{user}/roles', [RbacController::class, 'assignRoles']);
     Route::get('rbac/users/{user}/effective-access', [RbacController::class, 'effectiveAccess']);
+
+    // EM-CFG-03 §8.5 user scopes
+    Route::get('rbac/users/{user}/scopes', [RbacController::class, 'userScopes']);
+    Route::post('rbac/users/{user}/scopes', [RbacController::class, 'assignScope']);
+    Route::post('rbac/scopes/{scope}/revoke', [RbacController::class, 'revokeScope']);
+    Route::get('rbac/users/{user}/within-scope', [RbacController::class, 'withinScope']);
+
+    // EM-CFG-03 catalog metadata + frontend action matrix
+    Route::put('rbac/roles/{code}/meta', [RbacController::class, 'upsertRoleMeta']);
+    Route::put('rbac/permissions/{code}/meta', [RbacController::class, 'upsertPermissionMeta']);
+    Route::get('rbac/frontend-actions', [RbacController::class, 'frontendActions']);
+    Route::post('rbac/frontend-actions', [RbacController::class, 'storeFrontendAction']);
+    Route::get('rbac/users/{user}/navigation', [RbacController::class, 'navigation']);
 });
