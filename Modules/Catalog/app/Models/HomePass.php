@@ -30,7 +30,11 @@ class HomePass extends Model
 
     protected $casts = [
         'has_been_active' => 'boolean',
+        'has_been_sellable' => 'boolean',
         'network_nodes' => 'array',
+        'network_path' => 'array',
+        'service_management_endpoints' => 'array',
+        'services_supported' => 'array',
     ];
 
     protected static function booted(): void

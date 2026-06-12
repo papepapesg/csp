@@ -114,6 +114,53 @@ class CatalogApiTest extends TestCase
             ->assertJsonPath('totalElements', 1);
     }
 
+    public function test_homepass_network_path_derives_services_and_endpoints(): void
+    {
+        $hp = $this->postJson('/api/homepass', ['address' => '7 Topo Rd', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
+
+        // The node chain: OLT (data+iptv, service_management) + VOIPSWITCH (voice, service_management) + ONT (termination).
+        $this->patchJson("/api/homepass/{$hp}/network-path", [
+            'captureMode' => 'PRE_INSTALLATION',
+            'nodes' => [
+                ['type' => 'OLT', 'code' => 'OLT-NRB-WTL-01', 'role' => 'service_management', 'port' => '1/2/3'],
+                ['type' => 'VOIPSWITCH', 'code' => 'VOIPSWITCH-NRB-01', 'role' => 'service_management', 'port' => 'EXT-5421'],
+                ['type' => 'SPLITTER', 'code' => 'SPL-1', 'role' => 'passive'],
+                ['type' => 'ONT', 'code' => 'ONT-SN-1', 'role' => 'termination'],
+            ],
+        ])->assertOk()
+            // service_management_endpoints: the {nodeCode,port} each gateway must address (R-RLM-CFG-01-H-11).
+            ->assertJsonPath('service_management_endpoints.data.nodeCode', 'OLT-NRB-WTL-01')
+            ->assertJsonPath('service_management_endpoints.data.port', '1/2/3')
+            ->assertJsonPath('service_management_endpoints.voice.nodeCode', 'VOIPSWITCH-NRB-01')
+            ->assertJsonPath('service_management_endpoints.iptv_multicast.nodeCode', 'OLT-NRB-WTL-01');
+
+        // services_supported derived from node types (R-RLM-CFG-01-H-12).
+        $supported = \Modules\Catalog\Models\HomePass::find($hp)->services_supported;
+        $this->assertEqualsCanonicalizing(['DATA', 'IPTV_MULTICAST', 'VOICE'], $supported);
+    }
+
+    public function test_eligible_contractors_for_a_homepass_skill(): void
+    {
+        $hp = $this->postJson('/api/homepass', ['address' => '9 Route Rd', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
+        $region = 'KE-NRB-ROUTE';
+
+        $con = \Modules\Catalog\Models\TechContractor::query()->create([
+            'operator_code' => 'WIK', 'code' => 'ACME_FIBER', 'name' => 'Acme Fiber', 'skills' => ['INSTALLATION', 'MAINTENANCE'], 'status' => 'ACTIVE',
+        ]);
+        \Illuminate\Support\Facades\DB::table('homepass_tech_region')->insert(['homepass_id' => $hp, 'tech_region_ref' => $region, 'created_at' => now(), 'updated_at' => now()]);
+        // Per-region assignment scopes the contractor to INSTALLATION only in this region (R-RLM-CFG-01-A-1).
+        \Illuminate\Support\Facades\DB::table('tech_region_contractor')->insert([
+            'tech_region_id' => $region, 'tech_contractor_id' => $con->contractor_id, 'operator_code' => 'WIK',
+            'skills' => json_encode(['INSTALLATION']), 'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        $this->getJson("/api/homepass/{$hp}/eligible-contractors?skill=INSTALLATION")
+            ->assertOk()->assertJsonPath('items.0.contractor_id', $con->contractor_id);
+        // The assignment doesn't scope MAINTENANCE in this region → none eligible.
+        $this->getJson("/api/homepass/{$hp}/eligible-contractors?skill=MAINTENANCE")
+            ->assertOk()->assertJsonCount(0, 'items');
+    }
+
     public function test_homepass_status_is_a_config_catalog_with_semantic_flags(): void
     {
         $this->postJson('/api/tech-regions', ['tech_region_id' => 'KE-NRB-X', 'display_name_primary' => 'X', 'region_type' => 'NEIGHBORHOOD'])->assertCreated();

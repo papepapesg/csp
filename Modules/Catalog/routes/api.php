@@ -49,6 +49,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('homepass', [HomePassController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
     Route::get('homepass/{homepass}', [HomePassController::class, 'show'])->middleware('permission:catalog.read');
     Route::patch('homepass/{homepass}/status', [HomePassController::class, 'changeStatus'])->middleware('permission:catalog.manage');
+    Route::patch('homepass/{homepass}/network-path', [HomePassController::class, 'setNetworkPath'])->middleware('permission:catalog.manage');
+    Route::get('homepass/{homepass}/eligible-contractors', [HomePassController::class, 'eligibleContractors'])->middleware('permission:catalog.read');
 
     // PLM-CFG-02 tax compute
     Route::post('tax/compute', [TaxController::class, 'compute'])->middleware('permission:catalog.read');

@@ -19,6 +19,7 @@ class HomePassController extends ApiController
     public function __construct(
         private readonly CatalogService $catalog,
         private readonly CatalogPolicy $policy,
+        private readonly \Modules\Catalog\Services\HomePassTopologyService $topology,
     ) {}
 
     /** GET /api/homepass?techRegionId=&status=&q= (serviceability search) */
@@ -75,6 +76,32 @@ class HomePassController extends ApiController
             ->orderByDesc('created_at')->limit(200)->get();
 
         return ApiResponse::item(['items' => $items, 'sellableStatuses' => $sellableCodes]);
+    }
+
+    /**
+     * PATCH /api/homepass/{homepass}/network-path — set the node chain; the service re-derives
+     * services_supported + service_management_endpoints (RLM-CFG-01 §network_path).
+     */
+    public function setNetworkPath(Request $request, HomePass $homepass): JsonResponse
+    {
+        $v = $request->validate([
+            'captureMode' => ['nullable', 'in:PRE_INSTALLATION,AT_INSTALLATION'],
+            'nodes' => ['required', 'array'],
+            'nodes.*.type' => ['required', 'string'],
+            'nodes.*.code' => ['required', 'string'],
+            'nodes.*.role' => ['nullable', 'in:service_management,passive,termination'],
+            'nodes.*.port' => ['nullable', 'string'],
+        ]);
+
+        return ApiResponse::item($this->topology->setNetworkPath($homepass, $v));
+    }
+
+    /** GET /api/homepass/{homepass}/eligible-contractors?skill=INSTALLATION (WO routing primitive). */
+    public function eligibleContractors(Request $request, HomePass $homepass): JsonResponse
+    {
+        $skill = $request->validate(['skill' => ['required', 'string']])['skill'];
+
+        return ApiResponse::item(['items' => $this->topology->eligibleContractors($homepass, $skill)]);
     }
 
     /** PATCH /api/homepass/{homepass}/status — the code is governed by the status catalog, not an enum. */
