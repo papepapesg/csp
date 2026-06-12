@@ -37,6 +37,9 @@ set_env APP_URL "http://${PUBLIC_HOST}"
 set_env APP_PORT "${APP_PORT}"
 set_env MAIL_MAILER smtp
 set_env SESSION_SECURE_COOKIE false
+# Containerized logging: stderr -> `docker compose logs`, and no root-vs-www-data
+# contention on storage/logs/laravel.log across app/queue/scheduler/one-off containers.
+set_env LOG_CHANNEL stderr
 # Stable app key via env_file so sessions survive container restarts.
 grep -q '^APP_KEY=base64:' .env || set_env APP_KEY "base64:$(openssl rand -base64 32)"
 
@@ -57,6 +60,8 @@ docker compose run --rm -e CONTAINER_ROLE=oneoff app php artisan sophix:setup de
 # Drain the demo's queued workflow + outbox so projections/metrics are live.
 docker compose run --rm -e CONTAINER_ROLE=oneoff app php artisan sophix:workflow:work --once || true
 docker compose run --rm -e CONTAINER_ROLE=oneoff app php artisan sophix:outbox:dispatch || true
+# The one-off seeds ran as root; hand storage back to the php-fpm user.
+docker compose run --rm -e CONTAINER_ROLE=oneoff app chown -R www-data:www-data storage || true
 
 # 5. Start the full application stack (app boot-migrate is now a no-op; schema is current).
 echo "==> Starting the application stack..."

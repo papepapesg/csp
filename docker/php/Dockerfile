@@ -65,3 +65,10 @@ RUN chown -R www-data:www-data storage bootstrap/cache \
 EXPOSE 9000
 ENTRYPOINT ["entrypoint"]
 CMD ["php-fpm"]
+
+# ---------- Stage 5: web (nginx with the real public/ tree) ----------
+# nginx must hold the static files itself (assets, index.php for $realpath_root):
+# it cannot see the app container's filesystem over fastcgi.
+FROM nginx:1.27-alpine AS web
+COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
+COPY --from=vendor /var/www/html/public /var/www/html/public
