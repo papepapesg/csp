@@ -14,7 +14,7 @@ RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist \
 # ---------- Stage 2: frontend assets (Inertia + Vue + Vite) ----------
 FROM node:22-alpine AS assets
 WORKDIR /app
-COPY package.json package-lock.json* vite.config.js ./
+COPY package.json package-lock.json* vite.config.js postcss.config.js tailwind.config.js ./
 RUN npm ci || npm install
 COPY resources ./resources
 COPY public ./public
