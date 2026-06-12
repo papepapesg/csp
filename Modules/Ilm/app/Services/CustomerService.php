@@ -5,9 +5,12 @@ namespace Modules\Ilm\Services;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
+use App\Foundation\Files\FileObject;
+use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Ilm\Events\IlmEvents;
 use Modules\Ilm\Models\Customer;
+use Modules\Ilm\Models\CustomerKycDocument;
 use Modules\Ilm\Models\KycApproval;
 
 /**
@@ -68,6 +71,57 @@ class CustomerService
      *
      * @param  array<string, mixed>  $meta
      */
+    /**
+     * ILM-CFG-01 §5.3 — record a captured KYC document. The binary already lives in
+     * FOUNDATION_FILE_STORAGE; we resolve the foundation file by id (so a customer can
+     * never reference a non-existent object), keep only the reference + authoritative
+     * mime/size/content_hash (R-ILM-K-6), and supersede any prior document of the same
+     * type rather than hard-deleting it (R-ILM-K-8).
+     *
+     * @param  array<string,mixed>  $data  file_id, document_type, document_name?
+     */
+    public function recordKycDocument(Customer $customer, array $data, ?string $actor = null): CustomerKycDocument
+    {
+        $file = FileObject::query()->where('file_id', $data['file_id'])->first();
+        if (! $file) {
+            throw new DomainException('KYC_DOCUMENT_FILE_NOT_FOUND', 'The referenced file is not registered in file storage.', 404);
+        }
+
+        return DB::transaction(function () use ($customer, $data, $actor, $file) {
+            $document = CustomerKycDocument::query()->create([
+                'document_id' => Id::make('kycdoc'),
+                'customer_id' => $customer->customer_id,
+                'operator_code' => $customer->operator_code,
+                'document_type' => $data['document_type'],
+                'document_name' => $data['document_name'] ?? $file->filename,
+                'file_id' => $file->file_id,
+                'storage_path' => $file->path,
+                'mime_type' => $file->mime_type,
+                'size_bytes' => $file->size_bytes,
+                'content_hash' => $file->checksum, // SHA-256 from the foundation
+                'captured_by' => $actor,
+            ]);
+
+            // R-ILM-K-8: a newer document of the same type supersedes the prior one (audit kept).
+            CustomerKycDocument::query()
+                ->where('customer_id', $customer->customer_id)
+                ->where('document_type', $data['document_type'])
+                ->where('document_id', '!=', $document->document_id)
+                ->whereNull('superseded_by_id')
+                ->update(['superseded_by_id' => $document->document_id, 'superseded_at' => now()]);
+
+            $this->events->publish(new DomainEvent(
+                type: IlmEvents::CUSTOMER_UPDATED,
+                topic: IlmEvents::TOPIC,
+                payload: ['customerId' => $customer->customer_id, 'kycDocumentId' => $document->document_id, 'documentType' => $document->document_type],
+                aggregateType: 'Customer',
+                aggregateId: $customer->customer_id,
+            ));
+
+            return $document;
+        });
+    }
+
     public function recordKycDecision(Customer $customer, int $level, string $decision, array $meta = []): KycApproval
     {
         $isFinal = $level >= 2;

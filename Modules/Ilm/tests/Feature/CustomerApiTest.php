@@ -77,6 +77,35 @@ class CustomerApiTest extends TestCase
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'CustomerKycApproved']);
     }
 
+    public function test_kyc_documents_are_stored_through_the_file_foundation(): void
+    {
+        $this->actingAsAgent(['CUSTOMER_CARE_AGENT']);
+        \Illuminate\Support\Facades\Storage::fake('local');
+        $customer = Customer::factory()->create(['operator_code' => 'WIK']);
+
+        // Post the binary to the KYC documents endpoint — it lands in FOUNDATION_FILE_STORAGE.
+        $doc = $this->post("/api/customers/{$customer->customer_id}/kyc/documents", [
+            'file' => \Illuminate\Http\UploadedFile::fake()->image('id_front.jpg'),
+            'document_type' => 'NATIONAL_ID_FRONT',
+        ])->assertStatus(201)->json();
+
+        // The bytes are in the foundation registry (with a storage path); ILM holds the reference + hash.
+        $this->assertDatabaseHas('file_object', ['file_id' => $doc['file_id'], 'owner_type' => 'CUSTOMER_KYC', 'owner_id' => $customer->customer_id]);
+        $this->assertDatabaseHas('customer_kyc_document', ['document_id' => $doc['document_id'], 'customer_id' => $customer->customer_id, 'document_type' => 'NATIONAL_ID_FRONT', 'storage_path' => $doc['storage_path']]);
+        $this->assertNotNull($doc['content_hash']); // SHA-256 from the foundation (R-ILM-K-6)
+
+        // A second ID-front document supersedes the first (R-ILM-K-8, never hard-deleted).
+        $doc2 = $this->post("/api/customers/{$customer->customer_id}/kyc/documents", [
+            'file' => \Illuminate\Http\UploadedFile::fake()->image('id_front_v2.jpg'),
+            'document_type' => 'NATIONAL_ID_FRONT',
+        ])->assertStatus(201)->json();
+        $this->assertDatabaseHas('customer_kyc_document', ['document_id' => $doc['document_id'], 'superseded_by_id' => $doc2['document_id']]);
+
+        // Referencing a non-existent foundation file is rejected.
+        $this->postJson("/api/customers/{$customer->customer_id}/kyc/documents", ['file_id' => 'file_missing', 'document_type' => 'PASSPORT'])
+            ->assertStatus(404)->assertJsonPath('errorCode', 'KYC_DOCUMENT_FILE_NOT_FOUND');
+    }
+
     public function test_kyc_approval_authority_is_config_driven(): void
     {
         // Operator has configured KYC authority per level (kyc_approval_role).

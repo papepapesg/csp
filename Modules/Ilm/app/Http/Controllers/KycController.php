@@ -16,7 +16,35 @@ use Modules\Ilm\Services\CustomerService;
  */
 class KycController extends ApiController
 {
-    public function __construct(private readonly CustomerService $customers) {}
+    public function __construct(
+        private readonly CustomerService $customers,
+        private readonly \App\Foundation\Files\FileStorageService $files,
+    ) {}
+
+    /**
+     * POST /api/customers/{customer}/kyc/documents — capture a KYC document. Post the
+     * binary (multipart) and we store it in FOUNDATION_FILE_STORAGE here, or reference a
+     * file already uploaded via POST /api/files by its file_id. ILM keeps only the reference.
+     */
+    public function storeDocument(Request $request, Customer $customer): JsonResponse
+    {
+        $v = $request->validate([
+            'file' => ['required_without:file_id', 'file', 'max:20480'],
+            'file_id' => ['required_without:file', 'string'],
+            'document_type' => ['required', 'string', 'max:64'],
+            'document_name' => ['nullable', 'string', 'max:160'],
+        ]);
+
+        if ($request->hasFile('file')) {
+            $object = $this->files->store($request->file('file'), [
+                'owner_type' => 'CUSTOMER_KYC', 'owner_id' => $customer->customer_id,
+                'category' => 'kyc', 'uploaded_by' => $request->user()?->uid,
+            ]);
+            $v['file_id'] = $object->file_id;
+        }
+
+        return ApiResponse::item($this->customers->recordKycDocument($customer, $v, $request->user()?->uid), 201);
+    }
 
     /** POST /api/customers/{customer}/kyc/l1-approve */
     public function l1Approve(Request $request, Customer $customer): JsonResponse

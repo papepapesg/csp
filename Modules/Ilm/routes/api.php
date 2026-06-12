@@ -30,6 +30,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('customers/{customer}/interactions', [CustomerSubResourceController::class, 'storeInteraction'])->middleware('permission:customer.update');
 
     // --- KYC ---
+    Route::post('customers/{customer}/kyc/documents', [KycController::class, 'storeDocument'])->middleware('permission:customer.update');
     Route::post('customers/{customer}/kyc/l1-approve', [KycController::class, 'l1Approve'])->middleware(['permission:customer.update', 'idempotency']);
     Route::post('customers/{customer}/kyc/final-approve', [KycController::class, 'finalApprove'])->middleware(['permission:customer.update', 'idempotency']);
     Route::post('customers/{customer}/kyc/reject', [KycController::class, 'reject'])->middleware('permission:customer.update');
