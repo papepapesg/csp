@@ -67,7 +67,7 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 26 | Procurement, receipt, audit, write-off | OSR-02/05 | `ProcurementService` (PO → approve → receive → OSR-01 movement + OSR-INSTANCE register for serialized, R-OSR-02-08), `InventoryAuditService` (count→variance→idempotent reconcile, R-OSR-05-09) | StockMoved | `ProcurementAuditTest` | ✅ |
 | 27 | Warehouse backoffice (added) | UI over OSR | `resources/js/Pages/Osr/Warehouse.vue` | — | UI route test | ⬜ |
 | 28 | Field audits | FA-01/02/03 | audit_type-driven process + FieldAuditPolicySeeder | Audit* | `FieldAuditTest` | ⬜ |
-| 29 | Contractor / staff / team registry | EM-02 | `Modules/Workforce` | — | `WorkforceApiTest` | ⬜ |
+| 29 | Contractor / staff / team registry | EM-02 | `Modules/Workforce`: registry + capacity hot path — `ContractorAvailabilityService` (region-scope/skill/slot resolution R-EM-CS-1..6, atomic slot commitment R-EM-CS-6/7) | ContractorSlotCommitment* | `WorkforceApiTest` | ✅ |
 
 ### 1.5 Care, assurance & engagement
 
