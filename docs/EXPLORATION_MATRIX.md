@@ -144,5 +144,6 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 2026-06-12 | #40 RBAC (EM-CFG-03) | added user scopes + withinScope enforcement, role/permission metadata, frontend-action visibility matrix + per-user navigation, scopes in effective-access, RBAC events — Spatie stays the engine (suite →406) |
 | 2026-06-12 | #1 sales (SALES-01) | full pre-order pipeline (territory, rich lead lifecycle, assignment history, activities, package interest, conversion→FUL-02, immutable attribution events); duplicate detection; daily-work (suite →412) |
 | 2026-06-12 | #3 customer 360 | resilient one-round-trip `/overview` composition with per-panel isolation (closes the CROSS-00 §12 partial-failure gap); Show.vue rewired (suite →415) |
+| 2026-06-12 | i18n sweep | wired `useI18n().t()` across all 27 pages (was 2/27) + script-side toast/error fallbacks; studio catalog → fallback dict → English key; English byte-identical (no regression, 415 pass); fixed `v-for="t in"` shadowing; locale number/date (`money()`/`dateFmt()`) noted as separate follow-up |
 
 **Next up (suggested order): #35 catalog setup, #46 reporting, #47/#27/#31/#42 UI surfaces.**
