@@ -45,6 +45,7 @@ class ApprovalService
             'payload' => $data['payload'] ?? null,
             'approver_roles' => $def?->approver_roles,
             'required_approvals' => $def?->required_approvals ?? 1,
+            'allow_requester' => (bool) ($def?->allow_requester ?? false), // APR-6 snapshot from policy
             'status' => $needsApproval ? ApprovalRequest::PENDING : ApprovalRequest::AUTO_APPROVED,
             'requested_by' => $data['requested_by'] ?? null,
             'decided_at' => $needsApproval ? null : now(),
@@ -55,11 +56,25 @@ class ApprovalService
         return $request;
     }
 
-    public function decide(ApprovalRequest $request, bool $approve, ?string $actor = null, ?string $reason = null): ApprovalRequest
+    public function decide(ApprovalRequest $request, bool $approve, ?\App\Models\User $actorUser = null, ?string $reason = null): ApprovalRequest
     {
         if ($request->status !== ApprovalRequest::PENDING) {
             throw DomainException::conflict('Approval request is not pending.');
         }
+        $actor = $actorUser?->uid;
+
+        // APR-6 (segregation of duties): the requester cannot approve their own request
+        // unless the policy explicitly allows it (allow_requester = true, config).
+        if (! $request->allow_requester && $actor !== null && $actor === $request->requested_by) {
+            throw new DomainException('SELF_APPROVAL_NOT_ALLOWED', 'The requester cannot approve their own request.', 403);
+        }
+        // APR-5: the approver must hold one of the policy's approver roles (SUPER_ADMIN always may).
+        $roles = $request->approver_roles ?? [];
+        if ($roles !== [] && ! ($actorUser && ($actorUser->hasRole('SUPER_ADMIN') || $actorUser->hasAnyRole($roles)))) {
+            throw new DomainException('APPROVER_NOT_AUTHORIZED', 'You do not hold a role permitted to act on this approval.', 403);
+        }
+        // APR-7: every action writes an immutable decision record.
+        $this->recordDecision($request, $approve ? 'APPROVE' : 'REJECT', $actor, $reason);
 
         if (! $approve) {
             $request->update(['status' => ApprovalRequest::REJECTED, 'decided_by' => $actor, 'decision_reason' => $reason, 'decided_at' => now()]);
@@ -82,6 +97,22 @@ class ApprovalService
         }
 
         return $request->refresh();
+    }
+
+    /** APR-7: immutable per-action decision audit. */
+    private function recordDecision(ApprovalRequest $request, string $decision, ?string $actor, ?string $comment): void
+    {
+        \Illuminate\Support\Facades\DB::table('approval_decision')->insert([
+            'decision_id' => Id::make('appdec'),
+            'request_id' => $request->request_id,
+            'operator_code' => $request->operator_code,
+            'decision' => $decision,
+            'actor_user_id' => $actor,
+            'comment' => $comment,
+            'decided_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
     }
 
     private function emit(ApprovalRequest $request, string $type): void

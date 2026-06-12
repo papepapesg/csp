@@ -31,6 +31,7 @@ class ApprovalController extends ApiController
             'threshold_amount' => ['nullable', 'numeric'],
             'approver_roles' => ['required', 'array'],
             'required_approvals' => ['nullable', 'integer', 'min:1'],
+            'allow_requester' => ['nullable', 'boolean'], // APR-6: permit self-approval (default false)
         ]);
 
         return ApiResponse::created(ApprovalDefinition::query()->create($data + ['definition_id' => Id::make('appd')]));
@@ -61,6 +62,6 @@ class ApprovalController extends ApiController
     {
         $data = $request->validate(['approve' => ['required', 'boolean'], 'reason' => ['nullable', 'string', 'max:255']]);
 
-        return ApiResponse::item($this->approvals->decide($approvalRequest, (bool) $data['approve'], $request->user()?->uid, $data['reason'] ?? null));
+        return ApiResponse::item($this->approvals->decide($approvalRequest, (bool) $data['approve'], $request->user(), $data['reason'] ?? null));
     }
 }

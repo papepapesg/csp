@@ -27,7 +27,7 @@ class ApprovalRequest extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['approver_roles' => 'array', 'payload' => 'array', 'amount' => 'decimal:2', 'decided_at' => 'datetime'];
+    protected $casts = ['approver_roles' => 'array', 'payload' => 'array', 'amount' => 'decimal:2', 'allow_requester' => 'boolean', 'decided_at' => 'datetime'];
 
     public function getRouteKeyName(): string
     {

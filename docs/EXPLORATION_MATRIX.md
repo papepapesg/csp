@@ -89,7 +89,7 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 38 | Outbox/inbox event bus | FOUNDATION_KAFKA (local) | `EventBus` → outbox_events → `sophix:outbox:dispatch` → listeners; correlation ids | all | event tests throughout | ✅ |
 | 39 | Cache foundation | FOUNDATION_CACHE | `SophixCache` (cache-aside, TTLs, event eviction, admin invalidate/stats) | — | `CacheFoundationTest` | ✅ |
 | 40 | RBAC + admin portal + change audit | EM-CFG-03 | spatie + `RbacController` + `rbac_change_audit`; `Rbac/Admin.vue` | — | `RbacApiTest` | ⬜ |
-| 41 | Approval workflow catalog | EM-CFG-04 | `ApprovalController` + definitions; consumed by force-sync, bundles | — | `FileAndApprovalTest`, `ReconciliationTest` | ⬜ |
+| 41 | Approval workflow catalog | EM-CFG-04 | `ApprovalService` (threshold-gated policy + N-approval; APR-6 segregation of duties via allow_requester config, APR-5 approver-role eligibility, APR-7 immutable approval_decision); `ApprovalController` | Approval* | `FileAndApprovalTest` | ✅ |
 | 42 | NOC console + end-to-end traces | ops (added) | `NocController` (overview, service control, correlation-id trace across events/instances/tasks/commands/logs/notifications); `ItOps/Noc.vue` | — | `NocConsoleTest` (4) | ⬜ |
 | 43 | Operator config (identity/locale/currency/theme/logs) | config requirement (added) | `operator_config` + `OperatorConfigController`; runtime theming in shell | — | `OperatorConfigTest` | ✅ |
 | 44 | **i18n resource catalog + Localization Studio** (added) | config requirement | `ui_translation` + `TranslationService` (merged map → translator + `i18nResources`); `I18n/Studio.vue` | — | `I18nResourceTest` (3) | ✅ |
