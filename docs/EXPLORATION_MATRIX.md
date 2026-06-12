@@ -103,7 +103,7 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 47 | Backoffice web app (13 surfaces) | FE-APP-01 | Inertia pages under `resources/js/Pages` | — | route/UI tests | ⬜ |
 | 48 | Field PWA (sales + contractor) | FE-APP-02/03 | `/m` shell + `resources/mobile` app; installable (manifest + SW scope /m, offline shell) | — | `PwaShellTest` | ✅ |
 | 49 | Customer self-care PWA | FE-APP-04 | `/care` shell + `resources/care`; own manifest/scope; selfcare API group | — | `PwaShellTest`, selfcare tests | ✅ |
-| 50 | USSD channel adapter | FE-CH-USSD-01 | `UssdController` menu/session over existing APIs | — | `Wave3SalesUssdTest` | ⬜ |
+| 50 | USSD channel adapter | FE-CH-USSD-01 | **Config-driven menus** (`ussd_menu_definition` per operator+language — menus are data) + richer `ussd_session` (state machine, language) + `ussd_request_log` trace. `UssdService` menu engine walks the menu graph statefully and dispatches leaf actions to owning module reads (balance+BIL-04 dunning, subscription) / writes (TCK-01 ticket, idempotent per session) — never applies payment / changes sub / closes ticket locally; records CUST-INT-01. Normalized `POST /api/channels/ussd/sessions` + legacy webhook; en/sw seeded | — (channel adapter; logs interactions) | `UssdChannelTest` (7), `Wave3SalesUssdTest` | ✅ |
 
 ---
 
@@ -140,5 +140,6 @@ Legend — Tour: ✅ explored & discussed · ⬜ pending. Status: per DD_TRACEAB
 | 2026-06-12 | #33 CVM (EM-03) | full 5-table CVM (signal profile, segmentation, activities, offers w/ EM-CFG-04 approval, outcomes); rules-based segmentation; accept calls SIP-03; CUST-INT-01 interactions (suite →382) |
 | 2026-06-12 | #21 discounts (SIP-03 / DIS-OP-01) | SIP-03 assignment lifecycle (status machine, EM-CFG-04 approval, validity, history, cancel, effective-query); DIS-OP-01 compute honours status + window + stacking groups (suite →389) |
 | 2026-06-12 | #28 field audits (FA-01/02/03) | campaign→task→expected→observation→discrepancy model; expected-vs-observed comparison → typed discrepancies → Drools severity+route → EM-CFG-04-gated OSR corrections; idempotent tasks/observations (suite →394) |
+| 2026-06-12 | #50 USSD (FE-CH-USSD-01) | config-driven menus (ussd_menu_definition per operator+language); stateful menu engine dispatching to owning module reads/writes; normalized gateway endpoint; request-log trace; en/sw (suite →401) |
 
-**Next up (suggested order): #50 USSD, #47 backoffice surfaces, #35 catalog setup, #40 RBAC.**
+**Next up (suggested order): #47 backoffice surfaces, #35 catalog setup, #40 RBAC, #46 reporting.**

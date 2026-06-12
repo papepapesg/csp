@@ -20,6 +20,7 @@ class Wave3SalesUssdTest extends TestCase
     {
         parent::setUp();
         $this->seed(RbacSeeder::class);
+        $this->seed(\Database\Seeders\UssdMenuSeeder::class);
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('SUPER_ADMIN');
         Sanctum::actingAs($user);

@@ -27,7 +27,8 @@ Route::get('/platform/config', [PlatformController::class, 'runtimeConfig']);
 
 // --- Mobile token auth (FE-APP-02/03 PWAs) ---
 Route::post('/auth/token', [AuthTokenController::class, 'token']);
-Route::post('/ussd', [UssdController::class, 'handle']); // USSD gateway webhook
+Route::post('/ussd', [UssdController::class, 'handle']); // USSD gateway webhook (Africa's Talking style)
+Route::post('/channels/ussd/sessions', [UssdController::class, 'session']); // FE-CH-USSD-01 normalized endpoint
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me', [AuthTokenController::class, 'me']);
     Route::post('/auth/logout', [AuthTokenController::class, 'logout']);

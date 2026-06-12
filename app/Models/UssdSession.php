@@ -18,7 +18,11 @@ class UssdSession extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['context' => 'array', 'active' => 'boolean'];
+    public const ACTIVE = 'ACTIVE';
+    public const ENDED = 'ENDED';
+    public const TIMED_OUT = 'TIMED_OUT';
+
+    protected $casts = ['context' => 'array', 'active' => 'boolean', 'session_data_json' => 'array', 'started_at' => 'datetime', 'last_seen_at' => 'datetime', 'ended_at' => 'datetime'];
 
     public function getRouteKeyName(): string
     {
