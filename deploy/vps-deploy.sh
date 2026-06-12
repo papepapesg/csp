@@ -40,18 +40,27 @@ set_env SESSION_SECURE_COOKIE false
 # Stable app key via env_file so sessions survive container restarts.
 grep -q '^APP_KEY=base64:' .env || set_env APP_KEY "base64:$(openssl rand -base64 32)"
 
-# 3. Build + start the stack.
-echo "==> Building and starting containers..."
-docker compose up -d --build
+# 3. Build the image and bring up ONLY the datastores first.
+echo "==> Stopping any running stack (keeping data volumes)..."
+docker compose down --remove-orphans 2>/dev/null || true
+echo "==> Building image and starting datastores (postgres, redis)..."
+docker compose build
+docker compose up -d postgres redis
 
-# 4. Wait for postgres + app, then seed the demo profile.
+# 4. Seed the demo profile in a ONE-OFF container — no app/queue/scheduler running, so
+#    migrate:fresh is the only process touching the schema (avoids the boot-migrate race).
 echo "==> Waiting for the database to be ready..."
 until docker compose exec -T postgres pg_isready -U sophix -d sophix >/dev/null 2>&1; do sleep 2; done
 echo "==> Seeding demo dataset (migrate:fresh + catalogs + admin + demo data)..."
-docker compose exec -T app php artisan sophix:setup demo -n
+# CONTAINER_ROLE=oneoff makes the entrypoint skip its own auto-migrate and just run the command.
+docker compose run --rm -e CONTAINER_ROLE=oneoff app php artisan sophix:setup demo -n
 # Drain the demo's queued workflow + outbox so projections/metrics are live.
-docker compose exec -T app php artisan sophix:workflow:work --once || true
-docker compose exec -T app php artisan sophix:outbox:dispatch || true
+docker compose run --rm -e CONTAINER_ROLE=oneoff app php artisan sophix:workflow:work --once || true
+docker compose run --rm -e CONTAINER_ROLE=oneoff app php artisan sophix:outbox:dispatch || true
+
+# 5. Start the full application stack (app boot-migrate is now a no-op; schema is current).
+echo "==> Starting the application stack..."
+docker compose up -d
 docker compose exec -T app php artisan config:cache || true
 
 cat <<EOF
