@@ -30,6 +30,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // The backoffice SPA calls /api/* with its session cookie: Sanctum must treat
+        // first-party browser requests as stateful or every UI fetch 401s.
+        $middleware->statefulApi();
+
         $middleware->web(append: [
             \App\Http\Middleware\SetLocaleFromOperator::class,
             HandleInertiaRequests::class,

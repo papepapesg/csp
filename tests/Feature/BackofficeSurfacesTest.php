@@ -38,6 +38,29 @@ class BackofficeSurfacesTest extends TestCase
             ->assertJsonPath('widgets.kycPending.available', true);
     }
 
+    public function test_browser_session_authenticates_api_calls(): void
+    {
+        // Browser-faithful: a REAL login (session cookie), then an /api/* fetch — the exact
+        // path the SPA uses. Sanctum::actingAs() bypasses this, which is how a missing
+        // statefulApi() shipped: the UI 401'd in production while every test stayed green.
+        $this->seed(RbacSeeder::class);
+        $user = User::factory()->create(['operator_code' => 'WIK', 'password' => bcrypt('password')]);
+        $user->assignRole('SUPER_ADMIN');
+
+        $this->post('/login', ['email' => $user->email, 'password' => 'password'])
+            ->assertRedirect(route('dashboard', absolute: false));
+
+        $this->getJson('/api/dashboard/summary')->assertOk()
+            ->assertJsonStructure(['widgets']);
+
+        // And without any session, the API stays closed (flush the test client's cached
+        // guard state — within one test the auth manager memoizes the resolved user).
+        $this->post('/logout');
+        $this->app['auth']->forgetGuards();
+        $this->flushSession();
+        $this->getJson('/api/dashboard/summary')->assertStatus(401);
+    }
+
     public function test_global_search_federates_across_entities_with_isolation(): void
     {
         Sanctum::actingAs($this->user());
