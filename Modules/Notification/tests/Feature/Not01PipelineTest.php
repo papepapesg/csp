@@ -220,6 +220,24 @@ class Not01PipelineTest extends TestCase
         $this->assertNotNull(Template::resolve('WIK', 'SMS_TEXT', 'WELCOME', 'en'));
     }
 
+    public function test_admin_template_preview_renders_text_and_pdf(): void
+    {
+        $mgr = User::factory()->create(['operator_code' => 'WIK']);
+        $mgr->assignRole('TEMPLATE_MANAGER');
+        Sanctum::actingAs($mgr);
+
+        // The studio's "Render on server" path — text format returns rendered output.
+        $sms = Template::where('template_format', 'SMS_TEXT')->where('template_purpose_code', 'INVOICE_CYCLE_POSTPAID')->first();
+        $this->postJson("/api/admin/templates/{$sms->id}/preview", ['sample_data' => $this->invoicePayload])
+            ->assertOk()->assertJsonPath('format', 'SMS_TEXT')
+            ->assertJsonFragment(['rendered' => 'Invoice Inv-WIK-2026-000001: KES 2500.00 due 2026-07-01.']);
+
+        // PDF format returns a byte count (the studio shows "PDF rendered — N bytes").
+        $pdf = Template::where('template_format', 'PDF')->first();
+        $this->postJson("/api/admin/templates/{$pdf->id}/preview", ['sample_data' => $this->invoicePayload])
+            ->assertOk()->assertJsonPath('format', 'PDF');
+    }
+
     public function test_customer_can_read_and_update_preferences(): void
     {
         $cust = User::factory()->create(['operator_code' => 'WIK']);
