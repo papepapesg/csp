@@ -69,6 +69,23 @@ class BundleAndCampaignTest extends TestCase
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'CommercialBundleActivated']);
     }
 
+    public function test_bundle_launch_policy_is_config_not_code(): void
+    {
+        $pkg = $this->activePackage('PKG_SOLO');
+        $bundle = $this->createBundle('SOLO_BUNDLE', [$pkg]); // one mandatory component — passes by default
+        $this->postJson("/api/commercial-bundles/{$bundle['bundle_id']}/submit-review")->assertOk();
+
+        // An operator tightens the launch policy to require ≥2 mandatory components — no code change.
+        $table = \Modules\Rules\Models\DecisionTable::query()->where('rule_set', 'rules.bundle.launch-validation')->first();
+        $table->update(['rules' => [
+            ['ruleId' => 'BUN-VAL-MANDATORY', 'when' => [['var' => 'mandatoryComponentCount', 'op' => 'lt', 'value' => 2]], 'then' => ['error' => ['field' => 'components', 'message' => 'Bundle needs at least two mandatory components.']]],
+        ]]);
+
+        $b2 = $this->createBundle('SOLO_BUNDLE_2', [$pkg]);
+        $this->postJson("/api/commercial-bundles/{$b2['bundle_id']}/submit-review")
+            ->assertStatus(422)->assertJsonPath('errorCode', 'BUNDLE_VALIDATION_FAILED');
+    }
+
     public function test_bundle_with_inactive_package_cannot_submit_for_review(): void
     {
         // Package exists but is DRAFT -> PACKAGE_ACTIVE check FAILS (R-SIP-BUN-03).

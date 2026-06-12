@@ -5,6 +5,7 @@ namespace Modules\Catalog\Services;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
+use App\Foundation\Rules\RuleEngine;
 use App\Foundation\Support\Context;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -24,7 +25,10 @@ use Modules\Catalog\Models\Package;
  */
 class BundleService
 {
-    public function __construct(private readonly EventBus $events) {}
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly RuleEngine $rules,
+    ) {}
 
     /** @param array<string,mixed> $data with components[], availability[]?, discount_rules[]? */
     public function create(array $data): CommercialBundle
@@ -79,11 +83,21 @@ class BundleService
             $bundle->launchChecks()->delete();
             $checks = [];
 
-            $mandatory = $bundle->components()->where('mandatory', true)->count();
-            $checks[] = ['check_code' => 'MANDATORY_COMPONENT',
-                'check_status' => $mandatory > 0 ? 'PASS' : 'FAIL',
-                'message' => $mandatory > 0 ? "{$mandatory} mandatory component(s)." : 'Bundle has no mandatory package component.'];
+            // Operator-variable launch policy is decided by the rules engine
+            // (`rules.bundle.launch-validation`): the service supplies facts, the table
+            // (Rules Studio) decides. An operator tightens the minimum package mix etc.
+            // without a code change. Each failed gate becomes a FAIL launch check.
+            $assessed = $this->rules->assess('rules.bundle.launch-validation', [
+                'mandatoryComponentCount' => $bundle->components()->where('mandatory', true)->count(),
+                'componentCount' => $bundle->components()->count(),
+                'bundleType' => $bundle->bundle_type,
+                'hasAvailability' => $bundle->availability()->where('status', 'ACTIVE')->exists(),
+            ]);
+            foreach ($assessed['validationErrors'] as $e) {
+                $checks[] = ['check_code' => $e['ruleId'] ?? 'LAUNCH_POLICY', 'check_status' => 'FAIL', 'message' => $e['message']];
+            }
 
+            // Fixed ref-existence checks stay in code (integrity, not operator policy).
             foreach ($bundle->components as $component) {
                 $package = Package::query()->where('id', $component->package_ref)
                     ->orWhere(fn ($q) => $q->where('operator_code', $bundle->operator_code)->where('code', $component->package_ref))

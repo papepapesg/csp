@@ -51,6 +51,24 @@ class CatalogPolicySeeder extends Seeder
             ],
         );
 
+        // SIP-04 §10 bundle-launch-validation.drl — operator-variable launch readiness
+        // (e.g. minimum package mix). Fixed ref-existence checks stay in code; these gates
+        // are config. The service supplies facts; this table decides what blocks launch.
+        DecisionTable::query()->updateOrCreate(
+            ['rule_set' => 'rules.bundle.launch-validation', 'version' => 1, 'operator_code' => null],
+            [
+                'table_id' => Id::make('dt'),
+                'name' => 'Bundle launch validation',
+                'hit_policy' => 'COLLECT',
+                'inputs' => ['mandatoryComponentCount', 'componentCount', 'bundleType', 'hasAvailability'],
+                'rules' => [
+                    ['ruleId' => 'BUN-VAL-MANDATORY', 'when' => [['var' => 'mandatoryComponentCount', 'op' => 'lt', 'value' => 1]], 'then' => ['error' => ['field' => 'components', 'message' => 'Bundle has no mandatory package component.']]],
+                ],
+                'default_output' => ['valid' => true],
+                'status' => DecisionTable::DEPLOYED,
+            ],
+        );
+
         // SIP-05 §10 campaign-eligibility.drl — the operator-variable gates that decide
         // whether a campaign is offerable. The service computes the facts; this table
         // decides. An operator adds/removes a gate by editing this row (Rules Studio),
