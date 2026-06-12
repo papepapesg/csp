@@ -62,10 +62,15 @@ class SophixSetupCommand extends Command
             return true;
         });
 
-        // 4. Demo sample data (a browsable customer journey).
+        // 4. Demo sample data (a browsable customer journey + a populated backoffice).
         if ($profile === 'demo') {
             $this->components->task('Seeding demo journey (customer → order → active subscription)', function () {
                 Artisan::call('db:seed', ['--class' => \Database\Seeders\DemoJourneySeeder::class, '--force' => true]);
+
+                return true;
+            });
+            $this->components->task('Seeding backoffice demo dataset (customers, onboarding, tickets, metrics)', function () {
+                Artisan::call('db:seed', ['--class' => \Database\Seeders\BackofficeDemoSeeder::class, '--force' => true]);
 
                 return true;
             });

@@ -71,6 +71,7 @@ class BackofficeSurfacesTest extends TestCase
             '/admin' => 'Admin/Console',
             '/catalog/setup' => 'Catalog/Setup',
             '/reports' => 'Reports/Dashboard',
+            '/warehouse' => 'Osr/Warehouse',
         ];
 
         foreach ($routes as $url => $component) {
