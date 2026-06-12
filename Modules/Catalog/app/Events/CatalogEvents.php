@@ -27,6 +27,19 @@ final class CatalogEvents
 
     public const HOMEPASS_ADDRESS_CORRECTED = 'HomePassAddressCorrected'; // R-RLM-CFG-01-H-14
 
+    // SIP-03 discount assignment lifecycle.
+    public const DISCOUNT_ASSIGNMENT_CREATED = 'DiscountAssignmentCreated';
+
+    public const DISCOUNT_ASSIGNMENT_APPROVAL_REQUIRED = 'DiscountAssignmentApprovalRequired';
+
+    public const DISCOUNT_ASSIGNMENT_ACTIVATED = 'DiscountAssignmentActivated';
+
+    public const DISCOUNT_ASSIGNMENT_CANCELLED = 'DiscountAssignmentCancelled';
+
+    public const DISCOUNT_ASSIGNMENT_EXPIRED = 'DiscountAssignmentExpired';
+
+    public const DISCOUNT_ASSIGNMENT_REJECTED = 'DiscountAssignmentRejected';
+
     // PLM-CFG-03 wallet catalog lifecycle.
     public const WALLET_CREATED = 'WalletCreated';
 

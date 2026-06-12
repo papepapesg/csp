@@ -79,8 +79,15 @@ Route::middleware('auth:sanctum')->group(function () {
     // PLM-CFG-04 / SIP-03 / DIS-OP-01 discounts
     Route::get('discounts', [DiscountController::class, 'index'])->middleware('permission:catalog.read');
     Route::post('discounts', [DiscountController::class, 'store'])->middleware('permission:catalog.manage');
-    Route::post('discounts/assign', [DiscountController::class, 'assign'])->middleware('permission:catalog.manage');
+    Route::post('discounts/assign', [DiscountController::class, 'assign'])->middleware('permission:catalog.manage'); // legacy thin assign
     Route::post('discounts/compute', [DiscountController::class, 'compute'])->middleware('permission:catalog.read');
+
+    // SIP-03 discount assignment lifecycle + DIS-OP-01 runtime query
+    Route::post('discount-assignments', [DiscountController::class, 'createAssignment'])->middleware(['permission:catalog.manage', 'idempotency']);
+    Route::post('discount-assignments/preview', [DiscountController::class, 'previewAssignment'])->middleware('permission:catalog.read');
+    Route::get('discount-assignments/effective', [DiscountController::class, 'effective'])->middleware('permission:catalog.read');
+    Route::post('discount-assignments/{discountAssignment}/cancel', [DiscountController::class, 'cancelAssignment'])->middleware('permission:catalog.manage');
+    Route::post('discount-assignments/{discountAssignment}/approval-outcome', [DiscountController::class, 'approvalOutcome'])->middleware('permission:catalog.manage');
 
     // PLM-CFG-03 wallet catalog (the rich `wallet` entity: applicability, precedence, lifecycle)
     Route::get('wallet-catalog', [WalletCatalogController::class, 'index'])->middleware('permission:catalog.read');

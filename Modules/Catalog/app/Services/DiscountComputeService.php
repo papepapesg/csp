@@ -31,7 +31,9 @@ class DiscountComputeService
 
         $assignments = DiscountAssignment::query()
             ->where('operator_code', $operator)
-            ->where('active', true)
+            ->where('status', DiscountAssignment::ACTIVE)
+            ->where(fn ($q) => $q->whereNull('valid_from')->orWhere('valid_from', '<=', $at->toDateString()))
+            ->where(fn ($q) => $q->whereNull('valid_to')->orWhere('valid_to', '>=', $at->toDateString()))
             ->where(function ($q) use ($scopeRefs) {
                 $q->where('scope', 'ALL');
                 foreach ($scopeRefs as $scope => $ref) {
@@ -39,6 +41,14 @@ class DiscountComputeService
                 }
             })
             ->get();
+
+        // R-SIP-DA-06 / DIS-OP-01 stacking groups: within a non-null stacking_group_code only the
+        // highest-priority assignment survives (lower assignment_priority = higher precedence).
+        $assignments = $assignments
+            ->sortBy(fn ($a) => $a->assignment_priority ?? 100)
+            ->groupBy(fn ($a) => $a->stacking_group_code ?: '__ungrouped__'.$a->assignment_id)
+            ->map(fn ($group) => $group->first())
+            ->values();
 
         $codes = $assignments->pluck('discount_code')->unique()->all();
         $discounts = Discount::query()
