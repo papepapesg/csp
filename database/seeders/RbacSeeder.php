@@ -27,7 +27,8 @@ class RbacSeeder extends Seeder
         'workorder.read', 'workorder.assign', 'workorder.execute',
         'stock.read', 'stock.manage',
         'report.view',
-        'notification.read', 'notification.send', 'ticket.read', 'ticket.create', 'ticket.assign', 'ticket.manage',
+        'notification.read', 'notification.send', 'notification.manage', 'notification.template.manage',
+        'ticket.read', 'ticket.create', 'ticket.assign', 'ticket.manage',
         'franchise.manage', 'rbac.manage',
         'workforce.read', 'workforce.manage',
         'workflow.view', 'workflow.manage',
@@ -57,6 +58,9 @@ class RbacSeeder extends Seeder
         'DISPATCHER' => ['workorder.read', 'workorder.assign', 'fulfillment.read', 'workforce.read'],
         'FIELD_TECHNICIAN' => ['workorder.read', 'workorder.execute', 'stock.read'],
         'CUSTOMER' => ['selfcare.access'],
+        // NOT-01 notification operations team (FOUNDATION_AUTH roles).
+        'NOTIFICATION_SENDER' => ['notification.read', 'notification.send', 'notification.manage'],
+        'TEMPLATE_MANAGER' => ['notification.read', 'notification.template.manage'],
     ];
 
     public function run(): void

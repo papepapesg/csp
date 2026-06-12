@@ -1,15 +1,38 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Notification\Http\Controllers\AdminNotificationController;
+use Modules\Notification\Http\Controllers\AdminTemplateController;
+use Modules\Notification\Http\Controllers\CustomerPreferenceController;
 use Modules\Notification\Http\Controllers\NotificationController;
 use Modules\Notification\Http\Controllers\TemplateStudioController;
 
 /*
 | NOT-01 notification + ICN-01 internal comms API (DD_API-00).
-| Reads: notification.read; send: notification.send.
+| Reads: notification.read; send: notification.send; admin ops: notification.manage.
 */
 
 Route::middleware('auth:sanctum')->group(function () {
+    // NOT-01 full model — customer self-service preferences (P-1/P-2).
+    Route::get('notifications/preferences', [CustomerPreferenceController::class, 'show'])->middleware('permission:selfcare.access');
+    Route::put('notifications/preferences', [CustomerPreferenceController::class, 'update'])->middleware('permission:selfcare.access');
+
+    // NOT-01 admin operations (rule group O) + bounce intake (F-5).
+    Route::post('admin/notifications/send', [AdminNotificationController::class, 'send'])->middleware(['permission:notification.manage', 'idempotency']);
+    Route::post('admin/notifications/{notificationLog}/resend', [AdminNotificationController::class, 'resend'])->middleware(['permission:notification.manage', 'idempotency']);
+    Route::get('admin/notifications/dashboard', [AdminNotificationController::class, 'dashboard'])->middleware('permission:notification.manage');
+    Route::get('admin/notifications/failure-queue', [AdminNotificationController::class, 'failureQueue'])->middleware('permission:notification.manage');
+    Route::post('admin/notifications/render-failures/{renderFailureQueue}/retry', [AdminNotificationController::class, 'retryRender'])->middleware('permission:notification.manage');
+    Route::post('admin/notifications/routing/pause', [AdminNotificationController::class, 'pauseRouting'])->middleware('permission:notification.manage');
+    Route::post('admin/notifications/bounces', [AdminNotificationController::class, 'processBounce'])->middleware('permission:notification.manage');
+
+    // NOT-01 admin template management (O-3) — the format-decomposed, versioned `template`.
+    Route::get('admin/templates', [AdminTemplateController::class, 'index'])->middleware('permission:notification.template.manage');
+    Route::post('admin/templates', [AdminTemplateController::class, 'store'])->middleware('permission:notification.template.manage');
+    Route::post('admin/templates/{template}/preview', [AdminTemplateController::class, 'preview'])->middleware('permission:notification.template.manage');
+    Route::post('admin/templates/{template}/activate', [AdminTemplateController::class, 'activate'])->middleware('permission:notification.template.manage');
+    Route::post('admin/templates/{template}/deactivate', [AdminTemplateController::class, 'deactivate'])->middleware('permission:notification.template.manage');
+
     Route::get('notifications', [NotificationController::class, 'index'])->middleware('permission:notification.read');
     Route::post('notifications', [NotificationController::class, 'send'])->middleware(['permission:notification.send', 'idempotency']);
     Route::get('notifications/{notification}', [NotificationController::class, 'show'])->middleware('permission:notification.read');

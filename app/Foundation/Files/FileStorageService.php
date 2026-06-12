@@ -42,6 +42,35 @@ class FileStorageService
         ]);
     }
 
+    /**
+     * Store raw, in-memory bytes (e.g. a rendered PDF artifact) and register them as a
+     * FileObject. Used by NOT-01 artifact rendering, which produces PDF byte streams that
+     * never existed as an UploadedFile. The key pattern (e.g. invoices/2026/05/inv_..pdf)
+     * is supplied by the caller per FOUNDATION_FILE_STORAGE conventions.
+     *
+     * @param array<string,mixed> $meta owner_type, owner_id, category, uploaded_by, mime_type, filename, key
+     */
+    public function storeContents(string $contents, array $meta = []): FileObject
+    {
+        $disk = $this->disk();
+        $key = $meta['key'] ?? 'sophix/'.($meta['category'] ?? 'misc').'/'.Id::make('art').'.bin';
+        Storage::disk($disk)->put($key, $contents);
+
+        return FileObject::query()->create([
+            'file_id' => Id::make('file'),
+            'owner_type' => $meta['owner_type'] ?? null,
+            'owner_id' => $meta['owner_id'] ?? null,
+            'category' => $meta['category'] ?? null,
+            'filename' => $meta['filename'] ?? basename($key),
+            'mime_type' => $meta['mime_type'] ?? 'application/octet-stream',
+            'size_bytes' => strlen($contents),
+            'disk' => $disk,
+            'path' => $key,
+            'checksum' => hash('sha256', $contents),
+            'uploaded_by' => $meta['uploaded_by'] ?? null,
+        ]);
+    }
+
     public function contents(FileObject $file): ?string
     {
         return Storage::disk($file->disk)->get($file->path);

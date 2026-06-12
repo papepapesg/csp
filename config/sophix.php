@@ -84,4 +84,27 @@ return [
         'default_size' => 50,
         'max_size' => 200,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | NOT-01 Notification Service
+    |--------------------------------------------------------------------------
+    | Operator-tunable delivery behaviour. Per-operator overrides belong in the
+    | operator's config; these are the platform defaults.
+    */
+    'notification' => [
+        'default_locale' => env('SOPHIX_NOTIFICATION_LOCALE', 'en'),
+        'timezone' => env('SOPHIX_NOTIFICATION_TZ', config('app.timezone', 'UTC')),
+        'send_timeout_seconds' => (int) env('SOPHIX_NOTIFICATION_SEND_TIMEOUT', 15),
+        // R-NOT-01-F-2: transient retry backoff (7 retries -> escalate).
+        'retry_backoff_seconds' => [60, 300, 900, 1800, 3600, 7200, 14400],
+        // R-NOT-01-D-7: render retry backoff (8 retries -> give up).
+        'render_backoff_seconds' => [300, 900, 1800, 3600, 7200, 14400, 28800, 86400],
+        // R-NOT-01-R-4: regulatory delivery windows (local time). Non-urgent messages
+        // outside the window are deferred to the next window start.
+        'window' => [
+            'default' => ['start' => '00:00', 'end' => '23:59'],
+            'SMS' => ['start' => '07:00', 'end' => '21:00'],
+        ],
+    ],
 ];

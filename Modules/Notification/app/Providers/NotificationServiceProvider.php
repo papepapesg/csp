@@ -22,7 +22,19 @@ class NotificationServiceProvider extends ModuleServiceProvider
      *
      * @var string[]
      */
-    // protected array $commands = [];
+    protected array $commands = [
+        \Modules\Notification\Console\RetryDispatchCommand::class,
+        \Modules\Notification\Console\RetryRenderCommand::class,
+    ];
+
+    public function register(): void
+    {
+        parent::register();
+        // The adapter registry caches initialized (channel, operator) adapters; keep it a
+        // singleton so the cache lives for the request/worker lifetime.
+        $this->app->singleton(\Modules\Notification\Dispatch\ChannelAdapterRegistry::class);
+        $this->app->singleton(\Modules\Notification\Rendering\TemplateEngineRegistry::class);
+    }
 
     /**
      * Provider classes to register.
