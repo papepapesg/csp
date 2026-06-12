@@ -96,5 +96,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/leads/{lead}/convert', [LeadController::class, 'convert'])->middleware('permission:customer.create');
     Route::post('/leads/{lead}/lose', [LeadController::class, 'lose'])->middleware('permission:customer.create');
 
+    // SALES-01 full pipeline (FE-APP-02 + Backoffice)
+    $sales = \App\Http\Controllers\SalesController::class;
+    Route::get('/sales/leads', [$sales, 'leads'])->middleware('permission:customer.read');
+    Route::post('/sales/leads', [$sales, 'createLead'])->middleware(['permission:customer.create', 'idempotency']);
+    Route::get('/sales/leads/{lead}', [$sales, 'showLead'])->middleware('permission:customer.read');
+    Route::post('/sales/leads/{lead}/assign', [$sales, 'assign'])->middleware('permission:customer.create');
+    Route::post('/sales/leads/{lead}/activities', [$sales, 'addActivity'])->middleware('permission:customer.create');
+    Route::post('/sales/leads/{lead}/qualify', [$sales, 'qualify'])->middleware('permission:customer.create');
+    Route::post('/sales/leads/{lead}/convert-to-order', [$sales, 'convertToOrder'])->middleware(['permission:customer.create', 'idempotency']);
+    Route::post('/sales/leads/{lead}/lose', [$sales, 'lose'])->middleware('permission:customer.create');
+    Route::get('/sales/territories', [$sales, 'territories'])->middleware('permission:customer.read');
+    Route::post('/sales/territories', [$sales, 'createTerritory'])->middleware('permission:franchise.manage');
+    Route::get('/sales/agents/{agentId}/daily-work', [$sales, 'dailyWork'])->middleware('permission:customer.read');
+
     Route::get('/customers/{customerId}/timeline', [CustomerTimelineController::class, 'show'])->middleware('permission:customer.read');
 });
