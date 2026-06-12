@@ -19,7 +19,10 @@ use Modules\Catalog\Models\TechRegion;
  */
 class CatalogService
 {
-    public function __construct(private readonly EventBus $events) {}
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly \App\Foundation\Approvals\ApprovalService $approvals,
+    ) {}
 
     /** @param array<string,mixed> $data */
     public function createService(array $data): Service
@@ -108,7 +111,12 @@ class CatalogService
     public function createHomePass(array $data): HomePass
     {
         return DB::transaction(function () use ($data) {
-            $homepass = HomePass::query()->create($data);
+            try {
+                $homepass = HomePass::query()->create($data);
+            } catch (\Illuminate\Database\UniqueConstraintViolationException $e) {
+                // R-RLM-CFG-01-H-1: the full structured-address tuple is unique deployment-wide.
+                throw DomainException::ruleRejected('HOMEPASS_DUPLICATE_ADDRESS', 'A HomePass already exists at this address.');
+            }
             $this->emit(CatalogEvents::HOMEPASS_CREATED, 'HomePass', $homepass->id, [
                 'homepassId' => $homepass->id, 'techRegionId' => $homepass->tech_region_id,
             ]);
@@ -117,7 +125,69 @@ class CatalogService
         });
     }
 
-    public function changeHomePassStatus(HomePass $homepass, string $status): HomePass
+    /**
+     * RLM-CFG-01 bulk import — partial-reject by default (a bad row is reported but doesn't block
+     * the batch); all-or-nothing aborts on the first failure. Each row goes through createHomePass,
+     * so H-1 uniqueness and validation apply per row.
+     *
+     * @param  array<int,array<string,mixed>>  $rows
+     * @return array{imported:int, rejected:int, rowResults:array<int,array<string,mixed>>}
+     */
+    public function bulkImportHomePasses(array $rows, string $mode = 'partial'): array
+    {
+        $run = function () use ($rows, $mode) {
+            $results = [];
+            $imported = 0;
+            $rejected = 0;
+            foreach ($rows as $i => $row) {
+                try {
+                    $hp = $this->createHomePass($row);
+                    $results[] = ['row' => $i + 1, 'status' => 'created', 'homepassId' => $hp->id];
+                    $imported++;
+                } catch (DomainException $e) {
+                    if ($mode === 'all-or-nothing') {
+                        throw $e;
+                    }
+                    $results[] = ['row' => $i + 1, 'status' => 'rejected', 'error' => $e->errorCode];
+                    $rejected++;
+                }
+            }
+
+            return ['imported' => $imported, 'rejected' => $rejected, 'rowResults' => $results];
+        };
+
+        return $mode === 'all-or-nothing' ? DB::transaction($run) : $run();
+    }
+
+    /**
+     * R-RLM-CFG-01-H-14: correct a HomePass's address fields (allowed at any lifecycle point);
+     * every change is audit-logged via HomePassAddressCorrected. R-RLM-CFG-01-H-18: google_place_id
+     * is immutable once set. The H-1 uniqueness index is re-evaluated on the update.
+     *
+     * @param  array<string,mixed>  $fields
+     */
+    public function correctAddress(HomePass $homepass, array $fields): HomePass
+    {
+        if (array_key_exists('google_place_id', $fields) && $homepass->google_place_id !== null
+            && $fields['google_place_id'] !== $homepass->google_place_id) {
+            throw DomainException::ruleRejected('GOOGLE_PLACE_ID_IMMUTABLE', 'google_place_id cannot be changed once set.');
+        }
+
+        return DB::transaction(function () use ($homepass, $fields) {
+            try {
+                $homepass->update($fields);
+            } catch (\Illuminate\Database\UniqueConstraintViolationException $e) {
+                throw DomainException::ruleRejected('HOMEPASS_DUPLICATE_ADDRESS', 'A HomePass already exists at this address.');
+            }
+            $this->emit(CatalogEvents::HOMEPASS_ADDRESS_CORRECTED, 'HomePass', $homepass->id, [
+                'homepassId' => $homepass->id, 'changed' => array_keys($fields),
+            ]);
+
+            return $homepass->refresh();
+        });
+    }
+
+    public function changeHomePassStatus(HomePass $homepass, string $status, ?string $actor = null, bool $bypassApproval = false): HomePass
     {
         // RLM-CFG-01 §1: status semantics come from the operator's config catalog, never a
         // hardcoded code. The catalog row's flags (is_sellable / is_active / …) drive behaviour.
@@ -125,6 +195,23 @@ class CatalogService
         $hasCatalog = \Modules\Catalog\Models\HomePassStatusCode::query()->where('operator_code', $homepass->operator_code)->where('active', true)->exists();
         if ($hasCatalog && (! $code || ! $code->active)) {
             throw \App\Foundation\Errors\DomainException::ruleRejected('UNKNOWN_HOMEPASS_STATUS', "Status '{$status}' is not an active HomePass status code.");
+        }
+
+        // R-RLM-CFG-01-H-5 maker-checker: a transition INTO a requires_approval_to_enter code is
+        // routed through EM-CFG-04. If a policy gates it, the request is PENDING and the status does
+        // NOT flip yet — it flips when the approval is granted (see ApplyHomePassTransitionOnApproval).
+        if ($code && $code->requires_approval_to_enter && ! $bypassApproval) {
+            $req = $this->approvals->request([
+                'operator_code' => $homepass->operator_code,
+                'entity_type' => 'HOMEPASS_STATUS_TRANSITION',
+                'action' => $status,
+                'entity_ref' => $homepass->id,
+                'payload' => ['targetStatus' => $status],
+                'requested_by' => $actor,
+            ]);
+            if ($req->status === \App\Foundation\Approvals\ApprovalRequest::PENDING) {
+                return $homepass; // awaiting approval; status unchanged
+            }
         }
 
         return DB::transaction(function () use ($homepass, $status, $code) {

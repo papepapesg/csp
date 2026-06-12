@@ -25,6 +25,8 @@ final class CatalogEvents
 
     public const HOMEPASS_REACHED_SELLABLE = 'HomePassReachedSellable'; // R-RLM-CFG-01-H-6 lead-notify hook
 
+    public const HOMEPASS_ADDRESS_CORRECTED = 'HomePassAddressCorrected'; // R-RLM-CFG-01-H-14
+
     // PLM-CFG-03 wallet catalog lifecycle.
     public const WALLET_CREATED = 'WalletCreated';
 

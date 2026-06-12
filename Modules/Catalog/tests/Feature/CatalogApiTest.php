@@ -114,6 +114,69 @@ class CatalogApiTest extends TestCase
             ->assertJsonPath('totalElements', 1);
     }
 
+    public function test_homepass_bulk_import_and_geo_enrich(): void
+    {
+        // Bulk import: partial-reject — the duplicate of row 1 is reported but doesn't block the batch.
+        $row = ['address' => '5 Bulk St', 'country' => 'KE', 'road_name' => 'Bulk Street', 'building_number' => '5'];
+        $res = $this->postJson('/api/homepass/bulk-import', ['rows' => [
+            $row,
+            ['address' => '6 Bulk St', 'country' => 'KE', 'road_name' => 'Bulk Street', 'building_number' => '6'],
+            $row, // duplicate of row 1 (H-1)
+        ]])->assertOk();
+        $res->assertJsonPath('imported', 2)->assertJsonPath('rejected', 1)
+            ->assertJsonPath('rowResults.2.error', 'HOMEPASS_DUPLICATE_ADDRESS');
+
+        // GIS disabled by default → enrich-from-geo is a no-op (degrades, never errors).
+        $hp = $this->postJson('/api/homepass', ['address' => '9 Geo Rd', 'latitude' => -1.29, 'longitude' => 36.82])->assertCreated()->json('homepass.id');
+        $this->postJson("/api/homepass/{$hp}/enrich-from-geo")->assertOk()->assertJsonPath('id', $hp);
+    }
+
+    public function test_tech_coverage_lifecycle_and_rules(): void
+    {
+        $this->postJson('/api/tech-contractor-skills', ['code' => 'INSTALLATION', 'name' => 'Install'])->assertCreated();
+        // C-3: contractor skills must exist in the catalog.
+        $this->postJson('/api/tech-contractors', ['code' => 'X', 'name' => 'X', 'skills' => ['BOGUS']])
+            ->assertStatus(422)->assertJsonPath('errorCode', 'UNKNOWN_SKILL');
+        $con = $this->postJson('/api/tech-contractors', ['code' => 'ACME', 'name' => 'Acme', 'skills' => ['INSTALLATION']])->assertCreated()->json('contractor_id');
+
+        $this->postJson('/api/tech-regions', ['tech_region_id' => 'KE-COV', 'display_name_primary' => 'Cov', 'region_type' => 'NEIGHBORHOOD'])->assertCreated();
+        \Modules\Catalog\Models\TechRegion::query()->where('tech_region_id', 'KE-COV')->update(['status' => 'DRAFT']);
+
+        // T-7: cannot activate a region with no active contractor.
+        $this->postJson('/api/tech-regions/KE-COV/activate')->assertStatus(422)->assertJsonPath('errorCode', 'REGION_HAS_NO_CONTRACTOR');
+        // A-1: assignment skills must subset the contractor's skills.
+        $this->postJson('/api/tech-regions/KE-COV/contractors', ['contractor_id' => $con, 'skills' => ['MAINTENANCE']])
+            ->assertStatus(422)->assertJsonPath('errorCode', 'ASSIGNMENT_SKILLS_INVALID');
+        $this->postJson('/api/tech-regions/KE-COV/contractors', ['contractor_id' => $con, 'skills' => ['INSTALLATION']])->assertCreated();
+        // Now activation succeeds (T-7).
+        $this->postJson('/api/tech-regions/KE-COV/activate')->assertOk()->assertJsonPath('status', 'ACTIVE');
+
+        // T-3: cannot retire while an active HomePass references the region.
+        $hp = $this->postJson('/api/homepass', ['address' => '1 Cov Rd', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
+        \Illuminate\Support\Facades\DB::table('homepass_tech_region')->insert(['homepass_id' => $hp, 'tech_region_ref' => 'KE-COV', 'created_at' => now(), 'updated_at' => now()]);
+        $this->patchJson("/api/homepass/{$hp}/status", ['status' => 'ACT'])->assertOk(); // is_active
+        $this->postJson('/api/tech-regions/KE-COV/retire')->assertStatus(422)->assertJsonPath('errorCode', 'REGION_REFERENCED');
+    }
+
+    public function test_homepass_structured_address_uniqueness_correction_and_place_id(): void
+    {
+        $addr = ['address' => '12 Wood Ave', 'country' => 'KE', 'region_l1' => 'Nairobi County', 'city' => 'Nairobi',
+            'road_name' => 'Wood Avenue', 'building_number' => '12', 'apartment_number' => 'M18'];
+
+        $hp = $this->postJson('/api/homepass', $addr)->assertCreated()->json('homepass.id');
+
+        // R-RLM-CFG-01-H-1: the same full address tuple cannot be created twice.
+        $this->postJson('/api/homepass', $addr)->assertStatus(422)->assertJsonPath('errorCode', 'HOMEPASS_DUPLICATE_ADDRESS');
+
+        // R-RLM-CFG-01-H-14: correcting an address field is audited via HomePassAddressCorrected.
+        $this->patchJson("/api/homepass/{$hp}/address", ['building_name' => 'Finewood Apartments', 'google_place_id' => 'ChIJ_PLACE_1'])->assertOk();
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'HomePassAddressCorrected']);
+
+        // R-RLM-CFG-01-H-18: google_place_id is immutable once set.
+        $this->patchJson("/api/homepass/{$hp}/address", ['google_place_id' => 'ChIJ_DIFFERENT'])
+            ->assertStatus(422)->assertJsonPath('errorCode', 'GOOGLE_PLACE_ID_IMMUTABLE');
+    }
+
     public function test_network_node_catalog_parent_chain_and_referenced_guard(): void
     {
         // A node chain OLT ← SPLITTER ← FAT.
@@ -183,6 +246,31 @@ class CatalogApiTest extends TestCase
         // The assignment doesn't scope MAINTENANCE in this region → none eligible.
         $this->getJson("/api/homepass/{$hp}/eligible-contractors?skill=MAINTENANCE")
             ->assertOk()->assertJsonCount(0, 'items');
+    }
+
+    public function test_homepass_transition_is_maker_checker_when_policy_gates_it(): void
+    {
+        // An EM-CFG-04 policy gates transitions into requires_approval_to_enter codes (H-5).
+        \App\Foundation\Approvals\ApprovalDefinition::query()->create([
+            'definition_id' => 'appd_hp', 'operator_code' => 'WIK', 'entity_type' => 'HOMEPASS_STATUS_TRANSITION',
+            'approver_roles' => ['SUPER_ADMIN'], 'required_approvals' => 1, 'active' => true,
+        ]);
+        $hp = $this->postJson('/api/homepass', ['address' => '1 Gate Rd', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
+
+        // Proposing RFS (requires_approval_to_enter) does NOT flip — it awaits approval.
+        $this->patchJson("/api/homepass/{$hp}/status", ['status' => 'RFS'])->assertOk()->assertJsonPath('status', 'DRAFT');
+        $this->assertDatabaseHas('approval_request', ['entity_type' => 'HOMEPASS_STATUS_TRANSITION', 'entity_ref' => $hp, 'status' => 'PENDING']);
+
+        // A separate approver grants it; the listener applies the transition.
+        $reqId = \App\Foundation\Approvals\ApprovalRequest::query()->where('entity_ref', $hp)->value('request_id');
+        $approver = User::factory()->create(['operator_code' => 'WIK']);
+        $approver->assignRole('SUPER_ADMIN');
+        Sanctum::actingAs($approver);
+        $this->postJson("/api/approvals/{$reqId}/decide", ['approve' => true])->assertOk()->assertJsonPath('status', 'APPROVED');
+        \Illuminate\Support\Facades\Artisan::call('sophix:outbox:dispatch');
+
+        $this->assertSame('RFS', \Modules\Catalog\Models\HomePass::find($hp)->status);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'HomePassReachedSellable']);
     }
 
     public function test_homepass_status_is_a_config_catalog_with_semantic_flags(): void

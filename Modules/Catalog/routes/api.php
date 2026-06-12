@@ -43,13 +43,27 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('tech-regions/{techRegion}', [TechRegionController::class, 'show'])->middleware('permission:catalog.read');
     Route::patch('tech-regions/{techRegion}', [TechRegionController::class, 'update'])->middleware('permission:catalog.manage');
 
+    // RLM-CFG-01 TechContractor / skill / coverage.
+    $tc = \Modules\Catalog\Http\Controllers\TechCoverageController::class;
+    Route::get('tech-contractor-skills', [$tc, 'skills'])->middleware('permission:catalog.read');
+    Route::post('tech-contractor-skills', [$tc, 'storeSkill'])->middleware('permission:catalog.manage');
+    Route::get('tech-contractors', [$tc, 'contractors'])->middleware('permission:catalog.read');
+    Route::post('tech-contractors', [$tc, 'storeContractor'])->middleware('permission:catalog.manage');
+    Route::post('tech-contractors/{techContractor}/retire', [$tc, 'retireContractor'])->middleware('permission:catalog.manage');
+    Route::post('tech-regions/{techRegion}/contractors', [$tc, 'assignContractor'])->middleware('permission:catalog.manage');
+    Route::post('tech-regions/{techRegion}/activate', [$tc, 'activateRegion'])->middleware('permission:catalog.manage');
+    Route::post('tech-regions/{techRegion}/retire', [$tc, 'retireRegion'])->middleware('permission:catalog.manage');
+
     // RLM-CFG-01 — HomePass serviceability
     Route::get('homepass', [HomePassController::class, 'index'])->middleware('permission:catalog.read');
     Route::get('homepass/eligible', [HomePassController::class, 'eligible'])->middleware('permission:catalog.read');
+    Route::post('homepass/bulk-import', [HomePassController::class, 'bulkImport'])->middleware('permission:catalog.manage');
+    Route::post('homepass/{homepass}/enrich-from-geo', [HomePassController::class, 'enrichFromGeo'])->middleware('permission:catalog.manage');
     Route::post('homepass', [HomePassController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
     Route::get('homepass/{homepass}', [HomePassController::class, 'show'])->middleware('permission:catalog.read');
     Route::patch('homepass/{homepass}/status', [HomePassController::class, 'changeStatus'])->middleware('permission:catalog.manage');
     Route::patch('homepass/{homepass}/network-path', [HomePassController::class, 'setNetworkPath'])->middleware('permission:catalog.manage');
+    Route::patch('homepass/{homepass}/address', [HomePassController::class, 'correctAddress'])->middleware('permission:catalog.manage');
     Route::get('homepass/{homepass}/eligible-contractors', [HomePassController::class, 'eligibleContractors'])->middleware('permission:catalog.read');
 
     // RLM-CFG-01 network_node + house_type reference catalogs.
