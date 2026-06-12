@@ -5,6 +5,7 @@ namespace Modules\Catalog\Services;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
+use App\Foundation\Rules\RuleEngine;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Catalog\Events\CatalogEvents;
@@ -22,7 +23,10 @@ use Modules\Catalog\Models\PromoCampaign;
  */
 class CampaignService
 {
-    public function __construct(private readonly EventBus $events) {}
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly RuleEngine $rules,
+    ) {}
 
     /** Map of rule_type → the eligibility-context key it inspects. */
     private const RULE_CONTEXT = [
@@ -79,25 +83,26 @@ class CampaignService
      */
     public function validate(PromoCampaign $campaign): array
     {
-        $checks = [];
-
-        // R-SIP-CAMP-02: a campaign must have valid start/end dates.
-        if ($campaign->starts_at && $campaign->ends_at && $campaign->ends_at->lt($campaign->starts_at)) {
-            $checks[] = ['check' => 'DATES', 'status' => 'FAIL', 'message' => 'Campaign end date is before its start date.'];
-        }
-
         $offers = $campaign->offers()->where('status', 'ACTIVE')->get();
-        // R-SIP-CAMP-03: an active campaign needs ≥1 active offer (MESSAGE_ONLY counts).
-        if ($offers->isEmpty()) {
-            $checks[] = ['check' => 'HAS_OFFER', 'status' => 'FAIL', 'message' => 'Campaign has no active offer (use a MESSAGE_ONLY offer for message-only campaigns).'];
-        }
+
+        // Operator-variable launch gates live in the rules engine (config, Rules Studio):
+        // the service supplies facts, `rules.campaign.validation` decides what blocks launch.
+        $assessed = $this->rules->assess('rules.campaign.validation', [
+            'hasActiveOffer' => $offers->isNotEmpty(),
+            'datesValid' => ! ($campaign->starts_at && $campaign->ends_at && $campaign->ends_at->lt($campaign->starts_at)),
+            'campaignType' => $campaign->campaign_type,
+        ]);
+        $checks = array_map(
+            fn ($e) => ['check' => $e['ruleId'] ?? 'RULE', 'status' => 'FAIL', 'message' => $e['message']],
+            $assessed['validationErrors'],
+        );
+
+        // Fixed integrity checks (ref existence) stay in code (R-SIP-CAMP-04/05).
         foreach ($offers as $offer) {
-            // R-SIP-CAMP-04: discount offers must reference an active PLM-CFG-04 discount.
             if ($offer->offer_type === 'DISCOUNT' && $offer->discount_code) {
                 $ok = Discount::query()->where('operator_code', $campaign->operator_code)->where('code', $offer->discount_code)->where('status', 'ACTIVE')->exists();
                 $checks[] = ['check' => 'DISCOUNT_ACTIVE', 'status' => $ok ? 'PASS' : 'FAIL', 'message' => $ok ? "Discount {$offer->discount_code} is active." : "Discount {$offer->discount_code} is missing or inactive."];
             }
-            // R-SIP-CAMP-05: bundle offers must reference an active SIP-04 bundle.
             if ($offer->offer_type === 'BUNDLE' && $offer->bundle_code) {
                 $ok = CommercialBundle::query()->where('operator_code', $campaign->operator_code)->where('bundle_code', $offer->bundle_code)->where('status', CommercialBundle::ACTIVE)->exists();
                 $checks[] = ['check' => 'BUNDLE_ACTIVE', 'status' => $ok ? 'PASS' : 'FAIL', 'message' => $ok ? "Bundle {$offer->bundle_code} is active." : "Bundle {$offer->bundle_code} is missing or not ACTIVE."];
@@ -154,42 +159,34 @@ class CampaignService
      */
     public function checkEligibility(PromoCampaign $campaign, array $context): array
     {
-        $reasons = [];
         $warnings = [];
 
-        if ($campaign->status !== PromoCampaign::ACTIVE) {
-            $reasons[] = 'CAMPAIGN_NOT_ACTIVE';
-        }
-        $now = now();
-        if ($campaign->starts_at && $now->lt($campaign->starts_at)) {
-            $reasons[] = 'CAMPAIGN_NOT_STARTED';
-        }
-        if ($campaign->ends_at && $now->gt($campaign->ends_at)) {
-            $reasons[] = 'CAMPAIGN_ENDED';
-        }
-
-        $channels = $campaign->channels()->where('status', 'ACTIVE')->pluck('channel_code');
-        if ($channels->isNotEmpty() && ! $channels->contains($context['channelCode'] ?? null)) {
-            $reasons[] = 'CHANNEL_NOT_ALLOWED';
-        }
-
-        if ($campaign->max_participants !== null) {
-            $count = $campaign->participations()->whereNotIn('status', ['REJECTED', 'CANCELLED'])->count();
-            if ($count >= $campaign->max_participants) {
-                $reasons[] = 'PARTICIPANT_CAP_REACHED';
-            }
-        }
-
+        // Per-campaign targeting (config rows in promotion_campaign_target_rule). A hard
+        // failure becomes a fact; a soft failure is surfaced as a warning.
+        $hardFailures = [];
         foreach ($campaign->targetRules()->where('status', 'ACTIVE')->orderBy('display_order')->get() as $rule) {
             if ($this->rulePasses($rule->rule_type, $rule->operator, $rule->rule_value_json, $context)) {
                 continue;
             }
-            if ($rule->hard_exclusion) {
-                $reasons[] = "RULE_FAILED:{$rule->rule_type}";
-            } else {
-                $warnings[] = "RULE_FAILED:{$rule->rule_type}";
-            }
+            $rule->hard_exclusion ? $hardFailures[] = "RULE_FAILED:{$rule->rule_type}" : $warnings[] = "RULE_FAILED:{$rule->rule_type}";
         }
+
+        // The operator-variable eligibility gates are decided by the rules engine
+        // (`rules.campaign.eligibility`): the service only supplies facts. Operators
+        // add/remove a gate in the Rules Studio without a code change.
+        $now = now();
+        $channels = $campaign->channels()->where('status', 'ACTIVE')->pluck('channel_code');
+        $assessed = $this->rules->assess('rules.campaign.eligibility', [
+            'active' => $campaign->status === PromoCampaign::ACTIVE,
+            'withinWindow' => (! $campaign->starts_at || $now->gte($campaign->starts_at)) && (! $campaign->ends_at || $now->lte($campaign->ends_at)),
+            'channelAllowed' => $channels->isEmpty() || $channels->contains($context['channelCode'] ?? null),
+            'capReached' => $campaign->max_participants !== null
+                && $campaign->participations()->whereNotIn('status', ['REJECTED', 'CANCELLED'])->count() >= $campaign->max_participants,
+            'hardRuleFailed' => $hardFailures !== [],
+            'campaignType' => $campaign->campaign_type,
+            'channelCode' => $context['channelCode'] ?? null,
+        ]);
+        $reasons = array_values(array_map(fn ($e) => $e['message'], $assessed['validationErrors']));
 
         return ['eligible' => $reasons === [], 'reasons' => $reasons, 'warnings' => $warnings];
     }

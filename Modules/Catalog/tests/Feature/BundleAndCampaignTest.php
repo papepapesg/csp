@@ -24,7 +24,9 @@ class BundleAndCampaignTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        config(['sophix.rules.memo_seconds' => 0]); // read decision tables fresh (tests edit them live)
         $this->seed(RbacSeeder::class);
+        $this->seed(\Modules\Catalog\Database\Seeders\CatalogPolicySeeder::class); // rules.campaign.* gates
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('SUPER_ADMIN');
         Sanctum::actingAs($user);
@@ -153,6 +155,25 @@ class BundleAndCampaignTest extends TestCase
         $this->postJson("/api/campaigns/{$bad['campaign_id']}/validate")
             ->assertOk()->assertJsonPath('checks.0.status', 'FAIL');
         $this->postJson("/api/campaigns/{$bad['campaign_id']}/activate")->assertStatus(422);
+    }
+
+    public function test_eligibility_gates_are_config_not_code(): void
+    {
+        // Default gates block a campaign outside its channel.
+        $c = $this->postJson('/api/campaigns', ['code' => 'CFG_C', 'name' => 'Config',
+            'offers' => [['offer_type' => 'MESSAGE_ONLY']], 'channels' => ['SALES_APP'],
+        ], ['Idempotency-Key' => 'cfg-c'])->json();
+        $this->postJson("/api/campaigns/{$c['campaign_id']}/activate")->assertOk();
+        $this->postJson("/api/campaigns/{$c['campaign_id']}/check-eligibility", ['channelCode' => 'SELF_CARE'])
+            ->assertOk()->assertJsonPath('eligible', false);
+
+        // An operator drops the channel gate in the Rules Studio — no code change — and
+        // the same request is now eligible. This is the L2 extension point.
+        $table = \Modules\Rules\Models\DecisionTable::query()->where('rule_set', 'rules.campaign.eligibility')->first();
+        $table->update(['rules' => collect($table->rules)->reject(fn ($r) => $r['ruleId'] === 'CAMP-ELIG-CHANNEL')->values()->all()]);
+
+        $this->postJson("/api/campaigns/{$c['campaign_id']}/check-eligibility", ['channelCode' => 'SELF_CARE'])
+            ->assertOk()->assertJsonPath('eligible', true);
     }
 
     public function test_campaign_eligibility_and_unique_redemption_with_discount_binding(): void
