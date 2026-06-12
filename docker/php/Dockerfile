@@ -43,8 +43,10 @@ RUN composer dump-autoload --optimize --no-dev
 # ---------- Stage 4: runtime ----------
 FROM php:8.4-fpm-bookworm AS runtime
 ENV COMPOSER_ALLOW_SUPERUSER=1
+# -dev headers are required to COMPILE the extensions (they pull in the runtime libs too);
+# postgresql-client is needed by the entrypoint (pg_isready / psql).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libpq5 libicu72 libzip4 libpng16-16 postgresql-client \
+        libpq-dev libicu-dev libzip-dev libpng-dev zlib1g-dev postgresql-client \
     && docker-php-ext-configure intl \
     && docker-php-ext-install -j"$(nproc)" pdo_pgsql pgsql intl zip bcmath gd pcntl opcache \
     && pecl install redis && docker-php-ext-enable redis \
