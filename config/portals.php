@@ -83,7 +83,7 @@ return [
         ],
         'brand' => [
             'label' => 'Brand & Locale', 'tagline' => 'Theme & translations', 'color' => '#9333ea', 'perm' => null,
-            'nav' => [['Localize', [['i18n.studio', 'Localization', null]]]],
+            'nav' => [['Localize', [['i18n.studio', 'Brand & locale', null]]]],
         ],
     ],
 ];
