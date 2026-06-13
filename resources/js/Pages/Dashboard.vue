@@ -49,7 +49,7 @@ onMounted(load);
 <template>
     <Head :title="t('Dashboard')" />
     <AuthenticatedLayout>
-        <template #header><PageHeader title="Dashboard" /></template>
+        <template #header><PageHeader title="Dashboard" :crumbs="[{ label: 'Operations' }, { label: 'Dashboard' }]" /></template>
 
         <div class="mx-auto max-w-7xl space-y-5">
             <div class="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">

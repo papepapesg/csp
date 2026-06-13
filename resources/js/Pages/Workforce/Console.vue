@@ -197,7 +197,7 @@ onMounted(async () => {
     <Head :title="t('Workforce')" />
     <AuthenticatedLayout>
         <template #header>
-            <PageHeader title="Workforce" :crumbs="[{ label: 'Commerce' }, { label: 'Workforce' }]" />
+            <PageHeader title="Workforce" :crumbs="[{ label: 'Operations' }, { label: 'Workforce' }]" />
         </template>
 
         <div class="mx-auto max-w-7xl space-y-5">

@@ -108,7 +108,7 @@ onUnmounted(() => clearInterval(timer));
     <Head :title="t('NOC')" />
     <AuthenticatedLayout>
         <template #header>
-            <PageHeader title="NOC" :crumbs="[{ label: 'Admin' }, { label: 'NOC' }]">
+            <PageHeader title="NOC" :crumbs="[{ label: 'Operations' }, { label: 'NOC' }]">
                 <template #actions>
                     <input v-model="trace.key" @keyup.enter="runTrace()"
                         :placeholder="t('Trace: sub_…, ford_…, op_…, correlation id')"

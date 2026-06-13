@@ -148,7 +148,7 @@ onMounted(() => { loadStock(); loadPos(); loadEquipment(); loadSwaps(); });
     <Head :title="t('Warehouse')" />
     <AuthenticatedLayout>
         <template #header>
-            <PageHeader title="Warehouse" :crumbs="[{ label: 'Commerce' }, { label: 'Warehouse' }]">
+            <PageHeader title="Warehouse" :crumbs="[{ label: 'Operations' }, { label: 'Warehouse' }]">
                 <template #actions>
                     <button class="rounded border border-gray-200 bg-white px-3 py-1 text-xs text-gray-600 hover:bg-gray-50"
                         @click="loadStock(); loadPos(); loadEquipment(); loadSwaps()">{{ t('Refresh') }}</button>

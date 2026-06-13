@@ -288,7 +288,7 @@ onMounted(() => { loadSummary(); loadTab(); });
     <Head :title="t('Billing')" />
     <AuthenticatedLayout>
         <template #header>
-            <PageHeader title="Billing" :crumbs="[{ label: 'Commerce' }, { label: 'Billing' }]" />
+            <PageHeader title="Billing" :crumbs="[{ label: 'Operations' }, { label: 'Billing' }]" />
         </template>
 
         <div class="mx-auto max-w-7xl space-y-5">

@@ -191,7 +191,7 @@ onMounted(() => {
     <Head :title="t('Equipment')" />
     <AuthenticatedLayout>
         <template #header>
-            <PageHeader title="Equipment" :crumbs="[{ label: 'Commerce' }, { label: 'Equipment' }]" />
+            <PageHeader title="Equipment" :crumbs="[{ label: 'Operations' }, { label: 'Equipment' }]" />
         </template>
 
         <div class="mx-auto max-w-7xl space-y-5">

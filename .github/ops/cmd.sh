@@ -14,18 +14,26 @@ curl -s -b "$JAR" -c "$JAR" -X POST "https://app.$BASE/login" \
   -H "X-XSRF-TOKEN: $XSRF" -H "Origin: https://app.$BASE" -H "Referer: https://app.$BASE/login" \
   --data-urlencode 'email=admin@sophix.local' --data-urlencode 'password=password' -o /dev/null -w 'login %{http_code}\n'
 
-H=(-b "$JAR" -H "Origin: https://brand.$BASE" -H "Referer: https://brand.$BASE/" -H 'Accept: application/json')
-echo "=== operator-config (theme):"
-curl -s "${H[@]}" "https://brand.$BASE/api/operator-config" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("  operator:",d.get("operator_code"),"color:",d.get("theme_primary_color"),"locale:",d.get("default_locale"),"currency:",d.get("currency_code"))'
-echo "=== i18n meta:"
-curl -s "${H[@]}" "https://brand.$BASE/api/i18n/meta" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("  locales:",d.get("locales"),"domains:",len(d.get("domains") or []))'
-
-echo "=== page renders:"
 cat >/tmp/comp.py <<'PY'
 import sys,json,html,re
 m=re.search(r'data-page="([^"]+)"', sys.stdin.read())
-print("component:", json.loads(html.unescape(m.group(1)))["component"] if m else "NONE")
+print(json.loads(html.unescape(m.group(1)))["component"] if m else "NONE")
 PY
-echo -n "  brand.$BASE/i18n/studio -> "; curl -sL -b "$JAR" "https://brand.$BASE/i18n/studio" | python3 /tmp/comp.py
+
+echo "=== Operations app — every console renders on ops.$BASE:"
+for path in dashboard fulfillment work-orders tickets billing equipment warehouse workforce noc; do
+  echo -n "  ops/$path -> "; curl -sL -b "$JAR" "https://ops.$BASE/$path" | python3 /tmp/comp.py
+done
+
+echo "=== Launcher tiles (app grid) on app.$BASE:"
+curl -s -b "$JAR" -H "Origin: https://app.$BASE" -H "Referer: https://app.$BASE/" -H 'Accept: application/json' "https://app.$BASE/api/auth/me" >/dev/null
+curl -sL -b "$JAR" "https://app.$BASE/" | python3 -c '
+import sys,json,html,re
+m=re.search(r"data-page=\"([^\"]+)\"", sys.stdin.read())
+d=json.loads(html.unescape(m.group(1))) if m else {}
+apps=(d.get("props",{}).get("portal",{}) or {}).get("apps",[])
+print("  component:", d.get("component"))
+print("  app tiles:", len(apps), "->", ", ".join(a.get("slug","?") for a in apps))
+'
 rm -f "$JAR" /tmp/comp.py
 echo OPS_DONE
