@@ -14,21 +14,24 @@ curl -s -b "$JAR" -c "$JAR" -X POST "https://app.$BASE/login" \
   -H "X-XSRF-TOKEN: $XSRF" -H "Origin: https://app.$BASE" -H "Referer: https://app.$BASE/login" \
   --data-urlencode 'email=admin@sophix.local' --data-urlencode 'password=password' -o /dev/null -w 'login %{http_code}\n'
 
-H=(-b "$JAR" -H "Origin: https://catalog.$BASE" -H "Referer: https://catalog.$BASE/" -H 'Accept: application/json')
-echo "=== catalog data counts:"
-for ep in packages services tax/rules commercial-bundles campaigns discounts; do
-  n=$(curl -s "${H[@]}" "https://catalog.$BASE/api/$ep" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(len(d.get("items") or d.get("data") or []))' 2>/dev/null)
-  echo "  $ep -> ${n:-ERR}"
-done
+FROM=$(date -u -d '-30 days' +%F); TO=$(date -u +%F)
+H=(-b "$JAR" -H "Origin: https://reporting.$BASE" -H "Referer: https://reporting.$BASE/" -H 'Accept: application/json')
+echo "=== ops dashboard metrics ($FROM..$TO):"
+curl -s "${H[@]}" "https://reporting.$BASE/api/reports/dashboards/operations-overview?from=$FROM&to=$TO" | python3 -c '
+import sys,json
+d=json.load(sys.stdin); m=d.get("metrics",{})
+print("  metric keys:", len(m), "->", ", ".join(list(m.keys())[:6]))
+print("  sample:", {k:m[k] for k in list(m)[:4]})
+'
+echo "=== reconcile:"
+curl -s "${H[@]}" "https://reporting.$BASE/api/reports/reconcile?from=$FROM&to=$TO" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("  checked:",d.get("checked"),"inSync:",d.get("inSync"))'
 
-echo "=== catalog pages — actual Inertia component:"
+echo "=== page renders:"
 cat >/tmp/comp.py <<'PY'
 import sys,json,html,re
 m=re.search(r'data-page="([^"]+)"', sys.stdin.read())
 print("component:", json.loads(html.unescape(m.group(1)))["component"] if m else "NONE")
 PY
-for path in catalog/setup commercial/studio; do
-  echo -n "  catalog.$BASE/$path -> "; curl -sL -b "$JAR" "https://catalog.$BASE/$path" | python3 /tmp/comp.py
-done
+echo -n "  reporting.$BASE/reports -> "; curl -sL -b "$JAR" "https://reporting.$BASE/reports" | python3 /tmp/comp.py
 rm -f "$JAR" /tmp/comp.py
 echo OPS_DONE

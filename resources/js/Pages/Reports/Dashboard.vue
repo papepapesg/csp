@@ -21,6 +21,7 @@ const to = ref(new Date().toISOString().slice(0, 10));
 const loading = ref(true);
 const error = ref(null);
 const metrics = ref({});
+const prevMetrics = ref({});   // same metrics over the previous equal-length range, for deltas
 const series = ref([]);
 const selectedKey = ref(null);
 const recon = ref(null);
@@ -36,15 +37,37 @@ const isAmount = (k) => k.endsWith('_amount');
 const fmt = (k, v) => (isAmount(k) ? money(v) : Number(v).toLocaleString());
 const params = () => ({ from: from.value, to: to.value });
 
+// The immediately preceding range of equal length — so each card can show period-over-period.
+function previousRange() {
+    const f = new Date(from.value), tt = new Date(to.value);
+    const days = Math.max(1, Math.round((tt - f) / 864e5) + 1);
+    const prevTo = new Date(f.getTime() - 864e5);
+    const prevFrom = new Date(prevTo.getTime() - (days - 1) * 864e5);
+    return { from: prevFrom.toISOString().slice(0, 10), to: prevTo.toISOString().slice(0, 10) };
+}
+// % change vs the previous period, as a signed display string for the StatCard sub-line.
+function delta(k) {
+    const cur = Number(metrics.value[k] ?? 0);
+    const prev = Number(prevMetrics.value[k] ?? 0);
+    if (prev === 0) return cur === 0 ? '' : t('new');
+    const pct = Math.round(((cur - prev) / prev) * 100);
+    const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : '■';
+    return `${arrow} ${Math.abs(pct)}% ${t('vs prev')}`;
+}
+
 async function load() {
     loading.value = true; error.value = null;
     try {
         const { data } = await window.axios.get(`/api/reports/dashboards/${code.value}`, { params: params() });
         metrics.value = data.metrics ?? {};
         selectedKey.value = Object.keys(metrics.value)[0] ?? null;
-        await Promise.all([loadSeries(), loadRecon()]);
+        await Promise.all([loadSeries(), loadRecon(), loadPrev()]);
     } catch (e) { error.value = e.response?.data?.message ?? t('Failed to load dashboards'); }
     finally { loading.value = false; }
+}
+async function loadPrev() {
+    try { prevMetrics.value = (await window.axios.get(`/api/reports/dashboards/${code.value}`, { params: previousRange() })).data.metrics ?? {}; }
+    catch (e) { prevMetrics.value = {}; }
 }
 async function loadSeries() {
     if (!selectedKey.value) { series.value = []; return; }
@@ -71,25 +94,25 @@ onMounted(load);
     <Head :title="t('Reports')" />
     <AuthenticatedLayout>
         <template #header>
-            <PageHeader title="Reports" :crumbs="[{ label: 'Insight' }, { label: 'Reports' }]">
+            <PageHeader title="Reports" :crumbs="[{ label: 'Reporting' }, { label: 'Dashboards' }]">
                 <template #actions>
                     <select v-model="code" @change="load" class="rounded-lg border-gray-200 text-sm">
                         <option v-for="(label, c) in DASHBOARDS" :key="c" :value="c">{{ t(label) }}</option>
                     </select>
                     <input type="date" v-model="from" @change="load" class="rounded-lg border-gray-200 text-sm" />
                     <input type="date" v-model="to" @change="load" class="rounded-lg border-gray-200 text-sm" />
-                    <button @click="exportCsv" class="rounded-lg bg-op px-3 py-1.5 text-sm font-medium text-white hover:bg-op-dark">{{ t('Export CSV') }}</button>
+                    <button @click="exportCsv" class="rounded-lg bg-op px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">{{ t('Export CSV') }}</button>
                 </template>
             </PageHeader>
         </template>
 
-        <div class="mx-auto max-w-7xl space-y-5">
+        <div class="mx-auto max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
             <p v-if="error" class="rounded bg-red-50 p-3 text-sm text-red-600">{{ error }}</p>
 
             <div class="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
                 <StatCard v-for="(v, k) in metrics" :key="k" :label="labels[k] ?? k" :value="fmt(k, v)"
                     :tone="isAmount(k) ? 'emerald' : 'indigo'" :loading="loading"
-                    :sub="selectedKey === k ? t('charted below') : ''" @select="pick(k)" />
+                    :sub="delta(k) || (selectedKey === k ? t('charted below') : '')" @select="pick(k)" />
             </div>
 
             <Panel :title="t(labels[selectedKey] ?? selectedKey ?? 'Trend')" subtitle="Daily series over the selected range">
