@@ -48,6 +48,13 @@ class HandleInertiaRequests extends Middleware
             ],
             // Deployment environment marker (visible in non-prod, hidden in prod — FE-APP-01 §6).
             'appEnv' => fn () => app()->environment(),
+            // Multi-app portal context: which app this subdomain is, its nav, and the launcher tiles
+            // the user may open (FE-APP-01 app separation).
+            'portal' => fn () => [
+                'baseDomain' => \App\Foundation\Portals\PortalRegistry::baseDomain(),
+                'current' => \App\Foundation\Portals\PortalRegistry::currentForHost($request->getHost()),
+                'apps' => \App\Foundation\Portals\PortalRegistry::accessibleTiles($request->user(), $request->getScheme()),
+            ],
         ];
     }
 }

@@ -48,7 +48,7 @@ class BackofficeSurfacesTest extends TestCase
         $user->assignRole('SUPER_ADMIN');
 
         $this->post('/login', ['email' => $user->email, 'password' => 'password'])
-            ->assertRedirect(route('dashboard', absolute: false));
+            ->assertRedirect(route('home', absolute: false));
 
         $this->getJson('/api/dashboard/summary')->assertOk()
             ->assertJsonStructure(['widgets']);

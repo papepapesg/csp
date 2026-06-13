@@ -25,35 +25,21 @@ watchEffect(() => {
     if (op.value?.theme_primary_color) document.documentElement.style.setProperty('--op-primary', op.value.theme_primary_color);
 });
 
-// A nav item shows when it has no permission, the user is SUPER_ADMIN, or holds the permission.
+// Portal-aware nav: the sidebar shows only the CURRENT app's nav (config/portals.php, shared as
+// portal.current). A nav item shows when it has no permission, the user is SUPER_ADMIN, or holds
+// the permission. Links are relative so navigation stays on this app's subdomain.
+const portal = computed(() => page.props.portal ?? {});
+const currentApp = computed(() => portal.value.current ?? null);
+const launcherUrl = computed(() => {
+    const base = portal.value.baseDomain;
+    return base && base !== 'localhost' ? `${window.location.protocol}//app.${base}` : '/';
+});
 const can = (perm) => !perm || roles.value.includes('SUPER_ADMIN') || perms.value.includes(perm);
-const groups = [
-    ['Operations', [
-        ['dashboard', 'Dashboard', null], ['customers.index', 'Customers', 'customer.read'],
-        ['subscriptions.index', 'Subscriptions', 'subscription.read'], ['tickets.index', 'Tickets', 'ticket.read'],
-        ['fulfillment.console', 'Fulfillment', 'fulfillment.read'], ['workorders.console', 'Work Orders', 'workorder.read'],
-    ]],
-    ['Commerce', [
-        ['billing.console', 'Billing', 'invoice.read'], ['catalog.setup', 'Catalog', 'catalog.read'],
-        ['commercial.studio', 'Commercial', 'catalog.read'], ['equipment.console', 'Equipment', 'stock.read'],
-        ['workforce.console', 'Workforce', 'workforce.read'],
-    ]],
-    ['Insight', [['reports.index', 'Reports', 'report.view']]],
-    ['Studios', [
-        ['workflow.studio', 'Workflow', 'workflow.view'], ['rules.studio', 'Rules', 'rules.view'],
-        ['templates.studio', 'Templates', 'notification.read'], ['dunning.studio', 'Dunning', 'dunning.admin'],
-        ['i18n.studio', 'Localization', null],
-    ]],
-    ['Admin', [
-        ['rbac.admin', 'RBAC', 'rbac.manage'], ['noc.console', 'NOC', 'itops.view'],
-        ['workflow.ops', 'Operations console', 'workflow.view'], ['itops.console', 'IT-Ops', 'itops.view'],
-        ['admin.console', 'Admin', 'itops.view'],
-    ]],
-];
-const visibleGroups = computed(() => groups
+const visibleGroups = computed(() => (currentApp.value?.nav ?? [])
     .map(([name, items]) => [name, items.filter(([, , p]) => can(p))])
     .filter(([, items]) => items.length));
 
+const href = (r) => route(r, undefined, false); // relative — stay on this subdomain
 const isActive = (name) => route().current(name);
 
 // Federated global search (FE-APP-01 §16): debounced query → grouped hits. A customer/account
@@ -76,8 +62,8 @@ function onSearchInput() {
 }
 function goToHit(type, item) {
     searchOpen.value = false; search.value = '';
-    if (type === 'customer' || type === 'account') router.visit(route('customers.show', item.id));
-    else if (consoleRoute[type]) router.visit(route(consoleRoute[type]));
+    if (type === 'customer' || type === 'account') router.visit(route('customers.show', item.id, false));
+    else if (consoleRoute[type]) router.visit(route(consoleRoute[type], undefined, false));
 }
 </script>
 
@@ -87,16 +73,17 @@ function goToHit(type, item) {
         <aside class="fixed inset-y-0 left-0 z-30 w-60 -translate-x-full transform border-r border-gray-200 bg-white transition-transform lg:translate-x-0"
             :class="sidebarOpen ? 'translate-x-0' : ''">
             <div class="flex h-16 items-center gap-2 border-b border-gray-100 px-4">
-                <Link :href="route('dashboard')" class="flex items-center gap-2">
-                    <img v-if="op?.theme_logo_url" :src="op.theme_logo_url" class="h-8 w-auto" />
-                    <ApplicationLogo v-else class="h-8 w-auto fill-current" :style="{ color: op?.theme_primary_color ?? '#4f46e5' }" />
-                    <span class="text-sm font-semibold" :style="{ color: op?.theme_primary_color }">{{ op?.display_name ?? 'SOPHIX' }}</span>
-                </Link>
+                <img v-if="op?.theme_logo_url" :src="op.theme_logo_url" class="h-8 w-auto" />
+                <ApplicationLogo v-else class="h-8 w-auto shrink-0 fill-current" :style="{ color: op?.theme_primary_color ?? '#4f46e5' }" />
+                <div class="min-w-0">
+                    <div class="truncate text-sm font-semibold" :style="{ color: op?.theme_primary_color }">{{ t(currentApp?.label ?? (op?.display_name ?? 'SOPHIX')) }}</div>
+                    <div class="truncate text-[10px] text-gray-400">{{ op?.display_name ?? 'SOPHIX' }}</div>
+                </div>
             </div>
-            <nav class="h-[calc(100vh-4rem)] overflow-y-auto px-3 py-4">
+            <nav class="h-[calc(100vh-7rem)] overflow-y-auto px-3 py-4">
                 <div v-for="[name, items] in visibleGroups" :key="name" class="mb-4">
                     <div class="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">{{ t(name) }}</div>
-                    <Link v-for="[r, label] in items" :key="r" :href="route(r)"
+                    <Link v-for="[r, label] in items" :key="r" :href="href(r)"
                         class="flex items-center rounded-lg px-2 py-1.5 text-sm font-medium transition"
                         :class="isActive(r) ? 'bg-op-soft text-op' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'"
                         :style="isActive(r) && op?.theme_primary_color ? { color: op.theme_primary_color, backgroundColor: op.theme_primary_color + '14' } : {}">
@@ -104,6 +91,11 @@ function goToHit(type, item) {
                     </Link>
                 </div>
             </nav>
+            <!-- App switcher: back to the launcher (other apps) -->
+            <a :href="launcherUrl" class="absolute inset-x-0 bottom-0 flex h-12 items-center gap-2 border-t border-gray-100 bg-white px-4 text-sm font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-800">
+                <span class="grid grid-cols-2 gap-0.5"><span class="h-1.5 w-1.5 rounded-sm bg-current"></span><span class="h-1.5 w-1.5 rounded-sm bg-current"></span><span class="h-1.5 w-1.5 rounded-sm bg-current"></span><span class="h-1.5 w-1.5 rounded-sm bg-current"></span></span>
+                {{ t('All apps') }}
+            </a>
         </aside>
         <div v-if="sidebarOpen" class="fixed inset-0 z-20 bg-gray-900/30 lg:hidden" @click="sidebarOpen = false"></div>
 

@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
-# Verify-only (no redeploy): wait for the app to be healthy, then prove the cross-tenant block.
+# Deploy Phase 0 (Caddy + subdomains + SSO) and verify TLS + cross-subdomain session.
 set -uxo pipefail
-for i in $(seq 1 30); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost/api/health || true)
-  [ "$code" = "200" ] && break
-  sleep 2
+bash deploy/vps-deploy.sh 2>&1 | tail -16
+BASE=207.180.209.83.sslip.io
+echo "=== caddy recent logs (cert acquisition):"
+docker compose logs caddy --tail 25 2>&1 | tail -25
+echo "=== launcher over HTTPS (-k tolerates a still-warming cert):"
+for h in app crm ops catalog; do
+  echo -n "https://$h.$BASE -> "; curl -sk -o /dev/null -w '%{http_code} (cert_issuer=%{ssl_verify_result})\n' "https://$h.$BASE/" --max-time 20 || echo "fail"
 done
-echo "--- health: $(curl -s http://localhost/api/health)"
-TOKEN=$(curl -s -X POST http://localhost/api/auth/token -H 'Content-Type: application/json' \
-  -d '{"email":"admin@sophix.local","password":"password"}')
-echo "--- token resp: $(echo "$TOKEN" | head -c 120)"
-TOK=$(echo "$TOKEN" | grep -oE '"(token|access_token|plainTextToken)":"[^"]*"' | head -1 | cut -d'"' -f4)
-echo "--- token len: ${#TOK}"
-echo "--- ATTACK: WIK admin + spoofed X-Operator-Code: ZZZ (expect only WIK, no leak):"
-curl -s -H "Authorization: Bearer $TOK" -H 'X-Operator-Code: ZZZ' http://localhost/api/customers \
-  | grep -oE '"operatorCode":"[A-Z]+"' | sort -u
-echo "--- total returned:"; curl -s -H "Authorization: Bearer $TOK" -H 'X-Operator-Code: ZZZ' http://localhost/api/customers | grep -oE '"totalElements":[0-9]+'
+echo "=== SSO: login on crm.<base>, reuse cookie on ops.<base>:"
+JAR=/tmp/cj.txt; rm -f $JAR
+XSRF=$(curl -sk -c $JAR "https://crm.$BASE/login" -o /dev/null -w '%{http_code}'); echo "login page: $XSRF"
+echo "(full form login needs CSRF token scrape; smoke = launcher reachable on all hosts above)"
 echo OPS_DONE

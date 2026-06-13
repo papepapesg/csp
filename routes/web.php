@@ -1,11 +1,25 @@
 <?php
 
+use App\Foundation\Portals\PortalRegistry;
 use App\Http\Controllers\ProfileController;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
-// The backoffice IS the product: the root goes straight to it (or to login).
-Route::get('/', fn () => redirect()->route(auth()->check() ? 'dashboard' : 'login'));
+// Portal-aware root: guests -> login; the launcher host -> app grid; an app subdomain ->
+// that app's first screen (relative redirect, staying on the subdomain).
+Route::get('/', function (Request $request) {
+    if (! auth()->check()) {
+        return redirect()->route('login');
+    }
+    $app = PortalRegistry::currentForHost($request->getHost());
+    if ($app === null) {
+        return Inertia::render('Launcher');
+    }
+    $first = PortalRegistry::firstRoute($app);
+
+    return $first ? redirect(route($first, [], false)) : Inertia::render('Launcher');
+})->middleware(['auth', 'verified'])->name('home');
 
 Route::get('/dashboard', function () {
     return Inertia::render('Dashboard');

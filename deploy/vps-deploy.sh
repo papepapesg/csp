@@ -14,9 +14,11 @@ set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 PUBLIC_HOST="${PUBLIC_HOST:-207.180.209.83}"
-APP_PORT="${APP_PORT:-80}"
+# Base domain for the per-app subdomains. Defaults to the sslip.io wildcard for this IP (no DNS
+# setup needed); override BASE_DOMAIN with a real domain you control for production.
+BASE_DOMAIN="${BASE_DOMAIN:-${PUBLIC_HOST}.sslip.io}"
 
-echo "==> SOPHIX deploy — host ${PUBLIC_HOST}, web port ${APP_PORT}"
+echo "==> SOPHIX deploy — apps under *.${BASE_DOMAIN}"
 
 # 1. Docker + compose plugin.
 if ! command -v docker >/dev/null 2>&1; then
@@ -33,10 +35,14 @@ set_env() {
 }
 set_env APP_ENV production
 set_env APP_DEBUG false
-set_env APP_URL "http://${PUBLIC_HOST}"
-set_env APP_PORT "${APP_PORT}"
+set_env APP_URL "https://app.${BASE_DOMAIN}"
+# Multi-app portals: Caddy serves each app at slug.<base> with auto-TLS; one SSO session is
+# shared across the subdomains (cookie domain = .<base>), and Sanctum trusts the wildcard.
+set_env SOPHIX_APP_BASE_DOMAIN "${BASE_DOMAIN}"
+set_env SESSION_DOMAIN ".${BASE_DOMAIN}"
+set_env SESSION_SECURE_COOKIE true
+set_env SANCTUM_STATEFUL_DOMAINS "*.${BASE_DOMAIN}"
 set_env MAIL_MAILER smtp
-set_env SESSION_SECURE_COOKIE false
 # Containerized logging: stderr -> `docker compose logs`, and no root-vs-www-data
 # contention on storage/logs/laravel.log across app/queue/scheduler/one-off containers.
 set_env LOG_CHANNEL stderr
@@ -71,16 +77,21 @@ docker compose exec -T app php artisan config:cache || true
 cat <<EOF
 
 ================ SOPHIX BSS is up ================
-  UI            http://${PUBLIC_HOST}
-  API base      http://${PUBLIC_HOST}/api
+  Launcher      https://app.${BASE_DOMAIN}
+  CRM           https://crm.${BASE_DOMAIN}
+  Catalog       https://catalog.${BASE_DOMAIN}
+  Operations    https://ops.${BASE_DOMAIN}
+  (also: settings, reporting, templates, brand, studio-workflow/-rules/-dunning)
+  API base      https://app.${BASE_DOMAIN}/api
   Mailpit       http://${PUBLIC_HOST}:8025
   Login         admin@sophix.local / password
   Operator      WIK (Kenya, KES)
+  TLS           Let's Encrypt via Caddy (first request per host warms the cert)
 
   Postman       postman/collections/*.json  (19 bundles)
   Postman env   postman/SOPHIX-VPS.postman_environment.json
 
-  Logs          docker compose logs -f app
+  Logs          docker compose logs -f app | caddy
   Reset         docker compose down -v && bash deploy/vps-deploy.sh
 ==================================================
 EOF
