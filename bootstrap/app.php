@@ -30,6 +30,16 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Behind the Caddy edge (TLS terminates there, plain HTTP to nginx/php-fpm): trust the
+        // proxy so Laravel honors X-Forwarded-Proto/Host/Port and generates https:// asset URLs.
+        // Without this the page is served over https but @vite emits http:// assets → the browser
+        // blocks them as mixed content and the SPA never mounts (blank page).
+        $middleware->trustProxies(at: '*', headers: Request::HEADER_X_FORWARDED_FOR
+            | Request::HEADER_X_FORWARDED_HOST
+            | Request::HEADER_X_FORWARDED_PORT
+            | Request::HEADER_X_FORWARDED_PROTO
+            | Request::HEADER_X_FORWARDED_AWS_ELB);
+
         // The backoffice SPA calls /api/* with its session cookie: Sanctum must treat
         // first-party browser requests as stateful or every UI fetch 401s.
         $middleware->statefulApi();
