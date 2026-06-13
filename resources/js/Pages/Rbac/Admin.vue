@@ -1,5 +1,10 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+import PageHeader from '@/Components/Bss/PageHeader.vue';
+import Panel from '@/Components/Bss/Panel.vue';
+import StatCard from '@/Components/Bss/StatCard.vue';
+import StatusBadge from '@/Components/Bss/StatusBadge.vue';
+import DataTable from '@/Components/Bss/DataTable.vue';
 import { Head } from '@inertiajs/vue3';
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from '@/i18n';
@@ -28,6 +33,7 @@ const effective = ref(null);
 const audit = ref([]);
 const error = ref(null);
 const notice = ref(null);
+const flash = (msg) => { notice.value = msg; setTimeout(() => (notice.value = null), 4000); };
 
 const grantSet = computed(() => new Set(currentRole.value?.permissions ?? []));
 const permissionGroups = computed(() => {
@@ -52,7 +58,7 @@ function toggle(permission) {
 async function saveMatrix() {
     try {
         await window.axios.put(`/api/rbac/roles/${currentRole.value.code}/permissions`, { permissions: currentRole.value.permissions });
-        notice.value = `Saved ${currentRole.value.code}`; await load();
+        flash(t('Saved :code', { code: currentRole.value.code })); await load();
     } catch (e) { error.value = e.response?.data?.message ?? t('Save failed'); }
 }
 async function createRole() {
@@ -81,9 +87,11 @@ function toggleUserRole(code) {
     selectedUser.value.roles = [...set];
 }
 async function saveUserRoles() {
-    await window.axios.post(`/api/rbac/users/${selectedUser.value.uid}/roles`, { roles: selectedUser.value.roles });
-    notice.value = `Roles updated for ${selectedUser.value.name}`;
-    await openUser(selectedUser.value); await searchUsers();
+    try {
+        await window.axios.post(`/api/rbac/users/${selectedUser.value.uid}/roles`, { roles: selectedUser.value.roles });
+        flash(t('Roles updated for :name', { name: selectedUser.value.name }));
+        await openUser(selectedUser.value); await searchUsers();
+    } catch (e) { error.value = e.response?.data?.message ?? t('Save failed'); }
 }
 
 async function loadAudit() {
@@ -91,108 +99,123 @@ async function loadAudit() {
     audit.value = data.items ?? data.content ?? [];
 }
 
+const auditColumns = [
+    { key: 'created_at', label: 'When' },
+    { key: 'change_type', label: 'Change' },
+    { key: 'target', label: 'Target' },
+    { key: 'actor_user_id', label: 'Actor' },
+];
+
 onMounted(() => { load(); searchUsers(); loadAudit(); });
 </script>
 
 <template>
     <Head :title="t('RBAC Admin')" />
     <AuthenticatedLayout>
-        <template #header><h2 class="font-semibold text-xl text-gray-800">{{ t('RBAC Admin — roles, permissions & access') }}</h2></template>
+        <template #header>
+            <PageHeader :title="t('RBAC & users')" :crumbs="[{ label: 'Settings' }, { label: 'Access control' }]" />
+        </template>
 
-        <div class="py-6 max-w-7xl mx-auto sm:px-6 lg:px-8">
-            <div class="mb-4 flex gap-2">
-                <button @click="tab = 'matrix'" :class="tab === 'matrix' ? 'bg-op text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Role ⇄ permission matrix') }}</button>
-                <button @click="tab = 'users'; searchUsers()" :class="tab === 'users' ? 'bg-op text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('User assignments') }}</button>
-                <button @click="tab = 'audit'; loadAudit()" :class="tab === 'audit' ? 'bg-op text-white' : 'bg-white'" class="px-3 py-1 rounded border text-sm">{{ t('Change audit') }}</button>
+        <div class="mx-auto max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-3 gap-4">
+                <StatCard :label="t('Roles')" :value="roles.length" tone="indigo" />
+                <StatCard :label="t('Permissions')" :value="permissions.length" tone="cyan" />
+                <StatCard :label="t('Users')" :value="users.length" tone="emerald" />
             </div>
 
-            <div v-if="error" class="mb-3 p-2 bg-red-100 text-red-700 rounded text-sm">{{ error }}</div>
-            <div v-if="notice" class="mb-3 p-2 bg-green-100 text-green-700 rounded text-sm">{{ notice }}</div>
+            <div class="inline-flex gap-1 rounded-xl bg-gray-100 p-1">
+                <button @click="tab = 'matrix'" class="rounded-lg px-3 py-1.5 text-sm font-medium transition" :class="tab === 'matrix' ? 'bg-white text-op shadow-sm' : 'text-gray-500 hover:text-gray-700'">{{ t('Role ⇄ permission matrix') }}</button>
+                <button @click="tab = 'users'; searchUsers()" class="rounded-lg px-3 py-1.5 text-sm font-medium transition" :class="tab === 'users' ? 'bg-white text-op shadow-sm' : 'text-gray-500 hover:text-gray-700'">{{ t('User assignments') }}</button>
+                <button @click="tab = 'audit'; loadAudit()" class="rounded-lg px-3 py-1.5 text-sm font-medium transition" :class="tab === 'audit' ? 'bg-white text-op shadow-sm' : 'text-gray-500 hover:text-gray-700'">{{ t('Change audit') }}</button>
+            </div>
+
+            <div v-if="error" class="rounded-lg bg-red-50 p-2 text-sm text-red-700 ring-1 ring-red-100">{{ error }}</div>
+            <div v-if="notice" class="rounded-lg bg-emerald-50 p-2 text-sm text-emerald-700 ring-1 ring-emerald-100">{{ notice }}</div>
 
             <!-- Matrix -->
-            <div v-if="tab === 'matrix'" class="grid grid-cols-12 gap-4">
-                <div class="col-span-3 bg-white rounded shadow p-3">
-                    <div class="flex gap-1 mb-3">
-                        <input v-model="newRole" placeholder="NEW_ROLE" class="border rounded px-2 py-1 text-sm w-full" />
-                        <button @click="createRole" class="px-2 bg-op text-white rounded text-sm">+</button>
-                    </div>
-                    <button v-for="r in roles" :key="r.code" @click="openRole(r)"
-                        class="block w-full text-left px-2 py-1 rounded text-sm hover:bg-gray-100"
-                        :class="currentRole && currentRole.code === r.code ? 'bg-op-soft font-semibold' : ''">
-                        {{ r.code }} <span class="text-xs text-gray-400">({{ r.permissions.length }})</span>
-                    </button>
+            <div v-if="tab === 'matrix'" class="grid grid-cols-12 gap-5">
+                <div class="col-span-12 lg:col-span-3">
+                    <Panel :title="t('Roles')">
+                        <div class="mb-3 flex gap-1">
+                            <input v-model="newRole" placeholder="NEW_ROLE" class="w-full rounded-md border-gray-300 text-sm" />
+                            <button @click="createRole" class="rounded-md bg-op px-2 text-sm text-white">+</button>
+                        </div>
+                        <button v-for="r in roles" :key="r.code" @click="openRole(r)"
+                            class="mb-0.5 block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-gray-50"
+                            :class="currentRole && currentRole.code === r.code ? 'bg-op-soft font-semibold text-op' : ''">
+                            {{ r.code }} <span class="text-xs text-gray-400">({{ r.permissions.length }})</span>
+                        </button>
+                    </Panel>
                 </div>
 
-                <div v-if="currentRole" class="col-span-9 bg-white rounded shadow p-4">
-                    <div class="flex justify-between items-center mb-3">
-                        <div class="font-semibold">{{ currentRole.code }}</div>
-                        <div class="flex gap-2">
-                            <input v-model="newPermission" placeholder="module.action" class="border rounded px-2 py-1 text-sm" />
-                            <button @click="createPermission" class="px-2 py-1 bg-gray-200 rounded text-sm">{{ t('+ permission') }}</button>
-                            <button @click="saveMatrix" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Save matrix') }}</button>
+                <div class="col-span-12 lg:col-span-9">
+                    <Panel v-if="currentRole" :title="currentRole.code" :subtitle="t('Toggle the permissions this role grants')">
+                        <template #actions>
+                            <input v-model="newPermission" placeholder="module.action" class="rounded-md border-gray-300 text-sm" />
+                            <button @click="createPermission" class="rounded-md bg-gray-100 px-2 py-1.5 text-sm hover:bg-gray-200">{{ t('+ permission') }}</button>
+                            <button @click="saveMatrix" class="rounded-md bg-op px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">{{ t('Save matrix') }}</button>
+                        </template>
+                        <div v-for="(perms, group) in permissionGroups" :key="group" class="mb-4">
+                            <div class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-500">{{ group }}</div>
+                            <div class="flex flex-wrap gap-1.5">
+                                <button v-for="p in perms" :key="p" @click="toggle(p)"
+                                    class="rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset transition"
+                                    :class="grantSet.has(p) ? 'bg-emerald-100 text-emerald-700 ring-emerald-600/20' : 'bg-gray-50 text-gray-500 ring-gray-200 hover:bg-gray-100'">
+                                    {{ p }}
+                                </button>
+                            </div>
                         </div>
-                    </div>
-                    <div v-for="(perms, group) in permissionGroups" :key="group" class="mb-3">
-                        <div class="text-xs font-semibold text-gray-500 uppercase mb-1">{{ group }}</div>
-                        <div class="flex flex-wrap gap-1">
-                            <button v-for="p in perms" :key="p" @click="toggle(p)"
-                                class="px-2 py-0.5 rounded text-xs border"
-                                :class="grantSet.has(p) ? 'bg-green-600 text-white border-green-600' : 'bg-gray-50 text-gray-500'">
-                                {{ p }}
-                            </button>
-                        </div>
-                    </div>
+                    </Panel>
+                    <Panel v-else><p class="text-sm text-gray-400">{{ t('Select a role to edit its permissions.') }}</p></Panel>
                 </div>
             </div>
 
             <!-- Users -->
-            <div v-else-if="tab === 'users'" class="grid grid-cols-12 gap-4">
-                <div class="col-span-4 bg-white rounded shadow p-3">
-                    <input v-model="userQuery" @keyup.enter="searchUsers" :placeholder="t('Search name / email…')" class="border rounded px-2 py-1 text-sm w-full mb-2" />
-                    <div v-for="u in users" :key="u.uid" @click="openUser(u)"
-                        class="px-2 py-1 rounded text-sm hover:bg-gray-100 cursor-pointer"
-                        :class="selectedUser && selectedUser.uid === u.uid ? 'bg-op-soft' : ''">
-                        {{ u.name }} <span class="text-xs text-gray-400">{{ u.roles.join(', ') || '—' }}</span>
-                    </div>
-                </div>
-                <div v-if="selectedUser" class="col-span-8 bg-white rounded shadow p-4">
-                    <div class="flex justify-between items-center mb-3">
-                        <div class="font-semibold">{{ selectedUser.name }} <span class="text-xs text-gray-400">{{ selectedUser.email }} · {{ selectedUser.operatorCode }}</span></div>
-                        <button @click="saveUserRoles" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Save roles') }}</button>
-                    </div>
-                    <div class="flex flex-wrap gap-1 mb-4">
-                        <button v-for="r in roles" :key="r.code" @click="toggleUserRole(r.code)"
-                            class="px-2 py-0.5 rounded text-xs border"
-                            :class="selectedUser.roles.includes(r.code) ? 'bg-op text-white border-op' : 'bg-gray-50 text-gray-500'">
-                            {{ r.code }}
-                        </button>
-                    </div>
-                    <div v-if="effective" class="bg-gray-50 rounded p-3">
-                        <div class="text-xs font-semibold text-gray-500 mb-1">{{ t('Effective access (computed)') }}</div>
-                        <div class="flex flex-wrap gap-1">
-                            <span v-for="p in effective.permissions" :key="p" class="px-1.5 py-0.5 bg-gray-200 rounded text-xs">{{ p }}</span>
+            <div v-else-if="tab === 'users'" class="grid grid-cols-12 gap-5">
+                <div class="col-span-12 lg:col-span-4">
+                    <Panel :title="t('Users')">
+                        <input v-model="userQuery" @keyup.enter="searchUsers" :placeholder="t('Search name / email…')" class="mb-2 w-full rounded-md border-gray-300 text-sm" />
+                        <div v-for="u in users" :key="u.uid" @click="openUser(u)"
+                            class="cursor-pointer rounded-lg px-2 py-1.5 text-sm hover:bg-gray-50"
+                            :class="selectedUser && selectedUser.uid === u.uid ? 'bg-op-soft' : ''">
+                            <div class="font-medium text-gray-700">{{ u.name }}</div>
+                            <div class="text-xs text-gray-400">{{ u.roles.join(', ') || '—' }}</div>
                         </div>
-                    </div>
+                    </Panel>
+                </div>
+                <div class="col-span-12 lg:col-span-8">
+                    <Panel v-if="selectedUser" :title="selectedUser.name" :subtitle="`${selectedUser.email} · ${selectedUser.operatorCode}`">
+                        <template #actions>
+                            <button @click="saveUserRoles" class="rounded-md bg-op px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">{{ t('Save roles') }}</button>
+                        </template>
+                        <div class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-500">{{ t('Roles') }}</div>
+                        <div class="mb-4 flex flex-wrap gap-1.5">
+                            <button v-for="r in roles" :key="r.code" @click="toggleUserRole(r.code)"
+                                class="rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset transition"
+                                :class="selectedUser.roles.includes(r.code) ? 'bg-op text-white ring-op' : 'bg-gray-50 text-gray-500 ring-gray-200 hover:bg-gray-100'">
+                                {{ r.code }}
+                            </button>
+                        </div>
+                        <div v-if="effective" class="rounded-lg bg-gray-50 p-3">
+                            <div class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-500">{{ t('Effective access (computed)') }}</div>
+                            <div class="flex flex-wrap gap-1">
+                                <span v-for="p in effective.permissions" :key="p" class="rounded bg-white px-1.5 py-0.5 text-xs text-gray-600 ring-1 ring-gray-200">{{ p }}</span>
+                            </div>
+                        </div>
+                    </Panel>
+                    <Panel v-else><p class="text-sm text-gray-400">{{ t('Select a user to manage their roles.') }}</p></Panel>
                 </div>
             </div>
 
             <!-- Audit -->
-            <div v-else class="bg-white rounded shadow p-4">
-                <table class="w-full text-sm">
-                    <thead><tr class="text-left text-xs text-gray-500 uppercase">
-                        <th class="py-1">{{ t('When') }}</th><th>{{ t('Change') }}</th><th>{{ t('Target') }}</th><th>{{ t('Actor') }}</th><th>{{ t('After') }}</th>
-                    </tr></thead>
-                    <tbody>
-                        <tr v-for="a in audit" :key="a.audit_id" class="border-t">
-                            <td class="py-1 text-xs text-gray-500">{{ a.created_at }}</td>
-                            <td>{{ a.change_type }}</td>
-                            <td>{{ a.target_type }}: {{ a.target_id }}</td>
-                            <td class="text-xs">{{ a.actor_user_id ?? '—' }}</td>
-                            <td class="text-xs font-mono">{{ JSON.stringify(a.after_json) }}</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
+            <Panel v-else :title="t('Change audit')" :subtitle="t('Immutable record of every catalog change')">
+                <DataTable :columns="auditColumns" :rows="audit" row-key="audit_id" empty="No audit entries.">
+                    <template #cell-created_at="{ value }"><span class="text-xs text-gray-500">{{ value }}</span></template>
+                    <template #cell-change_type="{ value }"><StatusBadge :status="value" /></template>
+                    <template #cell-target="{ row }"><span class="text-xs">{{ row.target_type }}: {{ row.target_id }}</span></template>
+                    <template #cell-actor_user_id="{ value }"><span class="text-xs">{{ value ?? '—' }}</span></template>
+                </DataTable>
+            </Panel>
         </div>
     </AuthenticatedLayout>
 </template>

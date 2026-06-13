@@ -203,7 +203,7 @@ onMounted(loadTab);
     <Head :title="t('Admin')" />
     <AuthenticatedLayout>
         <template #header>
-            <PageHeader title="Admin" :crumbs="[{ label: 'Admin' }, { label: 'Console' }]">
+            <PageHeader title="Platform admin" :crumbs="[{ label: 'Settings' }, { label: 'Platform admin' }]">
                 <template #actions>
                     <span class="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium uppercase text-gray-600">{{ appEnv }}</span>
                     <button class="rounded border bg-white px-3 py-1 text-sm text-gray-700 hover:bg-gray-50" @click="loadTab">{{ t('Refresh') }}</button>

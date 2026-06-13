@@ -1,5 +1,6 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+import PageHeader from '@/Components/Bss/PageHeader.vue';
 import { Head } from '@inertiajs/vue3';
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from '@/i18n';
@@ -54,7 +55,7 @@ onUnmounted(() => clearInterval(poll));
     <Head :title="t('IT-Ops')" />
     <AuthenticatedLayout>
         <template #header>
-            <h2 class="text-xl font-semibold leading-tight text-gray-800">{{ t('IT-Ops · Services & Logs') }}</h2>
+            <PageHeader :title="t('IT-Ops')" :crumbs="[{ label: 'Settings' }, { label: 'Services & Logs' }]" />
         </template>
 
         <div class="py-6">

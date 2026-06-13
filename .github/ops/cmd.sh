@@ -14,24 +14,21 @@ curl -s -b "$JAR" -c "$JAR" -X POST "https://app.$BASE/login" \
   -H "X-XSRF-TOKEN: $XSRF" -H "Origin: https://app.$BASE" -H "Referer: https://app.$BASE/login" \
   --data-urlencode 'email=admin@sophix.local' --data-urlencode 'password=password' -o /dev/null -w 'login %{http_code}\n'
 
-FROM=$(date -u -d '-30 days' +%F); TO=$(date -u +%F)
-H=(-b "$JAR" -H "Origin: https://reporting.$BASE" -H "Referer: https://reporting.$BASE/" -H 'Accept: application/json')
-echo "=== ops dashboard metrics ($FROM..$TO):"
-curl -s "${H[@]}" "https://reporting.$BASE/api/reports/dashboards/operations-overview?from=$FROM&to=$TO" | python3 -c '
-import sys,json
-d=json.load(sys.stdin); m=d.get("metrics",{})
-print("  metric keys:", len(m), "->", ", ".join(list(m.keys())[:6]))
-print("  sample:", {k:m[k] for k in list(m)[:4]})
-'
-echo "=== reconcile:"
-curl -s "${H[@]}" "https://reporting.$BASE/api/reports/reconcile?from=$FROM&to=$TO" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("  checked:",d.get("checked"),"inSync:",d.get("inSync"))'
+H=(-b "$JAR" -H "Origin: https://settings.$BASE" -H "Referer: https://settings.$BASE/" -H 'Accept: application/json')
+echo "=== rbac data:"
+for ep in rbac/roles rbac/permissions rbac/users rbac/audit; do
+  n=$(curl -s "${H[@]}" "https://settings.$BASE/api/$ep" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(len(d.get("items") or d.get("content") or []))' 2>/dev/null)
+  echo "  $ep -> ${n:-ERR}"
+done
 
-echo "=== page renders:"
+echo "=== settings pages render:"
 cat >/tmp/comp.py <<'PY'
 import sys,json,html,re
 m=re.search(r'data-page="([^"]+)"', sys.stdin.read())
 print("component:", json.loads(html.unescape(m.group(1)))["component"] if m else "NONE")
 PY
-echo -n "  reporting.$BASE/reports -> "; curl -sL -b "$JAR" "https://reporting.$BASE/reports" | python3 /tmp/comp.py
+for path in admin/rbac itops admin; do
+  echo -n "  settings.$BASE/$path -> "; curl -sL -b "$JAR" "https://settings.$BASE/$path" | python3 /tmp/comp.py
+done
 rm -f "$JAR" /tmp/comp.py
 echo OPS_DONE
