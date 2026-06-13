@@ -1,7 +1,12 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+import PageHeader from '@/Components/Bss/PageHeader.vue';
+import Panel from '@/Components/Bss/Panel.vue';
+import StatCard from '@/Components/Bss/StatCard.vue';
+import StatusBadge from '@/Components/Bss/StatusBadge.vue';
+import DataTable from '@/Components/Bss/DataTable.vue';
 import { Head } from '@inertiajs/vue3';
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useI18n } from '@/i18n';
 
 // Catalog Setup (PLM-CFG-01/02/03/07, SIP-01/02). One operator-facing surface to set up the
@@ -86,12 +91,8 @@ async function createVoicePlan() {
 }
 async function voicePlanAction(p, action) { try { await window.axios.post(`/api/plm/voice-tariff-plans/${p.tariff_plan_id}/${action}`); flash(t('Done')); await loadVoice(); } catch (e) { fail(e); } }
 
-const badge = (s) => ({
-    ACTIVE: 'bg-green-100 text-green-700', DRAFT: 'bg-gray-100 text-gray-600', READY_FOR_REVIEW: 'bg-blue-100 text-blue-700',
-    PENDING_APPROVAL: 'bg-amber-100 text-amber-700', APPROVED: 'bg-op-soft text-op', SCHEDULED: 'bg-cyan-100 text-cyan-700',
-    REJECTED: 'bg-red-100 text-red-600', SUSPENDED: 'bg-amber-100 text-amber-700', END_OF_SALE: 'bg-orange-100 text-orange-700',
-    RETIRED: 'bg-red-50 text-red-500',
-}[s] ?? 'bg-gray-100 text-gray-600');
+// summary tiles per tab — counts straight off the loaded read models.
+const activeCount = (list) => list.filter((x) => x.status === 'ACTIVE').length;
 
 function loadTab() {
     const loaders = { packages: async () => { await loadPackages(); await loadLaunchPlans(); await loadAvailable(); }, services: loadServices, tax: loadTax, wallets: loadWallets, voice: loadVoice };
@@ -99,171 +100,180 @@ function loadTab() {
 }
 function selectTab(key) { tab.value = key; loadTab(); }
 onMounted(loadTab);
+
+const taxColumns = [
+    { key: 'code', label: 'Code' }, { key: 'rate', label: 'Rate' },
+    { key: 'base_method', label: 'Base' }, { key: 'effective_from', label: 'From' }, { key: 'effective_until', label: 'Until' },
+];
 </script>
 
 <template>
     <Head :title="t('Catalog Setup')" />
     <AuthenticatedLayout>
-        <template #header><h2 class="text-xl font-semibold text-gray-800">{{ t('Catalog Setup') }}</h2></template>
+        <template #header>
+            <PageHeader :title="t('Catalog')" :crumbs="[{ label: 'Catalog' }, { label: 'Setup' }]" />
+        </template>
 
-        <div class="py-6 mx-auto max-w-7xl sm:px-6 lg:px-8 space-y-4">
-            <p v-if="notice" class="p-2 bg-green-100 text-green-700 rounded text-sm">{{ notice }}</p>
-            <p v-if="error" class="p-2 bg-red-100 text-red-700 rounded text-sm">{{ error }}</p>
+        <div class="mx-auto max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+            <p v-if="notice" class="rounded-lg bg-emerald-50 p-2 text-sm text-emerald-700 ring-1 ring-emerald-100">{{ notice }}</p>
+            <p v-if="error" class="rounded-lg bg-red-50 p-2 text-sm text-red-700 ring-1 ring-red-100">{{ error }}</p>
 
-            <div class="flex gap-2 flex-wrap">
+            <!-- segmented tabs -->
+            <div class="inline-flex flex-wrap gap-1 rounded-xl bg-gray-100 p-1">
                 <button v-for="[key, label] in tabs" :key="key" @click="selectTab(key)"
-                    :class="tab === key ? 'bg-op text-white' : 'bg-white'"
-                    class="px-3 py-1 rounded border text-sm">{{ t(label) }}</button>
+                    class="rounded-lg px-3 py-1.5 text-sm font-medium transition"
+                    :class="tab === key ? 'bg-white text-op shadow-sm' : 'text-gray-500 hover:text-gray-700'">{{ t(label) }}</button>
             </div>
 
             <!-- PACKAGES -->
-            <div v-if="tab === 'packages'" class="space-y-4">
-                <div class="bg-white rounded shadow p-4">
-                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('New package (SIP-01)') }}</div>
-                    <div class="flex gap-2 flex-wrap">
-                        <input v-model="newPackage.code" :placeholder="t('Package code')" class="border rounded px-2 py-1 text-sm" />
-                        <input v-model="newPackage.name" :placeholder="t('Display name')" class="border rounded px-2 py-1 text-sm flex-1" />
-                        <input v-model.number="newPackage.billing_frequency_days" type="number" :placeholder="t('Billing days')" class="border rounded px-2 py-1 text-sm w-28" />
-                        <button @click="createPackage" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Create') }}</button>
-                    </div>
+            <div v-if="tab === 'packages'" class="space-y-5">
+                <div class="grid grid-cols-3 gap-4">
+                    <StatCard :label="t('Packages')" :value="packages.length" tone="indigo" :sub="t(':n active', { n: activeCount(packages) })" />
+                    <StatCard :label="t('Sellable now')" :value="available.length" tone="emerald" />
+                    <StatCard :label="t('In launch pipeline')" :value="launchPlans.length" :tone="launchPlans.length ? 'amber' : 'gray'" />
                 </div>
 
-                <div class="grid grid-cols-12 gap-4">
-                    <div class="col-span-6 bg-white rounded shadow p-4">
-                        <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('Packages') }}</div>
-                        <div v-for="p in packages" :key="p.id" class="flex justify-between items-center text-sm border-t py-1">
-                            <span class="font-mono text-xs">{{ p.code }}</span>
-                            <span class="flex-1 px-2 truncate">{{ p.name }}</span>
-                            <span class="text-xs px-1.5 py-0.5 rounded" :class="badge(p.status)">{{ p.status }}</span>
-                        </div>
-                        <div v-if="!packages.length" class="text-sm text-gray-400">{{ t('No packages yet.') }}</div>
+                <Panel :title="t('New package (SIP-01)')">
+                    <div class="flex flex-wrap gap-2">
+                        <input v-model="newPackage.code" :placeholder="t('Package code')" class="rounded-md border-gray-300 text-sm" />
+                        <input v-model="newPackage.name" :placeholder="t('Display name')" class="flex-1 rounded-md border-gray-300 text-sm" />
+                        <input v-model.number="newPackage.billing_frequency_days" type="number" :placeholder="t('Billing days')" class="w-28 rounded-md border-gray-300 text-sm" />
+                        <button @click="createPackage" class="rounded-md bg-op px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">{{ t('Create') }}</button>
                     </div>
+                </Panel>
 
-                    <div class="col-span-6 bg-white rounded shadow p-4">
-                        <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('Launch pipeline (SIP-02)') }}</div>
-                        <div v-for="lp in launchPlans" :key="lp.launch_plan_id" class="text-sm border-t py-1">
-                            <div class="flex justify-between items-center">
-                                <span class="font-mono text-xs">{{ lp.package_code }}</span>
-                                <span class="text-xs px-1.5 py-0.5 rounded" :class="badge(lp.status)">{{ lp.status }}</span>
+                <div class="grid grid-cols-12 gap-5">
+                    <div class="col-span-12 lg:col-span-6">
+                        <Panel :title="t('Packages')">
+                            <DataTable :columns="[{ key: 'code', label: 'Code' }, { key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }]" :rows="packages" row-key="id" empty="No packages yet.">
+                                <template #cell-code="{ value }"><span class="font-mono text-xs">{{ value }}</span></template>
+                                <template #cell-status="{ value }"><StatusBadge :status="value" /></template>
+                            </DataTable>
+                        </Panel>
+                    </div>
+                    <div class="col-span-12 lg:col-span-6">
+                        <Panel :title="t('Launch pipeline (SIP-02)')">
+                            <div v-for="lp in launchPlans" :key="lp.launch_plan_id" class="border-b border-gray-50 py-2 last:border-0">
+                                <div class="flex items-center justify-between">
+                                    <span class="font-mono text-xs">{{ lp.package_code }}</span>
+                                    <StatusBadge :status="lp.status" />
+                                </div>
+                                <div class="mt-1 flex gap-1">
+                                    <button @click="planAction(lp, 'validate')" class="rounded border px-2 py-0.5 text-xs hover:bg-gray-50">{{ t('Validate') }}</button>
+                                    <button @click="planAction(lp, 'submit-review')" class="rounded border px-2 py-0.5 text-xs hover:bg-gray-50">{{ t('Submit review') }}</button>
+                                    <button @click="planAction(lp, 'activate')" class="rounded border px-2 py-0.5 text-xs hover:bg-gray-50">{{ t('Activate') }}</button>
+                                </div>
                             </div>
-                            <div class="flex gap-1 mt-1">
-                                <button @click="planAction(lp, 'validate')" class="text-xs px-2 py-0.5 border rounded">{{ t('Validate') }}</button>
-                                <button @click="planAction(lp, 'submit-review')" class="text-xs px-2 py-0.5 border rounded">{{ t('Submit review') }}</button>
-                                <button @click="planAction(lp, 'activate')" class="text-xs px-2 py-0.5 border rounded">{{ t('Activate') }}</button>
-                            </div>
-                        </div>
-                        <div v-if="!launchPlans.length" class="text-sm text-gray-400">{{ t('No launch plans.') }}</div>
+                            <p v-if="!launchPlans.length" class="text-sm text-gray-400">{{ t('No launch plans.') }}</p>
+                        </Panel>
                     </div>
                 </div>
 
-                <div class="bg-white rounded shadow p-4">
-                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('Sellable packages (read model)') }}</div>
-                    <div v-for="a in available" :key="a.packageVersionId" class="flex justify-between text-sm border-t py-1">
-                        <span class="font-mono text-xs">{{ a.packageCode }}</span>
-                        <span class="flex-1 px-2 truncate">{{ a.displayName }}</span>
-                        <span>{{ money(a.price) }}</span>
-                    </div>
-                    <div v-if="!available.length" class="text-sm text-gray-400">{{ t('No sellable packages.') }}</div>
-                </div>
+                <Panel :title="t('Sellable packages (read model)')">
+                    <DataTable :columns="[{ key: 'packageCode', label: 'Code' }, { key: 'displayName', label: 'Name' }, { key: 'price', label: 'Price', align: 'right' }]" :rows="available" row-key="packageVersionId" empty="No sellable packages.">
+                        <template #cell-packageCode="{ value }"><span class="font-mono text-xs">{{ value }}</span></template>
+                        <template #cell-price="{ value }"><span class="tabular-nums">{{ money(value) }}</span></template>
+                    </DataTable>
+                </Panel>
             </div>
 
             <!-- SERVICES -->
-            <div v-if="tab === 'services'" class="bg-white rounded shadow p-4 space-y-3">
-                <div class="flex gap-2">
-                    <input v-model="newService.code" :placeholder="t('Service code')" class="border rounded px-2 py-1 text-sm" />
-                    <input v-model="newService.name" :placeholder="t('Service name')" class="border rounded px-2 py-1 text-sm flex-1" />
-                    <button @click="createService" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Create') }}</button>
+            <div v-if="tab === 'services'" class="space-y-5">
+                <div class="grid grid-cols-3 gap-4">
+                    <StatCard :label="t('Services')" :value="services.length" tone="indigo" :sub="t(':n active', { n: activeCount(services) })" />
                 </div>
-                <div v-for="s in services" :key="s.id" class="flex justify-between text-sm border-t py-1">
-                    <span class="font-mono text-xs">{{ s.code }}</span>
-                    <span class="flex-1 px-2 truncate">{{ s.name }}</span>
-                    <span class="text-xs px-1.5 py-0.5 rounded" :class="badge(s.status)">{{ s.status }}</span>
-                </div>
-                <div v-if="!services.length" class="text-sm text-gray-400">{{ t('No services yet.') }}</div>
+                <Panel :title="t('Services (PLM-CFG-01)')">
+                    <div class="mb-3 flex gap-2">
+                        <input v-model="newService.code" :placeholder="t('Service code')" class="rounded-md border-gray-300 text-sm" />
+                        <input v-model="newService.name" :placeholder="t('Service name')" class="flex-1 rounded-md border-gray-300 text-sm" />
+                        <button @click="createService" class="rounded-md bg-op px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">{{ t('Create') }}</button>
+                    </div>
+                    <DataTable :columns="[{ key: 'code', label: 'Code' }, { key: 'name', label: 'Name' }, { key: 'status', label: 'Status' }]" :rows="services" row-key="id" empty="No services yet.">
+                        <template #cell-code="{ value }"><span class="font-mono text-xs">{{ value }}</span></template>
+                        <template #cell-status="{ value }"><StatusBadge :status="value" /></template>
+                    </DataTable>
+                </Panel>
             </div>
 
             <!-- TAX -->
-            <div v-if="tab === 'tax'" class="grid grid-cols-12 gap-4">
-                <div class="col-span-7 bg-white rounded shadow p-4 space-y-3">
-                    <div class="text-xs font-semibold text-gray-500 uppercase">{{ t('Tax rules (effective-dated versions)') }}</div>
-                    <div class="flex gap-2 flex-wrap">
-                        <input v-model="newRule.code" :placeholder="t('Rule code')" class="border rounded px-2 py-1 text-sm" />
-                        <input v-model="newRule.name" :placeholder="t('Rule name')" class="border rounded px-2 py-1 text-sm flex-1" />
-                        <input v-model.number="newRule.rate" type="number" step="0.0001" :placeholder="t('Rate (0–1)')" class="border rounded px-2 py-1 text-sm w-24" />
-                        <select v-model="newRule.base_method" class="border rounded px-2 py-1 text-sm">
-                            <option value="BASE">{{ t('BASE') }}</option>
-                            <option value="BASE_PLUS_PRIOR">{{ t('BASE_PLUS_PRIOR') }}</option>
-                        </select>
-                        <button @click="createRule" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Save') }}</button>
-                    </div>
-                    <table class="w-full text-sm">
-                        <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="py-1">{{ t('Code') }}</th><th>{{ t('Rate') }}</th><th>{{ t('Base') }}</th><th>{{ t('From') }}</th><th>{{ t('Until') }}</th></tr></thead>
-                        <tbody>
-                            <tr v-for="r in taxRules" :key="r.tax_rule_id" class="border-t">
-                                <td class="py-1 font-mono text-xs">{{ r.code }}</td>
-                                <td>{{ r.rate }}</td>
-                                <td class="text-xs">{{ r.base_method }}</td>
-                                <td class="text-xs">{{ r.effective_from ?? '—' }}</td>
-                                <td class="text-xs">{{ r.effective_until ?? '—' }}</td>
-                            </tr>
-                        </tbody>
-                    </table>
+            <div v-if="tab === 'tax'" class="grid grid-cols-12 gap-5">
+                <div class="col-span-12 lg:col-span-7">
+                    <Panel :title="t('Tax rules (effective-dated versions)')">
+                        <div class="mb-3 flex flex-wrap gap-2">
+                            <input v-model="newRule.code" :placeholder="t('Rule code')" class="rounded-md border-gray-300 text-sm" />
+                            <input v-model="newRule.name" :placeholder="t('Rule name')" class="flex-1 rounded-md border-gray-300 text-sm" />
+                            <input v-model.number="newRule.rate" type="number" step="0.0001" :placeholder="t('Rate (0–1)')" class="w-24 rounded-md border-gray-300 text-sm" />
+                            <select v-model="newRule.base_method" class="rounded-md border-gray-300 text-sm">
+                                <option value="BASE">{{ t('BASE') }}</option>
+                                <option value="BASE_PLUS_PRIOR">{{ t('BASE_PLUS_PRIOR') }}</option>
+                            </select>
+                            <button @click="createRule" class="rounded-md bg-op px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">{{ t('Save') }}</button>
+                        </div>
+                        <DataTable :columns="taxColumns" :rows="taxRules" row-key="tax_rule_id" empty="No tax rules.">
+                            <template #cell-code="{ value }"><span class="font-mono text-xs">{{ value }}</span></template>
+                        </DataTable>
+                    </Panel>
                 </div>
-                <div class="col-span-5 bg-white rounded shadow p-4">
-                    <div class="text-xs font-semibold text-gray-500 uppercase mb-2">{{ t('Tax groups') }}</div>
-                    <div v-for="g in taxGroups" :key="g.tax_group_id" class="text-sm border-t py-1">
-                        <span class="font-mono text-xs">{{ g.code }}</span>
-                        <span class="text-xs text-gray-400 ml-2">{{ (g.order_within_group ?? []).join(' → ') }}</span>
-                    </div>
-                    <div v-if="!taxGroups.length" class="text-sm text-gray-400">{{ t('No tax groups.') }}</div>
+                <div class="col-span-12 lg:col-span-5">
+                    <Panel :title="t('Tax groups')">
+                        <div v-for="g in taxGroups" :key="g.tax_group_id" class="border-b border-gray-50 py-1.5 text-sm last:border-0">
+                            <span class="font-mono text-xs">{{ g.code }}</span>
+                            <span class="ml-2 text-xs text-gray-400">{{ (g.order_within_group ?? []).join(' → ') }}</span>
+                        </div>
+                        <p v-if="!taxGroups.length" class="text-sm text-gray-400">{{ t('No tax groups.') }}</p>
+                    </Panel>
                 </div>
             </div>
 
             <!-- WALLETS -->
-            <div v-if="tab === 'wallets'" class="bg-white rounded shadow p-4 space-y-3">
-                <div class="flex gap-2 flex-wrap">
-                    <input v-model="newWallet.code" :placeholder="t('Wallet code')" class="border rounded px-2 py-1 text-sm" />
-                    <input v-model="newWallet.description" :placeholder="t('Description')" class="border rounded px-2 py-1 text-sm flex-1" />
-                    <input v-model="newWallet.wallet_type_code" :placeholder="t('Type')" class="border rounded px-2 py-1 text-sm w-28" />
-                    <input v-model="newWallet.currency" :placeholder="t('Currency')" class="border rounded px-2 py-1 text-sm w-20" />
-                    <select v-model="newWallet.applicability" class="border rounded px-2 py-1 text-sm">
-                        <option value="ANY">{{ t('ANY') }}</option>
-                        <option value="PREPAID_ONLY">{{ t('PREPAID_ONLY') }}</option>
-                        <option value="POSTPAID_ONLY">{{ t('POSTPAID_ONLY') }}</option>
-                    </select>
-                    <button @click="createWallet" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Create') }}</button>
-                </div>
-                <div v-for="w in wallets" :key="w.wallet_catalog_id" class="flex justify-between items-center text-sm border-t py-1">
-                    <span class="font-mono text-xs">{{ w.code }}</span>
-                    <span class="flex-1 px-2 truncate">{{ w.description }}</span>
-                    <span class="text-xs px-1.5 py-0.5 rounded" :class="badge(w.status)">{{ w.status }}</span>
-                    <button v-if="w.status === 'DRAFT'" @click="walletAction(w, 'activate')" class="ml-2 text-xs px-2 py-0.5 border rounded">{{ t('Activate') }}</button>
-                    <button v-else-if="w.status === 'ACTIVE'" @click="walletAction(w, 'retire')" class="ml-2 text-xs px-2 py-0.5 border rounded">{{ t('Retire') }}</button>
-                </div>
-                <div v-if="!wallets.length" class="text-sm text-gray-400">{{ t('No wallets yet.') }}</div>
+            <div v-if="tab === 'wallets'">
+                <Panel :title="t('Wallet catalog (PLM-CFG-03)')">
+                    <div class="mb-3 flex flex-wrap gap-2">
+                        <input v-model="newWallet.code" :placeholder="t('Wallet code')" class="rounded-md border-gray-300 text-sm" />
+                        <input v-model="newWallet.description" :placeholder="t('Description')" class="flex-1 rounded-md border-gray-300 text-sm" />
+                        <input v-model="newWallet.wallet_type_code" :placeholder="t('Type')" class="w-28 rounded-md border-gray-300 text-sm" />
+                        <input v-model="newWallet.currency" :placeholder="t('Currency')" class="w-20 rounded-md border-gray-300 text-sm" />
+                        <select v-model="newWallet.applicability" class="rounded-md border-gray-300 text-sm">
+                            <option value="ANY">{{ t('ANY') }}</option>
+                            <option value="PREPAID_ONLY">{{ t('PREPAID_ONLY') }}</option>
+                            <option value="POSTPAID_ONLY">{{ t('POSTPAID_ONLY') }}</option>
+                        </select>
+                        <button @click="createWallet" class="rounded-md bg-op px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">{{ t('Create') }}</button>
+                    </div>
+                    <DataTable :columns="[{ key: 'code', label: 'Code' }, { key: 'description', label: 'Description' }, { key: 'status', label: 'Status' }]" :rows="wallets" row-key="wallet_catalog_id" empty="No wallets yet.">
+                        <template #cell-code="{ value }"><span class="font-mono text-xs">{{ value }}</span></template>
+                        <template #cell-status="{ value }"><StatusBadge :status="value" /></template>
+                        <template #row-actions="{ row }">
+                            <button v-if="row.status === 'DRAFT'" @click="walletAction(row, 'activate')" class="rounded border px-2 py-0.5 text-xs hover:bg-gray-50">{{ t('Activate') }}</button>
+                            <button v-else-if="row.status === 'ACTIVE'" @click="walletAction(row, 'retire')" class="rounded border px-2 py-0.5 text-xs hover:bg-gray-50">{{ t('Retire') }}</button>
+                        </template>
+                    </DataTable>
+                </Panel>
             </div>
 
             <!-- VOICE TARIFFS -->
-            <div v-if="tab === 'voice'" class="bg-white rounded shadow p-4 space-y-3">
-                <div class="flex gap-2 flex-wrap">
-                    <input v-model="newVoicePlan.tariff_plan_code" :placeholder="t('Plan code')" class="border rounded px-2 py-1 text-sm" />
-                    <input v-model="newVoicePlan.display_name" :placeholder="t('Display name')" class="border rounded px-2 py-1 text-sm flex-1" />
-                    <select v-model="newVoicePlan.billing_mode" class="border rounded px-2 py-1 text-sm">
-                        <option value="BOTH">{{ t('BOTH') }}</option>
-                        <option value="PREPAID">{{ t('PREPAID') }}</option>
-                        <option value="POSTPAID">{{ t('POSTPAID') }}</option>
-                    </select>
-                    <input v-model="newVoicePlan.currency_code" :placeholder="t('Currency')" class="border rounded px-2 py-1 text-sm w-20" />
-                    <button @click="createVoicePlan" class="px-3 py-1 bg-op text-white rounded text-sm">{{ t('Create') }}</button>
-                </div>
-                <div v-for="p in voicePlans" :key="p.tariff_plan_id" class="flex justify-between items-center text-sm border-t py-1">
-                    <span class="font-mono text-xs">{{ p.tariff_plan_code }}</span>
-                    <span class="flex-1 px-2 truncate">{{ p.display_name }}</span>
-                    <span class="text-xs px-1.5 py-0.5 rounded" :class="badge(p.status)">{{ p.status }}</span>
-                    <button v-if="p.status === 'DRAFT'" @click="voicePlanAction(p, 'activate')" class="ml-2 text-xs px-2 py-0.5 border rounded">{{ t('Activate') }}</button>
-                    <button v-else-if="p.status === 'ACTIVE'" @click="voicePlanAction(p, 'retire')" class="ml-2 text-xs px-2 py-0.5 border rounded">{{ t('Retire') }}</button>
-                </div>
-                <div v-if="!voicePlans.length" class="text-sm text-gray-400">{{ t('No voice tariff plans.') }}</div>
+            <div v-if="tab === 'voice'">
+                <Panel :title="t('Voice tariff plans (PLM-CFG-07)')">
+                    <div class="mb-3 flex flex-wrap gap-2">
+                        <input v-model="newVoicePlan.tariff_plan_code" :placeholder="t('Plan code')" class="rounded-md border-gray-300 text-sm" />
+                        <input v-model="newVoicePlan.display_name" :placeholder="t('Display name')" class="flex-1 rounded-md border-gray-300 text-sm" />
+                        <select v-model="newVoicePlan.billing_mode" class="rounded-md border-gray-300 text-sm">
+                            <option value="BOTH">{{ t('BOTH') }}</option>
+                            <option value="PREPAID">{{ t('PREPAID') }}</option>
+                            <option value="POSTPAID">{{ t('POSTPAID') }}</option>
+                        </select>
+                        <input v-model="newVoicePlan.currency_code" :placeholder="t('Currency')" class="w-20 rounded-md border-gray-300 text-sm" />
+                        <button @click="createVoicePlan" class="rounded-md bg-op px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">{{ t('Create') }}</button>
+                    </div>
+                    <DataTable :columns="[{ key: 'tariff_plan_code', label: 'Code' }, { key: 'display_name', label: 'Name' }, { key: 'status', label: 'Status' }]" :rows="voicePlans" row-key="tariff_plan_id" empty="No voice tariff plans.">
+                        <template #cell-tariff_plan_code="{ value }"><span class="font-mono text-xs">{{ value }}</span></template>
+                        <template #cell-status="{ value }"><StatusBadge :status="value" /></template>
+                        <template #row-actions="{ row }">
+                            <button v-if="row.status === 'DRAFT'" @click="voicePlanAction(row, 'activate')" class="rounded border px-2 py-0.5 text-xs hover:bg-gray-50">{{ t('Activate') }}</button>
+                            <button v-else-if="row.status === 'ACTIVE'" @click="voicePlanAction(row, 'retire')" class="rounded border px-2 py-0.5 text-xs hover:bg-gray-50">{{ t('Retire') }}</button>
+                        </template>
+                    </DataTable>
+                </Panel>
             </div>
         </div>
     </AuthenticatedLayout>
