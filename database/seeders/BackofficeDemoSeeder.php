@@ -25,6 +25,9 @@ class BackofficeDemoSeeder extends Seeder
         Context::setOperatorCode(config('sophix.default_operator', 'WIK'));
         $op = Context::operatorCode();
 
+        // Demo stock (locations + balances) so the OSR/inventory surfaces have data.
+        $this->safe('stock', fn () => $this->call(\Modules\Osr\Database\Seeders\OsrDemoSeeder::class));
+
         // Base living customer (reuse the canonical journey seeder).
         $this->safe('base journey', fn () => $this->call(DemoJourneySeeder::class));
 
@@ -73,18 +76,47 @@ class BackofficeDemoSeeder extends Seeder
             }
         });
 
-        // A handful of tickets in varied states.
-        $this->safe('tickets', function () {
+        // A handful of tickets in varied states. The category must exist in the WIK
+        // ticket category catalog (TicketCategorySeeder) so routing/SLA defaults resolve,
+        // and each ticket carries a customer_id to satisfy the TCK-2 entity-link rule.
+        $this->safe('tickets', function () use ($activeSub) {
             $cust = Customer::query()->where('operator_code', Context::operatorCode())->first();
             if (! $cust) {
                 return;
             }
             $svc = app(\Modules\Ticketing\Services\TicketService::class);
-            foreach ([['Slow speeds in the evening', 'SERVICE_REQUEST'], ['Billing query on last invoice', 'BILLING'], ['No internet since morning', 'INCIDENT']] as [$subject, $cat]) {
+            $tickets = [
+                ['No internet since morning', 'NO_INTERNET'],
+                ['Billing query on last invoice', 'BILLING_DISPUTE'],
+                ['Slow speeds in the evening', 'TECHNICAL'],
+                ['How do I upgrade my package?', 'GENERAL_INQUIRY'],
+            ];
+            foreach ($tickets as [$subject, $cat]) {
                 $this->safe("ticket {$subject}", fn () => $svc->create([
-                    'category' => $cat, 'subject' => $subject, 'customer_id' => $cust->customer_id, 'channel' => 'PHONE',
+                    'category' => $cat, 'subject' => $subject,
+                    'customer_id' => $cust->customer_id,
+                    'subscription_id' => $activeSub?->subscription_id,
+                    'opened_by' => 'demo-seed',
                 ]));
             }
+        });
+
+        // One demo invoice off the active subscription so the billing surfaces (invoices,
+        // account ledger) open with data. Uses InvoiceService::generate directly — the full
+        // rating/cycle pipeline is out of scope for a demo seed.
+        $this->safe('invoice', function () use ($activeSub) {
+            if (! $activeSub) {
+                return;
+            }
+            app(\Modules\Billing\Services\InvoiceService::class)->generate(
+                [
+                    'account_id' => $activeSub->account_id,
+                    'customer_id' => $activeSub->customer_id,
+                    'subscription_id' => $activeSub->subscription_id,
+                    'currency' => $activeSub->currency ?? 'KES',
+                ],
+                [['description' => 'Fiber Home 100 — monthly subscription', 'quantity' => 1, 'unit_price' => 3000.00]],
+            );
         });
 
         // Project everything into the reporting mart + activity feed.

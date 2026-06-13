@@ -72,6 +72,9 @@ class DatabaseSeeder extends Seeder
             AsrPolicySeeder::class,
             TicketCategorySeeder::class,
             TemplateCatalogSeeder::class,
+            // Demo-friendly sellable catalog (services, packages incl. pkg_fiber_100m,
+            // bundles, promo) so catalog surfaces and the demo journeys have real data.
+            \Modules\Catalog\Database\Seeders\CatalogDemoSeeder::class,
         ]);
 
         $admin = User::query()->firstOrCreate(
