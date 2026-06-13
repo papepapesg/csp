@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# Recreate Caddy with the Let's Encrypt pin + valid ACME email, wait for the cert, verify HTTPS.
+# Properly wait for Caddy's Let's Encrypt cert, then diagnose + verify HTTPS per subdomain.
 set -uxo pipefail
 BASE=207.180.209.83.sslip.io
-grep -q '^ACME_EMAIL=' .env || echo 'ACME_EMAIL=papepapes@gmail.com' >> .env
-docker compose up -d --force-recreate caddy
-echo "=== waiting for a trusted cert on app.$BASE ..."
-for i in $(seq 1 40); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' "https://app.$BASE/" --max-time 8 || echo 000)
-  echo "  attempt $i: $code"; [ "$code" != "000" ] && break; sleep 5
+docker compose up -d caddy
+echo "=== polling for a working cert on app.$BASE (up to ~4 min) ..."
+for i in $(seq 1 48); do
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "https://app.$BASE/")
+  code=${code:-000}
+  echo "  attempt $i: $code"
+  [ "$code" != "000" ] && break
+  sleep 5
 done
-echo "=== caddy logs tail:"; docker compose logs caddy --tail 30 2>&1 | tail -30
-echo "=== per-subdomain HTTPS (verify=0 means a trusted Let's Encrypt cert):"
-for h in app crm ops catalog settings reporting templates brand; do
-  echo -n "https://$h.$BASE -> "; curl -s -o /dev/null -w '%{http_code} verify=%{ssl_verify_result}\n' "https://$h.$BASE/" --max-time 12 || echo fail
+echo "=== caddy ACME logs:"
+docker compose logs caddy 2>&1 | grep -iE 'acme|challenge|certificate|obtain|error|http-01|tls' | tail -30
+echo "=== per-subdomain HTTPS (verify=0 = trusted LE cert):"
+for h in app crm ops catalog settings; do
+  echo -n "https://$h.$BASE -> "; curl -s -o /dev/null -w '%{http_code} verify=%{ssl_verify_result}\n' --max-time 12 "https://$h.$BASE/"
 done
 echo OPS_DONE
