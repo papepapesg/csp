@@ -21,6 +21,7 @@ use Modules\Ilm\Database\Factories\CustomerFactory;
 class Customer extends Model
 {
     use HasFactory;
+    use \App\Foundation\Tenancy\BelongsToOperator;
 
     public const KYC_PENDING = 'PENDING';
 

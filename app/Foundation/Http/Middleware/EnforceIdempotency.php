@@ -5,6 +5,7 @@ namespace App\Foundation\Http\Middleware;
 use App\Foundation\Errors\ErrorCode;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Idempotency\IdempotencyKey;
+use App\Foundation\Support\Context;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -31,9 +32,11 @@ class EnforceIdempotency
         }
 
         $hash = hash('sha256', $request->method().'|'.$request->path().'|'.$request->getContent());
-        $operator = $request->header('X-Operator-Code');
+        // Server-derived operator (never client header): keys are scoped per operator so the
+        // same key from two tenants can't collide or replay one tenant's response to another.
+        $operator = Context::operatorCode();
 
-        $existing = IdempotencyKey::query()->where('key', $key)->first();
+        $existing = IdempotencyKey::query()->where('operator_code', $operator)->where('key', $key)->first();
 
         if ($existing) {
             if ($existing->request_hash !== $hash) {
@@ -79,16 +82,15 @@ class EnforceIdempotency
         /** @var Response $response */
         $response = $next($request);
 
-        if ($response->getStatusCode() < 500) {
-            DB::table('idempotency_keys')->where('key', $key)->update([
-                'response_status' => $response->getStatusCode(),
-                'response_body' => $response->getContent(),
-                'updated_at' => now(),
-            ]);
-        } else {
-            // Allow retry of server errors by releasing the reservation.
-            IdempotencyKey::query()->where('key', $key)->delete();
-        }
+        // Persist the outcome for EVERY completed response, including 5xx. The business write may
+        // have committed in its own transaction before a later 5xx, so releasing the key on error
+        // would let a retry re-execute and double-apply money. A retry now replays the same result;
+        // a caller that knows nothing committed must use a fresh key.
+        DB::table('idempotency_keys')->where('operator_code', $operator)->where('key', $key)->update([
+            'response_status' => $response->getStatusCode(),
+            'response_body' => $response->getContent(),
+            'updated_at' => now(),
+        ]);
 
         return $response;
     }

@@ -16,6 +16,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class FulfillmentOrder extends Model
 {
     use HasPrefixedId;
+    use \App\Foundation\Tenancy\BelongsToOperator;
 
     public const CAPTURED = 'CAPTURED';
 

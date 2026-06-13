@@ -31,6 +31,7 @@ class RbacSeeder extends Seeder
         'staff_notification.dispatch', 'staff_notification.manage',
         'ticket.read', 'ticket.create', 'ticket.assign', 'ticket.manage',
         'franchise.manage', 'rbac.manage',
+        'platform.cross_operator',
         'workforce.read', 'workforce.manage',
         'workflow.view', 'workflow.manage',
         'itops.view', 'itops.manage',
@@ -87,5 +88,9 @@ class RbacSeeder extends Seeder
             $grants = $permissions === ['*'] ? self::PERMISSIONS : $permissions;
             $role->syncPermissions(array_map(fn ($p) => Permission::findByName($p, 'web'), $grants));
         }
+
+        // Bust Spatie's permission cache so freshly-seeded permissions/grants are honoured by
+        // can() immediately (otherwise a stale in-process cache hides new permissions).
+        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
     }
 }

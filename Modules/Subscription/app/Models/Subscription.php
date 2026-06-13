@@ -17,6 +17,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Subscription extends Model
 {
     use HasPrefixedId;
+    use \App\Foundation\Tenancy\BelongsToOperator;
 
     public const CREATED = 'CREATED';
 

@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class PaymentLedger extends Model
 {
     use HasPrefixedId;
+    use \App\Foundation\Tenancy\BelongsToOperator;
 
     protected $table = 'payment_ledger';
 

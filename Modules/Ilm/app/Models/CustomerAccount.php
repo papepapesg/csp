@@ -20,6 +20,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class CustomerAccount extends Model
 {
+    use \App\Foundation\Tenancy\BelongsToOperator;
+
     public const STATUS_INACTIVE = 'INACTIVE';
 
     public const STATUS_ACTIVE = 'ACTIVE';

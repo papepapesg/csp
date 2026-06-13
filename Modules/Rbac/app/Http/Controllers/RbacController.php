@@ -65,6 +65,17 @@ class RbacController extends ApiController
     {
         $data = $request->validate(['permissions' => ['present', 'array']]);
         $role = Role::findByName($code, 'web');
+        // A non-super actor cannot grant a permission they do not themselves hold (no escalation).
+        $actor = $request->user();
+        if ($actor && ! $actor->hasRole('SUPER_ADMIN')) {
+            $held = $actor->getAllPermissions()->pluck('name')->all();
+            foreach ($data['permissions'] as $p) {
+                if (! in_array($p, $held, true)) {
+                    throw new \App\Foundation\Errors\DomainException('PERMISSION_CEILING',
+                        "You cannot grant a permission you do not hold: {$p}", 403);
+                }
+            }
+        }
         // Ensure each permission exists (catalog grows at runtime).
         foreach ($data['permissions'] as $p) {
             Permission::findOrCreate($p, 'web');
@@ -99,6 +110,11 @@ class RbacController extends ApiController
     {
         $data = $request->validate(['roles' => ['present', 'array']]);
         $u = User::query()->where('uid', $user)->when(is_numeric($user), fn ($q) => $q->orWhere('id', (int) $user))->firstOrFail();
+
+        // Assignment ceiling (anti-escalation): only SUPER_ADMIN may grant SUPER_ADMIN, and a
+        // non-super actor may only assign roles they themselves hold — no self/lateral escalation.
+        $this->assertWithinGrantCeiling($request->user(), $data['roles']);
+
         $before = $u->getRoleNames()->all();
         $u->syncRoles($data['roles']);
 
@@ -106,6 +122,26 @@ class RbacController extends ApiController
             ['roles' => $before], ['roles' => $data['roles']], $request->user()?->uid);
 
         return ApiResponse::item(['userId' => $u->uid, 'roles' => $u->getRoleNames()]);
+    }
+
+    /**
+     * Anti-escalation ceiling: SUPER_ADMIN may grant anything; a non-super actor may only
+     * assign roles they themselves hold, and may never grant SUPER_ADMIN.
+     *
+     * @param  array<int,string>  $roles
+     */
+    private function assertWithinGrantCeiling(?User $actor, array $roles): void
+    {
+        if ($actor && $actor->hasRole('SUPER_ADMIN')) {
+            return;
+        }
+        $held = $actor ? $actor->getRoleNames()->all() : [];
+        foreach ($roles as $role) {
+            if ($role === 'SUPER_ADMIN' || ! in_array($role, $held, true)) {
+                throw new \App\Foundation\Errors\DomainException('ROLE_CEILING',
+                    "You cannot assign a role you do not hold: {$role}", 403);
+            }
+        }
     }
 
     /** GET /api/rbac/users — the user directory for the role-assignment screen. */

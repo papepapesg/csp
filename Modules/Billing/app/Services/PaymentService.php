@@ -134,11 +134,15 @@ class PaymentService
      */
     public function reverse(PaymentLedger $payment, string $reasonCode, ?string $actor = null): PaymentLedger
     {
-        if ($payment->status === 'REVERSED') {
-            throw DomainException::conflict('Payment is already reversed.');
-        }
-
         return DB::transaction(function () use ($payment, $reasonCode, $actor) {
+            // Serialize concurrent reversals: lock + re-read inside the txn BEFORE the guard, so two
+            // simultaneous reverse() calls can't both pass the status check and double-undo the money.
+            $payment = PaymentLedger::query()->whereKey($payment->payment_id)->lockForUpdate()->firstOrFail();
+            if ($payment->status === 'REVERSED') {
+                throw DomainException::conflict('Payment is already reversed.');
+            }
+            $payment->load('allocations');
+
             $reversedAllocations = [];
             foreach ($payment->allocations as $alloc) {
                 $invoice = Invoice::query()->whereKey($alloc->invoice_id)->lockForUpdate()->first();
@@ -159,7 +163,7 @@ class PaymentService
             // best-effort (debits what's available) and flags the shortfall.
             $partialShortfall = 0.0;
             if ((float) $payment->unallocated_amount > 0) {
-                $credit = AccountCreditBalance::query()->find($payment->account_id);
+                $credit = AccountCreditBalance::query()->whereKey($payment->account_id)->lockForUpdate()->first();
                 $have = (float) ($credit?->balance ?? 0);
                 $want = (float) $payment->unallocated_amount;
                 if ($credit) {
