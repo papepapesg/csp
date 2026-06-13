@@ -1,20 +1,16 @@
 #!/usr/bin/env bash
-# Properly wait for Caddy's Let's Encrypt cert, then diagnose + verify HTTPS per subdomain.
 set -uxo pipefail
 BASE=207.180.209.83.sslip.io
-docker compose up -d caddy
-echo "=== polling for a working cert on app.$BASE (up to ~4 min) ..."
-for i in $(seq 1 48); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "https://app.$BASE/")
-  code=${code:-000}
-  echo "  attempt $i: $code"
-  [ "$code" != "000" ] && break
-  sleep 5
+echo "=== /login asset tags (host + path):"
+curl -sL "https://app.$BASE/login" | grep -oE '(src|href)="[^"]*build[^"]*"' | head -20
+echo "=== inertia root present?"
+curl -sL "https://app.$BASE/login" | grep -oE 'id="app" data-page="[^"]{0,60}' | head -1
+echo "=== asset reachability (same host):"
+for u in $(curl -sL "https://app.$BASE/login" | grep -oE '/build/assets/[A-Za-z0-9_.-]+\.(js|css)' | sort -u | head -6); do
+  echo -n "$u -> "; curl -s -o /dev/null -w '%{http_code} %{content_type}\n' "https://app.$BASE$u"
 done
-echo "=== caddy ACME logs:"
-docker compose logs caddy 2>&1 | grep -iE 'acme|challenge|certificate|obtain|error|http-01|tls' | tail -30
-echo "=== per-subdomain HTTPS (verify=0 = trusted LE cert):"
-for h in app crm ops catalog settings; do
-  echo -n "https://$h.$BASE -> "; curl -s -o /dev/null -w '%{http_code} verify=%{ssl_verify_result}\n' --max-time 12 "https://$h.$BASE/"
-done
+echo "=== APP_URL / ASSET in container env:"
+docker compose exec -T app sh -lc 'php -r "echo \"APP_URL=\".config(\"app.url\").\" ASSET_URL=\".(config(\"app.asset_url\")?:\"-\").PHP_EOL;"'
+echo "=== app logs tail:"
+docker compose logs app --tail 15 2>&1 | tail -15
 echo OPS_DONE
