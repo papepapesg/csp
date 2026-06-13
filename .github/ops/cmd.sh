@@ -14,21 +14,19 @@ curl -s -b "$JAR" -c "$JAR" -X POST "https://app.$BASE/login" \
   -H "X-XSRF-TOKEN: $XSRF" -H "Origin: https://app.$BASE" -H "Referer: https://app.$BASE/login" \
   --data-urlencode 'email=admin@sophix.local' --data-urlencode 'password=password' -o /dev/null -w 'login %{http_code}\n'
 
-H=(-b "$JAR" -H "Origin: https://settings.$BASE" -H "Referer: https://settings.$BASE/" -H 'Accept: application/json')
-echo "=== rbac data:"
-for ep in rbac/roles rbac/permissions rbac/users rbac/audit; do
-  n=$(curl -s "${H[@]}" "https://settings.$BASE/api/$ep" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(len(d.get("items") or d.get("content") or []))' 2>/dev/null)
+H=(-b "$JAR" -H "Origin: https://templates.$BASE" -H "Referer: https://templates.$BASE/" -H 'Accept: application/json')
+echo "=== template data:"
+for ep in admin/templates invoice-templates; do
+  n=$(curl -s "${H[@]}" "https://templates.$BASE/api/$ep" | python3 -c 'import sys,json;print(len(json.load(sys.stdin).get("items") or []))' 2>/dev/null)
   echo "  $ep -> ${n:-ERR}"
 done
 
-echo "=== settings pages render:"
+echo "=== page renders:"
 cat >/tmp/comp.py <<'PY'
 import sys,json,html,re
 m=re.search(r'data-page="([^"]+)"', sys.stdin.read())
 print("component:", json.loads(html.unescape(m.group(1)))["component"] if m else "NONE")
 PY
-for path in admin/rbac itops admin; do
-  echo -n "  settings.$BASE/$path -> "; curl -sL -b "$JAR" "https://settings.$BASE/$path" | python3 /tmp/comp.py
-done
+echo -n "  templates.$BASE/templates/studio -> "; curl -sL -b "$JAR" "https://templates.$BASE/templates/studio" | python3 /tmp/comp.py
 rm -f "$JAR" /tmp/comp.py
 echo OPS_DONE
