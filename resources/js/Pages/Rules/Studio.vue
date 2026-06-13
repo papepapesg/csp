@@ -1,5 +1,6 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+import PageHeader from '@/Components/Bss/PageHeader.vue';
 import { Head } from '@inertiajs/vue3';
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from '@/i18n';
@@ -15,6 +16,17 @@ const error = ref(null);
 const notice = ref(null);
 
 const ops = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'truthy', 'falsy', 'in'];
+// Plain-language meaning of each comparison operator and hit policy, surfaced in the help panel
+// so a non-engineer building a table knows exactly what each element does.
+const opHelp = {
+    eq: 'equals', neq: 'not equal to', gt: 'greater than', gte: 'greater than or equal',
+    lt: 'less than', lte: 'less than or equal', truthy: 'is set / true', falsy: 'is empty / false',
+    in: 'is one of (comma-separated list)',
+};
+const hitPolicyHelp = {
+    FIRST: 'Stops at the first matching rule and returns its output — order matters.',
+    COLLECT: 'Evaluates every rule and collects all matching outputs.',
+};
 
 const blank = () => ({
     rule_set: '', name: '', operator_code: '', hit_policy: 'FIRST',
@@ -97,7 +109,7 @@ onMounted(load);
     <Head :title="t('Rules Studio')" />
     <AuthenticatedLayout>
         <template #header>
-            <h2 class="text-xl font-semibold leading-tight text-gray-800">{{ t('Rules Studio (FOUNDATION_DROOLS)') }}</h2>
+            <PageHeader :title="t('Rules Studio')" :crumbs="[{ label: 'Studios' }, { label: 'Rules' }]" />
         </template>
 
         <div class="py-6">
@@ -163,6 +175,20 @@ onMounted(load);
                             <textarea v-model="test.facts" rows="5" class="w-full rounded border-gray-300 font-mono text-xs"></textarea>
                             <button class="mt-2 w-full rounded bg-gray-800 py-1.5 text-sm text-white" @click="runTest">{{ t('Evaluate') }}</button>
                             <div v-if="test.result" class="mt-2 rounded bg-gray-900 p-2 font-mono text-xs text-green-300">{{ JSON.stringify(test.result, null, 2) }}</div>
+                        </div>
+
+                        <!-- What it does: element legend so a non-engineer can read/build a table -->
+                        <div class="mt-4 rounded-lg bg-white p-4 shadow-sm ring-1 ring-gray-100">
+                            <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-op">{{ t('How a decision table works') }}</div>
+                            <p class="mb-3 text-xs leading-relaxed text-gray-600">{{ t('Each rule is WHEN (all conditions true) → THEN (this output). The hit policy decides what happens when several rules match. If nothing matches, the default output is returned.') }}</p>
+                            <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">{{ t('Hit policy') }}</div>
+                            <ul class="mb-3 space-y-0.5 text-xs text-gray-600">
+                                <li v-for="(d, k) in hitPolicyHelp" :key="k"><code class="text-op">{{ k }}</code> — {{ t(d) }}</li>
+                            </ul>
+                            <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">{{ t('Operators') }}</div>
+                            <ul class="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs text-gray-600">
+                                <li v-for="(d, k) in opHelp" :key="k"><code class="text-op">{{ k }}</code> — {{ t(d) }}</li>
+                            </ul>
                         </div>
                     </div>
                 </div>

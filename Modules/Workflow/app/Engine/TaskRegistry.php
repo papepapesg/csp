@@ -38,12 +38,18 @@ class TaskRegistry
         return array_keys($this->handlers);
     }
 
-    /** @return array<int,array{topic:string,label:string}> palette for the studio */
+    /** @return array<int,array{topic:string,label:string,description:string}> palette for the studio */
     public function palette(): array
     {
         $items = [];
         foreach ($this->handlers as $topic => $class) {
-            $items[] = ['topic' => $topic, 'label' => app($class)->label()];
+            $handler = app($class);
+            // A handler MAY expose description() to explain "what this step is for"; otherwise we
+            // derive an honest default from its label + topic so the inspector always has copy.
+            $description = method_exists($handler, 'description')
+                ? $handler->description()
+                : sprintf("Runs the '%s' step (service task '%s'). Idempotent — the engine may retry it.", $handler->label(), $topic);
+            $items[] = ['topic' => $topic, 'label' => $handler->label(), 'description' => $description];
         }
         usort($items, fn ($a, $b) => $a['label'] <=> $b['label']);
 

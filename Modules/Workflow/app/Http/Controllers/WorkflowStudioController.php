@@ -22,13 +22,21 @@ class WorkflowStudioController extends ApiController
     /** GET /api/workflow/palette — reusable steps available to drag onto a flow. */
     public function palette(): JsonResponse
     {
+        // Each flow element carries a plain-language description ("what is this node for") so the
+        // studio's inspector can explain it to a non-engineer designing a flow.
         $nodeTypes = [
-            ['type' => 'startEvent', 'label' => 'Start'],
-            ['type' => 'endEvent', 'label' => 'End'],
-            ['type' => 'exclusiveGateway', 'label' => 'Gateway (decision)'],
-            ['type' => 'userTask', 'label' => 'Human task'],
-            ['type' => 'timer', 'label' => 'Timer'],
-            ['type' => 'messageCatch', 'label' => 'Wait for message'],
+            ['type' => 'startEvent', 'label' => 'Start', 'category' => 'Events',
+                'description' => 'Where the process begins. A flow has exactly one start; the engine creates an instance here when the process is triggered.'],
+            ['type' => 'endEvent', 'label' => 'End', 'category' => 'Events',
+                'description' => 'Marks a path as finished. When every active path reaches an end, the process instance completes.'],
+            ['type' => 'exclusiveGateway', 'label' => 'Gateway (decision)', 'category' => 'Gateways',
+                'description' => 'A branch point: evaluates each outgoing path\'s condition in order and follows the first that matches (or the default). Use it to route on data, e.g. KYC approved vs rejected.'],
+            ['type' => 'userTask', 'label' => 'Human task', 'category' => 'Tasks',
+                'description' => 'Pauses the flow for a person to act (approve, review, call the customer). The instance waits until the task is completed from a worklist.'],
+            ['type' => 'timer', 'label' => 'Timer', 'category' => 'Events',
+                'description' => 'Waits for a duration or until a date before continuing — e.g. hold 24h before retrying, or wait for a grace period to elapse.'],
+            ['type' => 'messageCatch', 'label' => 'Wait for message', 'category' => 'Events',
+                'description' => 'Pauses until an external event/message arrives (e.g. a payment callback or a provisioning confirmation), then resumes the flow.'],
         ];
 
         return ApiResponse::item([

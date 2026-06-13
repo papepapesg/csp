@@ -1,5 +1,7 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
+import PageHeader from '@/Components/Bss/PageHeader.vue';
+import StageTracker from '@/Components/Bss/StageTracker.vue';
 import { Head } from '@inertiajs/vue3';
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from '@/i18n';
@@ -14,6 +16,13 @@ const { t } = useI18n();
 const intents = ['WARNING_ONLY', 'RESTRICTION_ADD', 'SUSPEND_NP', 'TERMINATION'];
 const intentLabel = { WARNING_ONLY: 'Warn', RESTRICTION_ADD: 'Restrict', SUSPEND_NP: 'Suspend', TERMINATION: 'Terminate' };
 const intentColor = { WARNING_ONLY: 'bg-amber-100 text-amber-800', RESTRICTION_ADD: 'bg-orange-100 text-orange-800', SUSPEND_NP: 'bg-red-100 text-red-700', TERMINATION: 'bg-gray-800 text-white' };
+// What each escalation action actually does to the account when its grace period expires.
+const intentHelp = {
+    WARNING_ONLY: 'Sends a warning only — no change to service. The grace clock starts.',
+    RESTRICTION_ADD: 'Applies restriction codes (e.g. throttle) while keeping the line up.',
+    SUSPEND_NP: 'Suspends the service for non-payment; it can be restored on payment.',
+    TERMINATION: 'Terminates the subscription and schedules equipment disposition — the end of the ladder.',
+};
 
 const programs = ref([]);
 const current = ref(null);          // the selected program (active version) being viewed/edited
@@ -29,6 +38,14 @@ const grouped = computed(() => {
     return m;
 });
 const totalCycle = computed(() => (current.value?.level_definitions ?? []).reduce((s, l) => s + (Number(l.grace_period_days) || 0), 0));
+// Visual preview of the escalation ladder: each level becomes a stage on the tracker so the
+// operator sees the whole journey (warn → restrict → suspend → terminate) at a glance.
+const ladderStages = computed(() => (current.value?.level_definitions ?? []).map((l) => ({
+    key: l.level,
+    label: `${l.name} · ${intentLabel[l.action_workflow_intent] ?? l.action_workflow_intent}`,
+    state: l.action_workflow_intent === 'TERMINATION' ? 'failed' : 'current',
+    at: `+${l.grace_period_days}d`,
+})));
 
 async function load() {
     const { data } = await window.axios.get('/api/dunning-programs');
@@ -91,7 +108,9 @@ onMounted(load);
 <template>
     <Head :title="t('Dunning Studio')" />
     <AuthenticatedLayout>
-        <template #header><h2 class="font-semibold text-xl text-gray-800">{{ t('Dunning Program Studio') }}</h2></template>
+        <template #header>
+            <PageHeader :title="t('Dunning Studio')" :crumbs="[{ label: 'Studios' }, { label: 'Dunning' }]" />
+        </template>
 
         <div class="py-6 max-w-7xl mx-auto sm:px-6 lg:px-8">
             <div v-if="error" class="mb-3 p-2 bg-red-100 text-red-700 rounded text-sm">{{ error }}</div>
@@ -127,6 +146,12 @@ onMounted(load);
                         </label>
                     </div>
                     <input v-model="current.description" @input="dirty = true" :placeholder="t('Description')" class="border rounded px-2 py-1 text-sm w-full" />
+
+                    <!-- visual ladder preview: the whole escalation journey at a glance -->
+                    <div v-if="ladderStages.length" class="rounded-lg bg-gray-50 p-3 ring-1 ring-gray-100">
+                        <div class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-500">{{ t('Escalation journey') }}</div>
+                        <StageTracker :stages="ladderStages" />
+                    </div>
 
                     <!-- the escalation ladder -->
                     <div class="space-y-2">
@@ -164,6 +189,17 @@ onMounted(load);
                             {{ current._new ? t('Create program') : t('Publish new version') }}
                         </button>
                     </div>
+                    <!-- What each action does -->
+                    <div class="rounded-lg bg-gray-50 p-3 ring-1 ring-gray-100">
+                        <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-op">{{ t('What each action does') }}</div>
+                        <ul class="space-y-1 text-xs text-gray-600">
+                            <li v-for="x in intents" :key="x" class="flex gap-2">
+                                <span class="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium" :class="intentColor[x]">{{ intentLabel[x] }}</span>
+                                <span>{{ t(intentHelp[x]) }}</span>
+                            </li>
+                        </ul>
+                    </div>
+
                     <p class="text-xs text-gray-400">{{ t('Channels for the dunning notice are not configured here — they live in NOT-01 routing rules (per operator + customer preference). This studio owns the escalation policy only.') }}</p>
                 </div>
             </div>

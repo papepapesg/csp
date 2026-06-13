@@ -28,6 +28,13 @@ class TerminateHandler implements TaskHandler
         return 'Subscription: Commit termination (TERMINATED)';
     }
 
+    public function description(): string
+    {
+        return 'Final commit of a termination: moves the subscription ACTIVE → PENDING_TERMINATION '
+            .'→ TERMINATED. Runs after the pending flip and equipment pickup/fulfilment, and '
+            .'narrates the operation. Idempotent — safe to retry on a subscription already terminal.';
+    }
+
     public function handle(TaskContext $context): TaskResult
     {
         $subscription = Subscription::query()->find($context->businessKey());

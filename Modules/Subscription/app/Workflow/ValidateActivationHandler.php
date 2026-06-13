@@ -32,6 +32,14 @@ class ValidateActivationHandler implements TaskHandler
         return 'Subscription: Validate activation';
     }
 
+    public function description(): string
+    {
+        return 'Decides whether a subscription may be activated. Hard guards (e.g. terminated) '
+            .'stay fixed, but the eligibility policy is read from the \'activation.eligibility\' '
+            .'decision table — so a gateway after this step can branch on the result, and an '
+            .'operator can change activation policy in the Rules Studio without code.';
+    }
+
     public function handle(TaskContext $context): TaskResult
     {
         $subscription = Subscription::query()->find($context->businessKey());

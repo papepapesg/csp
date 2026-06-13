@@ -15,5 +15,9 @@ interface TaskHandler
     /** Human-friendly label + category for the studio toolbox palette. */
     public function label(): string;
 
+    // A handler MAY also declare `public function description(): string` to explain — in plain
+    // language — what the step does ("what is this node for"); the studio inspector shows it.
+    // It is optional: TaskRegistry falls back to a generated description when absent.
+
     public function handle(TaskContext $context): TaskResult;
 }
