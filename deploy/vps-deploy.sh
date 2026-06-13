@@ -42,6 +42,7 @@ set_env SOPHIX_APP_BASE_DOMAIN "${BASE_DOMAIN}"
 set_env SESSION_DOMAIN ".${BASE_DOMAIN}"
 set_env SESSION_SECURE_COOKIE true
 set_env SANCTUM_STATEFUL_DOMAINS "*.${BASE_DOMAIN}"
+set_env ACME_EMAIL "${ACME_EMAIL:-papepapes@gmail.com}"
 set_env MAIL_MAILER smtp
 # Containerized logging: stderr -> `docker compose logs`, and no root-vs-www-data
 # contention on storage/logs/laravel.log across app/queue/scheduler/one-off containers.
