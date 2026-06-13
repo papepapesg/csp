@@ -33,7 +33,13 @@ export function useI18n() {
     // global + operator rows for this culture) → built-in fallback dictionary →
     // the key itself (en is the source language).
     const resources = page.props.i18nResources ?? {};
-    const t = (key) => resources[key] ?? dictionaries[locale]?.[key] ?? key;
+    // t('key') returns the translated string; t('Hello :name', { name }) interpolates
+    // :placeholder tokens after translation, so dynamic strings stay translatable.
+    const t = (key, params) => {
+        let s = resources[key] ?? dictionaries[locale]?.[key] ?? key;
+        if (params) for (const [k, v] of Object.entries(params)) s = s.replaceAll(`:${k}`, v ?? '');
+        return s;
+    };
     const money = (amount) => new Intl.NumberFormat(region, { style: 'currency', currency }).format(Number(amount ?? 0));
     const dateFmt = (d, opts = { dateStyle: 'medium', timeStyle: 'short' }) =>
         d ? new Intl.DateTimeFormat(region, opts).format(new Date(d)) : '—';

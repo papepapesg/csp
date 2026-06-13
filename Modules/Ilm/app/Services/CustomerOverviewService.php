@@ -64,13 +64,23 @@ class CustomerOverviewService
     {
         $c = Customer::query()->findOrFail($customerId);
 
-        return ['customerId' => $c->customer_id, 'name' => $c->name, 'type' => $c->type, 'msisdn' => $c->primary_msisdn, 'kycStatus' => $c->kyc_status ?? null];
+        return [
+            'customerId' => $c->customer_id, 'name' => $c->name, 'type' => $c->type,
+            'msisdn' => $c->primary_msisdn, 'email' => $c->email ?? null,
+            'preferredLanguage' => $c->preferred_language ?? null,
+            'kycStatus' => $c->kyc_status ?? null,
+            'createdAt' => $c->created_at?->toIso8601String(),
+        ];
     }
 
     private function accounts(string $customerId): array
     {
         return CustomerAccount::query()->where('customer_id', $customerId)->get()->map(fn ($a) => [
             'accountId' => $a->account_id, 'accountNumber' => $a->account_number, 'status' => $a->status ?? null,
+            'subStatus' => $a->sub_status ?? null, 'serviceAddress' => $a->service_address ?? null,
+            'homepassId' => $a->homepass_id ?? null, 'attentionBanner' => $a->attention_banner ?? null,
+            'installDate' => optional($a->install_date)->toDateString(),
+            'startBillDate' => optional($a->start_bill_date)->toDateString(),
             'flags' => CustomerAccountFlag::query()->where('account_id', $a->account_id)->where('state', 'ACTIVE')->pluck('flag_code'),
         ])->all();
     }
@@ -78,7 +88,11 @@ class CustomerOverviewService
     private function subscriptions(string $customerId): array
     {
         return \Modules\Subscription\Models\Subscription::query()->where('customer_id', $customerId)
-            ->get()->map(fn ($s) => ['subscriptionId' => $s->subscription_id, 'package' => $s->package_ref, 'status' => $s->status_code, 'billingMode' => $s->billing_mode ?? null])->all();
+            ->get()->map(fn ($s) => [
+                'subscriptionId' => $s->subscription_id, 'package' => $s->package_ref, 'status' => $s->status_code,
+                'billingMode' => $s->billing_mode ?? null, 'homepassId' => $s->homepass_id ?? null,
+                'createdAt' => $s->created_at?->toIso8601String(),
+            ])->all();
     }
 
     private function billing(array $accountIds): array
@@ -96,7 +110,7 @@ class CustomerOverviewService
     {
         return \Modules\Ticketing\Models\Ticket::query()->where('customer_id', $customerId)
             ->orderByDesc('created_at')->limit(10)->get()
-            ->map(fn ($t) => ['number' => $t->ticket_number ?? $t->getKey(), 'subject' => $t->subject, 'status' => $t->status, 'priority' => $t->priority])->all();
+            ->map(fn ($t) => ['number' => $t->ticket_number ?? $t->getKey(), 'subject' => $t->subject, 'status' => $t->status, 'priority' => $t->priority, 'at' => $t->created_at?->toIso8601String()])->all();
     }
 
     private function interactions(string $customerId): array
