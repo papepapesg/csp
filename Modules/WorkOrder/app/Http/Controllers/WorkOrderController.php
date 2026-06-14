@@ -80,6 +80,25 @@ class WorkOrderController extends ApiController
         return ApiResponse::item($this->service->assign($workOrder, $data, $request->user()?->uid));
     }
 
+    /**
+     * POST /work-orders/{wo}/auto-assign — WO-01 dispatch: contractor-with-availability first
+     * (EM-02), in-house staff fallback. Returns the assigned WO, or 409 when no one is available
+     * (the WO stays PENDING for manual routing).
+     */
+    public function autoAssign(Request $request, WorkOrder $workOrder): JsonResponse
+    {
+        $assigned = $this->service->autoAssign($workOrder, $request->user()?->uid);
+        if (! $assigned) {
+            return ApiResponse::error(
+                \App\Foundation\Errors\ErrorCode::CONFLICT,
+                'No contractor or technician is available for this work order; it remains PENDING for manual routing.',
+                409,
+            );
+        }
+
+        return ApiResponse::item($assigned);
+    }
+
     public function start(Request $request, WorkOrder $workOrder): JsonResponse
     {
         return ApiResponse::item($this->service->start($workOrder, $request->user()?->uid));

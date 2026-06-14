@@ -5,6 +5,7 @@ namespace Modules\WorkOrder\Services;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Modules\WorkOrder\Events\WorkOrderEvents;
 use Modules\WorkOrder\Models\WoAttachment;
@@ -12,6 +13,8 @@ use Modules\WorkOrder\Models\WoFinalizationRequirement;
 use Modules\WorkOrder\Models\WoNote;
 use Modules\WorkOrder\Models\WoNoteKind;
 use Modules\WorkOrder\Models\WorkOrder;
+use Modules\Workforce\Models\StaffMember;
+use Modules\Workforce\Services\ContractorAvailabilityService;
 
 /**
  * WO-01 work-order lifecycle (create → assign → start → finalize / cancel).
@@ -19,7 +22,10 @@ use Modules\WorkOrder\Models\WorkOrder;
  */
 class WorkOrderService
 {
-    public function __construct(private readonly EventBus $events) {}
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly ContractorAvailabilityService $availability,
+    ) {}
 
     /**
      * Allowed status transitions (WO-01 §3 generic state machine). Reassign is NOT a
@@ -62,16 +68,64 @@ class WorkOrderService
     }
 
     /**
-     * Skills-filtered auto-assign (WO-01): pick a staff member in the WO's tech
-     * region whose skills cover the WO's required_skills. Returns null when no
-     * eligible staff exists (the WO stays PENDING for manual routing).
+     * Auto-assign a PENDING work order (WO-01 dispatch). Strategy: prefer an OUTSOURCED
+     * contractor with region coverage, the required skills AND spare availability (EM-02
+     * §5.1/5.2 via ContractorAvailabilityService — the contractor capacity is atomically
+     * committed against the slot); fall back to an in-house StaffMember matched on skills.
+     * Returns null when neither yields a candidate (the WO stays PENDING for manual routing).
      */
     public function autoAssign(WorkOrder $wo, ?string $actor = null): ?WorkOrder
     {
+        if ($wo->tech_region_id) {
+            $assigned = $this->autoAssignToContractor($wo, $actor);
+            if ($assigned) {
+                return $assigned;
+            }
+        }
+
+        return $this->autoAssignToStaff($wo, $actor);
+    }
+
+    /**
+     * Region-scoped, skills-filtered, availability-aware contractor assignment. Resolves the
+     * ranked contractors with spare capacity for the WO's region/scope/skills window, commits
+     * the best slot (booking the capacity), then assigns the WO at the contractor level. The
+     * window is the scheduled time (or now) for a nominal one-hour job.
+     */
+    public function autoAssignToContractor(WorkOrder $wo, ?string $actor = null): ?WorkOrder
+    {
+        $serviceScope = $wo->kind ?: $wo->type;                 // EM-02 coverage is keyed by service scope
         $required = (array) ($wo->required_skills ?? []);
-        $candidate = \Modules\Workforce\Models\StaffMember::query()
+        $start = $wo->scheduled_at ? Carbon::parse($wo->scheduled_at) : now();
+        $end = $start->copy()->addHour();
+
+        $resolved = $this->availability->resolve($wo->tech_region_id, $serviceScope, $required, $start, $end);
+        $best = $resolved['availableContractors'][0] ?? null;   // already ranked: PRIMARY coverage + capacity
+        if (! $best) {
+            return null;
+        }
+
+        try {
+            // Atomically book the contractor's slot for this WO (loses gracefully on a capacity race).
+            $this->availability->commit($best['slot']['slotId'], $wo->work_order_id, $start);
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        return $this->assign($wo, ['contractor_id' => $best['contractorId']], $actor);
+    }
+
+    /**
+     * In-house fallback: the first ACTIVE StaffMember for the operator whose skills cover the
+     * WO's required_skills, preferring internal staff (no contractor) over contractor-employed.
+     */
+    public function autoAssignToStaff(WorkOrder $wo, ?string $actor = null): ?WorkOrder
+    {
+        $required = (array) ($wo->required_skills ?? []);
+        $candidate = StaffMember::query()
             ->where('operator_code', $wo->operator_code)
             ->where('status', 'ACTIVE')
+            ->orderByRaw('contractor_id IS NULL DESC')          // prefer in-house technicians
             ->get()
             ->first(fn ($staff) => empty($required) || empty(array_diff($required, (array) $staff->skills)));
 
