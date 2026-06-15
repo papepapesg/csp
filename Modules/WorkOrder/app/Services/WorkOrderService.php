@@ -5,6 +5,7 @@ namespace Modules\WorkOrder\Services;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
+use App\Foundation\Validation\JsonSchemaValidator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Modules\WorkOrder\Events\WorkOrderEvents;
@@ -192,15 +193,24 @@ class WorkOrderService
      *
      * @param  array<string,mixed>  $payload
      */
+    /**
+     * WO-01 §1.3 append a structured note. The payload is validated in full against the
+     * note_kind's stored JSON Schema (wo_note_kind_registry.schema_jsonb) by JsonSchemaValidator —
+     * type, required, enum, numeric ranges (e.g. ontRxDbm exclusiveMinimum), patterns, nested
+     * shape. Free-text kinds (schema_jsonb = null) accept any body. Cross-field/business rules are
+     * NOT expressed here — those live in the rule engine. Append-only.
+     *
+     * @param  array<string,mixed>  $payload
+     */
     public function addNote(WorkOrder $wo, string $noteKind, array $payload = [], ?string $body = null, ?string $author = null): WoNote
     {
         $kind = WoNoteKind::resolve($wo->operator_code, $noteKind);
-        $required = $kind?->schema_jsonb['required'] ?? [];
-        $missing = array_values(array_filter($required, fn ($key) => ! array_key_exists($key, $payload)));
-        if ($missing) {
+        $schema = $kind?->schema_jsonb ?? [];
+        $errors = $schema ? (new JsonSchemaValidator)->validate($payload, $schema) : [];
+        if ($errors) {
             throw DomainException::ruleRejected(
                 'NOTE_SCHEMA_INVALID',
-                "Note '{$noteKind}' is missing required fields: ".implode(', ', $missing),
+                "Note '{$noteKind}' failed schema validation: ".implode('; ', $errors),
             );
         }
 

@@ -17,14 +17,35 @@ class WoFrameworkSeeder extends Seeder
     {
         $operator = config('sophix.default_operator', 'WIK');
 
-        // note_kind => JSON schema (null = free-text).
+        // note_kind => JSON Schema (null = free-text). Validated in full by JsonSchemaValidator:
+        // type, required, enum, numeric ranges (e.g. ontRxDbm > -40 and <= -8), patterns, nested.
         $kinds = [
             'findings' => null,
             'solution' => null,
             'dispatcher_note' => null,
-            'final_reason_set' => ['required' => ['finalReasonCode']],
-            'optical_readings' => ['required' => ['oltPort', 'ontRxDbm']],
-            'hfc_signal_readings' => ['required' => ['downstreamLevel', 'upstreamLevel', 'snr']],
+            'final_reason_set' => [
+                'type' => 'object',
+                'required' => ['finalReasonCode'],
+                'properties' => ['finalReasonCode' => ['type' => 'string', 'minLength' => 2]],
+            ],
+            // GPON optical readings: port string + ONT RX power in dBm (valid GPON window ~ -8..-28 dBm).
+            'optical_readings' => [
+                'type' => 'object',
+                'required' => ['oltPort', 'ontRxDbm'],
+                'properties' => [
+                    'oltPort' => ['type' => 'string', 'pattern' => '^[0-9]+/[0-9]+/[0-9]+$'],
+                    'ontRxDbm' => ['type' => 'number', 'exclusiveMinimum' => -40, 'maximum' => -8],
+                ],
+            ],
+            'hfc_signal_readings' => [
+                'type' => 'object',
+                'required' => ['downstreamLevel', 'upstreamLevel', 'snr'],
+                'properties' => [
+                    'downstreamLevel' => ['type' => 'number'],
+                    'upstreamLevel' => ['type' => 'number'],
+                    'snr' => ['type' => 'number', 'minimum' => 0],
+                ],
+            ],
         ];
         foreach ($kinds as $kind => $schema) {
             WoNoteKind::query()->updateOrCreate(
