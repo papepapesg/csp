@@ -63,6 +63,7 @@ class DatabaseSeeder extends Seeder
             UpgradeConfigSeeder::class,
             WoSupportSeeder::class,
             WoFrameworkSeeder::class,
+            \Modules\WorkOrder\Database\Seeders\WoKeJobTypeCatalogSeeder::class,
             FieldAuditPolicySeeder::class,
             OsrRmaSeeder::class,
             StockReasonCodeSeeder::class,
