@@ -9,6 +9,10 @@ use Modules\WorkOrder\Http\Controllers\WorkOrderController;
 | field execution: workorder.execute; reads: workorder.read.
 */
 
+// POC ONLY — unauthenticated read for the YAS Dispatcher Console prototype (RBAC intentionally
+// skipped per POC scope; serves the seeded WO data). Remove before production.
+Route::get('poc/work-orders', [WorkOrderController::class, 'pocIndex']);
+
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('work-orders', [WorkOrderController::class, 'index'])->middleware('permission:workorder.read');
     Route::post('work-orders', [WorkOrderController::class, 'store'])->middleware(['permission:workorder.assign', 'idempotency']);

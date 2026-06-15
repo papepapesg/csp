@@ -7,6 +7,8 @@ use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Modules\WorkOrder\Models\WorkOrder;
 use Modules\WorkOrder\Services\ShiftingFlowService;
 use Modules\WorkOrder\Services\SupportFlowService;
@@ -39,6 +41,65 @@ class WorkOrderController extends ApiController
             ->paginate(perPage: $params['size'], page: $params['page'] + 1);
 
         return ApiResponse::paginated($page);
+    }
+
+    /**
+     * GET /api/poc/work-orders — POC ONLY (no auth): the seeded WO list, enriched with customer
+     * name + a "Contractor › Team › Tech" assignee label + computed SLA, for the YAS Dispatcher
+     * Console prototype. Reads the same work_order table the real index() uses.
+     */
+    public function pocIndex(Request $request): JsonResponse
+    {
+        $op = $request->query('operatorCode', config('sophix.default_operator', 'WIK'));
+        $rows = DB::table('work_order')->where('operator_code', $op)->orderBy('scheduled_at')->limit(50)->get();
+        $custs = DB::table('customer')->where('operator_code', $op)->pluck('name', 'customer_id');
+        $ctr = DB::table('contractor')->where('operator_code', $op)->pluck('name', 'contractor_id');
+        $team = DB::table('contractor_team')->where('operator_code', $op)->pluck('name', 'team_id');
+        $staff = DB::table('staff_member')->where('operator_code', $op)->pluck('name', 'staff_id');
+
+        $items = $rows->map(function ($w) use ($custs, $ctr, $team, $staff) {
+            $tech = $staff[$w->assigned_technician_id] ?? null;
+            $techLabel = $tech ? preg_replace('/^(\S)\S*\s+(\S+)$/', '$1. $2', $tech) : null;
+            $assignee = collect([$ctr[$w->contractor_id] ?? null, $team[$w->team_id] ?? null, $techLabel])
+                ->filter()->implode(' › ');
+            [$sla, $tone] = $this->pocSla($w->sla_due_at);
+
+            return [
+                'woNumber' => $w->work_order_id, 'type' => $w->type, 'jobType' => $w->job_type_code,
+                'customer' => $custs[$w->customer_id] ?? $w->customer_id, 'techRegion' => $w->tech_region_id,
+                'assignee' => $assignee ?: '—', 'priority' => $w->priority, 'status' => $w->status,
+                'sla' => $sla, 'slaTone' => $tone, 'scheduled' => $this->pocSched($w->scheduled_at),
+            ];
+        });
+
+        return ApiResponse::item(['items' => $items->values(), 'total' => 661]);
+    }
+
+    /** @return array{0:string,1:string} [display, tone] computed from the SLA due time. */
+    private function pocSla(?string $due): array
+    {
+        if (! $due) {
+            return ['—', 'none'];
+        }
+        $mins = intdiv(Carbon::parse($due)->getTimestamp() - now()->getTimestamp(), 60);
+        if ($mins < 0) {
+            $a = -$mins;
+
+            return [$a < 5 ? 'Breached 0h' : '-'.intdiv($a, 60).'h '.($a % 60).'m', 'red'];
+        }
+
+        return [intdiv($mins, 60).'h '.($mins % 60).'m', $mins < 60 ? 'red' : ($mins < 120 ? 'amber' : 'gray')];
+    }
+
+    private function pocSched(?string $at): string
+    {
+        if (! $at) {
+            return '—';
+        }
+        $d = Carbon::parse($at);
+        $day = $d->isToday() ? 'Today' : ($d->isTomorrow() ? 'Tomorrow' : ($d->isYesterday() ? 'Yesterday' : $d->format('d M')));
+
+        return $day.' '.$d->format('H:i');
     }
 
     public function store(Request $request): JsonResponse
