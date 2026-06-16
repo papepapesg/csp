@@ -205,6 +205,43 @@ class WorkflowEngineTest extends TestCase
         $this->assertStringContainsString("unknown step 'test.does-not-exist'", $joined);
         $this->assertStringContainsString("does not produce 'nope'", $joined);
     }
+
+    public function test_graph_validator_flags_a_wire_from_a_downstream_node(): void
+    {
+        // consume reads amount wired from `d`, but `d` runs AFTER consume — the
+        // value cannot exist yet (producer/consumer ordering).
+        $errors = app(GraphValidator::class)->validate([
+            'nodes' => [
+                ['id' => 'start', 'type' => 'startEvent', 'data' => []],
+                ['id' => 'c', 'type' => 'serviceTask', 'data' => ['topic' => 'test.consume',
+                    'inputMappings' => ['amount' => ['from' => 'd.priceDelta']]]],
+                ['id' => 'd', 'type' => 'serviceTask', 'data' => ['topic' => 'test.produce']],
+                ['id' => 'end', 'type' => 'endEvent', 'data' => []],
+            ],
+            'edges' => [
+                ['id' => 'e1', 'source' => 'start', 'target' => 'c'],
+                ['id' => 'e2', 'source' => 'c', 'target' => 'd'],
+                ['id' => 'e3', 'source' => 'd', 'target' => 'end'],
+            ],
+        ]);
+
+        $this->assertStringContainsString('not upstream', implode(' ', $errors));
+    }
+
+    public function test_strict_outputs_rejects_a_handler_that_returns_undeclared_keys(): void
+    {
+        config(['sophix.workflow.strict_outputs' => true]);
+        app(TaskRegistry::class)->register(LeakyStep::class);
+
+        $this->deploy('leak-flow', $this->linear('test.leaky'));
+        app(WorkflowEngine::class)->start('leak-flow', 'bk-leak', [], 'WIK');
+        $this->drain();
+
+        // The undeclared 'b' makes lintOutputs throw -> the task never completes and
+        // the instance fails (the bag is kept honest).
+        $this->assertSame(0, ProcessInstance::where('status', 'COMPLETED')->count());
+        $this->assertSame(1, ProcessInstance::where('status', 'FAILED')->count());
+    }
 }
 
 class RecordSink
@@ -302,5 +339,30 @@ class ConsumeStep implements TaskHandler
         RecordSink::$seen[] = 'amount:'.$c->input('amount');
 
         return TaskResult::success();
+    }
+}
+
+/** Declares output 'a' but leaks an undeclared 'b' — drift the lint should catch. */
+class LeakyStep implements TaskHandler
+{
+    public function topic(): string
+    {
+        return 'test.leaky';
+    }
+
+    public function label(): string
+    {
+        return 'Test Leaky';
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function outputs(): array
+    {
+        return [Io::out('a', Io::STRING, 'The one declared output.')];
+    }
+
+    public function handle(TaskContext $c): TaskResult
+    {
+        return TaskResult::success(['a' => 'x', 'b' => 'y']);
     }
 }

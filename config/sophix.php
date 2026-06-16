@@ -75,6 +75,14 @@ return [
         'memo_seconds' => (int) env('SOPHIX_RULES_MEMO_SECONDS', 60),
     ],
 
+    'workflow' => [
+        // Output-declaration lint (FOUNDATION_CAMUNDA IO contract). When a step
+        // returns variables it did not declare in outputs(), warn by default; set
+        // true to make it a hard failure (recommended in CI to keep the typed,
+        // wireable dataflow surface honest). Engine control flags are always exempt.
+        'strict_outputs' => (bool) env('SOPHIX_WORKFLOW_STRICT_OUTPUTS', false),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | API conventions (DD_API-00)

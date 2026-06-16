@@ -5,6 +5,7 @@ namespace Modules\Workflow\Engine;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Support\Context;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Modules\Workflow\Models\ActivityLog;
 use Modules\Workflow\Models\ExternalTask;
 use Modules\Workflow\Models\MessageSubscription;
@@ -382,6 +383,8 @@ class WorkflowEngine
      */
     public function completeExternalTask(ExternalTask $task, array $outputs = []): void
     {
+        $this->lintOutputs($task->topic, $outputs);
+
         DB::transaction(function () use ($task, $outputs) {
             $instance = ProcessInstance::query()->whereKey($task->instance_id)->lockForUpdate()->firstOrFail();
             $task->update(['status' => ExternalTask::COMPLETED, 'completed_at' => now()]);
@@ -391,6 +394,44 @@ class WorkflowEngine
             $definition = $this->definitionById($instance->definition_id);
             $this->advanceFrom($instance, $definition, $task->node_id);
         });
+    }
+
+    /**
+     * Output-declaration lint: keep the variable bag honest. When a step declares
+     * outputs(), the keys it actually publishes should match — undeclared keys are
+     * drift that erodes the typed, wireable surface (the IO contract). Engine
+     * control flags (`__`-prefixed) are exempt; unsignatured handlers are skipped.
+     * Warn by default; sophix.workflow.strict_outputs makes it a hard failure (CI).
+     *
+     * @param  array<string,mixed>  $outputs
+     */
+    private function lintOutputs(?string $topic, array $outputs): void
+    {
+        if (! $topic) {
+            return;
+        }
+        $declared = array_column($this->registry->signature($topic)['outputs'], 'name');
+        if (! $declared) {
+            return; // handler declares no ports — nothing to check against
+        }
+
+        $undeclared = [];
+        foreach (array_keys($outputs) as $key) {
+            if (str_starts_with((string) $key, '__')) {
+                continue; // engine control flags (e.g. __rejected) are not part of the dataflow
+            }
+            if (! in_array($key, $declared, true)) {
+                $undeclared[] = $key;
+            }
+        }
+        if (! $undeclared) {
+            return;
+        }
+
+        if ((bool) config('sophix.workflow.strict_outputs', false)) {
+            throw DomainException::ruleRejected('UNDECLARED_OUTPUT', "Step '{$topic}' returned undeclared outputs [".implode(', ', $undeclared).']; declare them in outputs().');
+        }
+        Log::warning('workflow.undeclared_output', ['topic' => $topic, 'keys' => $undeclared]);
     }
 
     public function failExternalTask(ExternalTask $task, string $message, bool $retryable = true): void

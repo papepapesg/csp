@@ -48,7 +48,9 @@ class ValidateActivationHandler implements TaskHandler
             Io::out('eligible', Io::BOOLEAN, 'Whether activation may proceed — wire a gateway off this to branch.'),
             Io::out('eligibilityReason', Io::STRING, 'Decision code when not eligible (e.g. PAY_FIRST_REQUIRED).'),
             Io::out('eligibilityRuleId', Io::STRING, 'Id of the decision-table rule that fired.'),
+            Io::out('validationErrors', Io::OBJECT, 'Structured validation errors from the decision table (empty when eligible).'),
             Io::out('outstandingBalance', Io::NUMBER, 'Open balance computed for the account.'),
+            Io::out('recipient', Io::STRING, 'Pass-through notification recipient carried for downstream steps.'),
         ];
     }
 

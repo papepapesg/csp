@@ -32,6 +32,16 @@ class GraphValidator
             $byId[$n['id'] ?? ''] = $n;
         }
 
+        // Directed adjacency (source -> [targets]) for upstream-reachability checks.
+        $adj = [];
+        foreach ($edges as $e) {
+            $src = $e['source'] ?? null;
+            $tgt = $e['target'] ?? null;
+            if ($src !== null && $tgt !== null) {
+                $adj[$src][] = $tgt;
+            }
+        }
+
         // Structural: exactly one start, at least one end.
         $starts = array_filter($nodes, fn ($n) => ($n['type'] ?? '') === 'startEvent');
         if (count($starts) !== 1) {
@@ -86,7 +96,7 @@ class GraphValidator
                 }
 
                 if (array_key_exists($name, $mappings)) {
-                    $errors = array_merge($errors, $this->validateMapping($id, $name, $mappings[$name], $byId));
+                    $errors = array_merge($errors, $this->validateMapping($id, $name, $mappings[$name], $byId, $adj));
                 }
             }
         }
@@ -95,13 +105,16 @@ class GraphValidator
     }
 
     /**
-     * A wire { from: "sourceNode.port" } must point at a node that exists and
-     * declares that output. { var: ... } / { const: ... } are always allowed.
+     * A wire { from: "sourceNode.port" } must point at a node that (a) exists,
+     * (b) runs UPSTREAM of the consumer — so the value is produced before it is
+     * read (single-token flow) — and (c) declares that output. { var: ... } /
+     * { const: ... } and flat refs are always allowed (no producer to cross-check).
      *
      * @param  array<string,array<string,mixed>>  $byId
+     * @param  array<string,array<int,string>>  $adj
      * @return array<int,string>
      */
-    private function validateMapping(string $nodeId, string $input, mixed $mapping, array $byId): array
+    private function validateMapping(string $nodeId, string $input, mixed $mapping, array $byId, array $adj): array
     {
         $from = is_array($mapping) ? ($mapping['from'] ?? null) : (is_string($mapping) ? $mapping : null);
         if (! $from || ! str_contains($from, '.')) {
@@ -111,6 +124,11 @@ class GraphValidator
         [$srcNode, $srcPort] = explode('.', $from, 2);
         if (! isset($byId[$srcNode])) {
             return ["Node [{$nodeId}] input '{$input}' is wired from unknown node [{$srcNode}]."];
+        }
+
+        // Producer/consumer ordering: the source must be able to reach the consumer.
+        if ($srcNode === $nodeId || ! $this->reaches($srcNode, $nodeId, $adj)) {
+            return ["Node [{$nodeId}] input '{$input}' is wired from [{$srcNode}], which is not upstream of it — the value would not exist yet."];
         }
 
         $srcTopic = $byId[$srcNode]['data']['topic'] ?? null;
@@ -123,5 +141,31 @@ class GraphValidator
         }
 
         return [];
+    }
+
+    /**
+     * Can $from reach $to by following directed edges? (BFS; graphs are small.)
+     *
+     * @param  array<string,array<int,string>>  $adj
+     */
+    private function reaches(string $from, string $to, array $adj): bool
+    {
+        $seen = [];
+        $queue = $adj[$from] ?? [];
+        while ($queue) {
+            $node = array_shift($queue);
+            if ($node === $to) {
+                return true;
+            }
+            if (isset($seen[$node])) {
+                continue;
+            }
+            $seen[$node] = true;
+            foreach ($adj[$node] ?? [] as $next) {
+                $queue[] = $next;
+            }
+        }
+
+        return false;
     }
 }
