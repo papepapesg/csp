@@ -19,5 +19,12 @@ interface TaskHandler
     // language — what the step does ("what is this node for"); the studio inspector shows it.
     // It is optional: TaskRegistry falls back to a generated description when absent.
 
+    // A handler is the node TYPE — a function with a signature. It MAY declare its data shape so
+    // the studio can wire flows visually and the engine can resolve/validate the wiring:
+    //   public function inputs(): array   // Io::in(...) ports it consumes (read via TaskContext::input())
+    //   public function outputs(): array  // Io::out(...) ports it publishes (returned in TaskResult::success())
+    // Both are OPTIONAL (method_exists fallback to []). A node INSTANCE binds inputs by a literal in
+    // data.config or a wire in data.inputMappings; outputs flow into the shared instance variables.
+
     public function handle(TaskContext $context): TaskResult;
 }

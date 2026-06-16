@@ -24,6 +24,26 @@ use Modules\Workflow\Models\WorkflowTimer;
  */
 class WorkflowEngine
 {
+    public function __construct(private readonly TaskRegistry $registry) {}
+
+    /**
+     * In-process cache of deployed definitions keyed by definition_id. A DEPLOYED
+     * definition is IMMUTABLE — deploying a change creates a new version row and
+     * retires the old one (WorkflowStudioController::deploy), so the graph behind
+     * an id never mutates. That makes this cache correctness-safe with no TTL, and
+     * it removes the per-task-completion primary-key read in long-running workers
+     * (the engine walks the same graph for every node of an instance).
+     *
+     * @var array<string, ProcessDefinition>
+     */
+    private array $definitionCache = [];
+
+    /** Load a deployed definition by id, memoized (immutable once deployed). */
+    private function definitionById(string $definitionId): ProcessDefinition
+    {
+        return $this->definitionCache[$definitionId] ??= ProcessDefinition::query()->findOrFail($definitionId);
+    }
+
     /**
      * Resolve the active definition for a process key, preferring an
      * operator-specific deployment over the global default, highest version.
@@ -127,7 +147,9 @@ class WorkflowEngine
                     'topic' => $topic,
                     'operator_code' => $instance->operator_code,
                     'business_key' => $instance->business_key,
-                    'variables' => ['__config' => $cfg],
+                    // __config = raw node config (legacy reads); __inputs = the handler's declared
+                    // ports resolved from wires/config/defaults (TaskContext::input()).
+                    'variables' => ['__config' => $cfg, '__inputs' => $this->resolveInputs($node, $instance)],
                     'status' => ExternalTask::CREATED,
                     'retries' => (int) ($cfg['retries'] ?? 3),
                 ]);
@@ -141,7 +163,7 @@ class WorkflowEngine
                     'node_id' => $nodeId,
                     'name' => $node['data']['name'] ?? $nodeId,
                     'candidate_group' => $node['data']['candidateGroup'] ?? null,
-                    'variables' => ['__config' => $cfg],
+                    'variables' => ['__config' => $cfg, '__inputs' => $this->resolveInputs($node, $instance)],
                     'status' => UserTask::OPEN,
                     'due_at' => isset($cfg['dueInMinutes']) ? now()->addMinutes((int) $cfg['dueInMinutes']) : null,
                 ]);
@@ -248,6 +270,90 @@ class WorkflowEngine
         };
     }
 
+    /**
+     * Resolve a node's declared input ports into a concrete map handed to the
+     * handler (TaskContext::input()). Precedence per port: a data WIRE
+     * (data.inputMappings) > a literal in data.config > the port's default. Wires
+     * read from the instance's shared variable bag, so this stays in-process with
+     * NO extra query — the signature is in-memory and variables are already loaded.
+     *
+     * @param  array<string,mixed>  $node
+     * @return array<string,mixed>
+     */
+    private function resolveInputs(array $node, ProcessInstance $instance): array
+    {
+        $topic = $node['data']['topic'] ?? null;
+        $config = $node['data']['config'] ?? [];
+        $mappings = $node['data']['inputMappings'] ?? [];
+        $vars = $instance->variables ?? [];
+
+        $resolved = [];
+
+        // Declared ports first, in precedence order.
+        foreach (($topic ? $this->registry->signature($topic)['inputs'] : []) as $port) {
+            $name = $port['name'] ?? null;
+            if ($name === null) {
+                continue;
+            }
+            if (array_key_exists($name, $mappings)) {
+                $resolved[$name] = $this->resolveMapping($mappings[$name], $vars);
+            } elseif (array_key_exists($name, $config)) {
+                $resolved[$name] = $config[$name];
+            } elseif (array_key_exists('default', $port) && $port['default'] !== null) {
+                $resolved[$name] = $port['default'];
+            }
+        }
+
+        // Wires onto undeclared inputs still resolve (unsignatured handlers / forward-compat).
+        foreach ($mappings as $name => $mapping) {
+            if (! array_key_exists($name, $resolved)) {
+                $resolved[$name] = $this->resolveMapping($mapping, $vars);
+            }
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * Resolve one input wire against the variable bag. Forms:
+     *   { const: <value> }          a literal
+     *   { var: "name" }             an instance variable (dot paths allowed)
+     *   { from: "nodeId.port" }     an upstream node's output (read by port name)
+     *   "name" | "nodeId.port"      shorthand for { from: ... }
+     *
+     * @param  array<string,mixed>  $vars
+     */
+    private function resolveMapping(mixed $mapping, array $vars): mixed
+    {
+        if (! is_array($mapping)) {
+            return $this->readPort((string) $mapping, $vars);
+        }
+        if (array_key_exists('const', $mapping)) {
+            return $mapping['const'];
+        }
+        if (array_key_exists('var', $mapping)) {
+            return data_get($vars, (string) $mapping['var']);
+        }
+        if (array_key_exists('from', $mapping)) {
+            return $this->readPort((string) $mapping['from'], $vars);
+        }
+
+        return null;
+    }
+
+    /**
+     * Read a "nodeId.port" (or flat "name") reference from the shared bag. Outputs
+     * are merged by name at completion (mergeVariables), so the port is the key.
+     *
+     * @param  array<string,mixed>  $vars
+     */
+    private function readPort(string $ref, array $vars): mixed
+    {
+        $key = str_contains($ref, '.') ? substr((string) strrchr($ref, '.'), 1) : $ref;
+
+        return data_get($vars, $key);
+    }
+
     private function park(ProcessInstance $instance, string $nodeId): void
     {
         $instance->update(['active_nodes' => [$nodeId], 'status' => ProcessInstance::RUNNING]);
@@ -282,7 +388,7 @@ class WorkflowEngine
             $this->mergeVariables($instance, $outputs);
             $this->log($instance, $task->node_id, 'serviceTask', 'TASK_COMPLETED', $outputs);
 
-            $definition = ProcessDefinition::query()->findOrFail($instance->definition_id);
+            $definition = $this->definitionById($instance->definition_id);
             $this->advanceFrom($instance, $definition, $task->node_id);
         });
     }
@@ -314,7 +420,7 @@ class WorkflowEngine
             $this->mergeVariables($instance, $outputs);
             $this->log($instance, $task->node_id, 'userTask', 'USER_TASK_COMPLETED', $outputs);
 
-            $definition = ProcessDefinition::query()->findOrFail($instance->definition_id);
+            $definition = $this->definitionById($instance->definition_id);
             $this->advanceFrom($instance, $definition, $task->node_id);
         });
     }
@@ -334,7 +440,7 @@ class WorkflowEngine
                     return;
                 }
                 $this->mergeVariables($instance, $variables);
-                $definition = ProcessDefinition::query()->findOrFail($instance->definition_id);
+                $definition = $this->definitionById($instance->definition_id);
                 $node = $sub->node_id;
                 $sub->delete();
                 $this->advanceFrom($instance, $definition, $node);
@@ -354,7 +460,7 @@ class WorkflowEngine
                 if (! $instance || $instance->status !== ProcessInstance::RUNNING) {
                     return;
                 }
-                $definition = ProcessDefinition::query()->findOrFail($instance->definition_id);
+                $definition = $this->definitionById($instance->definition_id);
                 $this->advanceFrom($instance, $definition, $timer->node_id);
             });
         }

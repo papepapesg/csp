@@ -7,6 +7,7 @@ use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Id;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Modules\Workflow\Engine\GraphValidator;
 use Modules\Workflow\Engine\TaskRegistry;
 use Modules\Workflow\Models\ProcessDefinition;
 
@@ -17,7 +18,10 @@ use Modules\Workflow\Models\ProcessDefinition;
  */
 class WorkflowStudioController extends ApiController
 {
-    public function __construct(private readonly TaskRegistry $registry) {}
+    public function __construct(
+        private readonly TaskRegistry $registry,
+        private readonly GraphValidator $validator,
+    ) {}
 
     /** GET /api/workflow/palette — reusable steps available to drag onto a flow. */
     public function palette(): JsonResponse
@@ -109,9 +113,28 @@ class WorkflowStudioController extends ApiController
         return ApiResponse::item($processDefinition);
     }
 
+    /**
+     * POST /api/workflow/definitions/{def}/validate — the studio "issues" panel.
+     * Returns the design-time problems (dangling edges, unknown steps, unbound
+     * required inputs, broken data wires) without changing anything.
+     */
+    public function validate(ProcessDefinition $processDefinition): JsonResponse
+    {
+        $errors = $this->validator->validate($processDefinition->graph ?? []);
+
+        return ApiResponse::item(['valid' => $errors === [], 'errors' => $errors]);
+    }
+
     /** POST /api/workflow/definitions/{def}/deploy — make it the active version. */
     public function deploy(ProcessDefinition $processDefinition): JsonResponse
     {
+        // A flow must be valid before it can go live (CAM-BPMN-*): no dangling
+        // edges, every step known, every required input bound, every wire sound.
+        $errors = $this->validator->validate($processDefinition->graph ?? []);
+        if ($errors !== []) {
+            return ApiResponse::error('GRAPH_INVALID', 'Flow cannot be deployed.', 422, false, ['graph' => $errors]);
+        }
+
         // Retire the currently deployed definition for the same key+operator.
         ProcessDefinition::query()
             ->where('process_key', $processDefinition->process_key)

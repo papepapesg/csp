@@ -5,6 +5,7 @@ namespace Modules\Subscription\Workflow;
 use Modules\Provisioning\Services\ProvisioningService;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Models\SubscriptionOperation;
+use Modules\Workflow\Contracts\Io;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
 use Modules\Workflow\Contracts\TaskResult;
@@ -29,6 +30,22 @@ class FulfillmentCallHandler implements TaskHandler
     public function label(): string
     {
         return 'Subscription: Fulfillment call (network)';
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function inputs(): array
+    {
+        return [
+            Io::in('action', Io::ENUM, 'Network command to send for this operation.', false, 'MODIFY', ['ACTIVATE', 'SUSPEND', 'MODIFY', 'DEACTIVATE']),
+            Io::in('target', Io::STRING, 'NMS/target system code.', false, 'DEFAULT_NMS'),
+            Io::in('desiredStatus', Io::STRING, 'State the network should reach.', false, 'ACTIVE'),
+        ];
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function outputs(): array
+    {
+        return [Io::out('fulfilled', Io::BOOLEAN, 'True when every network command was CONFIRMED (the commit is gated on this).')];
     }
 
     public function handle(TaskContext $context): TaskResult

@@ -3,6 +3,7 @@
 namespace Modules\Provisioning\Workflow;
 
 use Modules\Provisioning\Services\ProvisioningService;
+use Modules\Workflow\Contracts\Io;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
 use Modules\Workflow\Contracts\TaskResult;
@@ -26,6 +27,25 @@ class ActivateServiceHandler implements TaskHandler
     public function label(): string
     {
         return 'Provisioning: Activate service';
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function inputs(): array
+    {
+        return [
+            Io::in('target', Io::STRING, 'NMS/target system code to provision against.', false, 'DEFAULT_NMS'),
+            Io::in('speedProfile', Io::STRING, 'Service speed/bandwidth profile to apply (e.g. 100M).'),
+            Io::in('serviceRef', Io::STRING, 'Service reference when not derived from the subscription package.'),
+        ];
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function outputs(): array
+    {
+        return [
+            Io::out('provisioned', Io::BOOLEAN, 'True when the NMS confirmed activation.'),
+            Io::out('provisioningRefs', Io::OBJECT, 'External references returned by the NMS for the confirmed commands.'),
+        ];
     }
 
     public function handle(TaskContext $context): TaskResult

@@ -43,4 +43,24 @@ class TaskContext
     {
         return $this->task->variables['__config'] ?? [];
     }
+
+    /**
+     * Resolved inputs for this node (the engine resolves the handler's declared
+     * input ports from data.inputMappings -> data.config -> port default before
+     * the task runs). Prefer this over config()+var(): it already merged the
+     * literal config and any data wires, so a handler reads one clean input map.
+     *
+     * @return array<string,mixed>
+     */
+    public function inputs(): array
+    {
+        return $this->task->variables['__inputs'] ?? [];
+    }
+
+    public function input(string $key, mixed $default = null): mixed
+    {
+        $inputs = $this->task->variables['__inputs'] ?? [];
+
+        return array_key_exists($key, $inputs) && $inputs[$key] !== null ? $inputs[$key] : $default;
+    }
 }

@@ -38,6 +38,28 @@ class TaskRegistry
         return array_keys($this->handlers);
     }
 
+    /**
+     * The IO signature of a step (node type): its label and declared input/output
+     * ports. inputs()/outputs() are optional on a handler — absent = no declared
+     * ports (the step still runs; it just isn't visually wireable/validatable).
+     * Pure in-process reflection — no DB, safe to call per node.
+     *
+     * @return array{label:string, inputs:array<int,array<string,mixed>>, outputs:array<int,array<string,mixed>>}
+     */
+    public function signature(string $topic): array
+    {
+        $handler = $this->resolve($topic);
+        if (! $handler) {
+            return ['label' => $topic, 'inputs' => [], 'outputs' => []];
+        }
+
+        return [
+            'label' => $handler->label(),
+            'inputs' => method_exists($handler, 'inputs') ? $handler->inputs() : [],
+            'outputs' => method_exists($handler, 'outputs') ? $handler->outputs() : [],
+        ];
+    }
+
     /** @return array<int,array{topic:string,label:string,description:string}> palette for the studio */
     public function palette(): array
     {
@@ -49,7 +71,15 @@ class TaskRegistry
             $description = method_exists($handler, 'description')
                 ? $handler->description()
                 : sprintf("Runs the '%s' step (service task '%s'). Idempotent — the engine may retry it.", $handler->label(), $topic);
-            $items[] = ['topic' => $topic, 'label' => $handler->label(), 'description' => $description];
+            $items[] = [
+                'topic' => $topic,
+                'label' => $handler->label(),
+                'description' => $description,
+                // The studio renders these as the node's config panel: each input row is a
+                // value (literal/default) or a wire (mapping), each output a connectable port.
+                'inputs' => method_exists($handler, 'inputs') ? $handler->inputs() : [],
+                'outputs' => method_exists($handler, 'outputs') ? $handler->outputs() : [],
+            ];
         }
         usort($items, fn ($a, $b) => $a['label'] <=> $b['label']);
 

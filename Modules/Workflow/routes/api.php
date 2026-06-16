@@ -16,6 +16,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('workflow/definitions', [WorkflowStudioController::class, 'store'])->middleware('permission:workflow.manage');
     Route::get('workflow/definitions/{processDefinition}', [WorkflowStudioController::class, 'show'])->middleware('permission:workflow.view');
     Route::put('workflow/definitions/{processDefinition}', [WorkflowStudioController::class, 'update'])->middleware('permission:workflow.manage');
+    Route::post('workflow/definitions/{processDefinition}/validate', [WorkflowStudioController::class, 'validate'])->middleware('permission:workflow.view');
     Route::post('workflow/definitions/{processDefinition}/deploy', [WorkflowStudioController::class, 'deploy'])->middleware('permission:workflow.manage');
 
     // IT-Ops monitoring + control

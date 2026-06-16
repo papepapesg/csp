@@ -5,6 +5,7 @@ namespace Modules\Subscription\Workflow;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Models\SubscriptionOperation;
 use Modules\Subscription\Services\SubscriptionService;
+use Modules\Workflow\Contracts\Io;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
 use Modules\Workflow\Contracts\TaskResult;
@@ -28,6 +29,21 @@ class EnterPendingStatusHandler implements TaskHandler
     public function label(): string
     {
         return 'Subscription: Enter pending status';
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function inputs(): array
+    {
+        return [
+            Io::in('pendingStatus', Io::STRING, 'Transient PENDING_* status to hold during the commit window (e.g. PENDING_PAUSE).', true),
+            Io::in('transitionType', Io::STRING, 'Operation transition type stamped on the subscription (defaults to the operation kind).'),
+        ];
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function outputs(): array
+    {
+        return [Io::out('pendingStatus', Io::STRING, 'The pending status that was applied.')];
     }
 
     public function handle(TaskContext $context): TaskResult

@@ -5,9 +5,11 @@ namespace Modules\Workflow\Tests\Feature;
 use App\Foundation\Support\Id;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Modules\Workflow\Contracts\Io;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
 use Modules\Workflow\Contracts\TaskResult;
+use Modules\Workflow\Engine\GraphValidator;
 use Modules\Workflow\Engine\TaskRegistry;
 use Modules\Workflow\Engine\WorkflowEngine;
 use Modules\Workflow\Models\ProcessDefinition;
@@ -29,6 +31,8 @@ class WorkflowEngineTest extends TestCase
         $registry = app(TaskRegistry::class);
         $registry->register(RecordStepA::class);
         $registry->register(RecordStepB::class);
+        $registry->register(ProduceStep::class);
+        $registry->register(ConsumeStep::class);
         RecordSink::$seen = [];
     }
 
@@ -113,6 +117,94 @@ class WorkflowEngineTest extends TestCase
         $this->assertContains('A:vip-1', RecordSink::$seen);
         $this->assertContains('B:reg-1', RecordSink::$seen);
     }
+
+    public function test_input_mapping_wires_an_upstream_output_into_a_downstream_input(): void
+    {
+        // produce -> consume, where consume.amount is WIRED from produce.priceDelta.
+        $graph = [
+            'nodes' => [
+                ['id' => 'start', 'type' => 'startEvent', 'data' => []],
+                ['id' => 'p', 'type' => 'serviceTask', 'data' => ['topic' => 'test.produce']],
+                ['id' => 'c', 'type' => 'serviceTask', 'data' => ['topic' => 'test.consume',
+                    'inputMappings' => ['amount' => ['from' => 'p.priceDelta']]]],
+                ['id' => 'end', 'type' => 'endEvent', 'data' => []],
+            ],
+            'edges' => [
+                ['id' => 'e1', 'source' => 'start', 'target' => 'p'],
+                ['id' => 'e2', 'source' => 'p', 'target' => 'c'],
+                ['id' => 'e3', 'source' => 'c', 'target' => 'end'],
+            ],
+        ];
+        $this->deploy('io-flow', $graph);
+
+        app(WorkflowEngine::class)->start('io-flow', 'bk-io', [], 'WIK');
+        $this->drain();
+
+        // The consumer saw the produced value flow through the wire (not via a shared name).
+        $this->assertContains('amount:1500', RecordSink::$seen);
+        $this->assertSame(1, ProcessInstance::where('status', 'COMPLETED')->count());
+    }
+
+    public function test_graph_validator_passes_a_well_formed_wired_flow(): void
+    {
+        $graph = [
+            'nodes' => [
+                ['id' => 'start', 'type' => 'startEvent', 'data' => []],
+                ['id' => 'p', 'type' => 'serviceTask', 'data' => ['topic' => 'test.produce']],
+                ['id' => 'c', 'type' => 'serviceTask', 'data' => ['topic' => 'test.consume',
+                    'inputMappings' => ['amount' => ['from' => 'p.priceDelta']]]],
+                ['id' => 'end', 'type' => 'endEvent', 'data' => []],
+            ],
+            'edges' => [
+                ['id' => 'e1', 'source' => 'start', 'target' => 'p'],
+                ['id' => 'e2', 'source' => 'p', 'target' => 'c'],
+                ['id' => 'e3', 'source' => 'c', 'target' => 'end'],
+            ],
+        ];
+
+        $this->assertSame([], app(GraphValidator::class)->validate($graph));
+    }
+
+    public function test_graph_validator_flags_required_input_unknown_topic_and_bad_wire(): void
+    {
+        $validator = app(GraphValidator::class);
+
+        // (1) consume needs required 'amount' but nothing binds it.
+        $missing = $validator->validate([
+            'nodes' => [
+                ['id' => 'start', 'type' => 'startEvent', 'data' => []],
+                ['id' => 'c', 'type' => 'serviceTask', 'data' => ['topic' => 'test.consume']],
+                ['id' => 'end', 'type' => 'endEvent', 'data' => []],
+            ],
+            'edges' => [
+                ['id' => 'e1', 'source' => 'start', 'target' => 'c'],
+                ['id' => 'e2', 'source' => 'c', 'target' => 'end'],
+            ],
+        ]);
+        $this->assertNotEmpty($missing);
+        $this->assertStringContainsString("missing required input 'amount'", implode(' ', $missing));
+
+        // (2) unknown topic + (3) a wire onto an output the source does not produce.
+        $bad = $validator->validate([
+            'nodes' => [
+                ['id' => 'start', 'type' => 'startEvent', 'data' => []],
+                ['id' => 'x', 'type' => 'serviceTask', 'data' => ['topic' => 'test.does-not-exist']],
+                ['id' => 'p', 'type' => 'serviceTask', 'data' => ['topic' => 'test.produce']],
+                ['id' => 'c', 'type' => 'serviceTask', 'data' => ['topic' => 'test.consume',
+                    'inputMappings' => ['amount' => ['from' => 'p.nope']]]],
+                ['id' => 'end', 'type' => 'endEvent', 'data' => []],
+            ],
+            'edges' => [
+                ['id' => 'e1', 'source' => 'start', 'target' => 'x'],
+                ['id' => 'e2', 'source' => 'x', 'target' => 'p'],
+                ['id' => 'e3', 'source' => 'p', 'target' => 'c'],
+                ['id' => 'e4', 'source' => 'c', 'target' => 'end'],
+            ],
+        ]);
+        $joined = implode(' ', $bad);
+        $this->assertStringContainsString("unknown step 'test.does-not-exist'", $joined);
+        $this->assertStringContainsString("does not produce 'nope'", $joined);
+    }
 }
 
 class RecordSink
@@ -156,6 +248,58 @@ class RecordStepB implements TaskHandler
     public function handle(TaskContext $c): TaskResult
     {
         RecordSink::$seen[] = 'B:'.$c->businessKey();
+
+        return TaskResult::success();
+    }
+}
+
+/** Declares an output port and publishes it (the producer side of a data wire). */
+class ProduceStep implements TaskHandler
+{
+    public function topic(): string
+    {
+        return 'test.produce';
+    }
+
+    public function label(): string
+    {
+        return 'Test Produce';
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function outputs(): array
+    {
+        return [Io::out('priceDelta', Io::NUMBER, 'A produced amount.')];
+    }
+
+    public function handle(TaskContext $c): TaskResult
+    {
+        return TaskResult::success(['priceDelta' => 1500]);
+    }
+}
+
+/** Declares a required input and records the value the engine resolved for it. */
+class ConsumeStep implements TaskHandler
+{
+    public function topic(): string
+    {
+        return 'test.consume';
+    }
+
+    public function label(): string
+    {
+        return 'Test Consume';
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function inputs(): array
+    {
+        return [Io::in('amount', Io::NUMBER, 'Amount to consume.', true)];
+    }
+
+    public function handle(TaskContext $c): TaskResult
+    {
+        RecordSink::$seen[] = 'amount:'.$c->input('amount');
 
         return TaskResult::success();
     }

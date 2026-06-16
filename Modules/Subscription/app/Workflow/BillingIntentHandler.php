@@ -6,6 +6,7 @@ use Modules\Billing\Models\BillingIntent;
 use Modules\Billing\Services\BillingIntentService;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Models\SubscriptionOperation;
+use Modules\Workflow\Contracts\Io;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
 use Modules\Workflow\Contracts\TaskResult;
@@ -32,6 +33,28 @@ class BillingIntentHandler implements TaskHandler
         return 'Subscription: Billing intent (BIL-01)';
     }
 
+    /** @return array<int,array<string,mixed>> */
+    public function inputs(): array
+    {
+        return [
+            Io::in('amount', Io::NUMBER, 'Amount to charge. Wire this from an upstream output (e.g. validate.priceDelta) or set a fixed value.'),
+            Io::in('intentType', Io::ENUM, 'Billable-event category raised through BIL-01.', false, 'PRORATION', ['PRORATION', 'PAUSE_FEE', 'RECONNECTION_FEE', 'DEPOSIT_REFUND']),
+            Io::in('payFirst', Io::BOOLEAN, 'When true and the amount is chargeable, the flow parks on payment before fulfilling.', false, false),
+            // Legacy bindings (pre-IO flows): read the amount from a named variable or a fixed value.
+            Io::in('amountVar', Io::STRING, 'Legacy: name of the variable holding the amount (used only when amount is not wired).'),
+            Io::in('fixedAmount', Io::NUMBER, 'Legacy: fixed amount when neither amount nor amountVar is set.', false, 0),
+        ];
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function outputs(): array
+    {
+        return [
+            Io::out('billingIntentId', Io::STRING, 'Id of the raised BIL-01 intent.'),
+            Io::out('paymentRequired', Io::BOOLEAN, 'True when an unpaid chargeable balance was raised — a gateway can branch to await payment.'),
+        ];
+    }
+
     public function handle(TaskContext $context): TaskResult
     {
         $subscription = Subscription::query()->find($context->businessKey());
@@ -42,8 +65,12 @@ class BillingIntentHandler implements TaskHandler
         SubscriptionOperation::narrate($operationId, SubscriptionOperation::BILLING_CALL);
 
         $cfg = $context->config();
-        $amount = $cfg['amountVar'] ? (float) $context->var($cfg['amountVar'], 0) : (float) ($cfg['fixedAmount'] ?? 0);
-        $payFirst = (bool) ($cfg['payFirst'] ?? false);
+        // Prefer the resolved 'amount' input (a wire or literal). Fall back to the legacy
+        // amountVar/fixedAmount config so pre-IO flows keep working unchanged.
+        $legacyAmount = $cfg['amountVar'] ? (float) $context->var($cfg['amountVar'], 0) : (float) ($cfg['fixedAmount'] ?? 0);
+        $amount = (float) $context->input('amount', $legacyAmount);
+        $payFirst = (bool) $context->input('payFirst', $cfg['payFirst'] ?? false);
+        $intentType = (string) $context->input('intentType', $cfg['intentType'] ?? 'PRORATION');
 
         $intent = $this->intents->emit([
             'subscription_id' => $subscription->subscription_id,
@@ -51,11 +78,11 @@ class BillingIntentHandler implements TaskHandler
             'operator_code' => $subscription->operator_code,
             'billing_mode' => $subscription->billing_mode,   // PREPAID settles from the wallet, POSTPAID raises an invoice
             'operation_id' => $operationId,
-            'intent_type' => $cfg['intentType'] ?? 'PRORATION',
+            'intent_type' => $intentType,
             'amount' => $amount,
             'currency' => $subscription->currency,
             'pay_first' => $payFirst,
-            'description' => ($cfg['intentType'] ?? 'CHARGE').' for '.$context->var('operationKind'),
+            'description' => $intentType.' for '.$context->var('operationKind'),
         ]);
 
         $paymentRequired = $intent->status === BillingIntent::PENDING && (float) $intent->amount > 0;

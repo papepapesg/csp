@@ -5,6 +5,7 @@ namespace Modules\Subscription\Workflow;
 use App\Foundation\Rules\RuleEngine;
 use Modules\Billing\Models\Invoice;
 use Modules\Subscription\Models\Subscription;
+use Modules\Workflow\Contracts\Io;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
 use Modules\Workflow\Contracts\TaskResult;
@@ -38,6 +39,17 @@ class ValidateActivationHandler implements TaskHandler
             .'stay fixed, but the eligibility policy is read from the \'activation.eligibility\' '
             .'decision table — so a gateway after this step can branch on the result, and an '
             .'operator can change activation policy in the Rules Studio without code.';
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function outputs(): array
+    {
+        return [
+            Io::out('eligible', Io::BOOLEAN, 'Whether activation may proceed — wire a gateway off this to branch.'),
+            Io::out('eligibilityReason', Io::STRING, 'Decision code when not eligible (e.g. PAY_FIRST_REQUIRED).'),
+            Io::out('eligibilityRuleId', Io::STRING, 'Id of the decision-table rule that fired.'),
+            Io::out('outstandingBalance', Io::NUMBER, 'Open balance computed for the account.'),
+        ];
     }
 
     public function handle(TaskContext $context): TaskResult
