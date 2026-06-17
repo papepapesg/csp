@@ -25,6 +25,11 @@ class TechRegion extends Model
         'active' => 'boolean',
         'effective_from' => 'date',
         'effective_to' => 'date',
+        // Importable GIS placeholders (EPSG:4326): GeoJSON boundary + centroid.
+        'geo_boundary' => 'array',
+        'geo_centroid_lat' => 'float',
+        'geo_centroid_lng' => 'float',
+        'geo_imported_at' => 'datetime',
     ];
 
     public function getRouteKeyName(): string

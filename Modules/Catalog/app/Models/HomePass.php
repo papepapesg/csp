@@ -35,6 +35,11 @@ class HomePass extends Model
         'network_path' => 'array',
         'service_management_endpoints' => 'array',
         'services_supported' => 'array',
+        // Importable GIS placeholders (EPSG:4326): point coordinates + optional footprint.
+        'geo_lat' => 'float',
+        'geo_lng' => 'float',
+        'geo_footprint' => 'array',
+        'geo_imported_at' => 'datetime',
     ];
 
     protected static function booted(): void
