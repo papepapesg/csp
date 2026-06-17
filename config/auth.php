@@ -42,6 +42,19 @@ return [
             'driver' => 'session',
             'provider' => 'users',
         ],
+
+        // FOUNDATION_AUTH seam: the API guard the modules use (`auth:sanctum`).
+        // Its DRIVER is env-selected — 'sanctum' for local token auth, 'keycloak'
+        // for Keycloak OIDC (registered by FoundationServiceProvider). Swapping a
+        // deployment to Keycloak is therefore SOPHIX_AUTH_DRIVER=keycloak only:
+        // no route change (every route still says auth:sanctum), no code change.
+        // provider stays null (matching Sanctum's own default) so Spatie does NOT
+        // infer a second guard for the User model; the keycloak driver resolves
+        // the user itself (users.uid = token sub).
+        'sanctum' => [
+            'driver' => env('SOPHIX_AUTH_DRIVER', 'sanctum'),
+            'provider' => null,
+        ],
     ],
 
     /*

@@ -26,6 +26,7 @@ return [
     | event_bus : outbox | kafka   (FOUNDATION_KAFKA)
     | workflow  : native | camunda (FOUNDATION_CAMUNDA)
     | rules     : native | drools  (FOUNDATION_DROOLS)
+    | auth      : sanctum | keycloak (FOUNDATION_AUTH)
     */
     'event_bus' => env('SOPHIX_EVENT_BUS', 'outbox'),
     'workflow_driver' => env('SOPHIX_WORKFLOW_DRIVER', 'native'),
@@ -33,6 +34,27 @@ return [
     'provisioning_driver' => env('SOPHIX_PROVISIONING_DRIVER', 'stub'),
     'tax_driver' => env('SOPHIX_TAX_DRIVER', 'stub'),
     'sms_driver' => env('SOPHIX_SMS_DRIVER', 'stub'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Auth driver (FOUNDATION_AUTH). The api guard's driver is env-selected
+    | (config/auth.php reads SOPHIX_AUTH_DRIVER), so switching a deployment from
+    | local Sanctum tokens to Keycloak OIDC is ENV-ONLY — no code, no route change.
+    | Modules verify Keycloak JWTs locally (RS256), never calling Keycloak per
+    | request; users.uid = the token `sub`, the only Keycloak-aware column.
+    |--------------------------------------------------------------------------
+    */
+    'auth' => [
+        'driver' => env('SOPHIX_AUTH_DRIVER', 'sanctum'),
+        'keycloak' => [
+            'issuer' => env('KEYCLOAK_ISSUER'),                       // e.g. https://id.yas.sn/realms/sophix
+            'audience' => env('KEYCLOAK_AUDIENCE'),                   // optional aud claim to require
+            'realm_public_key' => env('KEYCLOAK_REALM_PUBLIC_KEY'),   // realm RS256 public key (PEM or base64 DER)
+            'roles_claim' => env('KEYCLOAK_ROLES_CLAIM', 'realm_access.roles'),
+            'leeway' => (int) env('KEYCLOAK_LEEWAY', 30),             // clock-skew seconds
+        ],
+    ],
+
 
     'kafka' => [
         'brokers' => env('KAFKA_BROKERS', 'kafka:9092'),
