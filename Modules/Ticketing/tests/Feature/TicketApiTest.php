@@ -31,6 +31,19 @@ class TicketApiTest extends TestCase
         ], ['Idempotency-Key' => 'tk-'.$priority])->assertCreated()->assertJsonPath('status', 'OPEN')->json('ticket_id');
     }
 
+    public function test_asr_type_is_preset_from_category_catalog_and_overridable(): void
+    {
+        // NO_INTERNET presets asr_type TECHNICAL_TROUBLE from the catalog (no asr_type sent).
+        $a = $this->postJson('/api/tickets', ['category' => 'NO_INTERNET', 'subject' => 'down', 'customer_id' => 'c9'], ['Idempotency-Key' => 'asr-1'])
+            ->assertCreated()->json();
+        $this->assertSame('TECHNICAL_TROUBLE', Ticket::find($a['ticket_id'])->asr_type);
+
+        // An explicit asr_type overrides the catalog default.
+        $b = $this->postJson('/api/tickets', ['category' => 'NO_INTERNET', 'asr_type' => 'COMPLAINT', 'subject' => 'angry', 'customer_id' => 'c9'], ['Idempotency-Key' => 'asr-2'])
+            ->assertCreated()->json();
+        $this->assertSame('COMPLAINT', Ticket::find($b['ticket_id'])->asr_type);
+    }
+
     public function test_ticket_gets_gap_free_number_attachments_and_links(): void
     {
         $a = $this->postJson('/api/tickets', ['category' => 'TECHNICAL', 'subject' => 'A', 'customer_id' => 'c1'], ['Idempotency-Key' => 'n1'])->assertCreated()->json();

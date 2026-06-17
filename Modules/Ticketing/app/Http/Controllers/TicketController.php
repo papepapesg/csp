@@ -41,6 +41,7 @@ class TicketController extends ApiController
         $data = $request->validate([
             'category' => ['required', 'string', 'max:64'], // governed by the ticket_category_catalog, not a code enum
             'subcategory' => ['nullable', 'string', 'max:64'],
+            'asr_type' => ['nullable', 'string', 'max:32'], // catalog preset; optional per-ticket override
             'priority' => ['nullable', 'in:LOW,NORMAL,HIGH,URGENT'],
             'subject' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],

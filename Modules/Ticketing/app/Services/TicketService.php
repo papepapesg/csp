@@ -44,6 +44,8 @@ class TicketService
             $ticket = Ticket::query()->create($data + [
                 'priority' => $priority,
                 'queue' => $data['queue'] ?? $category?->default_queue,
+                // §7.6: ASR type is a catalog preset, seeded here but override-able per ticket.
+                'asr_type' => $data['asr_type'] ?? $category?->default_asr_type,
                 'status' => Ticket::OPEN,
                 'ticket_number' => $this->nextTicketNumber(Context::operatorCode()),
                 'sla_due_at' => now()->addHours($slaHours),
