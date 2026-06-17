@@ -47,6 +47,28 @@ class TaxComputeTest extends TestCase
         $this->assertSame(0.0, $result['totalTaxAmount']);
     }
 
+    public function test_falls_back_to_product_default_tax_group_when_rule_resolves_nothing(): void
+    {
+        // The applicability rule only covers PACKAGE/INTERNET; a SERVICE resolves to null →
+        // compute falls back to the service's own default_tax_group_ref (WIK_INTERNET).
+        $class = \Modules\Catalog\Models\ServiceClass::query()->create([
+            'id' => 'scls_bb', 'operator_code' => 'WIK', 'name' => 'Broadband',
+        ]);
+        \Modules\Catalog\Models\Service::query()->create([
+            'id' => 'svc_100', 'operator_code' => 'WIK', 'code' => 'FTTH-100', 'name' => 'FTTH 100',
+            'service_class_id' => $class->id, 'default_tax_group_ref' => 'WIK_INTERNET',
+        ]);
+
+        $result = app(TaxComputeService::class)->compute([
+            'operatorCode' => 'WIK', 'taxableKind' => 'SERVICE', 'taxableRef' => 'svc_100',
+            'baseAmount' => 10000, 'currency' => 'KES',
+        ]);
+
+        $this->assertSame('RESOLVED', $result['resolutionStatus']);
+        $this->assertSame('WIK_INTERNET', $result['taxGroup']);
+        $this->assertEqualsWithDelta(3340.0, $result['totalTaxAmount'], 0.001); // same cascade as the worked example
+    }
+
     public function test_tax_compute_endpoint(): void
     {
         $this->postJson('/api/tax/compute', ['operatorCode' => 'WIK', 'taxableKind' => 'PACKAGE', 'baseAmount' => 10000])

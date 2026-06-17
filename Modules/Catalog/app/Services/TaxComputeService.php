@@ -4,6 +4,8 @@ namespace Modules\Catalog\Services;
 
 use App\Foundation\Rules\RuleEngine;
 use Carbon\Carbon;
+use Modules\Catalog\Models\Package;
+use Modules\Catalog\Models\Service;
 use Modules\Catalog\Models\TaxGroup;
 use Modules\Catalog\Models\TaxRule;
 
@@ -33,29 +35,37 @@ class TaxComputeService
         }
         $taxableAt = isset($request['taxableAt']) ? Carbon::parse($request['taxableAt']) : now();
 
+        // The taxable product's own default_tax_group_ref is the DEFAULT tax group; the
+        // applicability rule is the OVERRIDE layer (e.g. business customer / exempt region).
+        // We expose the default as a fact (so a rule may reference it) and fall back to it
+        // when the rule resolves nothing — so the product's configured group is honoured.
+        $productDefault = $this->productDefaultTaxGroup($operator, $request['taxableKind'] ?? null, $request['taxableRef'] ?? null);
+
         // R-PLM-02-AP-1: resolve the tax group (operator-scoped applicability).
         $decision = $this->rules->evaluate('rules.tax-applicability', [
             'operatorCode' => $operator,
             'taxableKind' => $request['taxableKind'] ?? null,
             'taxableRef' => $request['taxableRef'] ?? null,
             'customerCategory' => $request['customerCategory'] ?? 'RESIDENTIAL',
+            'defaultTaxGroup' => $productDefault,
         ]);
-        $groupCode = $decision['taxGroup'] ?? null;
+        $ruleGroup = $decision['taxGroup'] ?? null;
 
-        // R-PLM-02-AP-2/3: no group / explicit NONE -> zero tax, not an error.
-        if (! $groupCode || $groupCode === 'NONE') {
-            return [
-                'taxLines' => [], 'totalTaxAmount' => 0.0, 'totalWithTax' => round($baseAmount, 2),
-                'currency' => $currency, 'resolutionStatus' => $groupCode === 'NONE' ? 'EXEMPT_BY_RULE' : 'NO_TAX_GROUP_RESOLVED', 'taxGroup' => null,
-            ];
+        // R-PLM-02-AP-2/3: explicit NONE = exempt by rule (no fallback). Otherwise the rule
+        // result wins, else the product default; absent both = no tax (not an error).
+        if ($ruleGroup === 'NONE') {
+            return $this->untaxed($baseAmount, $currency, 'EXEMPT_BY_RULE');
+        }
+        $groupCode = $ruleGroup ?: $productDefault;
+        if (! $groupCode) {
+            return $this->untaxed($baseAmount, $currency, 'NO_TAX_GROUP_RESOLVED');
         }
 
-        $group = TaxGroup::query()->where('operator_code', $operator)->where('code', $groupCode)->first();
+        $group = TaxGroup::query()->where('operator_code', $operator)
+            ->where(fn ($q) => $q->where('code', $groupCode)->orWhere('tax_group_id', $groupCode))
+            ->first();
         if (! $group) {
-            return [
-                'taxLines' => [], 'totalTaxAmount' => 0.0, 'totalWithTax' => round($baseAmount, 2),
-                'currency' => $currency, 'resolutionStatus' => 'NO_TAX_GROUP_RESOLVED', 'taxGroup' => null,
-            ];
+            return $this->untaxed($baseAmount, $currency, 'NO_TAX_GROUP_RESOLVED');
         }
 
         $taxLines = [];
@@ -87,6 +97,32 @@ class TaxComputeService
             'currency' => $currency,
             'resolutionStatus' => 'RESOLVED',
             'taxGroup' => $groupCode,
+        ];
+    }
+
+    /** The taxable product's configured default tax group (code or id), if any. */
+    private function productDefaultTaxGroup(string $operator, ?string $kind, ?string $ref): ?string
+    {
+        if (! $ref) {
+            return null;
+        }
+        $model = match ($kind) {
+            'PACKAGE' => Package::query()->where('operator_code', $operator)->where(fn ($q) => $q->where('id', $ref)->orWhere('code', $ref))->first(),
+            'SERVICE' => Service::query()->where('operator_code', $operator)->where(fn ($q) => $q->where('id', $ref)->orWhere('code', $ref))->first(),
+            default => null,
+        };
+
+        return $model?->default_tax_group_ref;
+    }
+
+    /**
+     * @return array{taxLines:array<int,mixed>, totalTaxAmount:float, totalWithTax:float, currency:string, resolutionStatus:string, taxGroup:?string}
+     */
+    private function untaxed(float $baseAmount, string $currency, string $status): array
+    {
+        return [
+            'taxLines' => [], 'totalTaxAmount' => 0.0, 'totalWithTax' => round($baseAmount, 2),
+            'currency' => $currency, 'resolutionStatus' => $status, 'taxGroup' => null,
         ];
     }
 }
