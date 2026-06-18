@@ -314,6 +314,24 @@ class VoiceTariffController extends ApiController
         return ApiResponse::item($this->service->ratingLookup($data));
     }
 
+    /** POST /api/plm/voice-rating/rate — rate a CDR (reservation+pulse, allowance burn-down). */
+    public function rateCall(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'operatorCode' => ['nullable', 'string'],
+            'subscriptionId' => ['nullable', 'string'],
+            'packageRef' => ['nullable', 'string'],
+            'serviceRef' => ['nullable', 'string'],
+            'calledNumberNormalized' => ['required', 'string'],
+            'callDirection' => ['required', 'in:OUTBOUND,INBOUND,FORWARDED'],
+            'callStartedAt' => ['required', 'date'],
+            'durationSeconds' => ['required', 'integer', 'min:0'],
+            'remainingAllowanceSeconds' => ['nullable', 'integer', 'min:0'],
+        ]);
+
+        return ApiResponse::item($this->service->rateCall($data));
+    }
+
     /** @return array<string,array<int,string>> */
     private function rateRules(): array
     {

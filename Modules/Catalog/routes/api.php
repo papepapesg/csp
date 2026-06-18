@@ -130,6 +130,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('plm/voice-tariff-bindings', [VoiceTariffController::class, 'storeBinding'])->middleware('permission:catalog.manage');
 
     Route::post('plm/voice-rating/lookup', [VoiceTariffController::class, 'ratingLookup'])->middleware('permission:catalog.read');
+    Route::post('plm/voice-rating/rate', [VoiceTariffController::class, 'rateCall'])->middleware('permission:catalog.read');
 
     // PLM-CFG-04 / SIP-03 / DIS-OP-01 discounts
     Route::get('discounts', [DiscountController::class, 'index'])->middleware('permission:catalog.read');

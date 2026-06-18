@@ -401,6 +401,92 @@ class VoiceTariffService
         ];
     }
 
+    /**
+     * Rate a single voice CDR: resolve the rate card (ratingLookup), apply the
+     * RESERVATION (initial increment) + PULSE (subsequent increment) rounding to the
+     * call duration, burn the supplied allowance seconds first, then charge the
+     * remainder (unit price + setup fee, floored at the minimum charge). Stateless —
+     * the caller (mediation/Billing) owns the allowance balance + carry-over; this
+     * returns how many seconds to charge, how much allowance was consumed, and the
+     * amount. Closes the gap where the rich rate fields were modelled but unused.
+     *
+     * @param  array<string,mixed>  $req  ratingLookup inputs + durationSeconds, remainingAllowanceSeconds?
+     * @return array<string,mixed>
+     */
+    public function rateCall(array $req): array
+    {
+        $card = $this->ratingLookup($req);
+        if (($card['resolutionStatus'] ?? null) !== 'RESOLVED') {
+            return $card; // QUARANTINE / NO_RATE etc. — nothing to rate
+        }
+
+        $duration = max(0, (int) ($req['durationSeconds'] ?? 0));
+        $remainingAllowance = max(0, (int) ($req['remainingAllowanceSeconds'] ?? 0));
+        $policy = $card['chargePolicy'];
+
+        if ($policy === 'QUARANTINE') {
+            return $this->quarantine('RATE_QUARANTINE');
+        }
+
+        // Reservation + pulse rounding (Huawei CBS / Diameter terms).
+        $billable = $this->reservePulse($duration, max(0, (int) $card['initialIncrementSeconds']), max(1, (int) $card['subsequentIncrementSeconds']));
+
+        if ($policy === 'BLOCKED') {
+            return $this->ratedResult($card, 'BLOCKED', 0, 0, 0, 0.0);
+        }
+        if ($policy === 'ZERO_RATED') {
+            return $this->ratedResult($card, 'ZERO_RATED', $billable, 0, 0, 0.0); // free: no allowance burn, no charge
+        }
+
+        // Burn allowance first, charge the remaining seconds.
+        $allowanceUsed = min($billable, $remainingAllowance);
+        $chargeable = $billable - $allowanceUsed;
+
+        $units = str_contains(strtoupper((string) $card['unitType']), 'SECOND') ? $chargeable : $chargeable / 60.0;
+        $amount = $units * (float) $card['unitPrice'];
+        if ($chargeable > 0) {
+            $amount += (float) $card['setupFeeAmount'];
+            $amount = max($amount, (float) $card['minimumChargeAmount']);
+        }
+
+        return $this->ratedResult($card, 'CHARGED', $billable, $allowanceUsed, $chargeable, round($amount, 2));
+    }
+
+    /** Round a duration up by the reservation (first block) then pulse (subsequent blocks). */
+    private function reservePulse(int $duration, int $initial, int $pulse): int
+    {
+        if ($duration <= 0) {
+            return 0;
+        }
+        if ($duration <= $initial) {
+            return $initial;
+        }
+
+        return $initial + (int) (ceil(($duration - $initial) / $pulse) * $pulse);
+    }
+
+    /**
+     * @param  array<string,mixed>  $card
+     * @return array<string,mixed>
+     */
+    private function ratedResult(array $card, string $chargeStatus, int $billable, int $allowanceUsed, int $chargeable, float $amount): array
+    {
+        return [
+            'resolutionStatus' => 'RATED',
+            'chargeStatus' => $chargeStatus,                 // CHARGED | ZERO_RATED | BLOCKED
+            'tariffPlanCode' => $card['tariffPlanCode'] ?? null,
+            'zoneCode' => $card['zoneCode'] ?? null,
+            'timeBandCode' => $card['timeBandCode'] ?? null,
+            'billableSeconds' => $billable,
+            'allowanceConsumedSeconds' => $allowanceUsed,
+            'chargeableSeconds' => $chargeable,
+            'amount' => $amount,
+            'currency' => $card['currency'] ?? null,
+            'taxableKind' => $card['taxableKind'] ?? null,
+            'taxableRef' => $card['taxableRef'] ?? null,
+        ];
+    }
+
     /** @return array{resolutionStatus:string,reason:string} */
     private function quarantine(string $reason): array
     {

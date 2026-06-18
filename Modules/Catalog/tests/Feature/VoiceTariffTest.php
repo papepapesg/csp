@@ -147,6 +147,57 @@ class VoiceTariffTest extends TestCase
             ->assertJsonPath('taxableRef', 'svc_VOIP_STD');
     }
 
+    public function test_rate_call_applies_reservation_pulse_and_allowance(): void
+    {
+        $plan = $this->activePlan();
+        $zone = $this->zone('KE_MOBILE');
+        $band = $this->anytimeBand();
+        $this->prefix('+2547', $zone);
+        $this->rate($plan, $zone, $band, ['unit_price' => 3.0, 'initial_increment_seconds' => 60, 'subsequent_increment_seconds' => 60]);
+        $this->binding('SERVICE', 'svc_VOIP_STD', $plan);
+
+        $base = [
+            'operatorCode' => 'WIK', 'serviceRef' => 'svc_VOIP_STD',
+            'calledNumberNormalized' => '+254711222333', 'callDirection' => 'OUTBOUND',
+            'callStartedAt' => '2026-06-02T10:15:00+03:00',
+        ];
+
+        // 90s → reservation 60 + one 60s pulse = 120 billable = 2 min × 3.0 = 6.0
+        $this->postJson('/api/plm/voice-rating/rate', $base + ['durationSeconds' => 90])
+            ->assertOk()
+            ->assertJsonPath('resolutionStatus', 'RATED')
+            ->assertJsonPath('chargeStatus', 'CHARGED')
+            ->assertJsonPath('billableSeconds', 120)
+            ->assertJsonPath('chargeableSeconds', 120)
+            ->assertJsonPath('amount', fn ($v) => (float) $v === 6.0);
+
+        // Same call with 60s of allowance left → burn 60, charge the other 60s (1 min) = 3.0
+        $this->postJson('/api/plm/voice-rating/rate', $base + ['durationSeconds' => 90, 'remainingAllowanceSeconds' => 60])
+            ->assertOk()
+            ->assertJsonPath('allowanceConsumedSeconds', 60)
+            ->assertJsonPath('chargeableSeconds', 60)
+            ->assertJsonPath('amount', fn ($v) => (float) $v === 3.0);
+    }
+
+    public function test_rate_call_zero_rated_charges_nothing(): void
+    {
+        $plan = $this->activePlan();
+        $zone = $this->zone('KE_MOBILE');
+        $band = $this->anytimeBand();
+        $this->prefix('+2547', $zone);
+        $this->rate($plan, $zone, $band, ['unit_price' => 3.0, 'charge_policy' => 'ZERO_RATED']);
+        $this->binding('SERVICE', 'svc_VOIP_STD', $plan);
+
+        $this->postJson('/api/plm/voice-rating/rate', [
+            'operatorCode' => 'WIK', 'serviceRef' => 'svc_VOIP_STD',
+            'calledNumberNormalized' => '+254711222333', 'callDirection' => 'OUTBOUND',
+            'callStartedAt' => '2026-06-02T10:15:00+03:00', 'durationSeconds' => 90,
+        ])
+            ->assertOk()
+            ->assertJsonPath('chargeStatus', 'ZERO_RATED')
+            ->assertJsonPath('amount', fn ($v) => (float) $v === 0.0);
+    }
+
     public function test_longest_prefix_match_picks_most_specific(): void
     {
         $plan = $this->activePlan();
