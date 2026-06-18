@@ -12,6 +12,7 @@ use Modules\Billing\Models\RatedEvent;
 use Modules\Billing\Models\UsageRecord;
 use Modules\Catalog\Models\UsageTariff;
 use Modules\Catalog\Models\VoiceTariff;
+use Modules\Catalog\Services\UsageRatingService;
 
 /**
  * MED-01 mediation + RAT-01 rating. ingest() deduplicates raw usage by source_ref
@@ -28,6 +29,7 @@ class MediationRatingService
     public function __construct(
         private readonly EventBus $events,
         private readonly SophixCache $cache,
+        private readonly UsageRatingService $usage,
     ) {}
 
     /**
@@ -125,17 +127,22 @@ class MediationRatingService
 
             return [$rate, $amount, $tariff->code ?? null];
         }
-        if ($record->usage_type === 'DATA') {
-            $rate = $this->cache->remember('plm', 'usage-tariff', "{$record->operator_code}:DATA", SophixCache::TTL_PRICING,
-                fn () => UsageTariff::rate($record->operator_code, 'DATA')) ?? self::DATA_RATE_PER_MB;
-
-            return [$rate, (float) $record->quantity * $rate, 'DATA_FLAT'];
+        // DATA / SMS (and any future metered type) → the generic usage rating engine
+        // (reservation/pulse + allowance + fees + policy). Falls back to the flat default
+        // only when the operator has not configured a usage_tariff row.
+        $rated = $this->usage->rate([
+            'operatorCode' => $record->operator_code,
+            'usageType' => $record->usage_type,
+            'quantity' => (float) $record->quantity,
+            // allowance balance is owned by Billing; once wired it passes remaining units here.
+            'remainingAllowanceUnits' => (float) ($record->remaining_allowance_units ?? 0),
+        ]);
+        if ($rated['resolved']) {
+            return [$rated['rate'], $rated['amount'], $rated['tariffCode']];
         }
 
-        // SMS
-        $rate = $this->cache->remember('plm', 'usage-tariff', "{$record->operator_code}:SMS", SophixCache::TTL_PRICING,
-            fn () => UsageTariff::rate($record->operator_code, 'SMS')) ?? self::SMS_RATE;
+        $default = $record->usage_type === 'DATA' ? self::DATA_RATE_PER_MB : self::SMS_RATE;
 
-        return [$rate, (float) $record->quantity * $rate, 'SMS_FLAT'];
+        return [$default, (float) $record->quantity * $default, $record->usage_type.'_FLAT'];
     }
 }

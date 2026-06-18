@@ -4,7 +4,8 @@ namespace Modules\Catalog\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-/** PLM-CFG-07 per-operator flat usage rate (DATA per MB, SMS per message). */
+/** PLM-CFG-07 per-operator usage rate (DATA per MB, SMS per message), now with the
+ *  generic rating fields (reservation/pulse, allowance, fees, policy). */
 class UsageTariff extends Model
 {
     protected $table = 'usage_tariff';
@@ -17,7 +18,11 @@ class UsageTariff extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['rate_per_unit' => 'decimal:4', 'active' => 'boolean'];
+    protected $casts = [
+        'rate_per_unit' => 'decimal:4', 'active' => 'boolean',
+        'initial_increment_units' => 'float', 'subsequent_increment_units' => 'float',
+        'setup_fee' => 'float', 'min_charge' => 'float', 'included_units' => 'float',
+    ];
 
     /** The active per-unit rate for an (operator, usage_type), or null to use the default. */
     public static function rate(string $operator, string $usageType): ?float

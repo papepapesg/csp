@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
 use Modules\Billing\Models\RatedEvent;
 use Modules\Billing\Models\UsageRecord;
+use Modules\Catalog\Models\UsageTariff;
 use Modules\Catalog\Models\VoiceTariff;
 use Tests\TestCase;
 
@@ -52,5 +53,21 @@ class MediationRatingTest extends TestCase
         $data = RatedEvent::query()->where('tariff_code', 'DATA_FLAT')->first();
         $this->assertEqualsWithDelta(50.0, (float) $data->amount, 0.001);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'UsageRated']);
+    }
+
+    public function test_data_uses_the_generic_usage_tariff_when_configured(): void
+    {
+        // A configured rich tariff routes DATA through the generic engine (not the flat default).
+        UsageTariff::query()->create([
+            'operator_code' => 'WIK', 'usage_type' => 'DATA', 'rate_per_unit' => 2.0, 'unit' => 'MB', 'unit_type' => 'MB',
+            'initial_increment_units' => 1, 'subsequent_increment_units' => 1, 'min_charge' => 0, 'included_units' => 0, 'active' => true,
+        ]);
+
+        $this->postJson('/api/usage', ['records' => [['usage_type' => 'DATA', 'quantity' => 100, 'source_ref' => 'cdr-d1']]], ['Idempotency-Key' => 'ud'])->assertOk();
+        Artisan::call('sophix:billing:rate-usage', ['--operator' => 'WIK']);
+
+        $data = RatedEvent::query()->where('tariff_code', 'DATA_TARIFF')->first();
+        $this->assertNotNull($data);
+        $this->assertEqualsWithDelta(200.0, (float) $data->amount, 0.001); // 100 MB × 2.0
     }
 }
