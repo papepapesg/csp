@@ -5,6 +5,7 @@ namespace Modules\Catalog\Services;
 use Carbon\Carbon;
 use Modules\Catalog\Models\Discount;
 use Modules\Catalog\Models\DiscountAssignment;
+use Modules\Catalog\Models\PromoCampaign;
 
 /**
  * DIS-OP-01 discount runtime. Resolves the discounts assigned to a charge context
@@ -42,10 +43,30 @@ class DiscountComputeService
             })
             ->get();
 
+        // Option B: a CAMPAIGN-mode assignment only applies while its campaign is live
+        // (status ACTIVE and within starts_at/ends_at). DIRECT assignments are unaffected.
+        // This is the gate that prevents "active but not applying" surprises.
+        $campaignIds = $assignments->where('assignment_mode', 'CAMPAIGN')->pluck('campaign_id')->filter()->unique();
+        $liveCampaigns = $campaignIds->isEmpty() ? collect() : PromoCampaign::query()
+            ->whereIn('campaign_id', $campaignIds->all())
+            ->where('status', PromoCampaign::ACTIVE)
+            ->where(fn ($q) => $q->whereNull('starts_at')->orWhere('starts_at', '<=', $at))
+            ->where(fn ($q) => $q->whereNull('ends_at')->orWhere('ends_at', '>=', $at))
+            ->pluck('campaign_id')->flip();
+
+        $assignments = $assignments->filter(function ($a) use ($liveCampaigns) {
+            if (($a->assignment_mode ?? 'DIRECT') !== 'CAMPAIGN') {
+                return true; // DIRECT applies on its own validity
+            }
+
+            return $a->campaign_id && $liveCampaigns->has($a->campaign_id);
+        });
+
         // R-SIP-DA-06 / DIS-OP-01 stacking groups: within a non-null stacking_group_code only the
-        // highest-priority assignment survives (lower assignment_priority = higher precedence).
+        // highest-priority assignment survives (lower assignment_priority = higher precedence);
+        // on a priority tie a DIRECT (manual) grant wins over a CAMPAIGN one.
         $assignments = $assignments
-            ->sortBy(fn ($a) => $a->assignment_priority ?? 100)
+            ->sortBy(fn ($a) => (($a->assignment_priority ?? 100) * 2) + ((($a->assignment_mode ?? 'DIRECT') === 'DIRECT') ? 0 : 1))
             ->groupBy(fn ($a) => $a->stacking_group_code ?: '__ungrouped__'.$a->assignment_id)
             ->map(fn ($group) => $group->first())
             ->values();

@@ -77,6 +77,9 @@ class DiscountAssignmentService
                 'customer_id' => $data['customerId'] ?? null, 'account_id' => $data['accountId'] ?? null,
                 'subscription_id' => $data['subscriptionId'] ?? null, 'package_ref' => $data['packageRef'] ?? null,
                 'campaign_id' => $data['campaignId'] ?? null, 'campaign_code' => $data['campaignId'] ?? null,
+                // Option B: explicit mode — a campaign-linked grant is CAMPAIGN (gated by the
+                // campaign window at billing time), otherwise a self-standing DIRECT grant.
+                'assignment_mode' => ($data['campaignId'] ?? null) ? 'CAMPAIGN' : 'DIRECT',
                 'franchise_id' => $data['franchiseId'] ?? null, 'reason_code' => $data['reasonCode'] ?? null,
                 'source_channel' => $data['sourceChannel'] ?? 'API',
                 'valid_from' => $data['validFrom'] ?? now()->toDateString(), 'valid_to' => $data['validTo'] ?? null,
