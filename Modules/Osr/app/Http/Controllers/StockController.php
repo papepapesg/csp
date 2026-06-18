@@ -2,6 +2,8 @@
 
 namespace Modules\Osr\Http\Controllers;
 
+use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
@@ -17,7 +19,10 @@ use Modules\Osr\Services\StockService;
  */
 class StockController extends ApiController
 {
-    public function __construct(private readonly StockService $stock) {}
+    public function __construct(
+        private readonly StockService $stock,
+        private readonly ApprovalService $approvals,
+    ) {}
 
     // --- PLM-CFG-06 SKUs ---
     public function skus(Request $request): JsonResponse
@@ -80,10 +85,29 @@ class StockController extends ApiController
             'quantity' => ['required', 'numeric', 'not_in:0'],
             'reason_code' => ['required', 'in:RECEIPT,ISSUE,TRANSFER_IN,TRANSFER_OUT,INSTALL,RETURN,ADJUST,WRITE_OFF_DAMAGE,WRITE_OFF_LOSS,WRITE_OFF_OBSOLETE,CYCLE_COUNT_ADJUSTMENT_POS,CYCLE_COUNT_ADJUSTMENT_NEG'],
             'reference' => ['nullable', 'string'],
-            'approved_by' => ['nullable', 'string'], // R-OSR-SC-9: required for requires_approval reasons (enforced in service)
         ]);
+        $data['requested_by'] = $request->user()?->uid;
 
-        return ApiResponse::created($this->stock->move($data));
+        // R-OSR-SC-9: a requires_approval reason is gated by EM-CFG-04; a held movement
+        // returns the PENDING approval request (HTTP 202) instead of a posted movement.
+        $result = $this->stock->submit($data);
+        if ($result instanceof ApprovalRequest) {
+            return ApiResponse::item(['status' => 'PENDING_APPROVAL', 'approvalRequestId' => $result->request_id], 202);
+        }
+
+        return ApiResponse::created($result);
+    }
+
+    /** POST /api/stock-movements/approvals/{approvalRequest}/decide — approve/reject a held write-off. */
+    public function decideMovement(Request $request, ApprovalRequest $approvalRequest): JsonResponse
+    {
+        $data = $request->validate(['approve' => ['required', 'boolean'], 'reason' => ['nullable', 'string']]);
+        $decided = $this->approvals->decide($approvalRequest, (bool) $data['approve'], $request->user(), $data['reason'] ?? null);
+
+        // On final approval, post the held movement.
+        $movement = $decided->status === ApprovalRequest::APPROVED ? $this->stock->applyApproved($decided) : null;
+
+        return ApiResponse::item(['status' => $decided->status, 'movement' => $movement]);
     }
 
     public function balances(Request $request): JsonResponse

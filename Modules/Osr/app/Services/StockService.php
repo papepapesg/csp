@@ -2,6 +2,8 @@
 
 namespace Modules\Osr\Services;
 
+use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
@@ -18,7 +20,56 @@ use Modules\Osr\Models\StockReservation;
  */
 class StockService
 {
-    public function __construct(private readonly EventBus $events) {}
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly ApprovalService $approvals,
+    ) {}
+
+    /**
+     * User-facing entry: gate a movement through the EM-CFG-04 approval engine when
+     * its reason requires approval (R-OSR-SC-9), consistent with field audit /
+     * adjustments — no ad-hoc approver field. Returns the posted StockMovement, or a
+     * PENDING ApprovalRequest (the movement is held in the request payload and applied
+     * by applyApproved() once the required approvals are gathered). With no approval
+     * policy configured the request auto-approves and the movement posts immediately.
+     *
+     * @param  array<string,mixed>  $data
+     */
+    public function submit(array $data): StockMovement|ApprovalRequest
+    {
+        $operator = $data['operator_code'] ?? Context::operatorCode();
+        $reason = DB::table('stock_reason_code')->where('operator_code', $operator)->where('active', true)->where('code', $data['reason_code'])->first();
+
+        if ($reason && $reason->requires_approval) {
+            $request = $this->approvals->request([
+                'operator_code' => $operator,
+                'entity_type' => 'STOCK_MOVEMENT',
+                'action' => $data['reason_code'],
+                'entity_ref' => $data['reference'] ?? null,
+                'amount' => abs((float) $data['quantity']),
+                'payload' => $data,
+                'requested_by' => $data['requested_by'] ?? null,
+            ]);
+            if ($request->status === ApprovalRequest::PENDING) {
+                return $request; // held — applied on approval
+            }
+            $data['approved_by'] = 'AUTO'; // auto-approved (no policy / below threshold)
+        }
+
+        return $this->move($data);
+    }
+
+    /** Apply a movement that was held pending approval, now that it is APPROVED. */
+    public function applyApproved(ApprovalRequest $request): StockMovement
+    {
+        if ($request->entity_type !== 'STOCK_MOVEMENT' || $request->status !== ApprovalRequest::APPROVED) {
+            throw DomainException::conflict('Approval is not an APPROVED stock movement.');
+        }
+        $data = (array) $request->payload;
+        $data['approved_by'] = $request->decided_by;
+
+        return $this->move($data);
+    }
 
     /**
      * Record a signed stock movement and update the (location, sku) balance.
@@ -38,12 +89,9 @@ class StockService
                 throw DomainException::ruleRejected('UNKNOWN_STOCK_REASON', "Reason '{$data['reason_code']}' is not an ACTIVE stock reason code.");
             }
 
-            // R-OSR-SC-9: write-off / cycle-count-adjustment reasons (requires_approval)
-            // must record a second-person approver; the API rejects the movement without one.
+            // R-OSR-SC-9: the requires_approval gate runs in submit() via the EM-CFG-04
+            // approval engine; move() is the raw poster (internal callers + applyApproved).
             $approvedBy = $data['approved_by'] ?? null;
-            if ($reason && $reason->requires_approval && ! $approvedBy) {
-                throw DomainException::ruleRejected('APPROVAL_REQUIRED', "Reason '{$data['reason_code']}' requires an approver (approved_by).");
-            }
 
             // R-OSR-SC-8: a movement may never drive on-hand negative — reject up front.
             $balance = StockBalance::query()->lockForUpdate()->firstOrNew([

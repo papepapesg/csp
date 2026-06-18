@@ -2,7 +2,11 @@
 
 namespace Modules\Osr\Tests\Feature;
 
+use App\Foundation\Approvals\ApprovalDefinition;
+use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Support\Context;
+use App\Foundation\Support\Id;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Modules\Osr\Models\StockReservation;
@@ -37,26 +41,31 @@ class StockRulesTest extends TestCase
         $this->stock()->move(['sku_id' => 'WIK-ONT', 'location_id' => 'WIK-VAN-1', 'quantity' => -10, 'reason_code' => 'ISSUE']);
     }
 
-    public function test_write_off_requires_an_approver(): void
+    public function test_write_off_is_gated_by_the_em_cfg_04_approval_engine(): void
     {
-        // Operator governs a reason catalog: RECEIPT (no approval) + WRITE_OFF_DAMAGE (approval).
+        // Operator governs a reason catalog: RECEIPT (no approval) + WRITE_OFF_DAMAGE (approval),
+        // and an EM-CFG-04 policy for stock movements (the consistent mechanism).
         DB::table('stock_reason_code')->insert([
             ['operator_code' => 'WIK', 'code' => 'RECEIPT', 'description' => 'Receipt', 'direction' => 'IN', 'requires_approval' => false, 'active' => true, 'created_at' => now(), 'updated_at' => now()],
             ['operator_code' => 'WIK', 'code' => 'WRITE_OFF_DAMAGE', 'description' => 'Damaged', 'direction' => 'OUT', 'requires_approval' => true, 'active' => true, 'created_at' => now(), 'updated_at' => now()],
         ]);
+        ApprovalDefinition::query()->create([
+            'definition_id' => Id::make('appd'), 'operator_code' => 'WIK', 'entity_type' => 'STOCK_MOVEMENT',
+            'approver_roles' => [], 'required_approvals' => 1, 'active' => true,
+        ]);
         $this->stock()->move(['sku_id' => 'WIK-ONT', 'location_id' => 'WIK-VAN-1', 'quantity' => 10, 'reason_code' => 'RECEIPT']);
 
-        // Without an approver → rejected.
-        try {
-            $this->stock()->move(['sku_id' => 'WIK-ONT', 'location_id' => 'WIK-VAN-1', 'quantity' => -2, 'reason_code' => 'WRITE_OFF_DAMAGE']);
-            $this->fail('expected APPROVAL_REQUIRED');
-        } catch (\App\Foundation\Errors\DomainException $e) {
-            $this->assertSame('APPROVAL_REQUIRED', $e->errorCode);
-        }
+        // A write-off is HELD as a PENDING ApprovalRequest — the movement is not posted yet.
+        $result = $this->stock()->submit(['sku_id' => 'WIK-ONT', 'location_id' => 'WIK-VAN-1', 'quantity' => -2, 'reason_code' => 'WRITE_OFF_DAMAGE']);
+        $this->assertInstanceOf(ApprovalRequest::class, $result);
+        $this->assertSame(ApprovalRequest::PENDING, $result->status);
+        $this->assertDatabaseMissing('stock_movement', ['reason_code' => 'WRITE_OFF_DAMAGE']);
 
-        // With an approver → recorded.
-        $this->stock()->move(['sku_id' => 'WIK-ONT', 'location_id' => 'WIK-VAN-1', 'quantity' => -2, 'reason_code' => 'WRITE_OFF_DAMAGE', 'approved_by' => 'ops_supervisor_03']);
-        $this->assertDatabaseHas('stock_movement', ['reason_code' => 'WRITE_OFF_DAMAGE', 'approved_by' => 'ops_supervisor_03']);
+        // Approve → the held movement posts, with the approver recorded on the movement.
+        app(ApprovalService::class)->decide($result, true, null, 'damaged in transit');
+        $this->stock()->applyApproved($result->refresh());
+        $this->assertDatabaseHas('stock_movement', ['reason_code' => 'WRITE_OFF_DAMAGE']);
+        $this->assertSame(ApprovalRequest::APPROVED, $result->refresh()->status);
     }
 
     public function test_transfer_must_be_two_tier_no_van_to_van(): void

@@ -21,6 +21,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('stock-locations', [StockController::class, 'storeLocation'])->middleware('permission:stock.manage');
     Route::get('stock-balances', [StockController::class, 'balances'])->middleware('permission:stock.read');
     Route::post('stock-movements', [StockController::class, 'move'])->middleware(['permission:stock.manage', 'idempotency']);
+    Route::post('stock-movements/approvals/{approvalRequest}/decide', [StockController::class, 'decideMovement'])->middleware('permission:stock.manage');
     Route::get('stock-availability', [StockController::class, 'availability'])->middleware('permission:stock.read');
     Route::post('stock-reservations', [StockController::class, 'reserve'])->middleware('permission:stock.manage');
     Route::post('stock-reservations/{woId}/consume', [StockController::class, 'consumeReservation'])->middleware('permission:stock.manage');
