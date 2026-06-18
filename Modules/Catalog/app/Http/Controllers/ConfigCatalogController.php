@@ -9,7 +9,6 @@ use App\Foundation\Support\Id;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Catalog\Models\AdjustmentType;
-use Modules\Catalog\Models\EquipmentType;
 use Modules\Catalog\Models\VoiceTariff;
 use Modules\Catalog\Models\WalletType;
 
@@ -25,7 +24,7 @@ class ConfigCatalogController extends ApiController
         'wallet-types' => [WalletType::class, 'wtyp', ['currency' => ['nullable', 'string', 'size:3'], 'allow_negative' => ['nullable', 'boolean'], 'auto_debit' => ['nullable', 'boolean']]],
         'adjustment-types' => [AdjustmentType::class, 'atyp', ['direction' => ['required', 'in:CREDIT,DEBIT'], 'requires_approval' => ['nullable', 'boolean'], 'gl_code' => ['nullable', 'string'], 'taxable' => ['nullable', 'boolean']]],
         'voice-tariffs' => [VoiceTariff::class, 'vtar', ['destination' => ['required', 'in:ONNET,OFFNET,INTERNATIONAL'], 'rate_per_min' => ['nullable', 'numeric'], 'setup_fee' => ['nullable', 'numeric'], 'min_charge_seconds' => ['nullable', 'integer']]],
-        'equipment-types' => [EquipmentType::class, 'etyp', ['category' => ['nullable', 'string'], 'default_deposit' => ['nullable', 'numeric'], 'warranty_days' => ['nullable', 'integer'], 'serialized' => ['nullable', 'boolean']]],
+        // equipment-types consolidated into OSR equipment_sku (the owner). Manage SKUs via OSR /api/equipment-skus.
     ];
 
     private function catalog(string $key): array

@@ -18,7 +18,7 @@ class EquipmentSku extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['is_serialized' => 'boolean', 'active' => 'boolean', 'deposit_amount' => 'decimal:2'];
+    protected $casts = ['is_serialized' => 'boolean', 'active' => 'boolean', 'deposit_amount' => 'decimal:2', 'warranty_days' => 'integer'];
 
     public function getRouteKeyName(): string
     {
