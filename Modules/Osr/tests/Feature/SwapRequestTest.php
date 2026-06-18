@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
 use Modules\Osr\Database\Seeders\OsrRmaSeeder;
 use Modules\Osr\Models\EquipmentInstance;
+use Modules\Osr\Models\EquipmentSku;
 use Modules\Osr\Models\EquipmentSwapRequest;
 use Modules\Osr\Models\StockLocation;
 use Tests\TestCase;
@@ -136,6 +137,11 @@ class SwapRequestTest extends TestCase
     public function test_equ_upgrade_is_chargeable_and_places_target(): void
     {
         $van = $this->contractorVan('ctr_equ');
+        // The swapped device's SKU carries the equipment value charged on an upgrade.
+        EquipmentSku::query()->create([
+            'sku_id' => 'sku_modem', 'operator_code' => 'WIK', 'name' => 'Modem', 'category' => 'ONT',
+            'is_serialized' => true, 'deposit_amount' => 5000, 'active' => true,
+        ]);
         $source = $this->fieldInstance();
         $target = EquipmentInstance::query()->create([
             'instance_id' => Id::make('eqi'), 'operator_code' => 'WIK', 'sku_id' => 'sku_modem_v2',
@@ -156,6 +162,10 @@ class SwapRequestTest extends TestCase
         $this->assertSame('COMPLETED', $swap->status);
         $this->assertTrue($swap->chargeable);
         $this->assertSame('UPGRADE_FEE', $swap->charge_code);
+        // The charge is now ACTUALLY billed (was decided + announced, never charged):
+        // charge_amount = the SKU deposit, and a BIL-01 intent is raised.
+        $this->assertEqualsWithDelta(5000.0, (float) $swap->charge_amount, 0.001);
+        $this->assertDatabaseHas('billing_intent', ['subscription_id' => 'sub_1', 'intent_type' => 'UPGRADE_FEE', 'amount' => 5000]);
         // Target device is now bound to the customer in the field.
         $this->assertSame(EquipmentInstance::IN_FIELD_ACTIVE, $target->refresh()->state);
         $this->assertSame('cust_1', $target->customer_id);
