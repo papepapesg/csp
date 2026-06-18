@@ -5,7 +5,7 @@ namespace Modules\Catalog\Services;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Support\Context;
 use Illuminate\Support\Facades\DB;
-use Modules\Catalog\Models\TechContractor;
+use Modules\Workforce\Models\Contractor;
 use Modules\Catalog\Models\TechContractorSkill;
 use Modules\Catalog\Models\TechRegion;
 
@@ -29,7 +29,7 @@ class TechCoverageService
      *
      * @param  array<string,mixed>  $data  code, name, skills[]
      */
-    public function createContractor(array $data): TechContractor
+    public function createContractor(array $data): Contractor
     {
         $operator = Context::operatorCode();
         $skills = $data['skills'] ?? [];
@@ -41,7 +41,7 @@ class TechCoverageService
             throw DomainException::ruleRejected('UNKNOWN_SKILL', 'Unknown skill code(s): '.implode(', ', $missing));
         }
 
-        return TechContractor::query()->create($data + ['operator_code' => $operator, 'status' => TechContractor::STATUS_ACTIVE]);
+        return Contractor::query()->create($data + ['operator_code' => $operator, 'status' => 'ACTIVE']);
     }
 
     /**
@@ -49,7 +49,7 @@ class TechCoverageService
      *
      * @param  array<int,string>  $skills
      */
-    public function assignContractor(TechRegion $region, TechContractor $contractor, array $skills): void
+    public function assignContractor(TechRegion $region, Contractor $contractor, array $skills): void
     {
         if ($skills === [] || array_diff($skills, $contractor->skills ?? [])) {
             throw DomainException::ruleRejected('ASSIGNMENT_SKILLS_INVALID', 'Assignment skills must be a non-empty subset of the contractor’s skills.');
@@ -64,7 +64,7 @@ class TechCoverageService
     public function activateRegion(TechRegion $region): TechRegion
     {
         $contractorIds = DB::table('tech_region_contractor')->where('tech_region_id', $region->tech_region_id)->pluck('tech_contractor_id');
-        $active = TechContractor::query()->whereIn('contractor_id', $contractorIds)->where('status', TechContractor::STATUS_ACTIVE)->exists();
+        $active = Contractor::query()->whereIn('contractor_id', $contractorIds)->where('status', 'ACTIVE')->exists();
         if (! $active) {
             throw DomainException::ruleRejected('REGION_HAS_NO_CONTRACTOR', 'A TechRegion needs at least one active contractor assignment to activate.');
         }
@@ -85,7 +85,7 @@ class TechCoverageService
     }
 
     /** R-RLM-CFG-01-C-4: a contractor assigned to a region with active HomePasses cannot retire. */
-    public function retireContractor(TechContractor $contractor): TechContractor
+    public function retireContractor(Contractor $contractor): Contractor
     {
         $regions = DB::table('tech_region_contractor')->where('tech_contractor_id', $contractor->contractor_id)->pluck('tech_region_id');
         foreach ($regions as $regionId) {
@@ -93,7 +93,7 @@ class TechCoverageService
                 throw DomainException::ruleRejected('CONTRACTOR_REFERENCED', 'The contractor still serves a region with active HomePasses; unassign first.');
             }
         }
-        $contractor->update(['status' => TechContractor::STATUS_RETIRED]);
+        $contractor->update(['status' => 'RETIRED']);
 
         return $contractor;
     }

@@ -7,7 +7,7 @@ use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Catalog\Models\TechContractor;
+use Modules\Workforce\Models\Contractor;
 use Modules\Catalog\Models\TechContractorSkill;
 use Modules\Catalog\Models\TechRegion;
 use Modules\Catalog\Services\TechCoverageService;
@@ -32,7 +32,7 @@ class TechCoverageController extends ApiController
 
     public function contractors(Request $request): JsonResponse
     {
-        return ApiResponse::item(['items' => TechContractor::query()
+        return ApiResponse::item(['items' => Contractor::query()
             ->where('operator_code', $request->query('operatorCode', Context::operatorCode()))
             ->when($request->query('status'), fn ($q, $s) => $q->where('status', $s))->orderBy('code')->get()]);
     }
@@ -50,7 +50,7 @@ class TechCoverageController extends ApiController
     public function assignContractor(Request $request, TechRegion $techRegion): JsonResponse
     {
         $data = $request->validate(['contractor_id' => ['required', 'string'], 'skills' => ['required', 'array'], 'skills.*' => ['string']]);
-        $contractor = TechContractor::query()->findOrFail($data['contractor_id']);
+        $contractor = Contractor::query()->findOrFail($data['contractor_id']);
         $this->coverage->assignContractor($techRegion, $contractor, $data['skills']);
 
         return ApiResponse::item(['techRegionId' => $techRegion->tech_region_id, 'contractorId' => $contractor->contractor_id, 'skills' => $data['skills']], 201);
@@ -66,7 +66,7 @@ class TechCoverageController extends ApiController
         return ApiResponse::item($this->coverage->retireRegion($techRegion));
     }
 
-    public function retireContractor(TechContractor $techContractor): JsonResponse
+    public function retireContractor(Contractor $techContractor): JsonResponse
     {
         return ApiResponse::item($this->coverage->retireContractor($techContractor));
     }

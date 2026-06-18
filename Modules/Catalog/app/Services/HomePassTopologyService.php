@@ -7,7 +7,7 @@ use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
 use Modules\Catalog\Events\CatalogEvents;
 use Modules\Catalog\Models\HomePass;
-use Modules\Catalog\Models\TechContractor;
+use Modules\Workforce\Models\Contractor;
 
 /**
  * RLM-CFG-01 §network_path — the topology engine. A HomePass's ordered node chain drives
@@ -97,9 +97,9 @@ class HomePassTopologyService
             ->whereJsonContains('skills', $skill)
             ->pluck('tech_contractor_id')->unique();
 
-        return TechContractor::query()
+        return Contractor::query()
             ->whereIn('contractor_id', $assignments)
-            ->where('status', TechContractor::STATUS_ACTIVE)
+            ->where('status', 'ACTIVE')
             ->get(['contractor_id', 'code', 'name', 'skills'])->toArray();
     }
 }

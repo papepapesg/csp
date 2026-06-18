@@ -231,7 +231,7 @@ class CatalogApiTest extends TestCase
         $hp = $this->postJson('/api/homepass', ['address' => '9 Route Rd', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
         $region = 'KE-NRB-ROUTE';
 
-        $con = \Modules\Catalog\Models\TechContractor::query()->create([
+        $con = \Modules\Workforce\Models\Contractor::query()->create([
             'operator_code' => 'WIK', 'code' => 'ACME_FIBER', 'name' => 'Acme Fiber', 'skills' => ['INSTALLATION', 'MAINTENANCE'], 'status' => 'ACTIVE',
         ]);
         \Illuminate\Support\Facades\DB::table('homepass_tech_region')->insert(['homepass_id' => $hp, 'tech_region_ref' => $region, 'created_at' => now(), 'updated_at' => now()]);
