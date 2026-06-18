@@ -49,6 +49,25 @@ class DiscountAssignmentService
             throw DomainException::ruleRejected('DISCOUNT_NOT_FOUND_OR_INACTIVE', 'Discount code is not an active catalog item.');
         }
 
+        // Consistency: a PACKAGE/SERVICE-level discount must be assigned WITH the package/
+        // service context it reduces, otherwise the runtime has nothing to apply it to.
+        // INVOICE-level discounts have no such constraint.
+        $appliesTo = $discount->applies_to ?? 'INVOICE';
+        $hasPackage = ! empty($data['packageRef']) || ($data['scopeType'] ?? null) === 'PACKAGE';
+        $hasServiceContext = $hasPackage || ! empty($data['subscriptionId']);
+        if ($appliesTo === 'PACKAGE' && ! $hasPackage) {
+            if ($previewOnly) {
+                return ['assignment' => null, 'approvalRequired' => false, 'eligible' => false, 'reason' => 'APPLIES_TO_PACKAGE_NEEDS_PACKAGE'];
+            }
+            throw DomainException::ruleRejected('APPLIES_TO_PACKAGE_NEEDS_PACKAGE', 'Discount applies_to=PACKAGE but the assignment has no package context (scope PACKAGE or packageRef).');
+        }
+        if ($appliesTo === 'SERVICE' && ! $hasServiceContext) {
+            if ($previewOnly) {
+                return ['assignment' => null, 'approvalRequired' => false, 'eligible' => false, 'reason' => 'APPLIES_TO_SERVICE_NEEDS_CONTEXT'];
+            }
+            throw DomainException::ruleRejected('APPLIES_TO_SERVICE_NEEDS_CONTEXT', 'Discount applies_to=SERVICE but the assignment has no package/subscription context.');
+        }
+
         // R-SIP-DA-05: block a duplicate active grant for the same discount + scope + window.
         $dupe = DiscountAssignment::query()->where('operator_code', $operator)
             ->where('discount_code', $data['discountCode'])

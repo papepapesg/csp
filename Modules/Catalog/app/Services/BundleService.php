@@ -33,6 +33,9 @@ class BundleService
     /** @param array<string,mixed> $data with components[], availability[]?, discount_rules[]? */
     public function create(array $data): CommercialBundle
     {
+        // An ADDON depends on a PRIMARY: a bundle cannot be composed of add-ons alone.
+        $this->assertPrimaryBeforeAddon($data['components'] ?? []);
+
         return DB::transaction(function () use ($data) {
             $bundle = CommercialBundle::query()->create([
                 'bundle_code' => $data['bundle_code'],
@@ -71,6 +74,20 @@ class BundleService
     }
 
     /**
+     * An ADDON component only makes sense attached to a PRIMARY — reject an ADDON-only
+     * composition so the dependency is enforced at draft time, not discovered at launch.
+     *
+     * @param  array<int,array<string,mixed>>  $components
+     */
+    private function assertPrimaryBeforeAddon(array $components): void
+    {
+        $roles = collect($components)->map(fn ($c) => $c['component_role'] ?? 'PRIMARY');
+        if ($roles->contains('ADDON') && ! $roles->contains('PRIMARY')) {
+            throw new DomainException('BUNDLE_ADDON_REQUIRES_PRIMARY', 'A bundle ADDON requires at least one PRIMARY component.', 422);
+        }
+    }
+
+    /**
      * §7.2 launch validation — auditable findings persisted as launch checks.
      * R-SIP-BUN-02 (≥1 mandatory component), R-SIP-BUN-03 (package refs active),
      * R-SIP-BUN-05 (discount rules reference active catalog items).
@@ -96,6 +113,12 @@ class BundleService
             foreach ($assessed['validationErrors'] as $e) {
                 $checks[] = ['check_code' => $e['ruleId'] ?? 'LAUNCH_POLICY', 'check_status' => 'FAIL', 'message' => $e['message']];
             }
+
+            // ADDON depends on PRIMARY (defence in depth — also enforced at create).
+            $roles = $bundle->components->map(fn ($c) => $c->component_role);
+            $primaryOk = ! $roles->contains('ADDON') || $roles->contains('PRIMARY');
+            $checks[] = ['check_code' => 'PRIMARY_PRESENT', 'check_status' => $primaryOk ? 'PASS' : 'FAIL',
+                'message' => $primaryOk ? 'Bundle has a PRIMARY component for its ADDONs.' : 'Bundle has ADDON components but no PRIMARY.'];
 
             // Fixed ref-existence checks stay in code (integrity, not operator policy).
             foreach ($bundle->components as $component) {

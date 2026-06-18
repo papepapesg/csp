@@ -31,6 +31,19 @@ class DiscountAssignmentTest extends TestCase
         $this->postJson('/api/discounts', ['code' => 'RET10', 'name' => 'Retention 10%', 'discount_type' => 'PERCENT', 'value' => 0.10, 'stackable' => true, 'priority' => 10])->assertCreated();
     }
 
+    public function test_package_level_discount_requires_package_context(): void
+    {
+        $this->postJson('/api/discounts', ['code' => 'PKG10', 'name' => 'Package 10%', 'discount_type' => 'PERCENT', 'value' => 0.10, 'applies_to' => 'PACKAGE'])->assertCreated();
+
+        // applies_to=PACKAGE but a CUSTOMER scope with no package context → rejected.
+        $this->postJson('/api/discount-assignments', ['discountCode' => 'PKG10', 'scopeType' => 'CUSTOMER', 'scopeRefId' => 'CUS-1'], ['Idempotency-Key' => 'pk-1'])
+            ->assertStatus(422);
+
+        // PACKAGE scope supplies the context → accepted.
+        $this->postJson('/api/discount-assignments', ['discountCode' => 'PKG10', 'scopeType' => 'PACKAGE', 'scopeRefId' => 'pkg_hf100'], ['Idempotency-Key' => 'pk-2'])
+            ->assertCreated();
+    }
+
     public function test_create_assignment_activates_without_approval(): void
     {
         $res = $this->postJson('/api/discount-assignments', [

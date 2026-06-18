@@ -53,6 +53,24 @@ class BundleAndCampaignTest extends TestCase
         ], $extra), ['Idempotency-Key' => "bun-{$code}"])->assertCreated()->json();
     }
 
+    public function test_bundle_addon_requires_a_primary(): void
+    {
+        // ADDON-only composition is rejected at draft time.
+        $this->postJson('/api/commercial-bundles', [
+            'bundle_code' => 'ADDON_ONLY', 'display_name' => 'Addon only', 'bundle_type' => 'GENERAL',
+            'components' => [['package_ref' => 'pkg_x', 'component_role' => 'ADDON', 'mandatory' => true]],
+        ], ['Idempotency-Key' => 'b-addon'])->assertStatus(422);
+
+        // A PRIMARY + ADDON composition is fine.
+        $this->postJson('/api/commercial-bundles', [
+            'bundle_code' => 'PRIM_ADDON', 'display_name' => 'Primary+Addon', 'bundle_type' => 'GENERAL',
+            'components' => [
+                ['package_ref' => 'pkg_p', 'component_role' => 'PRIMARY', 'mandatory' => true],
+                ['package_ref' => 'pkg_a', 'component_role' => 'ADDON', 'mandatory' => false],
+            ],
+        ], ['Idempotency-Key' => 'b-prim'])->assertCreated();
+    }
+
     public function test_bundle_launch_lifecycle_with_validation_gate(): void
     {
         $pkg = $this->activePackage('PKG_FIBER_100M');
