@@ -48,7 +48,13 @@ class PaymentController extends ApiController
             'target_invoice_id' => ['nullable', 'string'],
         ]);
 
-        $data['payment_reference'] = $data['gateway_ref'] ?? null;
+        // RC-3 dedup reference: a gateway ref for online, else the Idempotency-Key for a
+        // reference-less (OFFLINE/cash) payment. A payment with NEITHER cannot be made
+        // idempotent, so it is rejected — a retried cash POST must never double-apply money.
+        $data['payment_reference'] = $data['gateway_ref'] ?: $request->header('Idempotency-Key');
+        if (! $data['payment_reference']) {
+            return ApiResponse::error('PAYMENT_REFERENCE_REQUIRED', 'A payment must carry a gateway_ref or an Idempotency-Key for idempotent application.', 422);
+        }
         $payment = $this->payments->receiveAndApply($data);
 
         return ApiResponse::created($payment);

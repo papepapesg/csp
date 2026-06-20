@@ -11,6 +11,10 @@ Artisan::command('inspire', function () {
 // Forward committed transactional-outbox events to the event bus (FOUNDATION_KAFKA).
 Schedule::command('sophix:outbox:dispatch')->everyMinute()->withoutOverlapping();
 
+// FOUNDATION_CAMUNDA tick: fire due workflow timers + release expired external-task
+// locks (so timer nodes advance and a dead worker's locked tasks are re-queued).
+Schedule::command('sophix:workflow:tick')->everyMinute()->withoutOverlapping();
+
 // BIL-03 cycle-close scanner (per-subscription boundary; recurring fee + usage).
 Schedule::command('sophix:billing:cycle-close')->everyThirtyMinutes()->withoutOverlapping();
 
