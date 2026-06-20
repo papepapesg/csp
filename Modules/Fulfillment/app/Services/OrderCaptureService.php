@@ -8,8 +8,12 @@ use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
 use Modules\Fulfillment\Events\FulfillmentEvents;
 use Modules\Fulfillment\Models\FulfillmentOrder;
+use Modules\Subscription\Models\Subscription;
+use Modules\Subscription\Services\SubscriptionService;
 use Modules\Workflow\Engine\WorkflowEngine;
 use Modules\Workflow\Models\ProcessInstance;
+use Modules\WorkOrder\Models\WorkOrder;
+use Modules\WorkOrder\Services\WorkOrderService;
 
 /**
  * FUL-02 order capture. The journey itself is CONFIG, not code: capture() creates
@@ -119,10 +123,38 @@ class OrderCaptureService
             ->where('status', ProcessInstance::RUNNING)
             ->update(['status' => ProcessInstance::CANCELLED, 'ended_at' => now()]);
 
+        // FUL-02-STEP-CANCELLATION: compensate the artifacts the journey already created,
+        // in reverse creation order. Each step is conditional — a step that never ran left
+        // nothing to undo. Without this a cancelled order leaked a dispatched install WO and
+        // a half-built subscription.
+        $this->compensate($order, $reason);
+
         $order->update(['status' => FulfillmentOrder::CANCELLED, 'current_step' => null]);
         $this->publish(FulfillmentEvents::ORDER_CANCELLED, $order, ['reason' => $reason]);
 
         return $order;
+    }
+
+    /** Undo the downstream side-effects of a cancelled order (cancel install WO, terminate subscription). */
+    private function compensate(FulfillmentOrder $order, ?string $reason): void
+    {
+        $cancellable = [
+            WorkOrder::PENDING,
+            WorkOrder::ASSIGNED,
+            WorkOrder::IN_PROGRESS,
+            WorkOrder::FINALIZATION_PENDING,
+        ];
+        if ($order->work_order_id
+            && ($wo = WorkOrder::query()->find($order->work_order_id))
+            && in_array($wo->status, $cancellable, true)) {
+            app(WorkOrderService::class)->cancel($wo, $reason ?? 'Fulfillment order cancelled');
+        }
+
+        if ($order->subscription_id
+            && ($sub = Subscription::query()->find($order->subscription_id))
+            && $sub->status_code !== Subscription::TERMINATED) {
+            app(SubscriptionService::class)->transitionStatus($sub, Subscription::TERMINATED);
+        }
     }
 
     /** Step ledger writer used by the journey's task handlers. @param array<string,mixed> $result */

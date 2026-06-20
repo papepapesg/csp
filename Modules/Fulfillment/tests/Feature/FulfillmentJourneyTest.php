@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
 use Modules\Fulfillment\Database\Seeders\FulfillmentFlowSeeder;
 use Modules\Fulfillment\Models\FulfillmentOrder;
+use Modules\Fulfillment\Services\OrderCaptureService;
 use Modules\Ilm\Models\Customer;
 use Modules\Ilm\Services\CustomerService;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
@@ -66,6 +67,29 @@ class FulfillmentJourneyTest extends TestCase
         $this->assertDatabaseHas('subscription', ['subscription_id' => $fresh->subscription_id, 'status_code' => 'PENDING_ACTIVATION']);
         $this->assertDatabaseHas('work_order', ['work_order_id' => $fresh->work_order_id, 'type' => 'INSTALLATION', 'source_type' => 'FULFILLMENT']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'OrderCaptured']);
+    }
+
+    public function test_cancelling_an_order_compensates_its_install_wo_and_subscription(): void
+    {
+        $order = $this->postJson('/api/fulfillment-orders', [
+            'customer_id' => 'cust_c', 'account_id' => 'acct_c', 'homepass_id' => 'hp_c', 'package_ref' => 'pkg_x',
+        ], ['Idempotency-Key' => 'order-c'])->json('order');
+        $this->drain(); // create subscription + install WO, park awaiting install
+
+        $fresh = FulfillmentOrder::find($order['order_id']);
+        $subId = $fresh->subscription_id;
+        $woId = $fresh->work_order_id;
+        $this->assertNotNull($subId);
+        $this->assertNotNull($woId);
+
+        // Cancel the order -> the dispatched install WO is cancelled and the half-built
+        // subscription is terminated (were both left dangling before).
+        $this->postJson("/api/fulfillment-orders/{$order['order_id']}/cancel", ['reason' => 'customer changed mind'])->assertOk();
+
+        $this->assertSame('CANCELLED', FulfillmentOrder::find($order['order_id'])->status);
+        $this->assertSame(WorkOrder::CANCELLED, WorkOrder::find($woId)->status);
+        $this->assertSame(Subscription::TERMINATED, Subscription::find($subId)->status_code);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'OrderCancelled']);
     }
 
     public function test_desk_complete_resumes_the_flow_and_activates(): void
@@ -167,7 +191,7 @@ class FulfillmentJourneyTest extends TestCase
         $this->assertDatabaseMissing('work_order', ['source_ref' => $orderId]);
 
         // Deposit received → correlate, the flow proceeds to create the install WO.
-        app(\Modules\Fulfillment\Services\OrderCaptureService::class)->confirmDepositPaid(FulfillmentOrder::find($orderId));
+        app(OrderCaptureService::class)->confirmDepositPaid(FulfillmentOrder::find($orderId));
         $this->drain();
         $this->assertSame('AWAITING_INSTALL', FulfillmentOrder::find($orderId)->status);
     }
