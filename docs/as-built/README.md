@@ -50,4 +50,6 @@ Read these six code sources **in order**; each maps to a section of `_TEMPLATE.m
 | `00_SPINE.md` | ✅ drafted |
 | `_TEMPLATE.md` | ✅ drafted |
 | `subscription.md` (exemplar) | ✅ drafted |
+| `catalog.md` | ✅ drafted |
+| `billing.md` | ✅ drafted |
 | all other modules | ⬜ to do (one owner each) |
