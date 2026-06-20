@@ -2,6 +2,8 @@
 
 namespace Modules\Osr\Http\Controllers;
 
+use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
@@ -18,6 +20,7 @@ class ProcurementController extends ApiController
     public function __construct(
         private readonly ProcurementService $procurement,
         private readonly InventoryAuditService $audit,
+        private readonly ApprovalService $approvals,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -40,9 +43,18 @@ class ProcurementController extends ApiController
         return ApiResponse::created($this->procurement->create($data + ['created_by' => $request->user()?->uid]));
     }
 
-    public function approve(PurchaseOrder $purchaseOrder): JsonResponse
+    public function approve(Request $request, PurchaseOrder $purchaseOrder): JsonResponse
     {
-        return ApiResponse::item($this->procurement->approve($purchaseOrder));
+        return ApiResponse::item($this->procurement->approve($purchaseOrder, $request->user()?->uid));
+    }
+
+    /** POST /api/purchase-orders/approvals/{approvalRequest}/decide — EM-CFG-04 approve/reject a held PO. */
+    public function decide(Request $request, ApprovalRequest $approvalRequest): JsonResponse
+    {
+        $data = $request->validate(['approve' => ['required', 'boolean'], 'reason' => ['nullable', 'string']]);
+        $decided = $this->approvals->decide($approvalRequest, (bool) $data['approve'], $request->user(), $data['reason'] ?? null);
+
+        return ApiResponse::item($this->procurement->applyApprovalOutcome($decided));
     }
 
     public function receive(Request $request, PurchaseOrder $purchaseOrder): JsonResponse

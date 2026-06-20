@@ -11,6 +11,14 @@ class PurchaseOrder extends Model
 {
     use HasPrefixedId;
 
+    public const DRAFT = 'DRAFT';
+
+    public const PENDING_APPROVAL = 'PENDING_APPROVAL';
+
+    public const APPROVED = 'APPROVED';
+
+    public const REJECTED = 'REJECTED';
+
     protected $table = 'purchase_order';
 
     protected $primaryKey = 'po_id';

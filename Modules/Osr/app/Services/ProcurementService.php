@@ -2,6 +2,8 @@
 
 namespace Modules\Osr\Services;
 
+use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
@@ -18,6 +20,7 @@ class ProcurementService
     public function __construct(
         private readonly StockService $stock,
         private readonly EquipmentInstanceService $instances,
+        private readonly ApprovalService $approvals,
     ) {}
 
     /** @param array<string,mixed> $data supplier, location_id, lines:[{sku_id,quantity,unit_cost}] */
@@ -46,14 +49,49 @@ class ProcurementService
         });
     }
 
-    public function approve(PurchaseOrder $po): PurchaseOrder
+    /**
+     * R-OSR-02-04: PO approval is gated through the EM-CFG-04 engine (consistent with stock
+     * write-offs / adjustments) rather than an ad-hoc status flip. With no approval policy
+     * configured the request auto-approves and the PO goes straight to APPROVED; otherwise it
+     * parks in PENDING_APPROVAL until decide() gathers the required approvals. OSR-02 stores
+     * only the approval reference + final outcome (§5).
+     */
+    public function approve(PurchaseOrder $po, ?string $requestedBy = null): PurchaseOrder
     {
-        if ($po->status !== 'DRAFT') {
+        if ($po->status !== PurchaseOrder::DRAFT) {
             throw DomainException::conflict('Only DRAFT purchase orders can be approved.');
         }
-        $po->update(['status' => 'APPROVED']);
 
-        return $po;
+        $request = $this->approvals->request([
+            'operator_code' => $po->operator_code,
+            'entity_type' => 'PURCHASE_ORDER',
+            'action' => 'PO_APPROVAL',
+            'entity_ref' => $po->po_id,
+            'amount' => (float) $po->total_value,
+            'requested_by' => $requestedBy,
+        ]);
+
+        $po->update([
+            'approval_request_id' => $request->request_id,
+            'status' => $request->status === ApprovalRequest::PENDING ? PurchaseOrder::PENDING_APPROVAL : PurchaseOrder::APPROVED,
+        ]);
+
+        return $po->refresh();
+    }
+
+    /** Apply a PO approval decision once EM-CFG-04 reaches a final outcome (mirrors stock movements). */
+    public function applyApprovalOutcome(ApprovalRequest $request): PurchaseOrder
+    {
+        if ($request->entity_type !== 'PURCHASE_ORDER') {
+            throw DomainException::conflict('Approval is not a purchase-order request.');
+        }
+        $po = PurchaseOrder::query()->findOrFail($request->entity_ref);
+        if ($po->status !== PurchaseOrder::PENDING_APPROVAL) {
+            return $po; // already resolved — idempotent.
+        }
+        $po->update(['status' => $request->status === ApprovalRequest::APPROVED ? PurchaseOrder::APPROVED : PurchaseOrder::REJECTED]);
+
+        return $po->refresh();
     }
 
     /**

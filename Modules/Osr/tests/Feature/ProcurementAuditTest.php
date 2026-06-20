@@ -2,11 +2,15 @@
 
 namespace Modules\Osr\Tests\Feature;
 
+use App\Foundation\Approvals\ApprovalDefinition;
+use App\Foundation\Support\Id;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
+use Modules\Osr\Models\PurchaseOrder;
 use Modules\Osr\Models\StockBalance;
+use Modules\Osr\Models\StockMovement;
 use Tests\TestCase;
 
 class ProcurementAuditTest extends TestCase
@@ -34,6 +38,36 @@ class ProcurementAuditTest extends TestCase
 
         $this->assertEquals(50, StockBalance::query()->where('location_id', 'WH-MAIN')->where('sku_id', 'sku_ont')->value('quantity'));
         $this->assertDatabaseHas('stock_movement', ['location_id' => 'WH-MAIN', 'reason_code' => 'GOODS_RECEIPT']);
+    }
+
+    public function test_po_approval_is_gated_through_em_cfg_04_when_a_policy_exists(): void
+    {
+        // R-OSR-02-04: an operator policy makes PO approval go through EM-CFG-04, not a bare flip.
+        ApprovalDefinition::query()->create([
+            'definition_id' => Id::make('appd'), 'operator_code' => 'WIK', 'entity_type' => 'PURCHASE_ORDER',
+            'approver_roles' => [], 'required_approvals' => 1, 'active' => true,
+        ]);
+
+        $po = $this->postJson('/api/purchase-orders', [
+            'supplier' => 'Huawei', 'location_id' => 'WH-MAIN',
+            'lines' => [['sku_id' => 'sku_ont', 'quantity' => 50, 'unit_cost' => 30]],
+        ])->assertCreated()->json('po_id');
+
+        // Approve now parks the PO in PENDING_APPROVAL and opens an EM-CFG-04 request.
+        $this->postJson("/api/purchase-orders/{$po}/approve")->assertOk()->assertJsonPath('status', 'PENDING_APPROVAL');
+        $requestId = PurchaseOrder::find($po)->approval_request_id;
+        $this->assertDatabaseHas('approval_request', ['request_id' => $requestId, 'entity_type' => 'PURCHASE_ORDER', 'status' => 'PENDING']);
+
+        // A held PO cannot be received yet.
+        $this->postJson("/api/purchase-orders/{$po}/receive")->assertStatus(409);
+
+        // A different approver decides (segregation of duties: the requester may not self-approve).
+        $approver = User::factory()->create(['operator_code' => 'WIK']);
+        $approver->assignRole('SUPER_ADMIN');
+        Sanctum::actingAs($approver);
+        $this->postJson("/api/purchase-orders/approvals/{$requestId}/decide", ['approve' => true])
+            ->assertOk()->assertJsonPath('status', 'APPROVED');
+        $this->postJson("/api/purchase-orders/{$po}/receive")->assertOk()->assertJsonPath('status', 'RECEIVED');
     }
 
     public function test_serialized_receipt_creates_equipment_instances(): void
@@ -68,7 +102,7 @@ class ProcurementAuditTest extends TestCase
         // A second reconcile must NOT post the -3 correction again (R-OSR-05-09).
         $this->postJson("/api/stock-counts/{$session}/reconcile")->assertOk();
         $this->assertEquals(47, StockBalance::query()->where('location_id', 'WH-I')->where('sku_id', 'sku_i')->value('quantity'));
-        $this->assertSame(1, \Modules\Osr\Models\StockMovement::query()->where('reason_code', 'INVENTORY_AUDIT_ADJUSTMENT')->where('reference', $session)->count());
+        $this->assertSame(1, StockMovement::query()->where('reason_code', 'INVENTORY_AUDIT_ADJUSTMENT')->where('reference', $session)->count());
     }
 
     public function test_inventory_audit_reconciles_variance(): void
