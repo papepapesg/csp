@@ -69,9 +69,16 @@ class ReconciliationTest extends TestCase
         $this->postJson("/api/provisioning/force-sync-requests/{$fs['force_sync_id']}/execute")
             ->assertStatus(409);
 
-        // Approve, then execute -> item resolved.
+        // EM-CFG-04 segregation of duties: the requester cannot approve their own force-sync.
+        $this->postJson("/api/provisioning/force-sync-requests/{$fs['force_sync_id']}/approve")->assertStatus(403);
+
+        // A different approver decides it; then it can execute -> item resolved.
+        $approver = User::factory()->create(['operator_code' => 'WIK']);
+        $approver->assignRole('SUPER_ADMIN');
+        Sanctum::actingAs($approver);
         $this->postJson("/api/provisioning/force-sync-requests/{$fs['force_sync_id']}/approve")
             ->assertOk()->assertJsonPath('status', 'APPROVED');
+        $this->assertDatabaseHas('approval_request', ['request_id' => $fs['approval_request_id'], 'entity_type' => 'PROVISIONING_FORCE_SYNC', 'status' => 'APPROVED']);
         $this->postJson("/api/provisioning/force-sync-requests/{$fs['force_sync_id']}/execute")
             ->assertOk()->assertJsonPath('status', 'COMPLETED');
 

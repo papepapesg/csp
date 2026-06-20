@@ -2,6 +2,7 @@
 
 namespace Modules\Provisioning\Database\Seeders;
 
+use App\Foundation\Approvals\ApprovalDefinition;
 use App\Foundation\Support\Id;
 use Illuminate\Database\Seeder;
 use Modules\Provisioning\Adapters\StubProvisioningAdapter;
@@ -35,5 +36,12 @@ class ProvisioningTargetSeeder extends Seeder
                 ['adapter_config_id' => Id::make('pac'), 'adapter_class' => StubProvisioningAdapter::class, 'status' => 'ACTIVE'],
             );
         }
+
+        // R-PROV-07: gate destructive force-sync through EM-CFG-04 by default (a manual approval
+        // step before the network is touched). Operators tune approver_roles / thresholds here.
+        ApprovalDefinition::query()->updateOrCreate(
+            ['operator_code' => 'WIK', 'entity_type' => 'PROVISIONING_FORCE_SYNC', 'action' => 'FORCE_SYNC'],
+            ['definition_id' => Id::make('appd'), 'approver_roles' => [], 'required_approvals' => 1, 'active' => true],
+        );
     }
 }

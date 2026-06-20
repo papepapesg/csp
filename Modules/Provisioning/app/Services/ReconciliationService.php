@@ -2,10 +2,13 @@
 
 namespace Modules\Provisioning\Services;
 
+use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Id;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Modules\Provisioning\Events\ProvisioningEvents;
 use Modules\Provisioning\Models\ProvisioningDesiredState;
@@ -26,6 +29,7 @@ class ReconciliationService
         private readonly EventBus $events,
         private readonly ProvisioningAdapterRegistry $adapters,
         private readonly ProvisioningService $provisioning,
+        private readonly ApprovalService $approvals,
     ) {}
 
     /**
@@ -112,19 +116,46 @@ class ReconciliationService
             'requested_by_user_id' => $requestedBy,
             'reason' => $reason,
         ]);
+
+        // R-PROV-07: gate the destructive force-sync through the EM-CFG-04 engine (config-driven,
+        // segregation of duties, immutable audit). With an operator policy it parks PENDING_APPROVAL;
+        // with none it auto-approves — consistent with every other EM-CFG-04 caller.
+        $approval = $this->approvals->request([
+            'operator_code' => $item->operator_code,
+            'entity_type' => 'PROVISIONING_FORCE_SYNC',
+            'action' => 'FORCE_SYNC',
+            'entity_ref' => $request->force_sync_id,
+            'requested_by' => $requestedBy,
+        ]);
+        $autoApproved = $approval->status !== ApprovalRequest::PENDING;
+        $request->update([
+            'approval_request_id' => $approval->request_id,
+            'status' => $autoApproved ? ProvisioningForceSyncRequest::APPROVED : ProvisioningForceSyncRequest::PENDING_APPROVAL,
+        ]);
+
         $item->update(['status' => ProvisioningReconciliationItem::IN_REVIEW]);
         $this->emitForceSync(ProvisioningEvents::FORCE_SYNC_REQUESTED, $request);
+        if ($autoApproved) {
+            $this->emitForceSync(ProvisioningEvents::FORCE_SYNC_APPROVED, $request);
+        }
 
-        return $request;
+        return $request->refresh();
     }
 
-    /** R-PROV-07: approve a pending force-sync (the EM-CFG-04 approval step). */
-    public function approveForceSync(ProvisioningForceSyncRequest $request, ?string $approver = null): ProvisioningForceSyncRequest
+    /** R-PROV-07: approve a pending force-sync through EM-CFG-04 (segregation of duties + audit). */
+    public function approveForceSync(ProvisioningForceSyncRequest $request, ?User $actor = null): ProvisioningForceSyncRequest
     {
         if ($request->status !== ProvisioningForceSyncRequest::PENDING_APPROVAL) {
             throw DomainException::conflict('Only a PENDING_APPROVAL force-sync can be approved.');
         }
-        $request->update(['status' => ProvisioningForceSyncRequest::APPROVED, 'approved_by_user_id' => $approver]);
+        $approval = $request->approval_request_id ? ApprovalRequest::query()->find($request->approval_request_id) : null;
+        if ($approval && $approval->status === ApprovalRequest::PENDING) {
+            $decided = $this->approvals->decide($approval, true, $actor);
+            if ($decided->status !== ApprovalRequest::APPROVED) {
+                return $request->refresh(); // multi-step policy: still gathering approvals
+            }
+        }
+        $request->update(['status' => ProvisioningForceSyncRequest::APPROVED, 'approved_by_user_id' => $actor?->uid]);
         $this->emitForceSync(ProvisioningEvents::FORCE_SYNC_APPROVED, $request);
 
         return $request->refresh();

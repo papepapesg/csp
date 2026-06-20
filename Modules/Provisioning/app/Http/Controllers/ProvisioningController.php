@@ -114,7 +114,7 @@ class ProvisioningController extends ApiController
 
     public function approveForceSync(Request $request, ProvisioningForceSyncRequest $forceSync): JsonResponse
     {
-        return ApiResponse::item($this->reconciliation->approveForceSync($forceSync, $request->user()?->uid));
+        return ApiResponse::item($this->reconciliation->approveForceSync($forceSync, $request->user()));
     }
 
     public function executeForceSync(Request $request, ProvisioningForceSyncRequest $forceSync): JsonResponse
