@@ -5,6 +5,8 @@ namespace Modules\Rbac\Services;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
+use App\Models\User;
+use Illuminate\Support\Collection;
 use Modules\Rbac\Events\RbacEvents;
 use Modules\Rbac\Models\RbacChangeAudit;
 use Modules\Rbac\Models\RbacPermissionMeta;
@@ -50,8 +52,8 @@ class RbacScopeService
         return $scope;
     }
 
-    /** @return \Illuminate\Support\Collection<int,RbacUserScope> active scopes for a user */
-    public function scopesFor(string $authUserId): \Illuminate\Support\Collection
+    /** @return Collection<int,RbacUserScope> active scopes for a user */
+    public function scopesFor(string $authUserId): Collection
     {
         return RbacUserScope::query()->where('auth_user_id', $authUserId)->where('active', true)
             ->where(fn ($q) => $q->whereNull('effective_to')->orWhere('effective_to', '>', now()))
@@ -66,6 +68,11 @@ class RbacScopeService
     public function withinScope(string $authUserId, string $scopeType, string $scopeValue, ?string $operator = null): bool
     {
         $operator ??= Context::operatorCode();
+        // A platform SUPER_ADMIN bypasses scope (DD §8.5) — the docstring's promise, now enforced.
+        $user = User::query()->where('uid', $authUserId)->first();
+        if ($user && $user->hasRole('SUPER_ADMIN')) {
+            return true;
+        }
         foreach ($this->scopesFor($authUserId) as $s) {
             if ($s->scope_type === RbacUserScope::GLOBAL) {
                 return true;

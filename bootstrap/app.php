@@ -7,6 +7,7 @@ use App\Foundation\Http\Middleware\CorrelationId;
 use App\Foundation\Http\Middleware\EnforceIdempotency;
 use App\Foundation\Http\Middleware\ResolveOperatorContext;
 use App\Http\Middleware\HandleInertiaRequests;
+use App\Http\Middleware\SetLocaleFromOperator;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -16,6 +17,7 @@ use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Middleware\AddLinkHeadersForPreloadedAssets;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
+use Modules\Rbac\Http\Middleware\EnforceScope;
 use Spatie\Permission\Middleware\PermissionMiddleware;
 use Spatie\Permission\Middleware\RoleMiddleware;
 use Spatie\Permission\Middleware\RoleOrPermissionMiddleware;
@@ -45,7 +47,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->statefulApi();
 
         $middleware->web(append: [
-            \App\Http\Middleware\SetLocaleFromOperator::class,
+            SetLocaleFromOperator::class,
             HandleInertiaRequests::class,
             AddLinkHeadersForPreloadedAssets::class,
         ]);
@@ -57,7 +59,7 @@ return Application::configure(basePath: dirname(__DIR__))
             ResolveOperatorContext::class,
         ]);
         $middleware->api(append: [
-            \App\Http\Middleware\SetLocaleFromOperator::class,
+            SetLocaleFromOperator::class,
         ]);
 
         $middleware->alias([
@@ -68,6 +70,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'role' => RoleMiddleware::class,
             'permission' => PermissionMiddleware::class,
             'role_or_permission' => RoleOrPermissionMiddleware::class,
+            // EM-CFG-03 §8.5 data-scope gate (after permission): scope:{type},{requestKey}
+            'scope' => EnforceScope::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

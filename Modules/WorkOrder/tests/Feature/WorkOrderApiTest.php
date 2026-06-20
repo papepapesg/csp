@@ -6,6 +6,7 @@ use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
+use Modules\Rbac\Services\RbacScopeService;
 use Tests\TestCase;
 
 class WorkOrderApiTest extends TestCase
@@ -62,5 +63,26 @@ class WorkOrderApiTest extends TestCase
         Sanctum::actingAs($user);
 
         $this->postJson('/api/work-orders', ['type' => 'SUPPORT'])->assertForbidden();
+    }
+
+    public function test_tech_region_scope_gates_work_order_creation(): void
+    {
+        // EM-CFG-03 §8.5: a region-scoped dispatcher may only create WOs in their region.
+        $user = User::factory()->create(['operator_code' => 'WIK']);
+        $user->assignRole('DISPATCHER'); // has workorder.assign, not SUPER_ADMIN
+        app(RbacScopeService::class)->assign($user->uid, [
+            'scopeType' => 'TECH_REGION', 'scopeValue' => 'KE-NRB-KAREN', 'operatorCode' => 'WIK',
+        ]);
+        Sanctum::actingAs($user);
+
+        // Within scope -> allowed.
+        $this->postJson('/api/work-orders', [
+            'type' => 'INSTALLATION', 'account_id' => 'a1', 'tech_region_id' => 'KE-NRB-KAREN', 'source_type' => 'FULFILLMENT',
+        ])->assertCreated();
+
+        // Outside scope -> 403 OUT_OF_SCOPE.
+        $this->postJson('/api/work-orders', [
+            'type' => 'INSTALLATION', 'account_id' => 'a1', 'tech_region_id' => 'KE-MSA-NYALI', 'source_type' => 'FULFILLMENT',
+        ])->assertStatus(403)->assertJsonPath('errorCode', 'OUT_OF_SCOPE');
     }
 }

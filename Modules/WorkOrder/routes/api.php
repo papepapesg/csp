@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\WorkOrder\Http\Controllers\FieldAuditCampaignController;
 use Modules\WorkOrder\Http\Controllers\FieldAuditController;
 use Modules\WorkOrder\Http\Controllers\WorkOrderController;
 
@@ -15,7 +16,7 @@ Route::get('poc/work-orders', [WorkOrderController::class, 'pocIndex']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('work-orders', [WorkOrderController::class, 'index'])->middleware('permission:workorder.read');
-    Route::post('work-orders', [WorkOrderController::class, 'store'])->middleware(['permission:workorder.assign', 'idempotency']);
+    Route::post('work-orders', [WorkOrderController::class, 'store'])->middleware(['permission:workorder.assign', 'scope:TECH_REGION,tech_region_id', 'idempotency']);
     Route::get('work-orders/{workOrder}', [WorkOrderController::class, 'show'])->middleware('permission:workorder.read');
     Route::post('work-orders/{workOrder}/assign', [WorkOrderController::class, 'assign'])->middleware('permission:workorder.assign');
     Route::post('work-orders/{workOrder}/auto-assign', [WorkOrderController::class, 'autoAssign'])->middleware('permission:workorder.assign');
@@ -43,7 +44,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('field-audits/{fieldAudit}/findings', [FieldAuditController::class, 'submitFindings'])->middleware('permission:workorder.execute');
 
     // FA-01/02/03 campaign/task/observation/discrepancy model (the unified field-audit capability)
-    $fac = \Modules\WorkOrder\Http\Controllers\FieldAuditCampaignController::class;
+    $fac = FieldAuditCampaignController::class;
     Route::post('field-audit-campaigns', [$fac, 'createCampaign'])->middleware('permission:workorder.assign');
     Route::get('field-audit-tasks', [$fac, 'tasks'])->middleware('permission:workorder.read');
     Route::post('field-audit-tasks', [$fac, 'createTask'])->middleware(['permission:workorder.assign', 'idempotency']);
