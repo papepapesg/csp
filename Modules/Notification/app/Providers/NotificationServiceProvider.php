@@ -13,6 +13,7 @@ use Modules\Notification\Dispatch\ChannelAdapterRegistry;
 use Modules\Notification\Icn\StaffAdapterRegistry;
 use Modules\Notification\Listeners\AccountStatusNotificationBridge;
 use Modules\Notification\Listeners\DunningNotificationBridge;
+use Modules\Notification\Listeners\NotifyApproversOnApprovalRequested;
 use Modules\Notification\Rendering\TemplateEngineRegistry;
 use Nwidart\Modules\Support\ModuleServiceProvider;
 
@@ -53,6 +54,11 @@ class NotificationServiceProvider extends ModuleServiceProvider
         Event::listen(
             OutboxEventPublished::class,
             [AccountStatusNotificationBridge::class, 'handle'],
+        );
+        // EM-CFG-04: a pending approval notifies its approver group via ICN-01.
+        Event::listen(
+            OutboxEventPublished::class,
+            [NotifyApproversOnApprovalRequested::class, 'handle'],
         );
     }
 

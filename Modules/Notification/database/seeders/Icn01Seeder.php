@@ -52,6 +52,10 @@ class Icn01Seeder extends Seeder
             ['refund-approval-needed', 'EMAIL', '[Finance] Refund {{amount}} {{currency}} needs approval', "Refund request {{refundRequestId}} for {{customerName}} ({{accountNumber}}): {{amount}} {{currency}}.\n\nReason: {{reasonCode}}\n\nApprove: {{deeplinkUrl}}", ['refundRequestId', 'customerName', 'accountNumber', 'amount', 'currency', 'reasonCode', 'deeplinkUrl'], 'high'],
             ['refund-approval-needed', 'SLACK', null, "*Refund approval needed* — {{amount}} {{currency}} for {{customerName}}\n<{{deeplinkUrl}}|Approve>", ['amount', 'currency', 'customerName', 'deeplinkUrl'], 'high'],
             ['dunning-l3-escalation-internal', 'EMAIL', '[Dunning L3] Account {{accountNumber}} — overdue {{daysOverdue}}d', "Account {{accountNumber}} ({{customerName}}) entered Dunning L3 (suspension).\n\nDays overdue: {{daysOverdue}}\nAmount: {{amountDue}} {{currency}}\n\nReview: {{deeplinkUrl}}", ['accountNumber', 'customerName', 'daysOverdue', 'amountDue', 'currency', 'deeplinkUrl'], 'high'],
+            // EM-CFG-04: generic "an approval awaits you" notice for any approval entity_type.
+            ['approval-needed', 'EMAIL', '[Approval] {{entityType}} awaits your decision', "An approval request ({{entityType}}, {{requestId}}) awaits your decision.\n\nReview: {{deeplinkUrl}}", ['entityType', 'requestId', 'deeplinkUrl'], 'high'],
+            ['approval-needed', 'SLACK', null, "*Approval needed* — {{entityType}}\n• Request: {{requestId}}\n• <{{deeplinkUrl}}|Open in BO UI>", ['entityType', 'requestId', 'deeplinkUrl'], 'high'],
+            ['approval-needed', 'IN_APP_PUSH', null, '{{entityType}} approval awaits ({{requestId}})', ['entityType', 'requestId'], 'high'],
         ];
         foreach ($templates as [$code, $channel, $subject, $body, $required, $urgency]) {
             StaffNotificationTemplate::query()->updateOrCreate(

@@ -2,20 +2,29 @@
 
 namespace Modules\Notification\Tests\Feature;
 
+use App\Foundation\Approvals\ApprovalDefinition;
+use App\Foundation\Approvals\ApprovalService;
+use App\Foundation\Support\Context;
+use App\Foundation\Support\Id;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Laravel\Sanctum\Sanctum;
 use Modules\Notification\Database\Seeders\Icn01Seeder;
+use Modules\Notification\Icn\ChannelDispatchResult;
+use Modules\Notification\Icn\RecipientInfo;
+use Modules\Notification\Icn\RenderedMessage;
 use Modules\Notification\Icn\Services\AckService;
 use Modules\Notification\Icn\Services\StaffNotificationService;
 use Modules\Notification\Icn\Services\StaffNotificationSweeper;
+use Modules\Notification\Icn\StaffChannelAdapter;
 use Modules\Notification\Models\Icn\StaffGroupMembership;
 use Modules\Notification\Models\Icn\StaffNotification;
 use Modules\Notification\Models\Icn\StaffNotificationAdapterBinding;
 use Modules\Notification\Models\Icn\StaffNotificationChannelConfig;
 use Modules\Notification\Models\Icn\StaffNotificationDelivery;
+use Modules\Notification\Models\Icn\StaffNotificationTemplate;
 use Modules\Notification\Models\Icn\StaffNotificationUserChannelIdentity;
 use Modules\Notification\Models\Icn\StaffNotificationUserPref;
 use Tests\TestCase;
@@ -91,6 +100,27 @@ class Icn01Test extends TestCase
         $this->assertSame(1, StaffNotification::count());
     }
 
+    public function test_pending_approval_notifies_the_approver_group(): void
+    {
+        // EM-CFG-04 -> ICN-01: a pending approval whose policy names an approver group
+        // (here the seeded kyc supervisors) raises a staff notification to that group.
+        Context::setOperatorCode('WIK');
+        ApprovalDefinition::query()->create([
+            'definition_id' => Id::make('appd'), 'operator_code' => 'WIK',
+            'entity_type' => 'KYC_DECISION', 'approver_roles' => ['kenya-l1-kyc'], 'required_approvals' => 1, 'active' => true,
+        ]);
+
+        app(ApprovalService::class)->request([
+            'operator_code' => 'WIK', 'entity_type' => 'KYC_DECISION', 'entity_ref' => 'kyc-1',
+        ]);
+        $this->artisan('sophix:outbox:dispatch')->assertSuccessful();
+
+        $notif = StaffNotification::query()->where('template_code', 'approval-needed')->first();
+        $this->assertNotNull($notif);
+        $this->assertSame('kenya-l1-kyc', $notif->candidate_group);
+        $this->assertSame(4, $notif->expected_recipients); // the four KYC supervisors
+    }
+
     public function test_empty_candidate_group_creates_expired_notification(): void
     {
         $n = $this->svc()->dispatch($this->kycPayload(['candidateGroup' => 'ghost-group']))['notification'];
@@ -163,7 +193,7 @@ class Icn01Test extends TestCase
     {
         // franchiseCode is required so caught at ingress; drop it from a template's required set
         // to exercise the soft «MISSING» render path instead.
-        \Modules\Notification\Models\Icn\StaffNotificationTemplate::query()
+        StaffNotificationTemplate::query()
             ->where('template_code', 'kyc-l1-approval-needed')->update(['required_variables' => ['customerName', 'deeplinkUrl']]);
 
         $n = $this->svc()->dispatch($this->kycPayload(['templateVariables' => ['customerName' => 'Jane', 'deeplinkUrl' => 'https://bo/t/1']]))['notification'];
@@ -239,7 +269,7 @@ class Icn01Test extends TestCase
     {
         config()->set('sophix.icn.adapter_implementations',
             config('sophix.icn.adapter_implementations') + ['whatsapp-business' => FakeWhatsAppStaffAdapter::class]);
-        \Modules\Notification\Models\Icn\StaffNotificationTemplate::query()->create([
+        StaffNotificationTemplate::query()->create([
             'operator_code' => 'WIK', 'template_code' => 'kyc-l1-approval-needed', 'channel' => 'WHATSAPP',
             'body_template' => 'KYC {{customerName}}', 'required_variables' => ['customerName'], 'display_name' => 'wa', 'enabled' => true,
         ]);
@@ -290,7 +320,7 @@ class Icn01Test extends TestCase
 }
 
 /** A staff WhatsApp provider, shipped exactly as a deployment would add one. */
-class FakeWhatsAppStaffAdapter implements \Modules\Notification\Icn\StaffChannelAdapter
+class FakeWhatsAppStaffAdapter implements StaffChannelAdapter
 {
     public function adapterImplCode(): string
     {
@@ -299,9 +329,9 @@ class FakeWhatsAppStaffAdapter implements \Modules\Notification\Icn\StaffChannel
 
     public function init(array $config): void {}
 
-    public function dispatch(StaffNotificationDelivery $delivery, \Modules\Notification\Icn\RenderedMessage $message, \Modules\Notification\Icn\RecipientInfo $recipient): \Modules\Notification\Icn\ChannelDispatchResult
+    public function dispatch(StaffNotificationDelivery $delivery, RenderedMessage $message, RecipientInfo $recipient): ChannelDispatchResult
     {
-        return \Modules\Notification\Icn\ChannelDispatchResult::ok('wa_'.bin2hex(random_bytes(4)));
+        return ChannelDispatchResult::ok('wa_'.bin2hex(random_bytes(4)));
     }
 
     public function resolveIdentity(array $userProfile): ?array
