@@ -10,6 +10,7 @@ use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Models\DunningProgram;
 use Modules\Billing\Models\DunningState;
 use Modules\Billing\Models\Invoice;
+use Modules\Ilm\Services\AccountService;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Services\OperationFramework;
 use Modules\Subscription\Services\RestrictionService;
@@ -30,6 +31,7 @@ class DunningService
         private readonly DunningProgramResolver $programs,
         private readonly OperationFramework $operations,
         private readonly RestrictionService $restrictions,
+        private readonly AccountService $accounts,
     ) {}
 
     /**
@@ -100,6 +102,10 @@ class DunningService
 
         // T-3: grace must have elapsed AND debt still > 0.
         $graceDays = $state->current_level === DunningState::LEVEL_NONE ? 0 : $program->graceDays($state->current_level);
+        // R-ILM-F-3: an affects_dunning account flag (e.g. NPD) escalates faster — waive grace.
+        if ($graceDays > 0 && $this->accounts->hasDunningAccelerantFlag($accountId, $operator)) {
+            $graceDays = 0;
+        }
         $daysAtLevel = $state->entered_level_at ? (int) abs(now()->diffInDays($state->entered_level_at)) : 0;
         if ($daysAtLevel < $graceDays) {
             $state->save();
@@ -266,7 +272,7 @@ class DunningService
      * whose ADD is currently in flight is skipped this pass (a no-op via idempotency / conflict)
      * and reconciled on a later pass. Successfully-applied codes are recorded for recovery.
      *
-     * @param list<string> $codes
+     * @param  list<string>  $codes
      */
     private function applyRestrictions(Subscription $subscription, DunningState $state, array $codes, int $level, string $dunningRef): void
     {

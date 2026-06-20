@@ -218,6 +218,26 @@ class AccountService
     }
 
     /**
+     * R-ILM-F-3: does the account carry an ACTIVE flag whose catalog marks it affects_dunning
+     * (e.g. NPD)? BIL-04 reads this before deciding the dunning level to escalate faster.
+     * Keyed by account_id so the dunning scanner can ask without loading the account model.
+     */
+    public function hasDunningAccelerantFlag(string $accountId, ?string $operator = null): bool
+    {
+        $active = CustomerAccountFlag::query()
+            ->where('account_id', $accountId)->where('state', CustomerAccountFlag::ACTIVE)->pluck('flag_code');
+        if ($active->isEmpty()) {
+            return false;
+        }
+
+        return CustomerAccountFlagCatalog::query()
+            ->when($operator, fn ($q) => $q->where('operator_code', $operator))
+            ->whereIn('flag_code', $active->all())
+            ->where('affects_dunning', true)
+            ->exists();
+    }
+
+    /**
      * Read-only decision context for an account/customer (ILM-CFG-01). Returns plain
      * data so any module can feed a *complete* fact set into its rule engine without
      * reading ILM tables directly (cross-module rule). Every routing-relevant attribute
