@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
 use Modules\Reporting\Models\ReportDailyMetric;
 use Modules\Reporting\Projectors\ReportMetricProjector;
+use Modules\Subscription\Models\Subscription;
+use Modules\Subscription\Services\SubscriptionService;
 use Tests\TestCase;
 
 class ReportingApiTest extends TestCase
@@ -48,6 +50,20 @@ class ReportingApiTest extends TestCase
         $rev = $this->getJson('/api/reports/dashboards/revenue-overview')->assertOk()->json('metrics');
         $this->assertEquals(1, $rev['invoices_generated']);
         $this->assertEquals(4999, $rev['payments_amount']);
+    }
+
+    public function test_subscription_termination_is_projected(): void
+    {
+        $subId = $this->postJson('/api/subscriptions', [
+            'customer_id' => 'ct', 'account_id' => 'at', 'homepass_id' => 'ht', 'package_ref' => 'pt',
+        ])->assertCreated()->json('subscription_id');
+
+        // Terminate it -> SubscriptionTerminated -> the reporting mart counts it.
+        app(SubscriptionService::class)
+            ->transitionStatus(Subscription::find($subId), Subscription::TERMINATED);
+        Artisan::call('sophix:outbox:dispatch');
+
+        $this->assertSame('1.00', (string) ReportDailyMetric::where('metric_key', 'subscriptions_terminated')->first()?->value);
     }
 
     public function test_projection_is_idempotent_on_redispatch(): void
