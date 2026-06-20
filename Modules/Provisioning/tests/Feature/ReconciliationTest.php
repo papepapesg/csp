@@ -2,14 +2,21 @@
 
 namespace Modules\Provisioning\Tests\Feature;
 
+use App\Foundation\Events\DomainEvent;
+use App\Foundation\Events\EventBus;
+use App\Foundation\Support\Context;
+use App\Foundation\Support\Id;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Provisioning\Database\Seeders\ProvisioningTargetSeeder;
+use Modules\Provisioning\Models\ProvisioningCommand;
+use Modules\Provisioning\Models\ProvisioningDesiredState;
 use Modules\Provisioning\Models\ProvisioningReconciliationItem;
 use Modules\Provisioning\Services\ProvisioningService;
 use Modules\Provisioning\Services\ReconciliationService;
+use Modules\Subscription\Models\Subscription;
 use Tests\TestCase;
 
 class ReconciliationTest extends TestCase
@@ -84,6 +91,37 @@ class ReconciliationTest extends TestCase
 
         $this->assertSame('RESOLVED', $item->refresh()->status);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'ProvisioningForceSyncCompleted']);
+    }
+
+    /** R-ILM-S-3: a provisioning-affecting account status change reaches the network. */
+    public function test_account_status_change_syncs_provisioning(): void
+    {
+        Context::setOperatorCode('WIK');
+        // A subscription on the account, provisioned ACTIVE on the default NMS.
+        Subscription::query()->create([
+            'operator_code' => 'WIK', 'subscription_id' => 'SUB-AS', 'customer_id' => 'cust_as', 'account_id' => 'ACC-AS',
+            'homepass_id' => 'hp_as', 'package_ref' => 'pkg_as', 'status_code' => 'ACTIVE', 'billing_mode' => 'POSTPAID',
+        ]);
+        ProvisioningDesiredState::query()->create([
+            'desired_state_id' => Id::make('pds'), 'operator_code' => 'WIK',
+            'subscription_id' => 'SUB-AS', 'target_code' => 'DEFAULT_NMS', 'subscriber_key' => 'SUB-AS', 'desired_status' => 'ACTIVE',
+        ]);
+
+        // ILM flags the account with a provisioning-affecting status change.
+        app(EventBus::class)->publish(new DomainEvent(
+            type: 'CustomerAccountStatusChanged',
+            topic: 'sophix.customer.account-status-changed',
+            payload: ['accountId' => 'ACC-AS', 'status' => 'INACTIVE', 'subStatus' => 'hold', 'affectsProvisioning' => true, 'customerVisible' => true],
+            aggregateType: 'CustomerAccount', aggregateId: 'ACC-AS',
+        ));
+        $this->artisan('sophix:outbox:dispatch')->assertSuccessful();
+
+        // Provisioning applied the suspension to the account's service.
+        $cmd = ProvisioningCommand::query()
+            ->where('subscription_id', 'SUB-AS')->where('action', 'ACCOUNT_STATUS_SYNC')->first();
+        $this->assertNotNull($cmd);
+        $this->assertSame('SUSPENDED', $cmd->desired_state['desiredStatus']);
+        $this->assertSame('DEFAULT_NMS', $cmd->target_code);
     }
 
     /** The polling worker reconciles all active targets. */
