@@ -56,6 +56,21 @@ class ItOpsTest extends TestCase
         $this->assertFalse(Heartbeat::shouldStop('workflow-worker'));
     }
 
+    public function test_pause_stops_the_worker_and_persists_until_resume(): void
+    {
+        Heartbeat::ping('workflow-worker', 'w-1');
+
+        // PAUSE: the worker stops AND stays stopped across restarts (command persists).
+        $this->postJson('/api/noc/services/workflow-worker/stop')->assertOk();
+        $this->assertTrue(Heartbeat::shouldStop('workflow-worker'));
+        $this->assertTrue(Heartbeat::shouldStop('workflow-worker')); // still paused — unlike RESTART
+
+        // RESUME clears the pause; the worker may run again.
+        $this->postJson('/api/noc/services/workflow-worker/start')->assertOk();
+        $this->assertFalse(Heartbeat::shouldStop('workflow-worker'));
+        $this->assertFalse(Heartbeat::shouldStop('workflow-worker'));
+    }
+
     public function test_requires_itops_permission(): void
     {
         $user = User::factory()->create();

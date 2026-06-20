@@ -39,9 +39,17 @@ class WorkflowWorkerCommand extends Command
         }
 
         do {
+            // IT-Ops control gate (checked first so a pending PAUSE keeps a restarted
+            // worker down, and a RESTART exits before claiming more work). --once drains
+            // regardless — it is a bounded operation, not a long-running service.
+            if (! $this->option('once') && Heartbeat::shouldStop('workflow-worker')) {
+                $this->info('Stop/pause requested via IT-Ops — exiting.');
+                break;
+            }
+
             $processed = $this->drainOnce($registry, $engine, $workerId, $topics, (int) $this->option('max'));
 
-            // IT-Ops liveness + restart control.
+            // IT-Ops liveness.
             Heartbeat::ping('workflow-worker', $workerId, ['lastBatch' => $processed]);
 
             if ($this->option('once')) {
@@ -50,10 +58,6 @@ class WorkflowWorkerCommand extends Command
                 }
 
                 continue;
-            }
-            if (Heartbeat::shouldStop('workflow-worker')) {
-                $this->info('Restart requested via IT-Ops — exiting for supervisor restart.');
-                break;
             }
             if ($processed === 0) {
                 sleep((int) $this->option('sleep'));

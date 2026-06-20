@@ -24,15 +24,42 @@ class Heartbeat
         }
     }
 
-    /** A worker should stop (to be restarted by supervisor) if a control asks for it. */
+    /**
+     * Whether a worker should stop its loop, honouring an IT-Ops control command:
+     *   RESTART — one-shot: stop now; the command is acked + cleared so the
+     *             supervisor-restarted worker runs normally again.
+     *   PAUSE   — stop and STAY down: the command persists, so a (re)started
+     *             worker exits again on every startup until RESUME clears it.
+     *   RESUME  — clear a pending PAUSE (consumed) so the worker proceeds.
+     */
     public static function shouldStop(string $service): bool
     {
         try {
             $control = ServiceControl::query()->find($service);
-            if ($control && $control->command === 'RESTART' && $control->acknowledged_at === null) {
+            if (! $control) {
+                return false;
+            }
+
+            if ($control->command === 'RESTART' && $control->acknowledged_at === null) {
                 $control->update(['acknowledged_at' => now(), 'command' => null]);
 
                 return true;
+            }
+
+            if ($control->command === 'PAUSE') {
+                // Record the first acknowledgement, but keep the command so the
+                // worker stays paused across restarts until RESUME.
+                if ($control->acknowledged_at === null) {
+                    $control->update(['acknowledged_at' => now()]);
+                }
+
+                return true;
+            }
+
+            if ($control->command === 'RESUME') {
+                $control->update(['command' => null, 'acknowledged_at' => now()]);
+
+                return false;
             }
         } catch (\Throwable) {
             // ignore

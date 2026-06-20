@@ -4,7 +4,7 @@ namespace Modules\ItOps\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-/** Pending control command for a service (e.g. RESTART). */
+/** Pending control command for a service (RESTART | PAUSE | RESUME). */
 class ServiceControl extends Model
 {
     protected $table = 'service_control';
