@@ -4,10 +4,12 @@ namespace Modules\Billing\Tests\Feature;
 
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Services\ProFormaService;
 use Modules\Catalog\Models\PackageVersion;
+use Modules\Ilm\Models\Customer;
 use Modules\Subscription\Models\Subscription;
 use Tests\TestCase;
 
@@ -22,9 +24,9 @@ class ProFormaTest extends TestCase
         Context::setOperatorCode('WIK');
     }
 
-    private function prepaidSub(\Carbon\Carbon $cycleEnd): Subscription
+    private function prepaidSub(Carbon $cycleEnd): Subscription
     {
-        \Modules\Ilm\Models\Customer::query()->firstOrCreate(['customer_id' => 'c1'], [
+        Customer::query()->firstOrCreate(['customer_id' => 'c1'], [
             'operator_code' => 'WIK', 'type' => 'RES', 'name' => 'Jane', 'primary_msisdn' => '+254700000001',
         ]);
         DB::table('package')->insertOrIgnore(['id' => 'pkg_p', 'operator_code' => 'WIK', 'code' => 'P', 'name' => 'P', 'status' => 'ACTIVE', 'created_at' => now(), 'updated_at' => now()]);
@@ -54,5 +56,21 @@ class ProFormaTest extends TestCase
     {
         $this->prepaidSub(now()->addDays(20)); // too far out
         $this->assertSame(0, app(ProFormaService::class)->scan('WIK')['generated']);
+    }
+
+    public function test_regenerating_supersedes_the_prior_pro_forma_and_links_it(): void
+    {
+        $sub = $this->prepaidSub(now()->addDays(3));
+        app(ProFormaService::class)->generate($sub);
+        $old = DB::table('pro_forma')->where('subscription_id', $sub->subscription_id)->where('status', 'ACTIVE')->first();
+
+        // Advance the cycle so a fresh pro forma is generated, superseding the old one.
+        $sub->update(['current_cycle_end' => now()->addMonth()->addDays(3)]);
+        app(ProFormaService::class)->generate($sub->refresh());
+
+        $new = DB::table('pro_forma')->where('subscription_id', $sub->subscription_id)->where('status', 'ACTIVE')->first();
+        $superseded = DB::table('pro_forma')->where('pro_forma_id', $old->pro_forma_id)->first();
+        $this->assertSame('SUPERSEDED', $superseded->status);
+        $this->assertSame($new->pro_forma_id, $superseded->superseded_by); // the chain is recorded
     }
 }

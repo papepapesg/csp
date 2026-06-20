@@ -58,11 +58,12 @@ class ProFormaService
         $total = round(array_sum(array_map(fn (Charge $c) => $c->amount, $charges)), 2);
 
         return DB::transaction(function () use ($subscription, $cycleKey, $charges, $total) {
-            // Supersede any prior ACTIVE pro forma for this subscription.
-            DB::table('pro_forma')->where('subscription_id', $subscription->subscription_id)
-                ->where('status', 'ACTIVE')->update(['status' => 'SUPERSEDED', 'updated_at' => now()]);
-
             $id = Id::make('pf');
+            // Supersede any prior ACTIVE pro forma for this subscription, recording WHICH
+            // pro forma replaced it (the supersede chain) rather than just the status.
+            DB::table('pro_forma')->where('subscription_id', $subscription->subscription_id)
+                ->where('status', 'ACTIVE')->update(['status' => 'SUPERSEDED', 'superseded_by' => $id, 'updated_at' => now()]);
+
             DB::table('pro_forma')->insert([
                 'pro_forma_id' => $id,
                 'operator_code' => $subscription->operator_code,
