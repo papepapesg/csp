@@ -2,7 +2,9 @@
 
 namespace Modules\Workforce\Providers;
 
+use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
+use Modules\Workforce\Listeners\ResolveSlotCommitmentOnWoLifecycle;
 
 class EventServiceProvider extends ServiceProvider
 {
@@ -11,7 +13,10 @@ class EventServiceProvider extends ServiceProvider
      *
      * @var array<string, array<int, string>>
      */
-    protected $listen = [];
+    protected $listen = [
+        // WO finalized/cancelled -> consume/release the contractor slot commitment.
+        OutboxEventPublished::class => [ResolveSlotCommitmentOnWoLifecycle::class],
+    ];
 
     /**
      * Indicates if events should be discovered.

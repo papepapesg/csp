@@ -198,6 +198,31 @@ class ContractorAvailabilityService
         return $commitment;
     }
 
+    /** WO finalized → CONSUME every ACTIVE commitment for that work order. @return int count */
+    public function consumeForWorkOrder(string $woId): int
+    {
+        return $this->resolveForWorkOrder($woId, fn ($c) => $this->consume($c));
+    }
+
+    /** WO cancelled → RELEASE every ACTIVE commitment for that work order (restore capacity). */
+    public function releaseForWorkOrder(string $woId): int
+    {
+        return $this->resolveForWorkOrder($woId, fn ($c) => $this->release($c));
+    }
+
+    /** @param callable(ContractorSlotCommitment):mixed $apply */
+    private function resolveForWorkOrder(string $woId, callable $apply): int
+    {
+        $n = 0;
+        ContractorSlotCommitment::query()->where('wo_id', $woId)->where('status', ContractorSlotCommitment::ACTIVE)
+            ->get()->each(function ($c) use ($apply, &$n) {
+                $apply($c);
+                $n++;
+            });
+
+        return $n;
+    }
+
     private function emit(string $type, ContractorSlotCommitment $commitment): void
     {
         $this->events->publish(new DomainEvent(
