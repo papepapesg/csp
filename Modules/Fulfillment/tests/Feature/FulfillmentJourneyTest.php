@@ -166,6 +166,36 @@ class FulfillmentJourneyTest extends TestCase
         $this->assertDatabaseHas('fulfillment_order_step', ['order_id' => $order['order_id'], 'step' => 'KYC']);
     }
 
+    public function test_kyc_rejection_cancels_the_parked_order_and_compensates(): void
+    {
+        $custId = Id::make('cust');
+        Customer::query()->create([
+            'customer_id' => $custId, 'operator_code' => 'WIK', 'type' => 'RES', 'name' => 'Rejected KYC',
+            'primary_msisdn' => '+254700333444', 'kyc_status' => 'PENDING',
+        ]);
+
+        $order = $this->postJson('/api/fulfillment-orders', [
+            'customer_id' => $custId, 'account_id' => 'acct_r', 'homepass_id' => 'hp_r', 'package_ref' => 'pkg_x',
+        ], ['Idempotency-Key' => 'order-r'])->json('order');
+        $this->drain();
+        $this->postJson("/api/fulfillment-orders/{$order['order_id']}/complete", [], ['Idempotency-Key' => 'complete-r'])->assertOk();
+        $this->drain();
+
+        $fresh = FulfillmentOrder::find($order['order_id']);
+        $this->assertSame('AWAITING_KYC', $fresh->status);
+        $woId = $fresh->work_order_id;
+
+        // Final KYC rejection -> CustomerKycRejected -> the parked order is cancelled (was stuck forever).
+        $customers = app(CustomerService::class);
+        $customer = Customer::find($custId);
+        $customers->recordKycDecision($customer, 1, 'REJECTED');
+        Artisan::call('sophix:outbox:dispatch');
+
+        $this->assertSame('CANCELLED', FulfillmentOrder::find($order['order_id'])->status);
+        $this->assertSame(WorkOrder::CANCELLED, WorkOrder::find($woId)->status); // compensated
+        $this->assertSame(Subscription::TERMINATED, Subscription::find($fresh->subscription_id)->status_code);
+    }
+
     public function test_capture_requires_permission(): void
     {
         $user = User::factory()->create();
