@@ -52,4 +52,11 @@ Read these six code sources **in order**; each maps to a section of `_TEMPLATE.m
 | `subscription.md` (exemplar) | ✅ drafted |
 | `catalog.md` | ✅ drafted |
 | `billing.md` | ✅ drafted |
-| all other modules | ⬜ to do (one owner each) |
+| `ilm.md` | ✅ drafted |
+| `fulfillment.md` | ✅ drafted |
+| `workorder.md` | ✅ drafted |
+| `workforce.md` | ✅ drafted |
+| `osr.md` | ✅ drafted |
+| `provisioning.md` | ✅ drafted |
+| Edges: `notification`, `ticketing`, `paymentgateway`, `reporting`, `itops` | ⬜ to do |
+| Substrate engines: `workflow`, `rules`, `rbac` (mostly in `00_SPINE`) | ⬜ short docs |
