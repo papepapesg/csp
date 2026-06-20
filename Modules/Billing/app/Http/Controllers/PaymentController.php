@@ -51,7 +51,7 @@ class PaymentController extends ApiController
         // RC-3 dedup reference: a gateway ref for online, else the Idempotency-Key for a
         // reference-less (OFFLINE/cash) payment. A payment with NEITHER cannot be made
         // idempotent, so it is rejected — a retried cash POST must never double-apply money.
-        $data['payment_reference'] = $data['gateway_ref'] ?: $request->header('Idempotency-Key');
+        $data['payment_reference'] = ($data['gateway_ref'] ?? null) ?: $request->header('Idempotency-Key');
         if (! $data['payment_reference']) {
             return ApiResponse::error('PAYMENT_REFERENCE_REQUIRED', 'A payment must carry a gateway_ref or an Idempotency-Key for idempotent application.', 422);
         }
@@ -61,7 +61,7 @@ class PaymentController extends ApiController
     }
 
     /** POST /api/payments/{payment}/reverse (RV; PAYMENT_REVERSAL). */
-    public function reverse(Request $request, \Modules\Billing\Models\PaymentLedger $payment): JsonResponse
+    public function reverse(Request $request, PaymentLedger $payment): JsonResponse
     {
         $data = $request->validate([
             'reason_code' => ['required', 'string', 'max:64'],
@@ -72,7 +72,7 @@ class PaymentController extends ApiController
     }
 
     /** POST /api/payments/{payment}/allocate-surplus (OV-4 manual review release). */
-    public function allocateSurplus(\Modules\Billing\Models\PaymentLedger $payment): JsonResponse
+    public function allocateSurplus(PaymentLedger $payment): JsonResponse
     {
         return ApiResponse::item($this->payments->allocateSurplus($payment));
     }

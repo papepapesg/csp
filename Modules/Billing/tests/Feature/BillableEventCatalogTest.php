@@ -2,6 +2,7 @@
 
 namespace Modules\Billing\Tests\Feature;
 
+use App\Foundation\Errors\DomainException;
 use App\Foundation\Support\Context;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
@@ -9,7 +10,9 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Billing\Database\Seeders\BillableEventSeeder;
 use Modules\Billing\Models\BillableEvent;
+use Modules\Billing\Models\BillingIntent;
 use Modules\Billing\Services\BillingIntentService;
+use Modules\Subscription\Models\Subscription;
 use Tests\TestCase;
 
 /**
@@ -104,7 +107,7 @@ class BillableEventCatalogTest extends TestCase
         try {
             $intents->emit(['subscription_id' => 'sub_cat_2', 'account_id' => 'acc_cat_2', 'intent_type' => 'NOT_IN_CATALOG', 'amount' => 50]);
             $this->fail('expected UNKNOWN_BILLABLE_EVENT');
-        } catch (\App\Foundation\Errors\DomainException $e) {
+        } catch (DomainException $e) {
             $this->assertSame('UNKNOWN_BILLABLE_EVENT', $e->errorCode);
         }
 
@@ -112,7 +115,7 @@ class BillableEventCatalogTest extends TestCase
         try {
             $intents->emit(['subscription_id' => 'sub_cat_3', 'account_id' => 'acc_cat_3', 'intent_type' => 'PAUSE_FEE', 'amount' => -10]);
             $this->fail('expected AMOUNT_SIGN_VIOLATION');
-        } catch (\App\Foundation\Errors\DomainException $e) {
+        } catch (DomainException $e) {
             $this->assertSame('AMOUNT_SIGN_VIOLATION', $e->errorCode);
         }
 
@@ -126,5 +129,37 @@ class BillableEventCatalogTest extends TestCase
         $this->assertSame('CONFIRMED', $skipped->status);
         $this->assertSame('NONE', $skipped->settlement_channel);
         $this->assertNull($skipped->invoice_id);
+    }
+
+    public function test_paid_state_callback_transitions_the_subscription(): void
+    {
+        // A suspended-for-non-payment subscription awaiting its reconnection fee.
+        $sub = Subscription::query()->create([
+            'operator_code' => 'WIK', 'customer_id' => 'cust_sc', 'account_id' => 'acc_sc',
+            'homepass_id' => 'hp_sc', 'package_ref' => 'pkg_sc', 'status_code' => Subscription::SUSPENDED,
+            'billing_mode' => 'POSTPAID',
+        ]);
+
+        // The operator's reconnection fee is pay-first and its state_callback flips the
+        // subscription back to ACTIVE once paid (seeded by BillableEventSeeder).
+        BillableEvent::query()->where('operator_code', 'WIK')->where('code', 'RECONNECTION_FEE_AFTER_DUNNING')
+            ->update([
+                'status' => BillableEvent::ACTIVE, 'pay_first_required' => true,
+                'state_callback' => ['transitionCode' => 'RECONNECT_AFTER_FEE', 'targetStatus' => 'ACTIVE'],
+            ]);
+
+        // Emitting the fee parks PENDING (pay-first) and pins the callback; no transition yet.
+        $intent = app(BillingIntentService::class)->emit([
+            'subscription_id' => $sub->subscription_id, 'account_id' => 'acc_sc',
+            'intent_type' => 'RECONNECTION_FEE_AFTER_DUNNING', 'amount' => 500,
+        ]);
+        $this->assertSame(BillingIntent::PENDING, $intent->status);
+        $this->assertSame('ACTIVE', $intent->state_callback['targetStatus']);
+        $this->assertSame(Subscription::SUSPENDED, $sub->refresh()->status_code); // still suspended
+
+        // Payment confirms the intent → the gated SUB-LM transition fires.
+        app(BillingIntentService::class)->confirm($intent->refresh());
+        $this->assertSame(Subscription::ACTIVE, $sub->refresh()->status_code);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionActivated']);
     }
 }

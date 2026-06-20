@@ -12,6 +12,8 @@ use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Models\AccountCreditBalance;
 use Modules\Billing\Models\BillableEvent;
 use Modules\Billing\Models\BillingIntent;
+use Modules\Subscription\Models\Subscription;
+use Modules\Subscription\Services\SubscriptionService;
 
 /**
  * BIL-01 billable-event intent service. A subscription operation calls emit() in
@@ -45,6 +47,7 @@ class BillingIntentService
             // BillableEvent catalog, the intent must resolve to an ACTIVE event;
             // applicability skips (R-B-5) and sign policy (R-AS-*) are enforced.
             $skipCharge = false;
+            $stateCallback = null;
             if ($this->catalog->operatorHasCatalog($operator)) {
                 $matched = $this->catalog->resolve($operator, (string) $data['intent_type'], $billingMode);
                 if ($matched->isEmpty()) {
@@ -73,6 +76,9 @@ class BillingIntentService
                     if (! array_key_exists('pay_first', $data)) {
                         $payFirst = $event->pay_first_required && $amount > 0;
                     }
+                    // R-BIL-01-SC-1: snapshot the SUB-LM transition this event gates so it
+                    // fires once the charge settles (possibly on a later payment confirmation).
+                    $stateCallback = $event->state_callback;
                 }
             }
 
@@ -87,6 +93,7 @@ class BillingIntentService
                 'pay_first' => $payFirst,
                 'status' => BillingIntent::PENDING,
                 'settlement_channel' => 'NONE',
+                'state_callback' => $stateCallback,
             ]);
 
             if ($skipCharge) {
@@ -126,6 +133,12 @@ class BillingIntentService
 
             $this->emitEvent($intent, 'SubscriptionBillingIntentEmitted');
 
+            // Inline-settled intents (prepaid paid / credit / zero / skip) apply their
+            // state callback now; pay-first intents apply it later, on confirm().
+            if ($intent->status === BillingIntent::CONFIRMED) {
+                $this->applyStateCallback($intent);
+            }
+
             return $intent->refresh();
         });
     }
@@ -138,8 +151,30 @@ class BillingIntentService
         }
         $intent->update(['status' => BillingIntent::CONFIRMED, 'confirmed_at' => now()]);
         $this->emitEvent($intent, 'SubscriptionBillingIntentConfirmed');
+        // R-BIL-01-SC-1: settlement is now confirmed — drive the gated SUB-LM transition.
+        $this->applyStateCallback($intent);
 
         return $intent;
+    }
+
+    /**
+     * R-BIL-01-SC-1: a matched BillableEvent may pin a state_callback {transitionCode,
+     * targetStatus}. Once its charge settles, BIL-01 drives the SUB-LM-01 transition it
+     * gates (e.g. a paid reconnection fee flips SUSPENDED_NP back to ACTIVE). Idempotent:
+     * a subscription already at the target status is left untouched.
+     */
+    private function applyStateCallback(BillingIntent $intent): void
+    {
+        $callback = $intent->state_callback;
+        $target = $callback['targetStatus'] ?? null;
+        if (! $target || ! $intent->subscription_id) {
+            return;
+        }
+        $subscription = Subscription::query()->find($intent->subscription_id);
+        if (! $subscription || $subscription->status_code === $target) {
+            return;
+        }
+        app(SubscriptionService::class)->transitionStatus($subscription, $target);
     }
 
     private function emitEvent(BillingIntent $intent, string $type): void

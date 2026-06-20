@@ -29,7 +29,7 @@ class BillingIntent extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['amount' => 'decimal:2', 'pay_first' => 'boolean', 'confirmed_at' => 'datetime'];
+    protected $casts = ['amount' => 'decimal:2', 'pay_first' => 'boolean', 'confirmed_at' => 'datetime', 'state_callback' => 'array'];
 
     protected static function booted(): void
     {
