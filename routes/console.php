@@ -21,6 +21,9 @@ Schedule::command('sophix:billing:cycle-close')->everyThirtyMinutes()->withoutOv
 // BIL-02-GEN-01 pro-forma pre-cycle scanner (prepaid, daily).
 Schedule::command('sophix:billing:pro-forma')->daily();
 
+// BIL-02-GEN-01 rule group Q: retry recoverable invoice-generation failures (R-GEN-01-Q-2).
+Schedule::command('sophix:billing:generation-retry')->everyFifteenMinutes()->withoutOverlapping();
+
 // EM-03 CVM daily flag evaluator.
 Schedule::command('sophix:cvm:evaluate-flags')->daily();
 

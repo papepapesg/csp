@@ -8,6 +8,7 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
+use Modules\Billing\Models\Invoice;
 use Modules\Billing\Services\GenerationFailureService;
 use Modules\Billing\Services\InvoiceService;
 use Tests\TestCase;
@@ -27,7 +28,7 @@ class BulkReversalAndFailureQueueTest extends TestCase
         Context::setOperatorCode('WIK');
     }
 
-    private function invoice(string $type = 'STANDARD', float $amount = 1000): \Modules\Billing\Models\Invoice
+    private function invoice(string $type = 'STANDARD', float $amount = 1000): Invoice
     {
         return app(InvoiceService::class)->generate(
             ['account_id' => 'acc_1', 'customer_id' => 'cust_1', 'type' => $type],
@@ -51,7 +52,7 @@ class BulkReversalAndFailureQueueTest extends TestCase
         $this->invoice('TAX', 500);            // protected: signed tax invoice
         $parent = $this->invoice('STANDARD', 800);
         // a credit note linked to the parent protects the parent
-        \Modules\Billing\Models\Invoice::query()->create([
+        Invoice::query()->create([
             'operator_code' => 'WIK', 'account_id' => 'acc_1', 'type' => 'CREDIT_NOTE',
             'original_invoice_id' => $parent->invoice_id, 'status' => 'ISSUED', 'currency' => 'KES',
             'issue_date' => now(), 'total_amount' => 100, 'amount_due' => 0,
@@ -102,5 +103,47 @@ class BulkReversalAndFailureQueueTest extends TestCase
         // A successful generation resolves it.
         $failures->resolveFor('WIK', 'sub_x', 'CYCLE_POSTPAID');
         $this->assertDatabaseHas('generation_failure_queue', ['subscription_id' => 'sub_x', 'status' => 'RETRIED_SUCCESS']);
+    }
+
+    public function test_retry_scanner_recovers_a_due_entry(): void
+    {
+        $failures = app(GenerationFailureService::class);
+        $failures->enqueue('WIK', 'CYCLE_POSTPAID', 'sub_ok', ['subscriptionId' => 'sub_ok'], 'BIL01_UNAVAILABLE', 'timeout');
+        // enqueue parks next_retry_at 15 min out — make it due now.
+        DB::table('generation_failure_queue')->where('subscription_id', 'sub_ok')->update(['next_retry_at' => now()->subMinute()]);
+
+        $r = $failures->retryDue('WIK', fn () => null); // the generator now succeeds (no throw)
+
+        $this->assertSame(1, $r['recovered']);
+        $this->assertDatabaseHas('generation_failure_queue', ['subscription_id' => 'sub_ok', 'status' => 'RETRIED_SUCCESS']);
+    }
+
+    public function test_retry_scanner_skips_entries_not_yet_due(): void
+    {
+        $failures = app(GenerationFailureService::class);
+        $failures->enqueue('WIK', 'CYCLE_POSTPAID', 'sub_future', ['subscriptionId' => 'sub_future'], 'BIL01_UNAVAILABLE', 'timeout');
+
+        // next_retry_at is in the future — the scanner must not touch it.
+        $r = $failures->retryDue('WIK', fn () => throw new \RuntimeException('should not run'));
+
+        $this->assertSame(0, $r['retried']);
+        $this->assertDatabaseHas('generation_failure_queue', ['subscription_id' => 'sub_future', 'status' => 'PENDING_RETRY', 'retry_count' => 0]);
+    }
+
+    public function test_retry_scanner_gives_up_after_the_retry_budget(): void
+    {
+        $failures = app(GenerationFailureService::class);
+        $failures->enqueue('WIK', 'CYCLE_POSTPAID', 'sub_bad', ['subscriptionId' => 'sub_bad'], 'BIL01_UNAVAILABLE', 'timeout');
+
+        // The generator stays broken across the whole budget (8 attempts); re-arm each pass.
+        $broken = fn () => throw new \RuntimeException('still down');
+        for ($i = 0; $i < 8; $i++) {
+            DB::table('generation_failure_queue')->where('subscription_id', 'sub_bad')->update(['next_retry_at' => now()->subMinute()]);
+            $failures->retryDue('WIK', $broken);
+        }
+
+        // Budget spent → GAVE_UP_AUTO for human review, no further auto-retry.
+        $this->assertDatabaseHas('generation_failure_queue', ['subscription_id' => 'sub_bad', 'status' => 'GAVE_UP_AUTO', 'retry_count' => 8]);
+        $this->assertSame(0, $failures->retryDue('WIK', $broken)['retried']);
     }
 }
