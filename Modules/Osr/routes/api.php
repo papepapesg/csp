@@ -36,14 +36,14 @@ Route::middleware('auth:sanctum')->group(function () {
     // OSR-RMA-01 equipment swap & RMA
     Route::get('swap-requests', [SwapRequestController::class, 'index'])->middleware('permission:stock.read');
     Route::get('swap-requests/{swapRequest}', [SwapRequestController::class, 'show'])->middleware('permission:stock.read');
-    Route::post('swap-requests/{swapRequest}/field-visit', [SwapRequestController::class, 'fieldVisit'])->middleware('permission:stock.manage');
+    Route::post('swap-requests/{swapRequest}/field-visit', [SwapRequestController::class, 'fieldVisit'])->middleware(['permission:stock.manage', 'idempotency']);
     Route::post('swap-requests/{kind}', [SwapRequestController::class, 'store'])->middleware(['permission:stock.manage', 'idempotency']);
 
     // OSR-02 procurement
     Route::get('purchase-orders', [ProcurementController::class, 'index'])->middleware('permission:stock.read');
-    Route::post('purchase-orders', [ProcurementController::class, 'store'])->middleware('permission:stock.manage');
+    Route::post('purchase-orders', [ProcurementController::class, 'store'])->middleware(['permission:stock.manage', 'idempotency']);
     Route::post('purchase-orders/{purchaseOrder}/approve', [ProcurementController::class, 'approve'])->middleware('permission:stock.manage');
-    Route::post('purchase-orders/{purchaseOrder}/receive', [ProcurementController::class, 'receive'])->middleware('permission:stock.manage');
+    Route::post('purchase-orders/{purchaseOrder}/receive', [ProcurementController::class, 'receive'])->middleware(['permission:stock.manage', 'idempotency']);
     // OSR-05 inventory audit
     Route::post('stock-counts', [ProcurementController::class, 'openCount'])->middleware('permission:stock.manage');
     Route::post('stock-counts/{stockCountSession}/count', [ProcurementController::class, 'count'])->middleware('permission:stock.manage');

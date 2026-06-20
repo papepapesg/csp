@@ -10,7 +10,7 @@ use Modules\Rules\Http\Controllers\DecisionTableController;
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('rules/decision-tables', [DecisionTableController::class, 'index'])->middleware('permission:rules.view');
-    Route::post('rules/decision-tables', [DecisionTableController::class, 'store'])->middleware('permission:rules.manage');
+    Route::post('rules/decision-tables', [DecisionTableController::class, 'store'])->middleware(['permission:rules.manage', 'idempotency']);
     Route::get('rules/decision-tables/{decisionTable}', [DecisionTableController::class, 'show'])->middleware('permission:rules.view');
     Route::put('rules/decision-tables/{decisionTable}', [DecisionTableController::class, 'update'])->middleware('permission:rules.manage');
     Route::post('rules/{ruleSet}/evaluate', [DecisionTableController::class, 'evaluate'])->middleware('permission:rules.manage');
