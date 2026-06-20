@@ -2,11 +2,14 @@
 
 namespace Modules\Ilm\Tests\Feature;
 
+use App\Foundation\Errors\DomainException;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Modules\Ilm\Database\Seeders\AccountFlagCatalogSeeder;
+use Modules\Ilm\Models\Customer;
 use Modules\Ilm\Models\CustomerAccount;
+use Modules\Ilm\Models\CustomerSubStatusCatalog;
 use Modules\Ilm\Services\AccountService;
 use Tests\TestCase;
 
@@ -29,7 +32,7 @@ class AccountFlagTest extends TestCase
     private function account(): CustomerAccount
     {
         $customerId = Id::make('cust');
-        \Modules\Ilm\Models\Customer::query()->create([
+        Customer::query()->create([
             'customer_id' => $customerId, 'operator_code' => 'WIK', 'type' => 'RES', 'name' => 'Test Customer',
             'primary_msisdn' => '+2547'.rand(10000000, 99999999), 'kyc_status' => 'APPROVED',
         ]);
@@ -69,6 +72,20 @@ class AccountFlagTest extends TestCase
         $this->assertCount(0, $svc->activeFlags($account));
     }
 
+    public function test_clearing_the_last_attention_flag_clears_the_banner(): void
+    {
+        $svc = app(AccountService::class);
+        $account = $this->account();
+
+        // NPD surfaces attention -> banner is set.
+        $svc->setFlag($account, 'NPD');
+        $this->assertSame('No Payment Done (cash-only)', $account->refresh()->attention_banner);
+
+        // Clearing the only attention-surfacing flag must clear the banner (was left stale before).
+        $svc->clearFlag($account, 'NPD');
+        $this->assertNull($account->refresh()->attention_banner);
+    }
+
     public function test_sub_status_must_be_in_the_registry(): void
     {
         $svc = app(AccountService::class);
@@ -97,7 +114,7 @@ class AccountFlagTest extends TestCase
         try {
             $svc->update($account, ['sub_status' => 'hold']);
             $this->fail('expected SUB_STATUS_APPROVAL_REQUIRED');
-        } catch (\App\Foundation\Errors\DomainException $e) {
+        } catch (DomainException $e) {
             $this->assertSame('SUB_STATUS_APPROVAL_REQUIRED', $e->errorCode);
         }
 
@@ -114,7 +131,7 @@ class AccountFlagTest extends TestCase
         $account = $this->account();
 
         // An operator drops the approval requirement on 'hold' by editing the catalog row — no code change.
-        \Modules\Ilm\Models\CustomerSubStatusCatalog::query()
+        CustomerSubStatusCatalog::query()
             ->where('operator_code', 'WIK')->where('sub_status_code', 'hold')->update(['requires_approval' => false]);
 
         $svc->update($account, ['sub_status' => 'hold']); // now accepted without a reference

@@ -5,8 +5,10 @@ namespace Modules\Ilm\Services;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Modules\Ilm\Events\IlmEvents;
+use Modules\Ilm\Models\Customer;
 use Modules\Ilm\Models\CustomerAccount;
 use Modules\Ilm\Models\CustomerAccountFlag;
 use Modules\Ilm\Models\CustomerAccountFlagCatalog;
@@ -165,6 +167,9 @@ class AccountService
             return;
         }
         $flag->update(['state' => CustomerAccountFlag::CLEARED, 'set_by' => $actor, 'set_at' => now()]);
+        // Recompute the attention banner from the REMAINING active flags — clearing the
+        // last attention-surfacing flag must clear the banner (it was previously left stale).
+        $this->recomputeAttentionBanner($account);
         $this->events->publish(new DomainEvent(
             type: IlmEvents::ACCOUNT_FLAG_CLEARED,
             topic: IlmEvents::TOPIC,
@@ -174,8 +179,21 @@ class AccountService
         ));
     }
 
-    /** @return \Illuminate\Support\Collection<int,CustomerAccountFlag> active flags. */
-    public function activeFlags(CustomerAccount $account): \Illuminate\Support\Collection
+    /** The banner = the name of an active flag whose catalog surfaces_attention, else null. */
+    private function recomputeAttentionBanner(CustomerAccount $account): void
+    {
+        $activeCodes = $this->activeFlags($account)->pluck('flag_code');
+        $banner = $activeCodes->isEmpty() ? null : CustomerAccountFlagCatalog::query()
+            ->where('operator_code', $account->operator_code)
+            ->whereIn('flag_code', $activeCodes->all())
+            ->where('surfaces_attention', true)
+            ->orderBy('flag_code')
+            ->value('name');
+        $account->update(['attention_banner' => $banner]);
+    }
+
+    /** @return Collection<int,CustomerAccountFlag> active flags. */
+    public function activeFlags(CustomerAccount $account): Collection
     {
         return CustomerAccountFlag::query()->where('account_id', $account->account_id)->where('state', CustomerAccountFlag::ACTIVE)->get();
     }
@@ -194,12 +212,12 @@ class AccountService
     {
         $account = $accountId ? CustomerAccount::query()->where('account_id', $accountId)->first() : null;
         $customer = $account?->customer
-            ?? ($customerId ? \Modules\Ilm\Models\Customer::query()->where('customer_id', $customerId)->first() : null);
+            ?? ($customerId ? Customer::query()->where('customer_id', $customerId)->first() : null);
         $flags = $account ? $this->activeFlags($account) : collect();
 
         return [
             'operatorCode' => $account?->operator_code ?? $customer?->operator_code,
-            'serviceClass' => $account?->service_class,
+            'serviceClass' => $account?->service_class_1,
             'accountStatus' => $account?->status,
             'accountSubStatus' => $account?->sub_status,                         // 'vip', 'staff_account', …
             'customerType' => $customer?->type,                                  // RES | SME | ENT — segment proxy

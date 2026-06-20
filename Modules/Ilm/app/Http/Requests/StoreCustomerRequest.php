@@ -21,6 +21,7 @@ class StoreCustomerRequest extends FormRequest
             'name' => ['required', 'string', 'max:255'],
             'primary_msisdn' => ['required', 'string', 'max:32'],
             'email' => ['nullable', 'email', 'max:255'],
+            'tax_identifier' => ['nullable', 'string', 'max:64'],
             'identification_type_1' => ['nullable', 'string', 'max:64'],
             'identification_number_1' => ['nullable', 'string', 'max:128'],
             'identification_type_2' => ['nullable', 'string', 'max:64'],
