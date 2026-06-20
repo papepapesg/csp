@@ -45,6 +45,9 @@ class Not01ModelSeeder extends Seeder
             // default; swap to WHATSAPP/etc. by editing these rows, no code change).
             ['DunningStageAdvanced', 'EMAIL', 1, 'NORMAL', 'TRANSACTIONAL', 'DUNNING_NOTICE', false],
             ['DunningStageAdvanced', 'SMS', 2, 'NORMAL', 'TRANSACTIONAL', 'DUNNING_NOTICE', false],
+            // ILM-CFG-01: a customer-visible account status change notifies the customer.
+            ['CustomerAccountStatusChanged', 'SMS', 1, 'NORMAL', 'TRANSACTIONAL', 'ACCOUNT_STATUS_CHANGE', false],
+            ['CustomerAccountStatusChanged', 'EMAIL', 2, 'NORMAL', 'TRANSACTIONAL', 'ACCOUNT_STATUS_CHANGE', false],
         ];
         foreach ($rules as [$event, $channel, $priority, $urgency, $category, $purpose, $needsPdf]) {
             NotificationRoutingRule::query()->updateOrCreate(
@@ -69,6 +72,10 @@ class Not01ModelSeeder extends Seeder
             ['EMAIL_SUBJECT', 'DUNNING_NOTICE', 'HANDLEBARS', 'Action needed: your account is overdue'],
             ['EMAIL_HTML', 'DUNNING_NOTICE', 'HANDLEBARS', '<p>Your account is overdue (stage {{levelName}}). Please settle the balance to avoid service interruption.</p>'],
             ['EMAIL_TEXT', 'DUNNING_NOTICE', 'HANDLEBARS', 'Your account is overdue (stage {{levelName}}). Please settle the balance to avoid service interruption.'],
+            ['SMS_TEXT', 'ACCOUNT_STATUS_CHANGE', 'HANDLEBARS', 'Your account status has changed to {{status}}.'],
+            ['EMAIL_SUBJECT', 'ACCOUNT_STATUS_CHANGE', 'HANDLEBARS', 'Your account status has changed'],
+            ['EMAIL_HTML', 'ACCOUNT_STATUS_CHANGE', 'HANDLEBARS', '<p>Your account status has changed to {{status}}.</p>'],
+            ['EMAIL_TEXT', 'ACCOUNT_STATUS_CHANGE', 'HANDLEBARS', 'Your account status has changed to {{status}}.'],
         ];
         foreach ($templates as [$format, $purpose, $engine, $payload]) {
             Template::query()->updateOrCreate(

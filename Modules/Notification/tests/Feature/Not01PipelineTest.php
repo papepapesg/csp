@@ -2,11 +2,22 @@
 
 namespace Modules\Notification\Tests\Feature;
 
+use App\Foundation\Events\DomainEvent;
+use App\Foundation\Events\EventBus;
+use App\Foundation\Events\Outbox\OutboxEvent;
+use App\Foundation\Events\OutboxEventPublished;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
+use Modules\Ilm\Models\Customer;
+use Modules\Ilm\Models\CustomerAccount;
 use Modules\Notification\Database\Seeders\Not01ModelSeeder;
+use Modules\Notification\Dispatch\ChannelAdapter;
+use Modules\Notification\Dispatch\ChannelAdapterRegistry;
+use Modules\Notification\Dispatch\DeliveryResult;
+use Modules\Notification\Dispatch\Dispatch;
+use Modules\Notification\Listeners\DunningNotificationBridge;
 use Modules\Notification\Models\ChannelOperatorConfig;
 use Modules\Notification\Models\CustomerNotificationPreference;
 use Modules\Notification\Models\NotificationDeliveryAttempt;
@@ -15,7 +26,9 @@ use Modules\Notification\Models\NotificationRoutingRule;
 use Modules\Notification\Models\Template;
 use Modules\Notification\Services\BounceService;
 use Modules\Notification\Services\NotificationOrchestrator;
+use Modules\Notification\Services\NotificationService;
 use Modules\Notification\Services\RetryScheduler;
+use Modules\Subscription\Models\Subscription;
 use Tests\TestCase;
 
 /**
@@ -41,6 +54,32 @@ class Not01PipelineTest extends TestCase
     private function orchestrator(): NotificationOrchestrator
     {
         return app(NotificationOrchestrator::class);
+    }
+
+    public function test_customer_visible_account_status_change_notifies_the_customer(): void
+    {
+        // ILM-CFG-01: a customer-visible account status change reaches the customer via NOT-01.
+        Customer::query()->create([
+            'customer_id' => 'cust_as', 'operator_code' => 'WIK', 'type' => 'RES', 'name' => 'Acct Holder',
+            'primary_msisdn' => '+254712000111', 'email' => 'holder@example.com',
+        ]);
+        CustomerAccount::query()->create([
+            'account_id' => 'ACC-NS', 'operator_code' => 'WIK', 'account_number' => '009-1', 'customer_id' => 'cust_as',
+            'service_address' => 'Nairobi', 'status' => 'INACTIVE', 'sub_status' => 'hold',
+        ]);
+
+        app(EventBus::class)->publish(new DomainEvent(
+            type: 'CustomerAccountStatusChanged',
+            topic: 'sophix.customer.account-status-changed',
+            payload: ['accountId' => 'ACC-NS', 'status' => 'INACTIVE', 'subStatus' => 'hold', 'affectsProvisioning' => false, 'customerVisible' => true],
+            aggregateType: 'CustomerAccount', aggregateId: 'ACC-NS',
+        ));
+        $this->artisan('sophix:outbox:dispatch')->assertSuccessful();
+
+        $log = NotificationLog::query()->where('event_type', 'CustomerAccountStatusChanged')->first();
+        $this->assertNotNull($log);
+        $this->assertSame('cust_as', $log->customer_id);
+        $this->assertEqualsCanonicalizing(['EMAIL', 'SMS'], $log->channels_attempted);
     }
 
     public function test_invoice_issued_renders_pdf_and_dispatches_both_channels(): void
@@ -285,7 +324,7 @@ class Not01PipelineTest extends TestCase
 
     public function test_legacy_send_dispatches_through_the_real_provider(): void
     {
-        $svc = app(\Modules\Notification\Services\NotificationService::class);
+        $svc = app(NotificationService::class);
 
         $ok = $svc->send(['channel' => 'SMS', 'recipient' => '+254712345678', 'body' => 'Your payment was received.']);
         $this->assertSame('SENT', $ok->status);
@@ -309,35 +348,35 @@ class Not01PipelineTest extends TestCase
         ]);
 
         // Legacy imperative path resolves the new provider through the registry.
-        $n = app(\Modules\Notification\Services\NotificationService::class)->send([
+        $n = app(NotificationService::class)->send([
             'channel' => 'WHATSAPP', 'recipient' => '+254712345678', 'body' => 'Hello via WhatsApp',
         ]);
         $this->assertSame('SENT', $n->status);
         $this->assertSame(['+254712345678' => 'Hello via WhatsApp'], FakeWhatsAppAdapter::$delivered);
 
         // The event-driven registry resolves it too.
-        $adapter = app(\Modules\Notification\Dispatch\ChannelAdapterRegistry::class)->for('WIK', 'WHATSAPP');
+        $adapter = app(ChannelAdapterRegistry::class)->for('WIK', 'WHATSAPP');
         $this->assertInstanceOf(FakeWhatsAppAdapter::class, $adapter);
     }
 
     public function test_dunning_notice_channels_come_from_routing_not_hardcoded(): void
     {
-        \Modules\Ilm\Models\Customer::query()->create([
+        Customer::query()->create([
             'customer_id' => 'cust_D', 'operator_code' => 'WIK', 'name' => 'Dee', 'type' => 'RES',
             'primary_msisdn' => '+254712345678', 'email' => 'dee@example.com',
         ]);
-        \Modules\Subscription\Models\Subscription::query()->create([
+        Subscription::query()->create([
             'subscription_id' => 'sub_D', 'customer_id' => 'cust_D', 'account_id' => 'acct_D', 'operator_code' => 'WIK',
             'homepass_id' => 'h1', 'package_ref' => 'p1', 'status_code' => 'ACTIVE', 'billing_mode' => 'POSTPAID', 'currency' => 'KES',
         ]);
 
         $fire = function (int $level) {
-            $event = new \App\Foundation\Events\Outbox\OutboxEvent;
+            $event = new OutboxEvent;
             $event->setRawAttributes([
                 'event_type' => 'DunningStageAdvanced', 'operator_code' => 'WIK',
                 'payload' => json_encode(['subscriptionId' => 'sub_D', 'accountId' => 'acct_D', 'level' => $level, 'levelName' => 'STAGE'.$level, 'debt' => '4500']),
             ]);
-            app(\Modules\Notification\Listeners\DunningNotificationBridge::class)->handle(new \App\Foundation\Events\OutboxEventPublished($event));
+            app(DunningNotificationBridge::class)->handle(new OutboxEventPublished($event));
         };
 
         // Default routing: the operator configured EMAIL + SMS — no channel is hardcoded.
@@ -375,7 +414,7 @@ class Not01PipelineTest extends TestCase
 }
 
 /** A third-party channel provider, exactly as a deployment would ship one. */
-class FakeWhatsAppAdapter implements \Modules\Notification\Dispatch\ChannelAdapter
+class FakeWhatsAppAdapter implements ChannelAdapter
 {
     /** @var array<string,string> recipient => text, captured for assertions */
     public static array $delivered = [];
@@ -387,11 +426,11 @@ class FakeWhatsAppAdapter implements \Modules\Notification\Dispatch\ChannelAdapt
 
     public function initialize(ChannelOperatorConfig $config): void {}
 
-    public function send(\Modules\Notification\Dispatch\Dispatch $dispatch, int $timeoutSeconds): \Modules\Notification\Dispatch\DeliveryResult
+    public function send(Dispatch $dispatch, int $timeoutSeconds): DeliveryResult
     {
         self::$delivered[$dispatch->recipient] = (string) $dispatch->artifact(Template::FORMAT_SMS_TEXT);
 
-        return \Modules\Notification\Dispatch\DeliveryResult::sent('wa_'.bin2hex(random_bytes(4)));
+        return DeliveryResult::sent('wa_'.bin2hex(random_bytes(4)));
     }
 
     public function shutdown(): void {}

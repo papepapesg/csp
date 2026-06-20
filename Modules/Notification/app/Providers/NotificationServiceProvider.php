@@ -2,7 +2,18 @@
 
 namespace Modules\Notification\Providers;
 
+use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Support\Facades\Event;
+use Modules\Notification\Console\Icn\StaffExpireCommand;
+use Modules\Notification\Console\Icn\StaffRetryCommand;
+use Modules\Notification\Console\RetryDispatchCommand;
+use Modules\Notification\Console\RetryRenderCommand;
+use Modules\Notification\Dispatch\ChannelAdapterRegistry;
+use Modules\Notification\Icn\StaffAdapterRegistry;
+use Modules\Notification\Listeners\AccountStatusNotificationBridge;
+use Modules\Notification\Listeners\DunningNotificationBridge;
+use Modules\Notification\Rendering\TemplateEngineRegistry;
 use Nwidart\Modules\Support\ModuleServiceProvider;
 
 class NotificationServiceProvider extends ModuleServiceProvider
@@ -23,10 +34,10 @@ class NotificationServiceProvider extends ModuleServiceProvider
      * @var string[]
      */
     protected array $commands = [
-        \Modules\Notification\Console\RetryDispatchCommand::class,
-        \Modules\Notification\Console\RetryRenderCommand::class,
-        \Modules\Notification\Console\Icn\StaffRetryCommand::class,
-        \Modules\Notification\Console\Icn\StaffExpireCommand::class,
+        RetryDispatchCommand::class,
+        RetryRenderCommand::class,
+        StaffRetryCommand::class,
+        StaffExpireCommand::class,
     ];
 
     public function boot(): void
@@ -34,9 +45,14 @@ class NotificationServiceProvider extends ModuleServiceProvider
         parent::boot();
         // NOT-01 consumes BIL-04 dunning level transitions and routes a customer notice per the
         // operator's routing rules + the customer's channel preferences (channels are config).
-        \Illuminate\Support\Facades\Event::listen(
-            \App\Foundation\Events\OutboxEventPublished::class,
-            [\Modules\Notification\Listeners\DunningNotificationBridge::class, 'handle'],
+        Event::listen(
+            OutboxEventPublished::class,
+            [DunningNotificationBridge::class, 'handle'],
+        );
+        // ILM-CFG-01: a customer-visible account status change notifies the customer.
+        Event::listen(
+            OutboxEventPublished::class,
+            [AccountStatusNotificationBridge::class, 'handle'],
         );
     }
 
@@ -45,9 +61,9 @@ class NotificationServiceProvider extends ModuleServiceProvider
         parent::register();
         // Adapter/engine registries cache initialized adapters; keep them singletons so the
         // cache lives for the request/worker lifetime.
-        $this->app->singleton(\Modules\Notification\Dispatch\ChannelAdapterRegistry::class);
-        $this->app->singleton(\Modules\Notification\Rendering\TemplateEngineRegistry::class);
-        $this->app->singleton(\Modules\Notification\Icn\StaffAdapterRegistry::class);
+        $this->app->singleton(ChannelAdapterRegistry::class);
+        $this->app->singleton(TemplateEngineRegistry::class);
+        $this->app->singleton(StaffAdapterRegistry::class);
     }
 
     /**
