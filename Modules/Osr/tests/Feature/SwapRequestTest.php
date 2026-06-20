@@ -116,7 +116,12 @@ class SwapRequestTest extends TestCase
     public function test_eqr_customer_refuses_return_forfeits_deposit(): void
     {
         $this->contractorVan('ctr_eqr');
-        $source = $this->fieldInstance();
+        // The unreturned unit's SKU carries the deposit value forfeited on refusal.
+        EquipmentSku::query()->create([
+            'sku_id' => 'sku_modem', 'operator_code' => 'WIK', 'name' => 'Modem', 'category' => 'ONT',
+            'is_serialized' => true, 'deposit_amount' => 3000, 'active' => true,
+        ]);
+        $source = $this->fieldInstance(); // sku_modem, subscription_id sub_1
 
         $resp = $this->postJson('/api/swap-requests/eqp', [
             'source_instance_id' => $source->instance_id, 'recovery_contractor_id' => 'ctr_eqr',
@@ -132,6 +137,9 @@ class SwapRequestTest extends TestCase
         $this->assertSame('COMPLETED_WITHOUT_RECOVERY', $swap->status);
         // Equipment never recovered — stays in the field.
         $this->assertSame(EquipmentInstance::IN_FIELD_ACTIVE, $source->refresh()->state);
+        // The forfeited deposit is ACTUALLY billed through BIL-01 (was only announced before).
+        $this->assertEqualsWithDelta(3000.0, (float) $swap->charge_amount, 0.001);
+        $this->assertDatabaseHas('billing_intent', ['subscription_id' => 'sub_1', 'intent_type' => 'DEPOSIT_FORFEITURE', 'amount' => 3000]);
     }
 
     public function test_equ_upgrade_is_chargeable_and_places_target(): void
