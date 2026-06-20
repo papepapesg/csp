@@ -4,6 +4,8 @@ namespace Modules\Fulfillment\Workflow;
 
 use Modules\Fulfillment\Models\FulfillmentOrder;
 use Modules\Fulfillment\Services\OrderCaptureService;
+use Modules\Ilm\Models\CustomerAccount;
+use Modules\Ilm\Services\AccountService;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Services\OperationFramework;
 use Modules\Workflow\Contracts\TaskContext;
@@ -20,6 +22,7 @@ class TriggerActivationHandler implements TaskHandler
     public function __construct(
         private readonly OrderCaptureService $orders,
         private readonly OperationFramework $operations,
+        private readonly AccountService $accounts,
     ) {}
 
     public function topic(): string
@@ -37,6 +40,13 @@ class TriggerActivationHandler implements TaskHandler
         $order = FulfillmentOrder::query()->find($context->var('orderId'));
         if (! $order || ! $order->subscription_id) {
             return TaskResult::fail('Order has no subscription to activate', retryable: false);
+        }
+
+        // R-ILM-F-4: a provisioning-blocking account flag (e.g. FRAUD_SUSPECTED) blocks
+        // new service activation until it is cleared. Non-retryable — needs BO intervention.
+        $account = $order->account_id ? CustomerAccount::query()->where('account_id', $order->account_id)->first() : null;
+        if ($account && $this->accounts->hasProvisioningBlockingFlag($account)) {
+            return TaskResult::fail('Activation blocked by a provisioning-affecting account flag (e.g. FRAUD_SUSPECTED).', retryable: false);
         }
 
         $order->update(['status' => FulfillmentOrder::ACTIVATING, 'current_step' => 'ACTIVATION']);

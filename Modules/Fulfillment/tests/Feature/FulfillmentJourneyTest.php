@@ -11,7 +11,10 @@ use Laravel\Sanctum\Sanctum;
 use Modules\Fulfillment\Database\Seeders\FulfillmentFlowSeeder;
 use Modules\Fulfillment\Models\FulfillmentOrder;
 use Modules\Fulfillment\Services\OrderCaptureService;
+use Modules\Ilm\Database\Seeders\AccountFlagCatalogSeeder;
 use Modules\Ilm\Models\Customer;
+use Modules\Ilm\Models\CustomerAccount;
+use Modules\Ilm\Services\AccountService;
 use Modules\Ilm\Services\CustomerService;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Subscription\Models\Subscription;
@@ -194,6 +197,33 @@ class FulfillmentJourneyTest extends TestCase
         $this->assertSame('CANCELLED', FulfillmentOrder::find($order['order_id'])->status);
         $this->assertSame(WorkOrder::CANCELLED, WorkOrder::find($woId)->status); // compensated
         $this->assertSame(Subscription::TERMINATED, Subscription::find($fresh->subscription_id)->status_code);
+    }
+
+    public function test_fraud_suspected_flag_blocks_activation(): void
+    {
+        // R-ILM-F-4: a provisioning-affecting account flag (FRAUD_SUSPECTED) blocks activation.
+        $this->seed(AccountFlagCatalogSeeder::class);
+        $custId = Id::make('cust');
+        Customer::query()->create([
+            'customer_id' => $custId, 'operator_code' => 'WIK', 'type' => 'RES', 'name' => 'Flagged',
+            'primary_msisdn' => '+254700555666', 'kyc_status' => 'APPROVED',
+        ]);
+        $account = CustomerAccount::query()->create([
+            'account_id' => 'ACC-FR', 'operator_code' => 'WIK', 'account_number' => '009-7', 'customer_id' => $custId,
+            'service_address' => 'Nairobi', 'status' => 'ACTIVE', 'sub_status' => 'active',
+        ]);
+        app(AccountService::class)->setFlag($account, 'FRAUD_SUSPECTED');
+
+        $order = $this->postJson('/api/fulfillment-orders', [
+            'customer_id' => $custId, 'account_id' => 'ACC-FR', 'homepass_id' => 'hp_fr', 'package_ref' => 'pkg_x',
+        ], ['Idempotency-Key' => 'order-fr'])->json('order');
+        $this->drain(); // park await_install
+        $this->postJson("/api/fulfillment-orders/{$order['order_id']}/complete", [], ['Idempotency-Key' => 'complete-fr'])->assertOk();
+        $this->drain(); // KYC gate passes (APPROVED) -> activation BLOCKED by the fraud flag
+
+        $fresh = FulfillmentOrder::find($order['order_id']);
+        $this->assertNotSame('COMPLETED', $fresh->status);
+        $this->assertSame('PENDING_ACTIVATION', Subscription::find($fresh->subscription_id)->status_code); // never activated
     }
 
     public function test_capture_requires_permission(): void

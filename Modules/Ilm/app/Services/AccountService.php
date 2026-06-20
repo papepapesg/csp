@@ -199,6 +199,25 @@ class AccountService
     }
 
     /**
+     * R-ILM-F-4: does the account carry an ACTIVE flag whose catalog marks it
+     * affects_provisioning (e.g. FRAUD_SUSPECTED)? FUL-03 reads this to block new
+     * service activation while such a flag stands.
+     */
+    public function hasProvisioningBlockingFlag(CustomerAccount $account): bool
+    {
+        $active = $this->activeFlags($account)->pluck('flag_code');
+        if ($active->isEmpty()) {
+            return false;
+        }
+
+        return CustomerAccountFlagCatalog::query()
+            ->where('operator_code', $account->operator_code)
+            ->whereIn('flag_code', $active->all())
+            ->where('affects_provisioning', true)
+            ->exists();
+    }
+
+    /**
      * Read-only decision context for an account/customer (ILM-CFG-01). Returns plain
      * data so any module can feed a *complete* fact set into its rule engine without
      * reading ILM tables directly (cross-module rule). Every routing-relevant attribute

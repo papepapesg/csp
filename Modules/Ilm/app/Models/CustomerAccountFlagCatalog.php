@@ -17,7 +17,10 @@ class CustomerAccountFlagCatalog extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['surfaces_attention' => 'boolean', 'active' => 'boolean'];
+    protected $casts = [
+        'surfaces_attention' => 'boolean', 'active' => 'boolean',
+        'affects_dunning' => 'boolean', 'affects_provisioning' => 'boolean', 'customer_visible' => 'boolean',
+    ];
 
     public static function resolve(string $operator, string $flagCode): ?self
     {
