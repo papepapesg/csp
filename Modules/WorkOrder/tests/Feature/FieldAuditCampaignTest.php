@@ -9,7 +9,10 @@ use Laravel\Sanctum\Sanctum;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\WorkOrder\Database\Seeders\FieldAuditPolicySeeder;
 use Modules\WorkOrder\Models\FieldAuditDiscrepancy;
+use Modules\WorkOrder\Models\FieldAuditExpectedItem;
+use Modules\WorkOrder\Models\FieldAuditObservation;
 use Modules\WorkOrder\Models\FieldAuditTask;
+use Modules\WorkOrder\Models\WorkOrder;
 use Tests\TestCase;
 
 /**
@@ -59,7 +62,7 @@ class FieldAuditCampaignTest extends TestCase
         $id = $this->taskWithExpected();
 
         $this->postJson("/api/field-audit-tasks/{$id}/observations", [
-            'expectedItemId' => \Modules\WorkOrder\Models\FieldAuditExpectedItem::where('audit_task_id', $id)->first()->expected_item_id,
+            'expectedItemId' => FieldAuditExpectedItem::where('audit_task_id', $id)->first()->expected_item_id,
             'presenceStatus' => 'MISSING',
         ])->assertCreated();
 
@@ -95,6 +98,33 @@ class FieldAuditCampaignTest extends TestCase
         $this->assertSame('OSR_CORRECTION', $d->refresh()->routed_ref_type);
     }
 
+    public function test_create_work_order_request_produces_a_wo_backed_task(): void
+    {
+        // FA-01 §6 step 4: createWorkOrder=true -> WO-01 builds the field-audit work order.
+        $id = $this->postJson('/api/field-audit-tasks', [
+            'auditType' => 'EQUIPMENT', 'taskType' => 'CUSTOMER_PREMISES', 'customerId' => 'CUS-1', 'accountId' => 'ACC-1',
+            'subscriptionId' => 'SUB-1', 'homepassId' => 'HP-1', 'createWorkOrder' => true, 'sourceEventRef' => 'fat-wo',
+            'expectedItems' => [['equipmentInstanceId' => 'inst-1', 'serialNumber' => 'ONT-1', 'expectedLocationRef' => 'CUS-1']],
+        ], ['Idempotency-Key' => 'k-wo'])->assertCreated()->json('audit_task_id');
+
+        // The orphan event is now consumed: dispatching the outbox creates the WO.
+        $this->artisan('sophix:outbox:dispatch')->assertSuccessful();
+
+        $task = FieldAuditTask::find($id);
+        $this->assertNotNull($task->wo_id);
+        $this->assertSame('ASSIGNED', $task->status); // FA-01 stores wo_id and moves the task to ASSIGNED
+        $this->assertDatabaseHas('work_order', [
+            'work_order_id' => $task->wo_id, 'type' => 'FIELD_AUDIT', 'source_type' => 'FIELD_AUDIT',
+            'source_ref' => $id, 'account_id' => 'ACC-1', 'subscription_id' => 'SUB-1', 'customer_id' => 'CUS-1',
+        ]);
+
+        // Re-dispatching does not create a second WO (idempotent on wo_id).
+        $woId = $task->wo_id;
+        $this->artisan('sophix:outbox:dispatch')->assertSuccessful();
+        $this->assertSame($woId, FieldAuditTask::find($id)->wo_id);
+        $this->assertSame(1, WorkOrder::where('source_ref', $id)->count());
+    }
+
     public function test_observation_is_idempotent_by_offline_ref(): void
     {
         $id = $this->taskWithExpected();
@@ -104,7 +134,7 @@ class FieldAuditCampaignTest extends TestCase
         $b = $this->postJson("/api/field-audit-tasks/{$id}/observations", $payload)->json('observation_id');
 
         $this->assertSame($a, $b);
-        $this->assertSame(1, \Modules\WorkOrder\Models\FieldAuditObservation::where('audit_task_id', $id)->count());
+        $this->assertSame(1, FieldAuditObservation::where('audit_task_id', $id)->count());
     }
 
     public function test_task_creation_is_idempotent_by_source_event(): void

@@ -2,7 +2,9 @@
 
 namespace Modules\WorkOrder\Providers;
 
+use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
+use Modules\WorkOrder\Listeners\CreateFieldAuditWorkOrder;
 
 class EventServiceProvider extends ServiceProvider
 {
@@ -11,7 +13,12 @@ class EventServiceProvider extends ServiceProvider
      *
      * @var array<string, array<int, string>>
      */
-    protected $listen = [];
+    protected $listen = [
+        OutboxEventPublished::class => [
+            // FA-01: a WO-backed field audit creates its WO-01 work order.
+            CreateFieldAuditWorkOrder::class,
+        ],
+    ];
 
     /**
      * Indicates if events should be discovered.
