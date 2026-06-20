@@ -2,11 +2,15 @@
 
 namespace Modules\Ilm\Tests\Feature;
 
+use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalService;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Ilm\Database\Seeders\CvmPolicySeeder;
+use Modules\Ilm\Models\Customer;
+use Modules\Ilm\Models\CvmActivity;
 use Modules\Ilm\Models\CvmOfferInstance;
 use Modules\Ilm\Services\CvmEvaluationService;
 use Modules\Ilm\Services\CvmOfferService;
@@ -32,7 +36,7 @@ class CvmTest extends TestCase
         Sanctum::actingAs($user);
 
         foreach (['CUS-1', 'CUS-2', 'CUS-3'] as $id) {
-            \Modules\Ilm\Models\Customer::query()->create([
+            Customer::query()->create([
                 'customer_id' => $id, 'operator_code' => 'WIK', 'name' => 'Test', 'type' => 'RES', 'primary_msisdn' => '+254712345678',
             ]);
         }
@@ -64,7 +68,7 @@ class CvmTest extends TestCase
         $b = app(CvmEvaluationService::class)->evaluate('WIK', 'CUS-2', ['dunningLevel' => 2, 'complaintCount90d' => 2], 'DUNNING', 'evt-X');
 
         $this->assertSame($a['activityId'], $b['activityId']);
-        $this->assertSame(1, \Modules\Ilm\Models\CvmActivity::where('customer_id', 'CUS-2')->count());
+        $this->assertSame(1, CvmActivity::where('customer_id', 'CUS-2')->count());
     }
 
     public function test_retention_offer_over_threshold_requires_em_cfg_04_approval(): void
@@ -81,6 +85,42 @@ class CvmTest extends TestCase
 
         // It cannot be accepted while pending approval.
         $this->postJson("/api/cvm-offers/{$offer->offer_instance_id}/accept", [])->assertStatus(409);
+    }
+
+    public function test_granting_the_approval_resumes_the_offer_so_it_can_be_accepted(): void
+    {
+        // An over-threshold offer parks in PENDING_APPROVAL.
+        $offer = app(CvmOfferService::class)->propose([
+            'operatorCode' => 'WIK', 'customerId' => 'CUS-1', 'offerType' => 'RETENTION_DISCOUNT',
+            'discountPercent' => 25, 'discountRef' => 'DISC-RET-25',
+        ]);
+        $this->assertSame(CvmOfferInstance::PENDING_APPROVAL, $offer->status);
+
+        // The approver grants the EM-CFG-04 request (SUPER_ADMIN may always act).
+        $request = ApprovalRequest::query()->find($offer->approval_request_id);
+        app(ApprovalService::class)->decide($request, true, User::query()->first());
+
+        // Dispatching the outbox fires ResumeCvmOfferOnApproval, which releases the offer.
+        $this->artisan('sophix:outbox:dispatch')->assertSuccessful();
+        $this->assertSame(CvmOfferInstance::PROPOSED, $offer->refresh()->status);
+
+        // It is now acceptable (previously it stayed stuck in PENDING_APPROVAL forever).
+        $this->postJson("/api/cvm-offers/{$offer->offer_instance_id}/accept", ['customerConsentRef' => 'consent-9'])
+            ->assertOk()->assertJsonPath('status', 'APPLIED');
+    }
+
+    public function test_rejecting_the_approval_closes_the_offer(): void
+    {
+        $offer = app(CvmOfferService::class)->propose([
+            'operatorCode' => 'WIK', 'customerId' => 'CUS-1', 'offerType' => 'RETENTION_DISCOUNT',
+            'discountPercent' => 25, 'discountRef' => 'DISC-RET-25',
+        ]);
+
+        $request = ApprovalRequest::query()->find($offer->approval_request_id);
+        app(ApprovalService::class)->decide($request, false, User::query()->first(), 'too generous');
+        $this->artisan('sophix:outbox:dispatch')->assertSuccessful();
+
+        $this->assertSame(CvmOfferInstance::REJECTED, $offer->refresh()->status);
     }
 
     public function test_accepted_discount_offer_calls_sip03_and_records_outcome(): void

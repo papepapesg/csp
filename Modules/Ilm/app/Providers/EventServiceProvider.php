@@ -2,7 +2,9 @@
 
 namespace Modules\Ilm\Providers;
 
+use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
+use Modules\Ilm\Listeners\ResumeCvmOfferOnApproval;
 
 class EventServiceProvider extends ServiceProvider
 {
@@ -11,7 +13,12 @@ class EventServiceProvider extends ServiceProvider
      *
      * @var array<string, array<int, string>>
      */
-    protected $listen = [];
+    protected $listen = [
+        OutboxEventPublished::class => [
+            // EM-CFG-04: a granted/rejected CVM offer approval resumes the parked offer.
+            ResumeCvmOfferOnApproval::class,
+        ],
+    ];
 
     /**
      * Indicates if events should be discovered.

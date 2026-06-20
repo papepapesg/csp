@@ -10,8 +10,11 @@ use App\Foundation\Events\EventBus;
 use App\Foundation\Rules\RuleEngine;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
+use Modules\Catalog\Models\DiscountAssignment;
 use Modules\Ilm\Events\CvmEvents;
+use Modules\Ilm\Models\CvmActivity;
 use Modules\Ilm\Models\CvmOfferInstance;
+use Modules\Ilm\Models\CvmOutcome;
 
 /**
  * EM-03 offer lifecycle (DD §5.3/5.4). Proposing an offer routes high-value retention discounts
@@ -94,7 +97,7 @@ class CvmOfferService
         // Boundary: call SIP-03 to assign the discount; EM-03 never writes the discount itself.
         $refType = $refId = null;
         if ($offer->offer_type === 'RETENTION_DISCOUNT' && $offer->discount_ref) {
-            $assignment = \Modules\Catalog\Models\DiscountAssignment::query()->create([
+            $assignment = DiscountAssignment::query()->create([
                 'assignment_id' => Id::make('dasg'),
                 'discount_code' => $offer->discount_ref,
                 'scope' => 'CUSTOMER',
@@ -108,12 +111,12 @@ class CvmOfferService
         }
 
         // Record the outcome (DD §4.5). If the offer hangs off an activity, close it too.
-        if ($offer->activity_id && ($activity = \Modules\Ilm\Models\CvmActivity::query()->find($offer->activity_id))) {
+        if ($offer->activity_id && ($activity = CvmActivity::query()->find($offer->activity_id))) {
             $this->activities->close($activity, 'ACCEPTED', "Offer {$offer->offer_instance_id} applied", $offer->offer_instance_id);
-            \Modules\Ilm\Models\CvmOutcome::query()->where('offer_instance_id', $offer->offer_instance_id)
+            CvmOutcome::query()->where('offer_instance_id', $offer->offer_instance_id)
                 ->update(['owning_module_ref_type' => $refType, 'owning_module_ref_id' => $refId]);
         } else {
-            \Modules\Ilm\Models\CvmOutcome::query()->create([
+            CvmOutcome::query()->create([
                 'operator_code' => $offer->operator_code, 'offer_instance_id' => $offer->offer_instance_id, 'customer_id' => $offer->customer_id,
                 'outcome_code' => 'ACCEPTED', 'owning_module_ref_type' => $refType, 'owning_module_ref_id' => $refId,
                 'notes' => "Offer {$offer->offer_instance_id} accepted",
@@ -129,6 +132,27 @@ class CvmOfferService
         $this->activities->writeInteraction($offer->customer_id, 'CVM_OFFER_REJECTED', $notes);
 
         return $offer->refresh();
+    }
+
+    /**
+     * EM-CFG-04 ownership callback (DD_EM-CFG-04 §4 step 9): when the offer's approval is
+     * finally decided, resume the offer. APPROVED releases it to PROPOSED (now acceptable);
+     * REJECTED closes it. Without this the offer stayed in PENDING_APPROVAL forever, since
+     * accept() refuses a pending offer. Only acts on an offer still awaiting approval.
+     */
+    public function applyApprovalOutcome(CvmOfferInstance $offer, string $outcome, ?string $decidedBy = null): CvmOfferInstance
+    {
+        if ($offer->status !== CvmOfferInstance::PENDING_APPROVAL) {
+            return $offer; // already resumed/closed — idempotent.
+        }
+        if ($outcome === 'APPROVED') {
+            $offer->update(['status' => CvmOfferInstance::PROPOSED]);
+            $this->emit(CvmEvents::OFFER_PROPOSED, $offer, ['approvalDecidedBy' => $decidedBy]);
+
+            return $offer->refresh();
+        }
+
+        return $this->reject($offer, "EM-CFG-04 approval rejected by {$decidedBy}");
     }
 
     /** @param array<string,mixed> $extra */
