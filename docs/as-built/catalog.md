@@ -29,13 +29,13 @@ rows by `order_within_group`, computing each per `base_method` (`BASE`/`BASE_PLU
 `NONE` ⇒ exempt. Returns `{subtotal, taxTotal, taxLines}`. *Proven by `TaxComputeTest`.*
 
 ### 3. Grant a discount (EM-CFG-04 if high-value)
-`DiscountAssignmentService::assign` blocks a duplicate active grant (R-SIP-DA-05), then asks EM-CFG-04
+`DiscountAssignmentService::create` blocks a duplicate active grant (R-SIP-DA-05), then asks EM-CFG-04
 if approval is needed (R-SIP-DA-07/11). High value → `discount_assignment.status=PENDING_APPROVAL`
 (`DiscountAssignmentApprovalRequired`); approval → `ACTIVATED`. *Proven by `DiscountAssignmentTest`.*
 
 ### 4. Resolve effective discount(s) at billing time (stacking)
-`DiscountComputeService::resolve(context)` finds the applicable assignments, applies stacking +
-priority (DIRECT beats CAMPAIGN on a tie), and returns the effective discount. *Proven by
+`DiscountComputeService::compute(operator, baseAmount, context)` finds the applicable assignments, applies
+stacking + priority (DIRECT beats CAMPAIGN on a tie), and returns the effective discount. *Proven by
 `DiscountComputeTest`.*
 
 ### 5. Bundle launch (maker-checker)
@@ -198,7 +198,7 @@ header.)
 | `CatalogService` | packages/services/versions CRUD + lifecycle |
 | `PackageLaunchService` | SIP-02 maker-checker launch (EM-CFG-04 + `ApplyPackageLaunchApproval`) |
 | `BundleService` / `CampaignService` | bundles + promotions |
-| `DiscountAssignmentService` / `DiscountComputeService` | grant (dup-block + EM-CFG-04) / resolve effective discount (stacking) |
+| `DiscountAssignmentService` / `DiscountComputeService` | grant `create()` (dup-block + EM-CFG-04) / `compute()` effective discount (stacking) |
 | `TaxComputeService` / `TaxConfigService` | `compute()` via `rules.tax-applicability` cascade / tax config |
 | `VoiceTariffService` / `UsageRatingService` | rate metered events (longest-prefix) |
 | `WalletCatalogService` | wallet-type catalog (PLM-CFG-03) |

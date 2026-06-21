@@ -16,7 +16,7 @@
 ### 1. Create a customer and run two-step KYC
 `POST /api/customers` → `CustomerService::create` (emits `CustomerCreated`). KYC docs uploaded via the
 **Foundation/Files** store. `recordKycDecision(customer, level, 'APPROVED')` — level authority is config
-(`kyc_approval_role`); two approvals flip `kyc_status` `PENDING → KYC_L1_APPROVED → APPROVED` and emit
+(`kyc_approval_role`); two approvals flip `kyc_status` `PENDING → L1_APPROVED → APPROVED` and emit
 `CustomerKycApproved`. *Cross-module: Fulfillment's `ResumeOrderOnKycApproved` resumes a parked order.*
 *Proven by `CustomerApiTest`.*
 
@@ -69,15 +69,15 @@ cancels + compensates the parked order. *Proven by `FulfillmentJourneyTest`.*
 > primary key shown is the real one (a ULID business key, e.g. `customer_id`; the catalogs use a
 > composite `operator_code`+`code` key); `created_at`/`updated_at` are omitted by convention.
 
-### `customer` (`type`: `RES|COM` · `kyc_status`: `PENDING|KYC_L1_APPROVED|APPROVED|REJECTED`)
+### `customer` (`type`: `RES|COM` · `kyc_status`: `PENDING|L1_APPROVED|APPROVED|REJECTED`)
 > `tax_identifier` added by the tax-identifier migration.
 ```json
 { "customer_id":"cust_1","operator_code":"WIK","type":"RES","tax_identifier":"A012345678Z","name":"Jane Mwangi","identification_type_1":"NATIONAL_ID","identification_number_1":"22334455","identification_type_2":null,"identification_number_2":null,"date_of_birth":"1990-04-12","business_reg_date":null,"primary_msisdn":"+254712000111","email":"jane@example.com","preferred_language":"en","kyc_status":"APPROVED" }
 { "customer_id":"cust_2","operator_code":"WIK","type":"RES","tax_identifier":null,"name":"Otieno","identification_type_1":"NATIONAL_ID","identification_number_1":"99887766","identification_type_2":null,"identification_number_2":null,"date_of_birth":"1985-09-30","business_reg_date":null,"primary_msisdn":"+254722000222","email":null,"preferred_language":"sw","kyc_status":"PENDING" }
-{ "customer_id":"cust_3","operator_code":"WIK","type":"COM","tax_identifier":"P051234567X","name":"Acme Ltd","identification_type_1":"BUSINESS_REG","identification_number_1":"BRS-2020-771","identification_type_2":"KRA_PIN","identification_number_2":"P051234567X","date_of_birth":null,"business_reg_date":"2020-02-01","primary_msisdn":"+254733000333","email":"ops@acme.co.ke","preferred_language":"en","kyc_status":"KYC_L1_APPROVED" }
+{ "customer_id":"cust_3","operator_code":"WIK","type":"COM","tax_identifier":"P051234567X","name":"Acme Ltd","identification_type_1":"BUSINESS_REG","identification_number_1":"BRS-2020-771","identification_type_2":"KRA_PIN","identification_number_2":"P051234567X","date_of_birth":null,"business_reg_date":"2020-02-01","primary_msisdn":"+254733000333","email":"ops@acme.co.ke","preferred_language":"en","kyc_status":"L1_APPROVED" }
 { "customer_id":"cust_4","operator_code":"WIK","type":"RES","tax_identifier":null,"name":"Fraudster","identification_type_1":"PASSPORT","identification_number_1":"X1234567","identification_type_2":null,"identification_number_2":null,"date_of_birth":"1979-01-01","business_reg_date":null,"primary_msisdn":"+254744000444","email":null,"preferred_language":"en","kyc_status":"REJECTED" }
 ```
-**Reading:** `kyc_status` gates fulfillment activation — only `APPROVED` proceeds; `KYC_L1_APPROVED` is
+**Reading:** `kyc_status` gates fulfillment activation — only `APPROVED` proceeds; `L1_APPROVED` is
 mid-chain (needs L2); `REJECTED` cancels the order. `type` (RES/COM) is a segment proxy used in routing
 and selects which identity fields apply (`date_of_birth` for RES, `business_reg_date` for COM).
 `tax_identifier` is what Billing's tax invoice reads; `primary_msisdn` is the required contact key.

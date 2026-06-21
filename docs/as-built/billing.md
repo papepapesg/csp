@@ -32,7 +32,7 @@ listener.* *Proven by `CycleCloseTest`, `DunningTest`.*
 
 ### 3. M-Pesa payment lands → allocate → confirm intent (cross-module chain)
 PaymentGateway emits `PaymentReceived` → `PaymentService` writes a `payment_ledger` row, allocates to
-open invoices (`payment_allocation`), marks the invoice `PAID`, emits `InvoicePaid`. Subscription's
+open invoices (`payment_invoice_allocation`), marks the invoice `PAID`, emits `InvoicePaid`. Subscription's
 `ConfirmBillingIntentOnPayment` then confirms a pay-first `billing_intent` and **correlates a workflow
 message** (`Foundation/Workflow`) to resume a parked operation. *Proven by `PaymentApplicationTest`.*
 
@@ -67,7 +67,7 @@ re-invokes the generator; persistent failure → `GAVE_UP_AUTO` for human review
 
 ### (bonus) 9. Tax invoice signed asynchronously
 A payment moment → `TaxEventBridge` → `TaxInvoiceGenerator` issues a `tax_invoice` (inclusive
-decomposition), then `sophix:billing:tax-sign` calls the signer; failure → `tax-retry` backoff →
+decomposition), then `sophix:billing:tax-sign-scan` calls the signer; failure → `tax-retry-scan` backoff →
 `TaxInvoiceSigningGaveUp`. *Proven by `Tax01Test`.*
 
 ## 2. Data model — ≥4 **complete** sample rows + readings
@@ -125,7 +125,8 @@ with `reversed_by` for the SoD trail.
 
 ### `billing_intent` · `intent_type`: `PRORATION|PAUSE_FEE|RECONNECTION_FEE|DEPOSIT_REFUND|…` · `status`: `PENDING|CHARGED|CONFIRMED|WAIVED|REFUNDED` · `settlement_channel`: `INVOICE|WALLET|CREDIT|NONE`
 > `settlement_channel` added by the settlement-channel migration; `state_callback` (JSON) by the
-> state-callback migration.
+> state-callback migration. (`intent_type` is **not** an enforced enum — it is a free-form code resolved
+> against the `billable_event` catalog; the four values above are illustrative.)
 ```json
 { "intent_id":"bint_1","operator_code":"WIK","subscription_id":"sub_1","account_id":"acc_1","operation_id":"op_up_1","intent_type":"PRORATION","amount":350.00,"currency":"KES","pay_first":false,"status":"CONFIRMED","settlement_channel":"INVOICE","state_callback":null,"invoice_id":"inv_7","confirmed_at":"2026-06-15T12:00:00Z" }
 { "intent_id":"bint_2","operator_code":"WIK","subscription_id":"sub_1","account_id":"acc_1","operation_id":"op_recon_1","intent_type":"RECONNECTION_FEE","amount":500.00,"currency":"KES","pay_first":true,"status":"PENDING","settlement_channel":"INVOICE","state_callback":{"transitionCode":"RECONNECT_AFTER_FEE","targetStatus":"ACTIVE"},"invoice_id":"inv_9","confirmed_at":null }
@@ -241,7 +242,10 @@ one and records `superseded_by` (the chain), keyed by `idempotency_cycle_key`. `
 
 ## 4. API surface
 Invoices, payments, wallets, adjustments, billable-events, bulk-reversals, dunning-run under `/api/`;
-`permission:billing.*`; payment posting idempotent (gateway_ref or Idempotency-Key).
+resource-scoped permissions (`invoice.read|manage`, `payment.read|apply|reverse`, `wallet.read|manage`,
+`adjustment.create|approve`, `dunning.admin`, `catalog.read|manage`, `tax.compliance` — there is **no**
+`billing.*` wildcard); adjustment `POST …/adjustments/{id}/override-limit` (`adjustment.approve`); payment
+posting idempotent (gateway_ref or Idempotency-Key).
 
 ## 5. Integration (events) — topic `billing.money`
 - **Emits:** `Invoice{Generated,Paid,Cancelled}`, `Cycle{Closed,Activated,PaymentMissed}`,
@@ -253,7 +257,7 @@ Invoices, payments, wallets, adjustments, billable-events, bulk-reversals, dunni
 
 ## 6. Processes (scheduled workers)
 `cycle-close` (30m), `dunning-run` (daily), `pro-forma` (daily), `generation-retry` (15m),
-`wallet:expire`, `tax-sign`/`tax-retry`, `rate-usage`. The money heartbeat.
+`wallet:expire`, `tax-sign-scan`/`tax-retry-scan`, `rate-usage`. The money heartbeat.
 
 ## 7. Policy & config
 `rules.billing.adjustment-approval`; `billable_event` catalog; versioned `dunning_program`;

@@ -107,7 +107,7 @@ command for that target now drives the OLT. **No platform code change.**
 > to the columns provisioning's path resolution actually reads).
 
 ### `network_node` (Catalog — the plant tree)
-**`type`:** `HEADEND|OLT|SPLITTER|FAT|FDT|ONT` (GPON) · `DISTRIBUTION_NODE|AMPLIFIER|LINE_EXTENDER` (HFC) · `VOIPSWITCH|NMS|OTHER`. Tree via `parent_node_code`. **`status`:** `ACTIVE` (default).
+**`type`:** `HEADEND|OLT|SPLITTER|FAT|FDT|ONT` (GPON) · `DISTRIBUTION_NODE|AMPLIFIER|LINE_EXTENDER` (HFC) · `VOIPSWITCH|NMS|OTHER`. Tree via `parent_node_code`. **`status`:** `DRAFT|ACTIVE|RETIRED` (default `ACTIVE`).
 ```json
 { "node_id":"nnode_he","operator_code":"WIK","code":"HEADEND-NRB","type":"HEADEND","name":"Nairobi Headend","parent_node_code":null,"description":"Westlands core","metadata":{"site":"WTL"},"status":"ACTIVE" }
 { "node_id":"nnode_olt","operator_code":"WIK","code":"OLT-NRB-WTL-01","type":"OLT","name":"Westlands OLT 01","parent_node_code":"HEADEND-NRB","description":null,"metadata":{"ports":16},"status":"ACTIVE" }
@@ -272,8 +272,9 @@ the default (logs + mirrors desired; honours `forceFail`/`simulateAsync`/`simula
 ## 6. Processes (workers + handler)
 - **Workers (`Foundation/Console` schedule):** `sophix:provisioning:poll-async` (5 min, resolve
   ACCEPTED via `pollStatus`), `:reconcile` (hourly).
-- **Handler — `ActivateServiceHandler` (topic `activate-service`):** reads `{subscriptionId, packageRef}`
-  + node `config`; does `broadcast('ACTIVATE')`; outputs `{provisioned, provisioningRefs}`; on fail
+- **Handler — `ActivateServiceHandler` (topic `provisioning.activate-service`):** reads the subscription
+  business key + `packageRef` var + node `config` (`target`/`speedProfile`/`serviceRef`); does
+  `broadcast('ACTIVATE')`; outputs `{provisioned, provisioningRefs}`; on fail
   `TaskResult::fail(retryable:true)`.
 
 ## 7. Policy & config
