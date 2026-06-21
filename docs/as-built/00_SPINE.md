@@ -90,14 +90,16 @@ Follow this once; it touches **every** pattern below. (Proven by `Subscription/t
 - **Mantra:** *new flow = compose registered topics (config); new step = register one handler (code).*
 
 ## 5. Approvals — *EM-CFG-04, config-driven maker-checker as an ordered chain*
-- `App\Foundation\Approvals\ApprovalService::request($data)` matches an **`approval_definition`**
-  (operator + entity_type + optional action). No matching policy (or amount below `threshold_amount`)
-  ⇒ **auto-approved**; otherwise ⇒ **PENDING** on the **first stage** of the policy's chain.
-- Approval is an **ordered chain of stages** (`approval_stage`), not a flat count. Each stage targets
-  **either a platform ROLE** (any of `approver_roles`) **or a specific named USER**
-  (`approver_user_ref`/`approver_email` — a senior like a *director* who holds no platform role, just
-  an **invited login**; `POST /api/approval-approvers/invite` provisions one). A stage carries its own
-  **quorum** (`required_approvals`) and **self-approval** toggle (`allow_requester`).
+- **`approval_definition`** is purely the policy *header* (WHEN: operator + entity_type + optional action
+  + `threshold_amount`). **`approval_stage`** is the only place approver config lives (WHO, in order) —
+  no duplicated approver columns on the definition.
+- `App\Foundation\Approvals\ApprovalService::request($data)` matches a definition. No matching policy (or
+  amount below `threshold_amount`) ⇒ **auto-approved**; otherwise ⇒ **PENDING** on the **first stage**.
+- Approval is an **ordered chain of stages**, not a flat count. Each stage targets **either a platform
+  ROLE** (any of `approver_roles`) **or a specific named USER** (`approver_user_ref`/`approver_email` — a
+  senior like a *director* who holds no platform role, just an **invited login**;
+  `POST /api/approval-approvers/invite` provisions one). A stage carries its own **quorum**
+  (`required_approvals`) and **self-approval** toggle (`allow_requester`).
 - `decide($request, $approve, $actorUser)` acts on the **current stage only**: it enforces
   **segregation of duties** (requester can't self-approve unless that stage's `allow_requester`),
   the stage's **approver target** (role membership or being the named user; `SUPER_ADMIN` may always
@@ -106,12 +108,11 @@ Follow this once; it touches **every** pattern below. (Proven by `Subscription/t
   with its `stage_sequence`. When a stage's quorum is met it **advances** (emits
   `ApprovalStageAdvanced`); the **final** stage flips to `APPROVED` (emits `ApprovalApproved`, topic
   `platform.approvals`). A **reject at any stage** fails the whole chain (`ApprovalRejected`).
-- **Every approval is a chain.** All seeded policies declare an **explicit** chain via
+- **Every approval is a chain.** All policies declare an **explicit** chain via
   `ApprovalDefinition::defineChain($op, $entityType, $action, [$stage, …])` — a **single-stage** chain
   where one approver suffices (force-sync, field-audit), a **multi-stage** one for a hierarchy (CVM
-  high-value retention: `CVM_MANAGER` → named director). The flat header columns mirror stage 1.
-- **Back-compat:** a definition with **no** `approval_stage` rows still runs as a single implicit stage
-  from the legacy flat columns, so older/inline policies keep working unchanged.
+  high-value retention: `CVM_MANAGER` → named director). A definition with no stages is a
+  misconfiguration; the engine still gates it with one open stage rather than silently auto-approving.
 - Owning modules resume on the outcome via a listener (e.g. `Ilm\Listeners\ResumeCvmOfferOnApproval`,
   `Osr` PO decide, `Provisioning` force-sync). The notification side is bridged to ICN-01
   (`NotifyApproversOnApprovalRequested`), which alerts the **current stage's** approvers on the initial
@@ -240,20 +241,21 @@ Columns: `event_id, consumer, event_type, processed_at`.
 two consumers (reporting + notification). evt_4's `workforce.capacity` row has `processed_at=null`
 (claimed but not yet done); a re-dispatch to a consumer whose `processed_at` is set is a no-op.
 
-### `approval_definition` (the policy header)
-Columns: `definition_id, operator_code, entity_type, action, threshold_amount, approver_roles, required_approvals, allow_requester, active`. The flat `approver_roles`/`required_approvals`/`allow_requester` are the **legacy single-stage** fallback; a definition with `approval_stage` rows (below) is an ordered chain instead.
+### `approval_definition` (the policy header — *WHEN* approval is needed)
+Columns: `definition_id, operator_code, entity_type, action, threshold_amount, active`. **No approver
+columns** — *who* approves lives only in `approval_stage` (below). Every definition has ≥1 stage.
 ```json
-{ "definition_id":"appd_1","operator_code":"WIK","entity_type":"PROVISIONING_FORCE_SYNC","action":"FORCE_SYNC","threshold_amount":null,"approver_roles":[],"required_approvals":1,"allow_requester":false,"active":true }
-{ "definition_id":"appd_2","operator_code":"WIK","entity_type":"ADJUSTMENT","action":null,"threshold_amount":10000.00,"approver_roles":["BILLING_LEAD"],"required_approvals":2,"allow_requester":false,"active":true }
-{ "definition_id":"appd_3","operator_code":"WIK","entity_type":"CVM_OFFER","action":"CVM_HIGH_VALUE_RETENTION_OFFER","threshold_amount":null,"approver_roles":["CVM_MANAGER"],"required_approvals":1,"allow_requester":false,"active":true }
-{ "definition_id":"appd_5","operator_code":"WIK","entity_type":"PURCHASE_ORDER","action":"PO_APPROVAL","threshold_amount":500000.00,"approver_roles":["BILLING_LEAD"],"required_approvals":1,"allow_requester":false,"active":true }
-{ "definition_id":"appd_4","operator_code":"WIK","entity_type":"DISCOUNT","action":null,"threshold_amount":50000.00,"approver_roles":["SALES_HEAD"],"required_approvals":1,"allow_requester":false,"active":false }
+{ "definition_id":"appd_1","operator_code":"WIK","entity_type":"PROVISIONING_FORCE_SYNC","action":"FORCE_SYNC","threshold_amount":null,"active":true }
+{ "definition_id":"appd_2","operator_code":"WIK","entity_type":"ADJUSTMENT","action":null,"threshold_amount":10000.00,"active":true }
+{ "definition_id":"appd_3","operator_code":"WIK","entity_type":"CVM_OFFER","action":"CVM_HIGH_VALUE_RETENTION_OFFER","threshold_amount":null,"active":true }
+{ "definition_id":"appd_5","operator_code":"WIK","entity_type":"PURCHASE_ORDER","action":"PO_APPROVAL","threshold_amount":500000.00,"active":true }
+{ "definition_id":"appd_4","operator_code":"WIK","entity_type":"DISCOUNT","action":null,"threshold_amount":50000.00,"active":false }
 ```
-**Reading:** the per-operator policy. `action=null` (appd_2) matches any action of that entity_type;
-`threshold_amount` auto-approves amounts **below** it (appd_2 below 10,000; appd_5 a PO below 500,000).
-appd_1 has `approver_roles:[]` → a single-stage gate **anyone** with the permission may clear (a maker-
-checker, not a hierarchy). appd_3 (CVM) and appd_5 (PO) carry `approval_stage` chains below — their flat
-columns just mirror stage 1. appd_4 is `active:false` → ignored (discounts auto-approve until re-enabled).
+**Reading:** the policy header answers *when*. `action=null` (appd_2) matches any action of that
+entity_type; `threshold_amount` auto-approves amounts **below** it (appd_2 below 10,000; appd_5 a PO
+below 500,000). appd_4 is `active:false` → ignored (discounts auto-approve until re-enabled). *Who*
+approves is entirely in the `approval_stage` rows — a one-stage chain for a simple gate, multi-stage for
+a hierarchy (appd_3 CVM, appd_5 PO below).
 
 ### `approval_stage` (the ordered chain) · `approver_kind`: `ROLE | USER`
 Columns: `stage_id, operator_code, definition_id, sequence, name, approver_kind, approver_roles, approver_user_ref, approver_email, required_approvals, allow_requester`.
@@ -271,20 +273,20 @@ holds **no platform role**, just an invited login (`POST /api/approval-approvers
 "CVM manager → director"; appd_5 = "two finance leads → finance director".
 
 ### `approval_request` (an instance) · `status`: `PENDING|AUTO_APPROVED|APPROVED|REJECTED`
-Columns: `request_id, operator_code, entity_type, action, entity_ref, amount, payload, status, approver_roles, required_approvals, approvals_count, allow_requester, current_stage, total_stages, stages_snapshot, requested_by, decided_by, decision_reason, decided_at`.
+Columns: `request_id, operator_code, entity_type, action, entity_ref, amount, payload, status, current_stage, total_stages, approvals_count, stages_snapshot, requested_by, decided_by, decision_reason, decided_at`. The active stage (its approver target, quorum, SoD toggle) is read from `stages_snapshot[current_stage]` — **not** duplicated on the row.
 ```json
-{ "request_id":"appr_5","operator_code":"WIK","entity_type":"PROVISIONING_FORCE_SYNC","action":"FORCE_SYNC","entity_ref":"pfs_2","amount":null,"payload":{"target":"GPON"},"status":"PENDING","approver_roles":[],"required_approvals":1,"approvals_count":0,"allow_requester":false,"current_stage":1,"total_stages":1,"stages_snapshot":[{"sequence":1,"approver_kind":"ROLE","approver_roles":[],"required_approvals":1,"allow_requester":false}],"requested_by":"u_noc1","decided_by":null,"decision_reason":null,"decided_at":null }
-{ "request_id":"appr_6","operator_code":"WIK","entity_type":"CVM_OFFER","action":"CVM_GOODWILL_CREDIT","entity_ref":"cvo_2","amount":null,"payload":{"discountPercent":5},"status":"AUTO_APPROVED","approver_roles":null,"required_approvals":1,"approvals_count":0,"allow_requester":false,"current_stage":1,"total_stages":1,"stages_snapshot":null,"requested_by":"u_agent","decided_by":null,"decision_reason":null,"decided_at":"2026-06-20T09:00:00Z" }
-{ "request_id":"appr_10","operator_code":"WIK","entity_type":"CVM_OFFER","action":"CVM_HIGH_VALUE_RETENTION_OFFER","entity_ref":"cvo_7","amount":null,"payload":{"discountPercent":25},"status":"PENDING","approver_roles":null,"required_approvals":1,"approvals_count":0,"allow_requester":false,"current_stage":2,"total_stages":2,"stages_snapshot":[{"sequence":1,"approver_kind":"ROLE","approver_roles":["CVM_MANAGER"],"required_approvals":1,"allow_requester":false},{"sequence":2,"approver_kind":"USER","approver_user_ref":"usr_dir9","approver_email":"cvm.director@wik.sn","required_approvals":1,"allow_requester":false}],"requested_by":"u_agent","decided_by":"u_cvmmgr","decision_reason":null,"decided_at":null }
-{ "request_id":"appr_9","operator_code":"WIK","entity_type":"ADJUSTMENT","action":null,"entity_ref":"adj_4","amount":1500.00,"payload":{},"status":"REJECTED","approver_roles":["BILLING_LEAD"],"required_approvals":2,"approvals_count":0,"allow_requester":false,"current_stage":1,"total_stages":1,"stages_snapshot":[{"sequence":1,"approver_kind":"ROLE","approver_roles":["BILLING_LEAD"],"required_approvals":2,"allow_requester":false}],"requested_by":"u_agent","decided_by":"u_lead2","decision_reason":"out of policy","decided_at":"2026-06-20T11:05:00Z" }
+{ "request_id":"appr_5","operator_code":"WIK","entity_type":"PROVISIONING_FORCE_SYNC","action":"FORCE_SYNC","entity_ref":"pfs_2","amount":null,"payload":{"target":"GPON"},"status":"PENDING","current_stage":1,"total_stages":1,"approvals_count":0,"stages_snapshot":[{"sequence":1,"approver_kind":"ROLE","approver_roles":[],"required_approvals":1,"allow_requester":false}],"requested_by":"u_noc1","decided_by":null,"decision_reason":null,"decided_at":null }
+{ "request_id":"appr_6","operator_code":"WIK","entity_type":"CVM_OFFER","action":"CVM_GOODWILL_CREDIT","entity_ref":"cvo_2","amount":null,"payload":{"discountPercent":5},"status":"AUTO_APPROVED","current_stage":1,"total_stages":1,"approvals_count":0,"stages_snapshot":null,"requested_by":"u_agent","decided_by":null,"decision_reason":null,"decided_at":"2026-06-20T09:00:00Z" }
+{ "request_id":"appr_10","operator_code":"WIK","entity_type":"CVM_OFFER","action":"CVM_HIGH_VALUE_RETENTION_OFFER","entity_ref":"cvo_7","amount":null,"payload":{"discountPercent":25},"status":"PENDING","current_stage":2,"total_stages":2,"approvals_count":0,"stages_snapshot":[{"sequence":1,"approver_kind":"ROLE","approver_roles":["CVM_MANAGER"],"required_approvals":1,"allow_requester":false},{"sequence":2,"approver_kind":"USER","approver_user_ref":"usr_dir9","approver_email":"cvm.director@wik.sn","required_approvals":1,"allow_requester":false}],"requested_by":"u_agent","decided_by":"u_cvmmgr","decision_reason":null,"decided_at":null }
+{ "request_id":"appr_9","operator_code":"WIK","entity_type":"ADJUSTMENT","action":null,"entity_ref":"adj_4","amount":1500.00,"payload":{},"status":"REJECTED","current_stage":1,"total_stages":1,"approvals_count":0,"stages_snapshot":[{"sequence":1,"approver_kind":"ROLE","approver_roles":["BILLING_LEAD"],"required_approvals":2,"allow_requester":false}],"requested_by":"u_agent","decided_by":"u_lead2","decision_reason":"out of policy","decided_at":"2026-06-20T11:05:00Z" }
 ```
-**Reading:** the working `approver_roles`/`required_approvals`/`allow_requester` always reflect the
-**active** stage (`current_stage`). appr_5 is a single-stage gate parked `PENDING`. appr_6 had no policy
-→ `AUTO_APPROVED` (empty chain, `stages_snapshot:null`). **appr_10 is mid-chain**: the CVM manager
-cleared stage 1 so `current_stage` advanced to **2** (count reset to 0, `approver_roles` now `null`
-because stage 2 is a `USER` stage), awaiting `cvm.director@wik.sn`. appr_9 was rejected at stage 1 →
-the whole chain is `REJECTED`. `stages_snapshot` is the chain **frozen at request time** (later policy
-edits don't change an in-flight request).
+**Reading:** the request carries only the **frozen chain** (`stages_snapshot`) + **progress**
+(`current_stage`, `approvals_count`); the active stage is read from the snapshot, never copied onto the
+row. appr_5 is a single-stage gate parked `PENDING`. appr_6 had no policy → `AUTO_APPROVED` (empty chain,
+`stages_snapshot:null`). **appr_10 is mid-chain**: the CVM manager cleared stage 1 so `current_stage`
+advanced to **2** (`approvals_count` reset to 0), awaiting the `USER` stage's `cvm.director@wik.sn`.
+appr_9 was rejected at stage 1 → the whole chain is `REJECTED`. `stages_snapshot` is frozen at request
+time, so later policy edits don't change an in-flight request.
 
 ### `approval_decision` (immutable audit) · `decision`: `APPROVE|REJECT|REQUEST_REVISION|CANCEL`
 Columns: `decision_id, request_id, operator_code, decision, stage_sequence, actor_user_id, comment, decided_at`.

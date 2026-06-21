@@ -3,7 +3,6 @@
 namespace Modules\Catalog\Tests\Feature;
 
 use App\Foundation\Approvals\ApprovalDefinition;
-use App\Foundation\Support\Id;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -68,10 +67,9 @@ class DiscountAssignmentTest extends TestCase
 
     public function test_high_value_assignment_requires_em_cfg_04_approval(): void
     {
-        ApprovalDefinition::query()->create([
-            'definition_id' => Id::make('appd'), 'operator_code' => 'WIK', 'entity_type' => 'DISCOUNT_ASSIGNMENT',
-            'action' => 'DISCOUNT_ASSIGNMENT_CREATE', 'threshold_amount' => 1000, 'approver_roles' => ['SUPER_ADMIN'], 'required_approvals' => 1, 'active' => true,
-        ]);
+        ApprovalDefinition::defineChain('WIK', 'DISCOUNT_ASSIGNMENT', 'DISCOUNT_ASSIGNMENT_CREATE', [
+            ['approver_kind' => 'ROLE', 'approver_roles' => ['SUPER_ADMIN']],
+        ], ['threshold_amount' => 1000]);
 
         $res = $this->postJson('/api/discount-assignments', [
             'discountCode' => 'RET10', 'scopeType' => 'CUSTOMER', 'scopeRefId' => 'CUS-1', 'estimatedValue' => 5000,

@@ -6,7 +6,6 @@ use App\Foundation\Approvals\ApprovalDefinition;
 use App\Foundation\Approvals\ApprovalRequest;
 use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Support\Context;
-use App\Foundation\Support\Id;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Modules\Osr\Models\StockReservation;
@@ -49,9 +48,8 @@ class StockRulesTest extends TestCase
             ['operator_code' => 'WIK', 'code' => 'RECEIPT', 'description' => 'Receipt', 'direction' => 'IN', 'requires_approval' => false, 'active' => true, 'created_at' => now(), 'updated_at' => now()],
             ['operator_code' => 'WIK', 'code' => 'WRITE_OFF_DAMAGE', 'description' => 'Damaged', 'direction' => 'OUT', 'requires_approval' => true, 'active' => true, 'created_at' => now(), 'updated_at' => now()],
         ]);
-        ApprovalDefinition::query()->create([
-            'definition_id' => Id::make('appd'), 'operator_code' => 'WIK', 'entity_type' => 'STOCK_MOVEMENT',
-            'approver_roles' => [], 'required_approvals' => 1, 'active' => true,
+        ApprovalDefinition::defineChain('WIK', 'STOCK_MOVEMENT', null, [
+            ['approver_kind' => 'ROLE', 'approver_roles' => []],
         ]);
         $this->stock()->move(['sku_id' => 'WIK-ONT', 'location_id' => 'WIK-VAN-1', 'quantity' => 10, 'reason_code' => 'RECEIPT']);
 

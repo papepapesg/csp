@@ -21,8 +21,9 @@ use Illuminate\Support\Facades\DB;
  * before the next stage opens; the final stage flips the request to APPROVED. A reject at any
  * stage fails the whole chain. Config-driven: a new policy (and its chain) is data, not code.
  *
- * Back-compat: a definition with no approval_stage rows runs as a single implicit stage built from
- * the legacy approver_roles / required_approvals / allow_requester columns.
+ * approval_definition is purely the policy header (WHEN approval is needed); the approver config (WHO,
+ * in what order) lives only in approval_stage. The request freezes the resolved chain in
+ * stages_snapshot and tracks progress via current_stage + approvals_count.
  */
 class ApprovalService
 {
@@ -45,7 +46,6 @@ class ApprovalService
             && ($def->threshold_amount === null || ($amount !== null && $amount >= (float) $def->threshold_amount));
 
         $chain = $needsApproval ? $this->resolveChain($def) : [];
-        $first = $chain[0] ?? null;
 
         $request = ApprovalRequest::query()->create([
             'request_id' => Id::make('appr'),
@@ -55,11 +55,8 @@ class ApprovalService
             'entity_ref' => $data['entity_ref'] ?? null,
             'amount' => $amount,
             'payload' => $data['payload'] ?? null,
-            // working snapshot = the active (first) stage; keeps approver_roles/required_approvals
-            // meaningful for the notification listener and existing reads.
-            'approver_roles' => $first['approver_roles'] ?? null,
-            'required_approvals' => $first['required_approvals'] ?? 1,
-            'allow_requester' => (bool) ($first['allow_requester'] ?? false), // APR-6 snapshot from the active stage
+            // The frozen chain + progress counters are the request's only state; the active stage
+            // (its approver target, quorum, SoD toggle) is read from stages_snapshot[current_stage].
             'current_stage' => 1,
             'total_stages' => count($chain) ?: 1,
             'stages_snapshot' => $chain ?: null,
@@ -128,14 +125,9 @@ class ApprovalService
             return $request->refresh();
         }
 
-        $next = $this->stageAt($request, (int) $request->current_stage + 1);
         $request->update([
-            'current_stage' => (int) $request->current_stage + 1,
+            'current_stage' => (int) $request->current_stage + 1, // next stage read from stages_snapshot
             'approvals_count' => 0,
-            // re-point the working snapshot at the now-active stage so notifications + reads follow the chain.
-            'approver_roles' => $next['approver_roles'] ?? null,
-            'required_approvals' => $next['required_approvals'] ?? 1,
-            'allow_requester' => (bool) ($next['allow_requester'] ?? false),
             'decided_by' => $actor,
             'decision_reason' => $reason,
         ]);
@@ -145,37 +137,44 @@ class ApprovalService
     }
 
     /**
-     * Build the ordered stage chain for a definition. Uses approval_stage rows when present; otherwise
-     * a single implicit stage from the legacy flat columns (back-compat).
+     * Build the ordered stage chain for a definition from its approval_stage rows. A definition with
+     * no stages is a misconfiguration; we still gate it with a single open stage (any approver) rather
+     * than silently auto-approving a policy that exists.
      *
      * @return list<array<string,mixed>>
      */
     private function resolveChain(ApprovalDefinition $def): array
     {
         $stages = $def->stages()->get();
-        if ($stages->isNotEmpty()) {
-            return $stages->map(fn (ApprovalStage $s) => [
-                'sequence' => (int) $s->sequence,
-                'name' => $s->name,
-                'approver_kind' => $s->approver_kind ?: ApprovalStage::ROLE,
-                'approver_roles' => $s->approver_roles,
-                'approver_user_ref' => $s->approver_user_ref,
-                'approver_email' => $s->approver_email,
-                'required_approvals' => (int) $s->required_approvals ?: 1,
-                'allow_requester' => (bool) $s->allow_requester,
-            ])->values()->all();
+        if ($stages->isEmpty()) {
+            return [$this->openStage(1)];
         }
 
-        return [[
-            'sequence' => 1,
+        return $stages->map(fn (ApprovalStage $s) => [
+            'sequence' => (int) $s->sequence,
+            'name' => $s->name,
+            'approver_kind' => $s->approver_kind ?: ApprovalStage::ROLE,
+            'approver_roles' => $s->approver_roles,
+            'approver_user_ref' => $s->approver_user_ref,
+            'approver_email' => $s->approver_email,
+            'required_approvals' => (int) $s->required_approvals ?: 1,
+            'allow_requester' => (bool) $s->allow_requester,
+        ])->values()->all();
+    }
+
+    /** @return array<string,mixed> a single ROLE stage anyone with the permission may clear. */
+    private function openStage(int $sequence): array
+    {
+        return [
+            'sequence' => $sequence,
             'name' => null,
             'approver_kind' => ApprovalStage::ROLE,
-            'approver_roles' => $def->approver_roles,
+            'approver_roles' => [],
             'approver_user_ref' => null,
             'approver_email' => null,
-            'required_approvals' => (int) ($def->required_approvals ?? 1) ?: 1,
-            'allow_requester' => (bool) ($def->allow_requester ?? false),
-        ]];
+            'required_approvals' => 1,
+            'allow_requester' => false,
+        ];
     }
 
     /** @return array<string,mixed> */
@@ -193,16 +192,8 @@ class ApprovalService
             }
         }
 
-        // Fallback for legacy requests created before the chain (no snapshot): treat the flat fields as stage 1.
-        return [
-            'sequence' => $sequence,
-            'approver_kind' => ApprovalStage::ROLE,
-            'approver_roles' => $request->approver_roles,
-            'approver_user_ref' => null,
-            'approver_email' => null,
-            'required_approvals' => (int) ($request->required_approvals ?? 1) ?: 1,
-            'allow_requester' => (bool) $request->allow_requester,
-        ];
+        // A PENDING request always has a snapshot; this only guards a malformed/legacy row.
+        return $this->openStage($sequence);
     }
 
     /** APR-5: enforce the current stage's approver target (a role pool, or a specific named user). */

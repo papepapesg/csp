@@ -109,10 +109,8 @@ class PackageLaunchTest extends TestCase
 
     public function test_approval_definition_routes_through_em_cfg_04_then_callback_activates(): void
     {
-        ApprovalDefinition::query()->create([
-            'definition_id' => Id::make('appd'), 'operator_code' => 'WIK', 'entity_type' => 'PACKAGE_LAUNCH_PLAN',
-            'action' => 'PACKAGE_LAUNCH_APPROVAL', 'threshold_amount' => null, 'approver_roles' => ['SUPER_ADMIN'],
-            'required_approvals' => 1, 'active' => true,
+        ApprovalDefinition::defineChain('WIK', 'PACKAGE_LAUNCH_PLAN', 'PACKAGE_LAUNCH_APPROVAL', [
+            ['approver_kind' => 'ROLE', 'approver_roles' => ['SUPER_ADMIN']],
         ]);
 
         [$id, $package, $version] = $this->createPlan();
@@ -132,10 +130,8 @@ class PackageLaunchTest extends TestCase
 
     public function test_em_cfg_04_rejection_blocks_launch(): void
     {
-        ApprovalDefinition::query()->create([
-            'definition_id' => Id::make('appd'), 'operator_code' => 'WIK', 'entity_type' => 'PACKAGE_LAUNCH_PLAN',
-            'action' => 'PACKAGE_LAUNCH_APPROVAL', 'threshold_amount' => null, 'approver_roles' => ['SUPER_ADMIN'],
-            'required_approvals' => 1, 'active' => true,
+        ApprovalDefinition::defineChain('WIK', 'PACKAGE_LAUNCH_PLAN', 'PACKAGE_LAUNCH_APPROVAL', [
+            ['approver_kind' => 'ROLE', 'approver_roles' => ['SUPER_ADMIN']],
         ]);
         [$id, $package] = $this->createPlan();
         $this->postJson("/api/package-launch-plans/{$id}/validate")->assertOk();

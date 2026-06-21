@@ -57,7 +57,7 @@ class NotifyApproversOnApprovalRequested
         }
 
         // ROLE stage: notify each distinct approver group (RBAC role = ICN candidate group).
-        $roles = $stage['approver_roles'] ?? ($request->approver_roles ?? []);
+        $roles = $stage['approver_roles'] ?? [];
         foreach (array_unique($roles ?? []) as $group) {
             $this->staff->dispatch([
                 'operatorCode' => $request->operator_code,
@@ -80,7 +80,7 @@ class NotifyApproversOnApprovalRequested
             }
         }
 
-        return ['approver_kind' => ApprovalStage::ROLE, 'approver_roles' => $request->approver_roles ?? []];
+        return ['approver_kind' => ApprovalStage::ROLE, 'approver_roles' => []];
     }
 
     private function lookupEmail(?string $uid, string $operator): ?string

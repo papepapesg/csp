@@ -3,7 +3,6 @@
 namespace Modules\Osr\Tests\Feature;
 
 use App\Foundation\Approvals\ApprovalDefinition;
-use App\Foundation\Support\Id;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -43,9 +42,8 @@ class ProcurementAuditTest extends TestCase
     public function test_po_approval_is_gated_through_em_cfg_04_when_a_policy_exists(): void
     {
         // R-OSR-02-04: an operator policy makes PO approval go through EM-CFG-04, not a bare flip.
-        ApprovalDefinition::query()->create([
-            'definition_id' => Id::make('appd'), 'operator_code' => 'WIK', 'entity_type' => 'PURCHASE_ORDER',
-            'approver_roles' => [], 'required_approvals' => 1, 'active' => true,
+        ApprovalDefinition::defineChain('WIK', 'PURCHASE_ORDER', null, [
+            ['approver_kind' => 'ROLE', 'approver_roles' => []],
         ]);
 
         $po = $this->postJson('/api/purchase-orders', [

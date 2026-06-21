@@ -2,11 +2,21 @@
 
 namespace Modules\Catalog\Tests\Feature;
 
+use App\Foundation\Approvals\ApprovalDefinition;
+use App\Foundation\Approvals\ApprovalRequest;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
+use Modules\Catalog\Database\Seeders\HomePassStatusSeeder;
+use Modules\Catalog\Models\HomePass;
+use Modules\Catalog\Models\HomePassStatusCode;
+use Modules\Catalog\Models\NetworkNode;
+use Modules\Catalog\Models\TechRegion;
+use Modules\Workforce\Models\Contractor;
 use Tests\TestCase;
 
 class CatalogApiTest extends TestCase
@@ -18,7 +28,7 @@ class CatalogApiTest extends TestCase
         parent::setUp();
         $this->seed(RbacSeeder::class);
         $this->seed(CatalogPolicySeeder::class); // rules.service-catalog / rules.homepass-catalog
-        $this->seed(\Modules\Catalog\Database\Seeders\HomePassStatusSeeder::class); // homepass_status_code catalog
+        $this->seed(HomePassStatusSeeder::class); // homepass_status_code catalog
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('CATALOG_ADMIN');
         Sanctum::actingAs($user);
@@ -140,7 +150,7 @@ class CatalogApiTest extends TestCase
         $con = $this->postJson('/api/tech-contractors', ['code' => 'ACME', 'name' => 'Acme', 'skills' => ['INSTALLATION']])->assertCreated()->json('contractor_id');
 
         $this->postJson('/api/tech-regions', ['tech_region_id' => 'KE-COV', 'display_name_primary' => 'Cov', 'region_type' => 'NEIGHBORHOOD'])->assertCreated();
-        \Modules\Catalog\Models\TechRegion::query()->where('tech_region_id', 'KE-COV')->update(['status' => 'DRAFT']);
+        TechRegion::query()->where('tech_region_id', 'KE-COV')->update(['status' => 'DRAFT']);
 
         // T-7: cannot activate a region with no active contractor.
         $this->postJson('/api/tech-regions/KE-COV/activate')->assertStatus(422)->assertJsonPath('errorCode', 'REGION_HAS_NO_CONTRACTOR');
@@ -153,7 +163,7 @@ class CatalogApiTest extends TestCase
 
         // T-3: cannot retire while an active HomePass references the region.
         $hp = $this->postJson('/api/homepass', ['address' => '1 Cov Rd', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
-        \Illuminate\Support\Facades\DB::table('homepass_tech_region')->insert(['homepass_id' => $hp, 'tech_region_ref' => 'KE-COV', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('homepass_tech_region')->insert(['homepass_id' => $hp, 'tech_region_ref' => 'KE-COV', 'created_at' => now(), 'updated_at' => now()]);
         $this->patchJson("/api/homepass/{$hp}/status", ['status' => 'ACT'])->assertOk(); // is_active
         $this->postJson('/api/tech-regions/KE-COV/retire')->assertStatus(422)->assertJsonPath('errorCode', 'REGION_REFERENCED');
     }
@@ -190,10 +200,10 @@ class CatalogApiTest extends TestCase
         // R-RLM-CFG-01-N-4: unknown parent rejected; a cycle (OLT-1 parented under FAT-1) rejected.
         $this->postJson('/api/network-nodes', ['code' => 'Y', 'type' => 'ONT', 'name' => 'y', 'parent_node_code' => 'NOPE'])
             ->assertStatus(422)->assertJsonPath('errorCode', 'UNKNOWN_PARENT_NODE');
-        \Modules\Catalog\Models\NetworkNode::query()->where('code', 'OLT-1')->update(['parent_node_code' => 'FAT-1']);
+        NetworkNode::query()->where('code', 'OLT-1')->update(['parent_node_code' => 'FAT-1']);
         $this->postJson('/api/network-nodes', ['code' => 'Z', 'type' => 'ONT', 'name' => 'z', 'parent_node_code' => 'OLT-1'])
             ->assertStatus(422)->assertJsonPath('errorCode', 'NODE_PARENT_CYCLE');
-        \Modules\Catalog\Models\NetworkNode::query()->where('code', 'OLT-1')->update(['parent_node_code' => null]);
+        NetworkNode::query()->where('code', 'OLT-1')->update(['parent_node_code' => null]);
 
         // R-RLM-CFG-01-N-5: a node referenced by a HomePass network_path cannot be retired.
         $hp = $this->postJson('/api/homepass', ['address' => '1 Node Rd', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
@@ -222,7 +232,7 @@ class CatalogApiTest extends TestCase
             ->assertJsonPath('service_management_endpoints.iptv_multicast.nodeCode', 'OLT-NRB-WTL-01');
 
         // services_supported derived from node types (R-RLM-CFG-01-H-12).
-        $supported = \Modules\Catalog\Models\HomePass::find($hp)->services_supported;
+        $supported = HomePass::find($hp)->services_supported;
         $this->assertEqualsCanonicalizing(['DATA', 'IPTV_MULTICAST', 'VOICE'], $supported);
     }
 
@@ -231,12 +241,12 @@ class CatalogApiTest extends TestCase
         $hp = $this->postJson('/api/homepass', ['address' => '9 Route Rd', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
         $region = 'KE-NRB-ROUTE';
 
-        $con = \Modules\Workforce\Models\Contractor::query()->create([
+        $con = Contractor::query()->create([
             'operator_code' => 'WIK', 'code' => 'ACME_FIBER', 'name' => 'Acme Fiber', 'skills' => ['INSTALLATION', 'MAINTENANCE'], 'status' => 'ACTIVE',
         ]);
-        \Illuminate\Support\Facades\DB::table('homepass_tech_region')->insert(['homepass_id' => $hp, 'tech_region_ref' => $region, 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('homepass_tech_region')->insert(['homepass_id' => $hp, 'tech_region_ref' => $region, 'created_at' => now(), 'updated_at' => now()]);
         // Per-region assignment scopes the contractor to INSTALLATION only in this region (R-RLM-CFG-01-A-1).
-        \Illuminate\Support\Facades\DB::table('tech_region_contractor')->insert([
+        DB::table('tech_region_contractor')->insert([
             'tech_region_id' => $region, 'tech_contractor_id' => $con->contractor_id, 'operator_code' => 'WIK',
             'skills' => json_encode(['INSTALLATION']), 'created_at' => now(), 'updated_at' => now(),
         ]);
@@ -251,9 +261,8 @@ class CatalogApiTest extends TestCase
     public function test_homepass_transition_is_maker_checker_when_policy_gates_it(): void
     {
         // An EM-CFG-04 policy gates transitions into requires_approval_to_enter codes (H-5).
-        \App\Foundation\Approvals\ApprovalDefinition::query()->create([
-            'definition_id' => 'appd_hp', 'operator_code' => 'WIK', 'entity_type' => 'HOMEPASS_STATUS_TRANSITION',
-            'approver_roles' => ['SUPER_ADMIN'], 'required_approvals' => 1, 'active' => true,
+        ApprovalDefinition::defineChain('WIK', 'HOMEPASS_STATUS_TRANSITION', null, [
+            ['approver_kind' => 'ROLE', 'approver_roles' => ['SUPER_ADMIN']],
         ]);
         $hp = $this->postJson('/api/homepass', ['address' => '1 Gate Rd', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
 
@@ -262,14 +271,14 @@ class CatalogApiTest extends TestCase
         $this->assertDatabaseHas('approval_request', ['entity_type' => 'HOMEPASS_STATUS_TRANSITION', 'entity_ref' => $hp, 'status' => 'PENDING']);
 
         // A separate approver grants it; the listener applies the transition.
-        $reqId = \App\Foundation\Approvals\ApprovalRequest::query()->where('entity_ref', $hp)->value('request_id');
+        $reqId = ApprovalRequest::query()->where('entity_ref', $hp)->value('request_id');
         $approver = User::factory()->create(['operator_code' => 'WIK']);
         $approver->assignRole('SUPER_ADMIN');
         Sanctum::actingAs($approver);
         $this->postJson("/api/approvals/{$reqId}/decide", ['approve' => true])->assertOk()->assertJsonPath('status', 'APPROVED');
-        \Illuminate\Support\Facades\Artisan::call('sophix:outbox:dispatch');
+        Artisan::call('sophix:outbox:dispatch');
 
-        $this->assertSame('RFS', \Modules\Catalog\Models\HomePass::find($hp)->status);
+        $this->assertSame('RFS', HomePass::find($hp)->status);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'HomePassReachedSellable']);
     }
 
@@ -277,7 +286,7 @@ class CatalogApiTest extends TestCase
     {
         $this->postJson('/api/tech-regions', ['tech_region_id' => 'KE-NRB-X', 'display_name_primary' => 'X', 'region_type' => 'NEIGHBORHOOD'])->assertCreated();
         $hp = $this->postJson('/api/homepass', ['address' => '1 X Rd', 'tech_region_id' => 'KE-NRB-X', 'technology' => 'GPON'])->assertCreated()->json('homepass.id');
-        $count = fn () => \Illuminate\Support\Facades\DB::table('outbox_events')->where('event_type', 'HomePassReachedSellable')->count();
+        $count = fn () => DB::table('outbox_events')->where('event_type', 'HomePassReachedSellable')->count();
 
         // First transition into a sellable status (RFS) fires the lead-notify event (R-RLM-CFG-01-H-6).
         $this->patchJson("/api/homepass/{$hp}/status", ['status' => 'RFS'])->assertOk()->assertJsonPath('has_been_sellable', true);
@@ -292,7 +301,7 @@ class CatalogApiTest extends TestCase
         $this->getJson('/api/homepass/eligible?techRegionId=KE-NRB-X')->assertOk()->assertJsonPath('items.0.id', $hp);
 
         // An operator adds a custom sellable code (config, no code change) — eligibility honours it.
-        \Modules\Catalog\Models\HomePassStatusCode::query()->create(['operator_code' => 'WIK', 'code' => 'LIVE', 'is_sellable' => true, 'active' => true]);
+        HomePassStatusCode::query()->create(['operator_code' => 'WIK', 'code' => 'LIVE', 'is_sellable' => true, 'active' => true]);
         $this->patchJson("/api/homepass/{$hp}/status", ['status' => 'LIVE'])->assertOk();
         $this->getJson('/api/homepass/eligible?techRegionId=KE-NRB-X')->assertOk()->assertJsonPath('items.0.id', $hp);
 

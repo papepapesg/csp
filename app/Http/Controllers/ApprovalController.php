@@ -5,11 +5,9 @@ namespace App\Http\Controllers;
 use App\Foundation\Approvals\ApprovalDefinition;
 use App\Foundation\Approvals\ApprovalRequest;
 use App\Foundation\Approvals\ApprovalService;
-use App\Foundation\Approvals\ApprovalStage;
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
-use App\Foundation\Support\Id;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -34,14 +32,11 @@ class ApprovalController extends ApiController
             'entity_type' => ['required', 'string'],
             'action' => ['nullable', 'string'],
             'threshold_amount' => ['nullable', 'numeric'],
-            // Legacy single-stage policy: a flat role pool. Optional when `stages` is supplied.
-            'approver_roles' => ['required_without:stages', 'array'],
-            'required_approvals' => ['nullable', 'integer', 'min:1'],
-            'allow_requester' => ['nullable', 'boolean'], // APR-6: permit self-approval (default false)
-            // Ordered approval chain: each stage targets a ROLE pool or a named USER, in sequence.
-            'stages' => ['nullable', 'array'],
+            'active' => ['nullable', 'boolean'],
+            // The approval chain: ≥1 stage, each targeting a ROLE pool or a named USER, in sequence.
+            'stages' => ['required', 'array', 'min:1'],
             'stages.*.name' => ['nullable', 'string'],
-            'stages.*.approver_kind' => ['required_with:stages', 'in:ROLE,USER'],
+            'stages.*.approver_kind' => ['required', 'in:ROLE,USER'],
             'stages.*.approver_roles' => ['nullable', 'array'],
             'stages.*.approver_user_ref' => ['nullable', 'string'],
             'stages.*.approver_email' => ['nullable', 'email'],
@@ -49,25 +44,13 @@ class ApprovalController extends ApiController
             'stages.*.allow_requester' => ['nullable', 'boolean'],
         ]);
 
-        $stages = $data['stages'] ?? null;
-        unset($data['stages']);
-        $def = ApprovalDefinition::query()->create($data + ['definition_id' => Id::make('appd')]);
-
-        foreach (array_values($stages ?? []) as $i => $stage) {
-            ApprovalStage::query()->create([
-                'stage_id' => Id::make('appds'),
-                'operator_code' => $def->operator_code,
-                'definition_id' => $def->definition_id,
-                'sequence' => $i + 1,
-                'name' => $stage['name'] ?? null,
-                'approver_kind' => $stage['approver_kind'],
-                'approver_roles' => $stage['approver_roles'] ?? null,
-                'approver_user_ref' => $stage['approver_user_ref'] ?? null,
-                'approver_email' => $stage['approver_email'] ?? null,
-                'required_approvals' => $stage['required_approvals'] ?? 1,
-                'allow_requester' => $stage['allow_requester'] ?? false,
-            ]);
-        }
+        $def = ApprovalDefinition::defineChain(
+            Context::operatorCode(),
+            $data['entity_type'],
+            $data['action'] ?? null,
+            $data['stages'],
+            ['threshold_amount' => $data['threshold_amount'] ?? null, 'active' => $data['active'] ?? true],
+        );
 
         return ApiResponse::created($def->load('stages'));
     }

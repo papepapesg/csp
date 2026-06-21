@@ -39,10 +39,9 @@ class FileAndApprovalTest extends TestCase
 
     public function test_approval_auto_approves_below_threshold_and_requires_above(): void
     {
-        ApprovalDefinition::query()->create([
-            'definition_id' => 'appd_1', 'operator_code' => 'WIK', 'entity_type' => 'ADJUSTMENT',
-            'threshold_amount' => 1000, 'approver_roles' => ['BILLING_LEAD'], 'required_approvals' => 1, 'active' => true,
-        ]);
+        ApprovalDefinition::defineChain('WIK', 'ADJUSTMENT', null, [
+            ['approver_kind' => 'ROLE', 'approver_roles' => ['BILLING_LEAD']],
+        ], ['threshold_amount' => 1000]);
 
         // Below threshold -> auto-approved.
         $this->postJson('/api/approvals', ['entity_type' => 'ADJUSTMENT', 'amount' => 500], ['Idempotency-Key' => 'a1'])
@@ -75,9 +74,8 @@ class FileAndApprovalTest extends TestCase
     public function test_self_approval_is_a_config_toggle(): void
     {
         // An operator opts a low-risk policy into self-approval — config, no code change (APR-6).
-        ApprovalDefinition::query()->create([
-            'definition_id' => 'appd_self', 'operator_code' => 'WIK', 'entity_type' => 'NOTE_OVERRIDE',
-            'approver_roles' => ['SUPER_ADMIN'], 'required_approvals' => 1, 'allow_requester' => true, 'active' => true,
+        ApprovalDefinition::defineChain('WIK', 'NOTE_OVERRIDE', null, [
+            ['approver_kind' => 'ROLE', 'approver_roles' => ['SUPER_ADMIN'], 'allow_requester' => true],
         ]);
         $req = $this->postJson('/api/approvals', ['entity_type' => 'NOTE_OVERRIDE'], ['Idempotency-Key' => 's1'])
             ->assertCreated()->assertJsonPath('status', 'PENDING')->json();

@@ -3,7 +3,6 @@
 namespace Tests\Feature\Foundation;
 
 use App\Foundation\Approvals\ApprovalDefinition;
-use App\Foundation\Approvals\ApprovalStage;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -44,22 +43,10 @@ class ApprovalChainTest extends TestCase
     private function twoStageManagerThenDirector(): ApprovalDefinition
     {
         // Stage 1: a platform ROLE (the "manager"). Stage 2: a named USER (the "director", no role).
-        $def = ApprovalDefinition::query()->create([
-            'definition_id' => 'appd_hv', 'operator_code' => 'WIK', 'entity_type' => 'ADJUSTMENT_HV',
-            'approver_roles' => [], 'required_approvals' => 1, 'active' => true,
+        return ApprovalDefinition::defineChain('WIK', 'ADJUSTMENT_HV', null, [
+            ['name' => 'Manager review', 'approver_kind' => 'ROLE', 'approver_roles' => ['BILLING_LEAD']],
+            ['name' => 'Director sign-off', 'approver_kind' => 'USER', 'approver_email' => 'director@wik.sn'],
         ]);
-        ApprovalStage::query()->create([
-            'stage_id' => 'appds_1', 'operator_code' => 'WIK', 'definition_id' => $def->definition_id,
-            'sequence' => 1, 'name' => 'Manager review', 'approver_kind' => 'ROLE',
-            'approver_roles' => ['BILLING_LEAD'], 'required_approvals' => 1,
-        ]);
-        ApprovalStage::query()->create([
-            'stage_id' => 'appds_2', 'operator_code' => 'WIK', 'definition_id' => $def->definition_id,
-            'sequence' => 2, 'name' => 'Director sign-off', 'approver_kind' => 'USER',
-            'approver_email' => 'director@wik.sn', 'required_approvals' => 1,
-        ]);
-
-        return $def;
     }
 
     public function test_chain_is_ordered_manager_then_director(): void
@@ -118,13 +105,8 @@ class ApprovalChainTest extends TestCase
 
     public function test_stage_quorum_requires_distinct_approvers(): void
     {
-        $def = ApprovalDefinition::query()->create([
-            'definition_id' => 'appd_q', 'operator_code' => 'WIK', 'entity_type' => 'DUAL_SIGN',
-            'approver_roles' => [], 'required_approvals' => 1, 'active' => true,
-        ]);
-        ApprovalStage::query()->create([
-            'stage_id' => 'appds_q1', 'operator_code' => 'WIK', 'definition_id' => $def->definition_id,
-            'sequence' => 1, 'approver_kind' => 'ROLE', 'approver_roles' => ['BILLING_LEAD'], 'required_approvals' => 2,
+        ApprovalDefinition::defineChain('WIK', 'DUAL_SIGN', null, [
+            ['approver_kind' => 'ROLE', 'approver_roles' => ['BILLING_LEAD'], 'required_approvals' => 2],
         ]);
 
         $requester = $this->requester();

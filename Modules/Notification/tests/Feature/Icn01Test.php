@@ -4,9 +4,7 @@ namespace Modules\Notification\Tests\Feature;
 
 use App\Foundation\Approvals\ApprovalDefinition;
 use App\Foundation\Approvals\ApprovalService;
-use App\Foundation\Approvals\ApprovalStage;
 use App\Foundation\Support\Context;
-use App\Foundation\Support\Id;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -106,9 +104,8 @@ class Icn01Test extends TestCase
         // EM-CFG-04 -> ICN-01: a pending approval whose policy names an approver group
         // (here the seeded kyc supervisors) raises a staff notification to that group.
         Context::setOperatorCode('WIK');
-        ApprovalDefinition::query()->create([
-            'definition_id' => Id::make('appd'), 'operator_code' => 'WIK',
-            'entity_type' => 'KYC_DECISION', 'approver_roles' => ['kenya-l1-kyc'], 'required_approvals' => 1, 'active' => true,
+        ApprovalDefinition::defineChain('WIK', 'KYC_DECISION', null, [
+            ['approver_kind' => 'ROLE', 'approver_roles' => ['kenya-l1-kyc']],
         ]);
 
         app(ApprovalService::class)->request([
@@ -224,13 +221,8 @@ class Icn01Test extends TestCase
     {
         // A policy whose stage is a NAMED USER (a director with an invited login, no platform role).
         $director = User::factory()->create(['operator_code' => 'WIK', 'email' => 'cvm.director@wik.sn', 'status' => 'INVITED']);
-        $def = ApprovalDefinition::query()->create([
-            'definition_id' => 'appd_dir', 'operator_code' => 'WIK', 'entity_type' => 'DIRECTOR_SIGNOFF',
-            'approver_roles' => [], 'required_approvals' => 1, 'active' => true,
-        ]);
-        ApprovalStage::query()->create([
-            'stage_id' => 'appds_dir', 'operator_code' => 'WIK', 'definition_id' => $def->definition_id,
-            'sequence' => 1, 'approver_kind' => 'USER', 'approver_user_ref' => $director->uid, 'approver_email' => $director->email, 'required_approvals' => 1,
+        ApprovalDefinition::defineChain('WIK', 'DIRECTOR_SIGNOFF', null, [
+            ['approver_kind' => 'USER', 'approver_user_ref' => $director->uid, 'approver_email' => $director->email],
         ]);
 
         $req = app(ApprovalService::class)->request(['entity_type' => 'DIRECTOR_SIGNOFF', 'entity_ref' => 'x1', 'requested_by' => 'u_maker']);

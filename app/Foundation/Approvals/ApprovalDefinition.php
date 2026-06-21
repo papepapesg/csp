@@ -21,7 +21,7 @@ class ApprovalDefinition extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['approver_roles' => 'array', 'active' => 'boolean', 'threshold_amount' => 'decimal:2'];
+    protected $casts = ['active' => 'boolean', 'threshold_amount' => 'decimal:2'];
 
     /** Ordered chain of stages (empty ⇒ legacy single implicit stage from the flat columns). */
     public function stages(): HasMany
@@ -31,8 +31,8 @@ class ApprovalDefinition extends Model
 
     /**
      * Canonical way to declare a policy AND its ordered chain in one idempotent call (used by every
-     * seeder). A single-element `$stages` is a one-stage chain; supply more for a hierarchy. The flat
-     * header columns mirror stage 1 so legacy reads + the notification snapshot stay meaningful.
+     * seeder). A single-element `$stages` is a one-stage chain; supply more for a hierarchy. The
+     * definition is purely the policy header (WHEN); the stages are the only approver config (WHO).
      *
      * @param  list<array<string,mixed>>  $stages  each: name?, approver_kind?(ROLE|USER), approver_roles?,
      *                                             approver_user_ref?, approver_email?, required_approvals?, allow_requester?
@@ -41,15 +41,11 @@ class ApprovalDefinition extends Model
     public static function defineChain(string $operator, string $entityType, ?string $action, array $stages, array $opts = []): self
     {
         $stages = array_values($stages);
-        $first = $stages[0] ?? [];
         $def = static::query()->updateOrCreate(
             ['operator_code' => $operator, 'entity_type' => $entityType, 'action' => $action],
             [
                 'definition_id' => Id::make('appd'),
                 'threshold_amount' => $opts['threshold_amount'] ?? null,
-                'approver_roles' => $first['approver_roles'] ?? [],
-                'required_approvals' => $first['required_approvals'] ?? 1,
-                'allow_requester' => $first['allow_requester'] ?? false,
                 'active' => $opts['active'] ?? true,
             ],
         );
