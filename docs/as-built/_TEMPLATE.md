@@ -8,6 +8,21 @@
 - **Does NOT own:** <what it delegates to other modules — name them>
 - One-paragraph summary of the module's job.
 
+## 📖 Scenarios — read these first
+> Concrete walk-throughs an entry-level dev can follow. Each: a real actor + situation, the API
+> call (with sample JSON), what the service does step-by-step, the rows/state that change, the
+> events that fire + who reacts, and the **test that proves it**.
+
+### Scenario A — <the happy path, e.g. "Jane orders X">
+1. **Request:** `POST /api/<…>` ```json {"…":"…"}```
+2. **Service does:** <step → step → step>
+3. **State change:** `<table>` gets <row …>; `<status>`: A → B
+4. **Events:** emits `<Event>` → `<Listener in module Y>` does <…>
+5. **Proven by:** `<TestClass::test_…>`
+
+### Scenario B — <an edge/failure, e.g. "wallet too low / approval needed">
+<same shape — show the branch and what differs>
+
 ## 2. Data model
 | Table | Purpose | Key invariants |
 | --- | --- | --- |

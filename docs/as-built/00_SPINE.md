@@ -8,6 +8,44 @@ every module reads as "business logic on top of the spine."
 
 ---
 
+## 🎬 One worked example — "Jane activates her subscription"
+Follow this once; it touches **every** pattern below. (Proven by `Subscription/tests/Feature/SubscriptionApiTest::test_activate_runs_workflow_and_sets_active`.)
+
+1. **Request** (a back-office agent clicks "Activate"):
+   ```http
+   POST /api/subscriptions/sub_123/activate
+   Authorization: Bearer <sanctum token>
+   Idempotency-Key: act-sub_123-1
+   ```
+2. **Middleware chain** (pattern 1,2,7): `auth:sanctum` → `permission:subscription.activate` →
+   (`scope` if declared) → `idempotency` (no prior key → proceeds) → `ResolveOperatorContext` pinned
+   `Context::operatorCode()` = `WIK`.
+3. **Service** (`OperationController` → `OperationFramework::trigger('ACTIVATE')`): checks idempotency
+   + single-in-flight, then **in one DB transaction** writes a `subscription_operation` row
+   (`current_state=INITIATED`) and **publishes** `SubscriptionOperationStarted` to the **outbox**
+   (pattern 3 — the row and the event commit together or not at all).
+4. **Starts the workflow** (pattern 4): `WorkflowEngine::start('sub-activate', businessKey=sub_123,
+   {subscriptionId, operationId, …})` creates a `ProcessInstance` + `ExternalTask` rows. HTTP returns
+   `202` with the operation id. **Nothing else has happened synchronously.**
+5. **Outbox dispatch** (every minute, or `artisan sophix:outbox:dispatch` in tests): fires
+   `OutboxEventPublished` → `Reporting` projector counts it, `Notification` may notify. (Inbox dedupe
+   means a re-run won't double-count.)
+6. **Workflow worker** (`sophix:workflow:work`) drains the tasks, one handler per topic:
+   `ValidateActivationHandler` → `BillingIntentHandler` (if there's an activation fee and it's
+   pay-first, this **parks** the flow on a `ful-payment-received` catch until `InvoicePaid` arrives —
+   pattern 3 again) → `ActivateHandler` calls `SubscriptionService::transitionStatus(ACTIVE)` which
+   emits `SubscriptionActivated` → `FulfillmentCallHandler` calls `ProvisioningService::broadcast()`.
+7. **Reconcile:** when the instance ends, `ProcessInstanceEnded` → `SyncOperationFromProcess` closes
+   the `subscription_operation` ledger (`final_state`, emits `SubscriptionOperationCompleted`).
+8. **Downstream of `SubscriptionActivated`:** Billing anchors the first cycle, Reporting increments
+   `subscriptions_activated`, Notification sends the welcome notice — all as **reactions**, none
+   called synchronously from step 3.
+
+> The shape never changes: **thin controller → service (mutate + emit in one tx) → async dispatch →
+> listeners/workflow react.** Learn it here; every module repeats it.
+
+---
+
 ## 1. Tenancy & Context — *who and which operator*
 - `App\Foundation\Support\Context` holds the per-request **operator code** and **correlation id**.
   Resolved server-side by `ResolveOperatorContext` middleware; the `X-Operator-Code` header only

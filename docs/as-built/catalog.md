@@ -14,6 +14,32 @@
 - **Job:** be the single, operator-scoped, governed source of "what can be sold, at what price, with
   what tax/discount, where" — tunable as data, with maker-checker on the risky launches.
 
+## 📖 Scenarios — read these first
+
+### Scenario A — "how much tax on a 5,000 KES package?"
+1. **Call (from Billing):** `TaxComputeService::compute([...])`
+   ```php
+   ['operatorCode'=>'WIK','taxableKind'=>'PACKAGE','taxableRef'=>'pkg_triple',
+    'baseAmount'=>5000.0,'currency'=>'KES','customerCategory'=>'RES']
+   ```
+2. **Service:** evaluates `rules.tax-applicability` → tax group (say `KE_VAT`); if the rule returns
+   `NONE` the item is **exempt** (no fallback). Otherwise it iterates the group's `tax_rule` rows in
+   `order_within_group`, computing each per `base_method` (`BASE` = on the base; `BASE_PLUS_PRIOR` =
+   on base + prior tax for a cascade).
+3. **Returns:** `{subtotal: 5000, taxTotal: 800, taxLines:[{code:'VAT', rate:0.16, amount:800}]}`.
+4. **No tax configured / `NONE`:** returns `taxTotal: 0` — Wananchi tunes this entirely as `tax_group`
+   / `tax_rule` rows + the decision table, **no code**.
+- **Proven by:** `TaxComputeTest`.
+
+### Scenario B — granting a big discount (maker-checker)
+1. **Request:** `POST /api/discount-assignments` for a 40%-off, 12-month grant.
+2. `DiscountAssignmentService` blocks a duplicate active grant (R-SIP-DA-05), then asks **EM-CFG-04**
+   whether this grant needs approval (R-SIP-DA-07/11). High value ⇒ it lands `PENDING_APPROVAL` and
+   emits `DiscountAssignmentApprovalRequired`.
+3. A different approver decides ⇒ `ApprovalApproved` ⇒ the grant `ACTIVATED`
+   (`DiscountAssignmentActivated`). A small/auto grant skips straight to active.
+- **Proven by:** `DiscountAssignmentTest`, `DiscountComputeTest`.
+
 ## 2. Data model (selected)
 | Table | Purpose | Key invariants |
 | --- | --- | --- |

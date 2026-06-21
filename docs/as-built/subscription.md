@@ -15,6 +15,37 @@
   relocate / migrate / terminate / restrict) into a governed, idempotent, single-in-flight
   operation whose steps are config-defined.
 
+## 📖 Scenarios — read these first
+
+### Scenario A — agent pauses an active subscription
+1. **Request:** `POST /api/subscriptions/sub_123/pause`
+   ```json
+   { "reason_code": "CUSTOMER_TRAVEL", "resume_at": "2026-08-01" }
+   ```
+2. **Service:** `OperationController@pause` → `OperationFramework::trigger($sub, 'PAUSE', input)`:
+   resolves the process key (`subscription_operation_config` for `WIK`/`PAUSE`, else `sub-pause`),
+   passes the **single-in-flight** check, writes a `subscription_operation` (`INITIATED`), starts the
+   `sub-pause` workflow.
+3. **Workflow:** `EnterPendingStatusHandler` flips the master to **`PENDING_PAUSE`** (transient) →
+   `PauseHandler` commits **`PAUSED`** via `SubscriptionService::transitionStatus` and opens a
+   `subscription_pause_history` row.
+4. **Events:** emits `SubscriptionPaused` → Billing pauses dunning, Notification notifies the customer.
+5. **State:** `subscription.status_code`: `ACTIVE → PENDING_PAUSE → PAUSED`; operation ledger closes
+   `COMPLETED` via `ProcessInstanceEnded → SyncOperationFromProcess`.
+
+### Scenario B — a second command arrives while one is in flight
+- Agent triggers `upgrade` while the pause above is still running (`final_state IS NULL`).
+- `OperationFramework::trigger` finds an in-flight **non-RESTRICT** op → throws
+  `DomainException::conflict('Another operation is already in progress', nextAction: WAIT_FOR_OPERATION)`
+  → HTTP **409**. (A `RESTRICT` op would be allowed — it's non-exclusive, R-SUB-WF-FW-2.)
+
+### Scenario C — idempotent retry
+- The agent's client retries `pause` with the **same `Idempotency-Key`** after a timeout.
+- `trigger` finds the existing `subscription_operation` by (operator, key) and **returns the original**
+  — no second workflow, no double-pause.
+
+> Proven by `Modules/Subscription/tests/Feature/*` (operation-framework + restriction + API tests).
+
 ## 2. Data model
 | Table | Purpose | Key invariants |
 | --- | --- | --- |

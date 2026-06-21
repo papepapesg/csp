@@ -15,6 +15,38 @@
 - **Job:** turn a subscription's cycle (and lifecycle fees) into settled money — compute → invoice →
   collect → dun → adjust — keeping postpaid (invoice) and prepaid (wallet) models distinct.
 
+## 📖 Scenarios — read these first
+
+### Scenario A — a postpaid triple-play cycle closes
+1. **Trigger:** `sophix:billing:cycle-close` (every 30 min) finds `sub_123` past `current_cycle_end`.
+2. `CycleCloseService::closeCycle('sub_123')`: `ChargeComputeService::cycleCharges` returns the
+   **package fee** (Internet+TV priced as one package) + a **VOICE usage** charge from the cycle's
+   rated events.
+3. `InvoiceService::generateFromCharges` reads `grouping_dimension`. For `WALLET` grouping it writes
+   **two invoices** — Internet/TV on one (their wallet), Voice on its own — each tax-decomposed via
+   Catalog `TaxComputeService`; emits `InvoiceGenerated`.
+4. Anchor advances (`current_cycle_start/end` += period); `account_credit_balance` (if any) is
+   auto-drawn by `ApplyCreditBalanceOnInvoice`.
+5. **State:** new `invoice` + `invoice_line` rows; `rated_event.billed=true` linked to the voice invoice.
+- **Proven by:** `CycleCloseTest`, `CycleBillingTest`.
+
+### Scenario B — a prepaid cycle with an empty wallet (the dunning entry)
+1. Same close runs for a **PREPAID** sub; `WalletService::settleFromWallets` finds the balance short.
+2. `closeCycle` does **not** advance the anchor — it **freezes** at the missed boundary and emits
+   `CyclePaymentMissed` (R-BIL-03-C-3/W-1).
+3. `DunningEventBridge` consumes it → `DunningService` enters the account at dunning **level 1**
+   (`SubscriptionEnteredDunning`, `DunningStageAdvanced`).
+4. Customer tops up → `WalletToppedUp` → `RetryFrozenCycleOnTopup` retries the frozen cycle; success
+   → `CycleActivated`, anchor advances, dunning clears.
+- **Proven by:** `CycleCloseTest`, `DunningTest`, `WalletMultiWalletTest`.
+
+### Scenario C — a paid reconnection fee flips the subscription back to ACTIVE
+1. A suspended-for-non-payment sub has a `RECONNECTION_FEE_AFTER_DUNNING` billable event with a
+   `state_callback {targetStatus: ACTIVE}`.
+2. `BillingIntentService::emit` raises the fee **pay-first** (intent `PENDING`); on `InvoicePaid`,
+   `confirm()` fires → reads the pinned `state_callback` → `SubscriptionService::transitionStatus(ACTIVE)`.
+- **Proven by:** `BillableEventCatalogTest::test_paid_state_callback_transitions_the_subscription`.
+
 ## 2. Data model (selected)
 | Table | Purpose | Key invariants |
 | --- | --- | --- |
