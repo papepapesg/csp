@@ -64,6 +64,10 @@ the engines → config → the revenue core → execution → edges. Each line s
 > rows + readings) → Services → API → Events → Processes → Config → Dependencies → Invariants → Deltas.
 > Always cross-check a claim against the **test** it cites.
 
+> **Sample-row convention:** every sample row lists **all domain columns** (nullables shown as `null`)
+> — never a partial subset — so a reading can never name a column that isn't present. The Laravel
+> surrogate `id` and `created_at`/`updated_at` timestamps are omitted by convention.
+
 ## How to write a module's as-built doc (the recipe)
 Read these six code sources **in order**; each maps to a section of `_TEMPLATE.md`:
 

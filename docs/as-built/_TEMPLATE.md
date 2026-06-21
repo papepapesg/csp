@@ -23,9 +23,14 @@ Services: `<A> → <B>`. Foundation: <outbox/workflow/…>. 1) `POST /api/<…>`
 ### Scenario 2 … 8 — <enum branches, approval, async worker, failure+retry, cross-module, idempotent>
 <same shape; one per branch/behaviour>
 
-## 2. Data model — **≥ 4 sample rows + readings per table**
-> **Every** table (ledger, config, catalog) gets an **enum legend** (what each value *does*) and
-> **at least 4 sample rows** chosen to contrast the enum states, then a plain-English **reading**.
+## 2. Data model — **≥ 4 complete sample rows + readings per table**
+> **Every** table (ledger, config, catalog) gets: the **column list**, an **enum legend** (what each
+> value *does*), and **≥ 4 sample rows** chosen to contrast the enum states, then a plain-English
+> **reading**.
+> **Completeness rule:** each sample row shows **every domain column** (nullables included, as `null`)
+> — never a partial subset, so a reading can never reference a column that isn't there. The Laravel
+> surrogate `id` and the `created_at`/`updated_at` audit timestamps are omitted **by convention**
+> (state it once; no reading depends on them).
 
 ### `<table>`
 **Enum legend — `<status_col>`:** `A` = <behaviour>, `B` = <behaviour>, `C` (transient) = <…>.

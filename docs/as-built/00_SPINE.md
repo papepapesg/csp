@@ -187,55 +187,87 @@ rows; `sophix:workflow:work` drains them; a `messageCatch` parks until
 `correlateMessage('sub-payment-confirmed', …)` (fired by a listener on `InvoicePaid`) resumes it.
 
 ## Foundation data model — sample rows + readings
+> **Convention (applies to every doc):** each sample row shows **every domain column** (nullables
+> included, as `null`). The Laravel surrogate `id` and the `created_at`/`updated_at` audit timestamps
+> are omitted by convention — no reading ever depends on them.
 
-### `outbox_events` (the transactional outbox) & `inbox_events` (consumer dedupe)
+### `outbox_events` (the transactional outbox)
+Columns: `event_id, event_type, topic, aggregate_type, aggregate_id, operator_code, correlation_id, payload, headers, published_at, attempts`.
 ```json
-{ "event_id":"evt_1","event_type":"SubscriptionActivated","topic":"subscription.lifecycle","aggregate_id":"sub_1","operator_code":"WIK","published_at":"2026-06-20T10:01:00Z","payload":{"subscriptionId":"sub_1"} }
-{ "event_id":"evt_2","event_type":"InvoiceGenerated","topic":"billing.money","aggregate_id":"inv_9","published_at":null,"attempts":0 }
-{ "event_id":"evt_3","event_type":"ApprovalRequested","topic":"platform.approvals","aggregate_id":"appr_5","published_at":"…" }
-// inbox
-{ "event_id":"evt_1","consumer":"reporting.metrics","processed_at":"2026-06-20T10:01:05Z" }
+{ "event_id":"evt_1","event_type":"SubscriptionActivated","topic":"subscription.lifecycle","aggregate_type":"Subscription","aggregate_id":"sub_1","operator_code":"WIK","correlation_id":"corr_88","payload":{"subscriptionId":"sub_1"},"headers":null,"published_at":"2026-06-20T10:01:00Z","attempts":1 }
+{ "event_id":"evt_2","event_type":"InvoiceGenerated","topic":"billing.money","aggregate_type":"Invoice","aggregate_id":"inv_9","operator_code":"WIK","correlation_id":"corr_90","payload":{"invoiceId":"inv_9","total":"5000"},"headers":null,"published_at":null,"attempts":0 }
+{ "event_id":"evt_3","event_type":"ApprovalRequested","topic":"platform.approvals","aggregate_type":"ApprovalRequest","aggregate_id":"appr_5","operator_code":"WIK","correlation_id":"corr_91","payload":{"requestId":"appr_5","entityType":"PURCHASE_ORDER","status":"PENDING"},"headers":null,"published_at":"2026-06-20T10:02:00Z","attempts":1 }
+{ "event_id":"evt_4","event_type":"WorkOrderFinalized","topic":"workorder.field","aggregate_type":"WorkOrder","aggregate_id":"wo_1","operator_code":"WIK","correlation_id":"corr_92","payload":{"workOrderId":"wo_1"},"headers":null,"published_at":null,"attempts":2 }
 ```
-**Reading:** an outbox row with `published_at=null` (evt_2) is **committed but not yet dispatched** — the
-dispatcher will fan it out and stamp the time; `attempts` counts dispatch tries. The inbox row says
-"the `reporting.metrics` consumer already processed evt_1" — a replay is a no-op. `topic` groups events
-for routing/Kafka.
+**Reading:** `published_at=null` (evt_2) = **committed but not yet dispatched**; the dispatcher fans it
+out, stamps `published_at`, and bumps `attempts`. evt_4 has `attempts:2` and is still unpublished (two
+failed dispatch tries — it'll retry). `correlation_id` threads one business action across events;
+`topic` is the routing/Kafka channel; `headers` is null when none were set.
 
-### `approval_definition` & `approval_request` (`status`: `PENDING|AUTO_APPROVED|APPROVED|REJECTED`)
+### `inbox_events` (per-consumer dedupe)
+Columns: `event_id, consumer, event_type, processed_at`.
 ```json
-// definition (the policy)
-{ "definition_id":"appd_1","entity_type":"PURCHASE_ORDER","action":"FORCE_SYNC","approver_roles":["NOC_LEAD"],"required_approvals":1,"threshold_amount":null,"allow_requester":false,"active":true }
-{ "definition_id":"appd_2","entity_type":"ADJUSTMENT","approver_roles":["BILLING_LEAD"],"required_approvals":2,"threshold_amount":10000 }
-// request (an instance)
-{ "request_id":"appr_5","entity_type":"PURCHASE_ORDER","entity_ref":"po_2","status":"PENDING","approvals_count":0,"requested_by":"u_buyer" }
-{ "request_id":"appr_6","entity_type":"CVM_OFFER","entity_ref":"cvo_2","status":"AUTO_APPROVED" }
+{ "event_id":"evt_1","consumer":"reporting.metrics","event_type":"SubscriptionActivated","processed_at":"2026-06-20T10:01:05Z" }
+{ "event_id":"evt_1","consumer":"notification.bridge","event_type":"SubscriptionActivated","processed_at":"2026-06-20T10:01:06Z" }
+{ "event_id":"evt_4","consumer":"fulfillment.resume","event_type":"WorkOrderFinalized","processed_at":"2026-06-20T10:03:00Z" }
+{ "event_id":"evt_4","consumer":"workforce.capacity","event_type":"WorkOrderFinalized","processed_at":null }
 ```
-**Reading:** the **definition** is the per-operator policy (who approves, how many, above what amount,
-may the requester self-approve). `threshold_amount` (appd_2) means amounts **below** 10,000 auto-approve
-and only larger ones need the 2 approvals. The **request** is one instance: appr_5 is parked PENDING
-(waiting on a NOC_LEAD ≠ the requester); appr_6 had no policy → AUTO_APPROVED.
+**Reading:** dedupe is **per (event_id, consumer)** — the same event evt_1 is processed independently by
+two consumers (reporting + notification). evt_4's `workforce.capacity` row has `processed_at=null`
+(claimed but not yet done); a re-dispatch to a consumer whose `processed_at` is set is a no-op.
+
+### `approval_definition` (the policy)
+Columns: `definition_id, operator_code, entity_type, action, threshold_amount, approver_roles, required_approvals, allow_requester, active`.
+```json
+{ "definition_id":"appd_1","operator_code":"WIK","entity_type":"PURCHASE_ORDER","action":"FORCE_SYNC","threshold_amount":null,"approver_roles":["NOC_LEAD"],"required_approvals":1,"allow_requester":false,"active":true }
+{ "definition_id":"appd_2","operator_code":"WIK","entity_type":"ADJUSTMENT","action":null,"threshold_amount":10000.00,"approver_roles":["BILLING_LEAD"],"required_approvals":2,"allow_requester":false,"active":true }
+{ "definition_id":"appd_3","operator_code":"WIK","entity_type":"CVM_OFFER","action":"CVM_HIGH_VALUE","threshold_amount":null,"approver_roles":["RETENTION_LEAD"],"required_approvals":1,"allow_requester":true,"active":true }
+{ "definition_id":"appd_4","operator_code":"WIK","entity_type":"DISCOUNT","action":null,"threshold_amount":50000.00,"approver_roles":["SALES_HEAD"],"required_approvals":1,"allow_requester":false,"active":false }
+```
+**Reading:** the per-operator policy. `action=null` (appd_2) matches any action of that entity_type;
+`threshold_amount` (appd_2) auto-approves amounts **below** 10,000 and needs 2 approvals above it.
+`allow_requester:true` (appd_3) lets the requester self-approve (waives SoD). appd_4 is `active:false`
+→ ignored (discounts auto-approve until it's re-enabled).
+
+### `approval_request` (an instance) · `status`: `PENDING|AUTO_APPROVED|APPROVED|REJECTED`
+Columns: `request_id, operator_code, entity_type, action, entity_ref, amount, payload, status, approver_roles, required_approvals, approvals_count, allow_requester, requested_by, decided_by, decision_reason, decided_at`.
+```json
+{ "request_id":"appr_5","operator_code":"WIK","entity_type":"PURCHASE_ORDER","action":"FORCE_SYNC","entity_ref":"po_2","amount":null,"payload":{"target":"GPON"},"status":"PENDING","approver_roles":["NOC_LEAD"],"required_approvals":1,"approvals_count":0,"allow_requester":false,"requested_by":"u_buyer","decided_by":null,"decision_reason":null,"decided_at":null }
+{ "request_id":"appr_6","operator_code":"WIK","entity_type":"CVM_OFFER","action":"CVM_HIGH_VALUE","entity_ref":"cvo_2","amount":null,"payload":{"discountPercent":25},"status":"AUTO_APPROVED","approver_roles":null,"required_approvals":1,"approvals_count":0,"allow_requester":false,"requested_by":"u_agent","decided_by":null,"decision_reason":null,"decided_at":"2026-06-20T09:00:00Z" }
+{ "request_id":"appr_8","operator_code":"WIK","entity_type":"ADJUSTMENT","action":null,"entity_ref":"adj_2","amount":12000.00,"payload":{"direction":"DEBIT"},"status":"APPROVED","approver_roles":["BILLING_LEAD"],"required_approvals":2,"approvals_count":2,"allow_requester":false,"requested_by":"u_agent","decided_by":"u_lead2","decision_reason":"valid","decided_at":"2026-06-20T11:00:00Z" }
+{ "request_id":"appr_9","operator_code":"WIK","entity_type":"ADJUSTMENT","action":null,"entity_ref":"adj_4","amount":1500.00,"payload":{},"status":"REJECTED","approver_roles":["BILLING_LEAD"],"required_approvals":1,"approvals_count":0,"allow_requester":false,"requested_by":"u_agent","decided_by":"u_lead2","decision_reason":"out of policy","decided_at":"2026-06-20T11:05:00Z" }
+```
+**Reading:** appr_5 is parked `PENDING` (`approvals_count:0/required:1`, waiting on a NOC_LEAD ≠
+`u_buyer`). appr_6 had no policy → `AUTO_APPROVED` (decided immediately, no approver). appr_8 gathered
+`approvals_count:2/2` → `APPROVED`. appr_9 was rejected (`decided_by` + `decision_reason` set, count
+stays 0). `entity_ref` links back to the gated thing (the PO / adjustment / offer).
 
 ### `approval_decision` (immutable audit) · `decision`: `APPROVE|REJECT|REQUEST_REVISION|CANCEL`
+Columns: `decision_id, request_id, operator_code, decision, actor_user_id, comment, decided_at`.
 ```json
-{ "decision_id":"appdec_1","request_id":"appr_7","decision":"APPROVE","actor_user_id":"u_lead1","decided_at":"…" }
-{ "decision_id":"appdec_2","request_id":"appr_8","decision":"APPROVE","actor_user_id":"u_lead1" }
-{ "decision_id":"appdec_3","request_id":"appr_8","decision":"APPROVE","actor_user_id":"u_lead2" }
-{ "decision_id":"appdec_4","request_id":"appr_9","decision":"REJECT","actor_user_id":"u_lead2","comment":"out of policy" }
+{ "decision_id":"appdec_1","request_id":"appr_7","operator_code":"WIK","decision":"APPROVE","actor_user_id":"u_lead1","comment":null,"decided_at":"2026-06-20T10:30:00Z" }
+{ "decision_id":"appdec_2","request_id":"appr_8","operator_code":"WIK","decision":"APPROVE","actor_user_id":"u_lead1","comment":"step 1 ok","decided_at":"2026-06-20T10:55:00Z" }
+{ "decision_id":"appdec_3","request_id":"appr_8","operator_code":"WIK","decision":"APPROVE","actor_user_id":"u_lead2","comment":"step 2 ok","decided_at":"2026-06-20T11:00:00Z" }
+{ "decision_id":"appdec_4","request_id":"appr_9","operator_code":"WIK","decision":"REJECT","actor_user_id":"u_lead2","comment":"out of policy","decided_at":"2026-06-20T11:05:00Z" }
 ```
-**Reading:** one **immutable** row per decision (who, what, when, why). appr_8 needed 2 approvals →
-two rows from **different** actors (SoD). The request's final status is derived from these rows; the
-audit can never be edited.
+**Reading:** one **immutable** row per decision. appr_8 needed 2 approvals → appdec_2 + appdec_3 from
+**different** actors (SoD — the engine rejects a second decision by the same actor). The request's
+`approvals_count`/`status` is derived from these rows; this audit can never be edited.
 
 ### `idempotency_keys`
+Columns: `key, operator_code, request_hash, response_status, response_body`.
 ```json
-{ "key":"act-sub_1-1","operator_code":"WIK","request_hash":"a1b2…","status_code":202,"status":"COMPLETED" }
-{ "key":"pay-acc_1-9","operator_code":"WIK","request_hash":"9f8e…","status_code":201,"status":"COMPLETED" }
-{ "key":"order-c","operator_code":"WIK","request_hash":"33aa…","status_code":201,"status":"COMPLETED" }
-{ "key":"in-flight-1","operator_code":"WIK","request_hash":"77bc…","status":"IN_PROGRESS" }
+{ "key":"act-sub_1-1","operator_code":"WIK","request_hash":"a1b2c3d4e5","response_status":202,"response_body":"{\"operation_id\":\"op_2\"}" }
+{ "key":"pay-acc_1-9","operator_code":"WIK","request_hash":"9f8e7d6c5b","response_status":201,"response_body":"{\"payment_id\":\"pay_1\"}" }
+{ "key":"order-c","operator_code":"WIK","request_hash":"33aa55bb77","response_status":500,"response_body":"{\"error\":\"INTERNAL\"}" }
+{ "key":"in-flight-1","operator_code":"WIK","request_hash":"77bcd9ee11","response_status":null,"response_body":null }
 ```
-**Reading:** the middleware keys on (operator, key). A retry with the same key + matching `request_hash`
-**replays** the stored `status_code`/response; a mismatched hash → 409. `IN_PROGRESS` guards against a
-concurrent duplicate while the first request is still running.
+**Reading:** the middleware keys on (operator, key) and stores the outcome. A retry with the same key +
+matching `request_hash` **replays** the stored `response_status`/`response_body` (even a 500 — `order-c`
+replays the error rather than re-running, since the business write may have committed). A **different**
+`request_hash` → 409 conflict. `response_status=null` (`in-flight-1`) = the row was reserved but the
+handler hasn't finished → a concurrent duplicate gets 409 "still being processed". *(There is no status
+enum — the null response IS the in-flight marker.)*
 
 ## Scheduled workers (`routes/console.php`)
 Outbox dispatch + workflow tick (every minute); billing cycle-close (30 min); provisioning
