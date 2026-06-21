@@ -12,6 +12,31 @@
   may serve (Fulfillment). It executes field jobs.
 - **Job:** dispatch and track field/desk work with SLA + skills, plus the FA inspection model.
 
+## 📖 Scenarios — read these first
+
+### Scenario A — dispatch an install and finish it
+1. **Request:** `POST /api/work-orders`
+   ```json
+   { "type":"INSTALLATION","account_id":"acct_1","tech_region_id":"KE-NRB-KAREN","source_type":"FULFILLMENT" }
+   ```
+   Guarded by `permission:workorder.assign` **and** `scope:TECH_REGION,tech_region_id` (a Karen-scoped
+   dispatcher can't create a Mombasa WO). WO created `PENDING`, SLA due-time stamped from priority.
+2. **Auto-assign:** `autoAssign` asks Workforce for an OUTSOURCED contractor in `KE-NRB-KAREN` with the
+   skill **and spare capacity**, and atomically commits a slot (EM-02). WO → `ASSIGNED`.
+3. **Execute:** `start` (`IN_PROGRESS`) → `finalize` with the checklist → `COMPLETED`; emits
+   `WorkOrderFinalized`.
+4. **Reactions:** Fulfillment resumes the order, Workforce **consumes** the committed capacity,
+   Ticketing resolves any linked ticket, Reporting counts it.
+- **Proven by:** `WorkOrderApiTest`, `WorkOrderAutoAssignTest`, `WorkOrderSlaSkillsTest`.
+
+### Scenario B — a field audit finds the wrong serial
+1. A tech submits an observation whose serial ≠ expected → `FieldAuditCampaignService` raises a
+   `WRONG_SERIAL` discrepancy; `rules.field_audit.equipment.discrepancy` routes it to
+   `REQUEST_OSR_CORRECTION` (a **risky** route).
+2. Risky routes are **EM-CFG-04 gated** → the discrepancy parks `PENDING_APPROVAL`. On approval, the
+   OSR correction is emitted for OSR to apply.
+- **Proven by:** `FieldAuditCampaignTest::test_wrong_serial_requires_em_cfg_04_approval_before_osr_correction`.
+
 ## 2. Data model (selected)
 | Table | Purpose | Invariants |
 | --- | --- | --- |

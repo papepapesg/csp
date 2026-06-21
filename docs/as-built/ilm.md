@@ -13,6 +13,29 @@
   modules feed into their rules.
 - **Job:** authoritative customer/account data + a data-driven flag/sub-status model + governed CVM.
 
+## 📖 Scenarios — read these first
+
+### Scenario A — risk team flags an account "No Payment Done"
+1. **Request:** `PUT /api/customer-accounts/acc_9/flags/NPD`
+2. `AccountService::setFlag`: the flag must be in the operator's `customer_account_flag_catalog`
+   (NPD is, with `surfaces_attention=true`, `affects_dunning=true`). Writes a
+   `customer_account_flag` row + sets `attention_banner` ("No Payment Done"). Emits
+   `CustomerAccountFlagSet`.
+3. **Cross-module effect:** next time BIL-04 dunning scans this account,
+   `AccountService::hasDunningAccelerantFlag('acc_9')` is true → the dunning **grace window is
+   waived** (R-ILM-F-3), so it escalates a level immediately instead of waiting.
+4. Clearing the flag (`clearFlag`) recomputes the banner from the remaining active flags.
+- **Proven by:** `AccountFlagTest`, `DunningTest::test_dunning_accelerant_flag_waives_grace`.
+
+### Scenario B — a retention offer that needs sign-off
+1. `CvmOfferService::propose` for a 25% retention discount. `rules.cvm.offer` says this exceeds the
+   threshold → `requireApproval` → the offer parks **`PENDING_APPROVAL`** with an EM-CFG-04 request.
+2. `accept()` on it returns **409** (can't accept a pending offer).
+3. A supervisor approves ⇒ `ApprovalApproved` ⇒ `ResumeCvmOfferOnApproval` →
+   `applyApprovalOutcome` releases the offer to `PROPOSED`; now `accept()` works and calls SIP-03
+   (creates a `DiscountAssignment`) + records a `cvm_outcome`.
+- **Proven by:** `CvmTest::test_granting_the_approval_resumes_the_offer_so_it_can_be_accepted`.
+
 ## 2. Data model (selected)
 | Table | Purpose | Invariants |
 | --- | --- | --- |

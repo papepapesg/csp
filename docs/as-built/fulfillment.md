@@ -15,6 +15,35 @@
 - **Job:** capture → (deposit gate) → create subscription + install WO → await install → KYC gate →
   trigger activation → complete; with **compensation** on cancel.
 
+## 📖 Scenarios — read these first
+
+### Scenario A — the happy path (capture → live)
+1. **Request:** `POST /api/fulfillment-orders`
+   ```json
+   { "customer_id":"cust_1","account_id":"acct_1","homepass_id":"hp_1","package_ref":"pkg_triple" }
+   ```
+   → order `CAPTURED`, `ful-order-capture` workflow started, HTTP `201`.
+2. **Worker drains** (`sophix:workflow:work`): `CreateSubscriptionHandler` makes a
+   `PENDING_ACTIVATION` subscription (stores `subscription_id` on the order) →
+   `CreateInstallWoHandler` makes an `INSTALLATION` WO (stores `work_order_id`) → flow **parks** at
+   `AWAITING_INSTALL` (a `ful-install-finalized` message catch).
+3. **Tech finishes:** the WO is finalized → `WorkOrderFinalized` →
+   `ResumeOrderOnInstallFinalized` correlates the message → flow resumes → `KycGateHandler` (customer
+   is APPROVED) → `TriggerActivationHandler` calls Subscription `ACTIVATE` → `CompleteOrderHandler`.
+4. **State:** order `COMPLETED`, subscription `ACTIVE`. Emits `OrderCompleted` + `SubscriptionActivated`.
+- **Proven by:** `FulfillmentJourneyTest::test_install_wo_finalization_resumes_the_flow_automatically`.
+
+### Scenario B — KYC is rejected (cancel + compensate)
+1. Order reaches the KYC gate but the customer is `PENDING`, so it **parks** `AWAITING_KYC`.
+2. KYC is finally **REJECTED** → `CustomerKycRejected` → `CancelOrderOnKycRejected` →
+   `OrderCaptureService::cancel`: interrupts the workflow, **cancels the install WO**, and
+   **terminates the half-built subscription** (compensation). Order → `CANCELLED`.
+- **Proven by:** `FulfillmentJourneyTest::test_kyc_rejection_cancels_the_parked_order_and_compensates`.
+
+### Scenario C — fraud flag blocks activation
+- If `acct_1` carries a `FRAUD_SUSPECTED` flag (`affects_provisioning`), `TriggerActivationHandler`
+  refuses to activate (R-ILM-F-4) and the order stays un-activated until the flag is cleared.
+
 ## 2. Data model
 | Table | Purpose | Invariants |
 | --- | --- | --- |

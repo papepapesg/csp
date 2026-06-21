@@ -12,6 +12,27 @@
 - **Job:** reliable, audited command dispatch behind a **swappable per-target adapter**, plus drift
   detection and NOC-driven correction.
 
+## 📖 Scenarios — read these first
+
+### Scenario A — the network drifted; NOC force-syncs it
+1. **Detect:** `sophix:provisioning:reconcile` (hourly) polls each target via its adapter and finds
+   `sub_2` desired `ACTIVE` but the NMS reports `SUSPENDED` → opens a
+   `provisioning_reconciliation_item` (`ProvisioningReconciliationItemOpened`). It does **not**
+   auto-fix (R-PROV-08).
+2. **Request:** NOC `POST …/items/{item}/force-sync` → a `PENDING_APPROVAL` force-sync + an
+   **EM-CFG-04** request (R-PROV-07). Trying to **execute before approval → 409**.
+3. **Decide + execute:** a **different** approver approves (SoD), then `…/execute` re-broadcasts the
+   desired state through the target's adapter; the item resolves. `…Completed`.
+- **Proven by:** `ReconciliationTest::test_drift_opens_item_and_force_sync_resolves`.
+
+### Scenario B — an account is suspended in ILM, so the network follows
+1. ILM flips `acc_9` to a provisioning-affecting status → `CustomerAccountStatusChanged`
+   (`affectsProvisioning:true, status:INACTIVE`).
+2. `SyncProvisioningOnAccountStatusChanged` looks up the account's subscriptions, and for each
+   provisioned target **re-broadcasts** the mapped status (`SUSPENDED`) via `ProvisioningService`.
+3. **State:** new `provisioning_command` rows (action `ACCOUNT_STATUS_SYNC`, desired `SUSPENDED`).
+- **Proven by:** `ReconciliationTest::test_account_status_change_syncs_provisioning`.
+
 ## 2. Data model (selected)
 | Table | Purpose | Invariants |
 | --- | --- | --- |

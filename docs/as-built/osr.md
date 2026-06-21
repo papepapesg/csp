@@ -13,6 +13,30 @@
   calls them. Stock authority stays here.
 - **Job:** authoritative equipment/stock state with governed movements, procurement, and swaps.
 
+## 📖 Scenarios — read these first
+
+### Scenario A — buy stock (governed) and receive it
+1. **Create:** `POST /api/purchase-orders` (supplier, lines of SKU×qty). PO `DRAFT`.
+2. **Approve:** `POST /api/purchase-orders/po_1/approve` opens an **EM-CFG-04** `PURCHASE_ORDER`
+   request. With a policy it parks `PENDING_APPROVAL`; a **different** approver decides via
+   `…/approvals/{req}/decide` (the requester can't self-approve — SoD). PO → `APPROVED`.
+3. **Receive:** `…/po_1/receive` with serials → posts a `GOODS_RECEIPT` `stock_movement` (+qty) and
+   registers each serial as an `equipment_instance` at the warehouse. PO → `RECEIVED`.
+- **Proven by:** `ProcurementAuditTest`.
+
+### Scenario B — customer refuses to return equipment (EQR → deposit forfeited)
+1. A pickup swap runs; on the field visit the tech reports `recovered=false`.
+2. `CompleteWithoutRecoveryHandler`: swap → `COMPLETED_WITHOUT_RECOVERY`, equipment stays in the
+   field, and the **deposit is forfeited** — it resolves the unit's SKU `deposit_amount` and raises a
+   `DEPOSIT_FORFEITURE` BIL-01 intent (so the operator actually collects it). Emits
+   `EquipmentSwapCompleted{depositForfeited:true, depositForfeitureAmount}`.
+- **Proven by:** `SwapRequestTest::test_eqr_customer_refuses_return_forfeits_deposit`.
+
+### Scenario C — a write-off needs approval
+- `POST /api/stock-movements` with reason `WRITE_OFF_DAMAGE` (catalog `requires_approval=true`) →
+  `StockService::submit` holds it as an EM-CFG-04 request; the movement only posts once approved
+  (a `RECEIPT` reason posts immediately). On-hand can never go negative (R-OSR-SC-8).
+
 ## 2. Data model (selected)
 | Table | Purpose | Invariants |
 | --- | --- | --- |

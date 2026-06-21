@@ -11,6 +11,20 @@
   capacity" and atomically books it.
 - **Job:** capacity registry + atomic commit/consume/release tied to WO lifecycle.
 
+## 📖 Scenarios — read these first
+
+### Scenario A — capacity is booked, used, then freed
+1. **Book:** WorkOrder's `autoAssign` calls `ContractorAvailabilityService::commit(slot, wo_id, when)`
+   — atomically reserves one of the slot's `max_concurrent` places, writing a
+   `contractor_slot_commitment` (`ACTIVE`). If the slot is full, no commit → the matcher tries the
+   next contractor / falls back to in-house staff.
+2. **Use:** the WO is finalized → `WorkOrderFinalized` → `ResolveSlotCommitmentOnWoLifecycle` →
+   `consumeForWorkOrder(wo_id)` flips the commitment `ACTIVE → CONSUMED` (capacity spent).
+3. **Free:** had the WO been **cancelled** instead → `releaseForWorkOrder(wo_id)` flips it `RELEASED`
+   (capacity restored, bookable again).
+4. **Idempotent:** re-running consume/release after the commitment is resolved is a no-op.
+- **Proven by:** `SlotCommitmentLifecycleTest`.
+
 ## 2. Data model
 | Table | Purpose | Invariants |
 | --- | --- | --- |
