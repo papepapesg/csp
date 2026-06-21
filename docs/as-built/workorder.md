@@ -53,7 +53,7 @@ A task created with `createWorkOrder=true` emits `FieldAuditWorkOrderRequested` 
 listener.* *Proven by `FieldAuditCampaignTest`.*
 
 ### (bonus) 9. Finalization is gated on a checklist
-`finalize` is rejected unless the `wo_finalization_requirement` items are satisfied (R-WO finalize gate).
+`finalize` is rejected unless the `wo_finalization_requirements` items are satisfied (R-WO finalize gate).
 
 ## 2. Data model — ≥4 **complete** sample rows + readings
 > **Completeness:** each row lists **every domain column** (nullables shown as `null`). The string

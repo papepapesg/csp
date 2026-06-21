@@ -37,7 +37,7 @@ Past-due open tickets appear in ItOps `GET /api/noc/sla-overdue` (reads ticket S
 `POST …/{id}/assign` records the owner; the timeline captures the change.
 
 ### 8. Category drives SLA + routing
-The `ticket_category` fixes the SLA matrix + default priority — an operator tunes SLAs as data.
+The `ticket_category_catalog` fixes the SLA matrix + default priority — an operator tunes SLAs as data.
 
 ## 2. Data model — ≥4 **complete** sample rows + readings per table
 > **Completeness:** each row lists **every domain column** (nullables shown as `null`). The string
@@ -113,7 +113,7 @@ supervisor reads.
 Service-level; ASR may start a fulfillment/WO flow.
 
 ## 7. Policy & config
-`ticket_category` + `sla_policy` (operator SLA matrix), per-category routing — data.
+`ticket_category_catalog` + `sla_policy` (operator SLA matrix), per-category routing — data.
 
 ## 8. Cross-module dependencies
 - **Calls →** WorkOrder (support WO from a ticket). **Reacts to →** WorkOrder finalize (auto-resolve);

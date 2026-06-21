@@ -182,7 +182,7 @@ a `SUPER_ADMIN` bypasses.
 *A package always resolves deterministically.*
 
 ### 10. Workflow start → drain → correlate (pattern 4)
-`OperationFramework::trigger('PAUSE')` → `WorkflowEngine.start('sub-pause')` creates `external_task`
+`OperationFramework::trigger('PAUSE')` → `WorkflowEngine.start('sub-pause')` creates `workflow_external_task`
 rows; `sophix:workflow:work` drains them; a `messageCatch` parks until
 `correlateMessage('sub-payment-confirmed', …)` (fired by a listener on `InvoicePaid`) resumes it.
 

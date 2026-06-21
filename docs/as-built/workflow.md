@@ -18,7 +18,7 @@
 is registered, inputs are wired, no dangling nodes) → `…/deploy`. *Proven by `WorkflowEngineTest`.*
 
 ### 2. Start an instance
-`WorkflowEngine::start('sub-activate', businessKey, vars)` → a `process_instance` + an `external_task`
+`WorkflowEngine::start('sub-activate', businessKey, vars)` → a `process_instance` + a `workflow_external_task`
 per service node (`CREATED`).
 
 ### 3. Worker drains a task
