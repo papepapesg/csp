@@ -45,22 +45,14 @@ Read these six code sources **in order**; each maps to a section of `_TEMPLATE.m
 
 ## Status
 
-| Doc | State |
-| --- | --- |
-| `00_SPINE.md` | ✅ drafted |
-| `_TEMPLATE.md` | ✅ drafted |
-| `subscription.md` (exemplar) | ✅ drafted |
-| `catalog.md` | ✅ drafted |
-| `billing.md` | ✅ drafted |
-| `ilm.md` | ✅ drafted |
-| `fulfillment.md` | ✅ drafted |
-| `workorder.md` | ✅ drafted |
-| `workforce.md` | ✅ drafted |
-| `osr.md` | ✅ drafted |
-| `provisioning.md` | ✅ drafted |
-| `notification.md` · `ticketing.md` · `paymentgateway.md` · `reporting.md` · `itops.md` | ✅ drafted |
-| `workflow.md` · `rules.md` · `rbac.md` | ✅ drafted |
+**All 17 module docs + the Foundation spine are complete at the deep bar** — every table has an
+enum legend + ≥4 contrasting sample rows + a reading, and every module has ≥8 worked scenarios
+naming the services + Foundation mechanics, each citing the test that proves it.
 
-**All 17 module docs + the spine are drafted, each with worked scenarios.** Next: capstone
-golden-path flow docs (order-to-activation, billing-cycle/dunning) that stitch the modules into
-end-to-end narratives.
+| Group | Docs |
+| --- | --- |
+| Spine + meta | `00_SPINE.md`, `_TEMPLATE.md`, `README.md` |
+| Core domain | `subscription.md`, `catalog.md`, `billing.md`, `ilm.md` |
+| Operations | `fulfillment.md`, `workorder.md`, `workforce.md`, `osr.md`, `provisioning.md` |
+| Edges | `notification.md`, `ticketing.md`, `paymentgateway.md`, `reporting.md`, `itops.md` |
+| Substrate engines | `workflow.md`, `rules.md`, `rbac.md` |
