@@ -30,8 +30,9 @@ metrics; a stale `last_seen_at` reads as unhealthy on the overview.
 `GET /api/itops/logs?level=warning&q=NMS` → filtered `system_log` rows (DB log channel).
 
 ### 6. Trace a journey
-`GET /api/noc/trace?subscriptionId=sub_1` reconstructs the timeline across outbox events, workflow
-instances/tasks, provisioning commands and tickets. *Proven by `NocConsoleTest`.*
+`GET /api/noc/trace?key=sub_1` reconstructs the timeline across outbox events, workflow
+instances/tasks, provisioning commands, notifications and system logs (matched by correlation id /
+business key). *Proven by `NocConsoleTest::test_end_to_end_trace_reconstructs_a_subscription_journey`.*
 
 ### 7. NOC overview counters
 `GET /api/noc/overview` → running instances, workflow incidents, provisioning mismatches, outbox
@@ -45,8 +46,7 @@ backlog, SLA-overdue tickets — the at-a-glance health.
 ### `service_control` · `command`: `RESTART|PAUSE|RESUME|null` & `service_heartbeat` · `status`: `UP|DOWN|STARTING`
 ```json
 { "service":"workflow-worker","command":"PAUSE","requested_by":"u_noc","requested_at":"2026-06-20T10:00:00Z","acknowledged_at":"2026-06-20T10:00:03Z" }
-{ "service":"outbox-dispatcher","command":null,"requested_by":null,"requested_at":null,"acknowledged_at":null }
-{ "service":"provisioning-poller","command":"RESTART","requested_by":"u_noc","requested_at":"2026-06-20T10:02:00Z","acknowledged_at":null }
+{ "service":"outbox-dispatcher","command":"RESTART","requested_by":"u_noc","requested_at":"2026-06-20T10:02:00Z","acknowledged_at":null }
 { "service":"scheduler","command":"RESUME","requested_by":"u_noc","requested_at":"2026-06-20T10:04:00Z","acknowledged_at":"2026-06-20T10:04:01Z" }
 { "hb":{ "service":"workflow-worker","instance_id":"wf-w-1","status":"UP","metrics":{"lastBatch":7,"queueDepth":2},"last_seen_at":"2026-06-20T10:05:00Z" } }
 { "hb":{ "service":"outbox-dispatcher","instance_id":"ob-d-1","status":"DOWN","metrics":null,"last_seen_at":"2026-06-20T09:40:00Z" } }
