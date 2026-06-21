@@ -209,6 +209,16 @@ swp_4 is mid field-visit. The swap stores its `work_order_id`, `slot_commitment_
 `process_instance_id` (the driving workflow); `flow_payload` carries per-flow specifics; `failure_code`
 is set only on a `FAILED` swap.
 
+### `vendor_rma_stub` (v1.0 vendor-handoff stub)
+```json
+{ "id":"vrma_1","operator_code":"WIK","swap_id":"swp_1","source_instance_id":"eqi_4","vendor_ref":null,"batch_ref":"PENDING_BATCH","shipped_at":null }
+{ "id":"vrma_2","operator_code":"WIK","swap_id":"swp_2","source_instance_id":"eqi_5","vendor_ref":null,"batch_ref":"PENDING_BATCH","shipped_at":null }
+```
+**Reading:** when a swap completes with `defectConfirmed`, `CompleteSwapHandler` records one stub per
+recovered defective unit with `batch_ref='PENDING_BATCH'` (`vendor_ref`/`shipped_at` stay null until a real
+vendor-RMA connector batches and ships it). There is no status column — the row's existence + `batch_ref`
+is the whole record in v1.0.
+
 ## 3. Services (worked calls)
 | Service | Responsibility |
 | --- | --- |

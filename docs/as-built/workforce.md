@@ -12,9 +12,11 @@
 
 ## 📖 Scenarios (service + Foundation involvement)
 
-### 1. Register a contractor with slots + skills
-`POST /api/contractors`, `…/availability-slots`, `…/region-skills` seed a contractor's coverage,
-skills and bookable windows (`max_concurrent`). *Operator config.*
+### 1. Register a contractor + teams + staff
+`POST /api/contractors`, `…/{contractor}/teams`, `POST /api/staff` register the contractor registry. The
+coverage rows (`contractor_availability_slot`, `contractor_region_skill`, `contractor_region_scope`,
+`skill_catalog`) are **operator seed data** (no write API) defining bookable windows (`max_concurrent`),
+certifications and region coverage. *Operator config.*
 
 ### 2. Match + atomically commit capacity for a WO
 WorkOrder `autoAssign` calls `ContractorAvailabilityService::resolve(...)` then `commit(slot, wo_id, when)` — atomically
