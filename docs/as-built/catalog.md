@@ -95,54 +95,102 @@ rated events → its own charge, routed to `default_wallet_ref`). `network_profi
 marks the services that get provisioned. `revenue_category` is how Billing groups usage and how voice
 lands on its own invoice. Every service belongs to a `service_class_id` (the coarse class).
 
-### `discount` (`discount_type`: `PERCENT|FIXED`) & `discount_assignment` (`scope`: `CUSTOMER|SUBSCRIPTION|PACKAGE|CAMPAIGN|ALL`)
+### `discount` table is `discount_catalog` (`discount_type`: `PERCENT|FIXED` · `applies_to`: `INVOICE|PACKAGE|SERVICE`)
 ```json
-{ "code":"RET_25","discount_type":"PERCENT","value":25,"stackable":false,"status":"ACTIVE" }
-{ "code":"WELCOME_500","discount_type":"FIXED","value":500,"stackable":true,"status":"ACTIVE" }
-// assignments (status: ACTIVE|PENDING_APPROVAL|CANCELLED|EXPIRED|REJECTED ; mode DIRECT|CAMPAIGN)
-{ "assignment_id":"dasg_1","discount_code":"RET_25","scope":"CUSTOMER","scope_ref":"cust_1","status":"ACTIVE","mode":"DIRECT" }
-{ "assignment_id":"dasg_2","discount_code":"WELCOME_500","scope":"CAMPAIGN","campaign_code":"Q3_ACQ","status":"PENDING_APPROVAL","mode":"CAMPAIGN" }
+{ "discount_id":"disc_ret25","operator_code":"WIK","code":"RET_25","name":"Retention 25%","discount_type":"PERCENT","value":0.2500,"applies_to":"INVOICE","stackable":false,"priority":50,"max_redemptions":null,"status":"ACTIVE","effective_from":"2026-01-01T00:00:00Z","effective_until":null }
+{ "discount_id":"disc_wel500","operator_code":"WIK","code":"WELCOME_500","name":"Welcome KES 500","discount_type":"FIXED","value":500.0000,"applies_to":"INVOICE","stackable":true,"priority":100,"max_redemptions":1,"status":"ACTIVE","effective_from":"2026-01-01T00:00:00Z","effective_until":null }
+{ "discount_id":"disc_staff","operator_code":"WIK","code":"STAFF_50","name":"Staff 50%","discount_type":"PERCENT","value":0.5000,"applies_to":"PACKAGE","stackable":false,"priority":10,"max_redemptions":null,"status":"ACTIVE","effective_from":"2026-01-01T00:00:00Z","effective_until":null }
+{ "discount_id":"disc_old","operator_code":"WIK","code":"LAUNCH_10","name":"Launch 10%","discount_type":"PERCENT","value":0.1000,"applies_to":"INVOICE","stackable":true,"priority":100,"max_redemptions":null,"status":"INACTIVE","effective_from":"2025-01-01T00:00:00Z","effective_until":"2026-01-01T00:00:00Z" }
 ```
-**Reading:** the **discount** is the rule (25% or KES 500); the **assignment** is a grant to a scope.
-`stackable` decides whether two can combine. dasg_1 is a manual (DIRECT) customer grant, live now;
-dasg_2 is a campaign grant awaiting EM-CFG-04. *(Delta: grants reach the invoice via Billing's
+### `discount_assignment` (`scope_type`: `CUSTOMER|ACCOUNT|SUBSCRIPTION|ORDER|PACKAGE|FRANCHISE|CAMPAIGN_COHORT` · `status`: `DRAFT|PENDING_APPROVAL|ACTIVE|SUSPENDED|EXPIRED|CANCELLED|REJECTED` · `assignment_mode`: `DIRECT|CAMPAIGN`)
+> SIP-03 grew this table: `scope_type`/`scope_ref_id`/typed refs/`status`/`valid_*`/approval all added by
+> the SIP-03 lifecycle migration; `assignment_mode` by a later ALTER. The original `scope`/`scope_ref`/
+> `active` columns remain as **LEGACY** (kept in sync; new code reads `scope_type`).
+```json
+{ "assignment_id":"dasg_1","operator_code":"WIK","discount_code":"RET_25","scope":"CUSTOMER","scope_ref":"cust_1","campaign_code":null,"active":true,"redemptions":0,"discount_id":"disc_ret25","scope_type":"CUSTOMER","scope_ref_id":"cust_1","customer_id":"cust_1","account_id":null,"subscription_id":null,"package_ref":null,"campaign_id":null,"franchise_id":null,"reason_code":"RETENTION","source_channel":"BACKOFFICE","valid_from":"2026-06-01","valid_to":null,"status":"ACTIVE","assignment_priority":50,"stacking_group_code":null,"approval_request_id":null,"metadata_json":null,"created_by_user_id":"u_csr1","activated_at":"2026-06-01T09:00:00Z","cancelled_at":null,"assignment_mode":"DIRECT" }
+{ "assignment_id":"dasg_2","operator_code":"WIK","discount_code":"WELCOME_500","scope":"CAMPAIGN","scope_ref":null,"campaign_code":"Q3_ACQ","active":false,"redemptions":0,"discount_id":"disc_wel500","scope_type":"CAMPAIGN_COHORT","scope_ref_id":"camp_q3","customer_id":null,"account_id":null,"subscription_id":null,"package_ref":null,"campaign_id":"camp_q3","franchise_id":null,"reason_code":"ACQUISITION","source_channel":"CAMPAIGN","valid_from":"2026-07-01","valid_to":"2026-09-30","status":"PENDING_APPROVAL","assignment_priority":100,"stacking_group_code":"WELCOME","approval_request_id":"appr_44","metadata_json":{"cohortSize":5000},"created_by_user_id":"u_mkt1","activated_at":null,"cancelled_at":null,"assignment_mode":"CAMPAIGN" }
+{ "assignment_id":"dasg_3","operator_code":"WIK","discount_code":"STAFF_50","scope":"SUBSCRIPTION","scope_ref":"sub_123","campaign_code":null,"active":true,"redemptions":1,"discount_id":"disc_staff","scope_type":"SUBSCRIPTION","scope_ref_id":"sub_123","customer_id":"cust_50","account_id":"acc_1","subscription_id":"sub_123","package_ref":"pkg_triple","campaign_id":null,"franchise_id":null,"reason_code":"STAFF_BENEFIT","source_channel":"BACKOFFICE","valid_from":"2026-01-01","valid_to":null,"status":"ACTIVE","assignment_priority":10,"stacking_group_code":null,"approval_request_id":null,"metadata_json":null,"created_by_user_id":"u_hr1","activated_at":"2026-01-01T00:00:00Z","cancelled_at":null,"assignment_mode":"DIRECT" }
+{ "assignment_id":"dasg_4","operator_code":"WIK","discount_code":"LAUNCH_10","scope":"ALL","scope_ref":null,"campaign_code":null,"active":false,"redemptions":12,"discount_id":"disc_old","scope_type":"FRANCHISE","scope_ref_id":"fr_nrb","customer_id":null,"account_id":null,"subscription_id":null,"package_ref":null,"campaign_id":null,"franchise_id":"fr_nrb","reason_code":"LAUNCH","source_channel":"BATCH","valid_from":"2025-01-01","valid_to":"2026-01-01","status":"EXPIRED","assignment_priority":100,"stacking_group_code":null,"approval_request_id":null,"metadata_json":null,"created_by_user_id":"u_mkt1","activated_at":"2025-01-01T00:00:00Z","cancelled_at":null,"assignment_mode":"CAMPAIGN" }
+```
+**Reading:** the **discount** is the rule (`value` 0.25 = 25%, or KES 500); the **assignment** is a grant
+to a typed scope (`scope_type`+`scope_ref_id`, with the convenience FK columns `customer_id`/
+`subscription_id`/`franchise_id`/`campaign_id` filled per scope). `stackable`+`stacking_group_code`+
+`assignment_priority` decide combination/order. dasg_1 is a manual (`DIRECT`) customer grant, live now;
+dasg_2 is a campaign grant awaiting EM-CFG-04 (`status=PENDING_APPROVAL`, `approval_request_id` set);
+dasg_4 has expired (`valid_to` passed, `status=EXPIRED`). *(Delta: grants reach the invoice via Billing's
 adjustment/credit path, not an auto cycle-close line — see `billing.md` §10.)*
 
-### `tax_group` & `tax_rule` (`base_method`: `BASE|BASE_PLUS_PRIOR`)
+### `tax_group` (`order_within_group` = JSON list of rule codes) & `tax_rule` (`base_method`: `BASE|BASE_PLUS_PRIOR`)
+> Both share the column name `order_within_group` but it differs: on `tax_group` it is the JSON **array**
+> of rule codes in order; on `tax_rule` it is the integer **position**. Rules are never deleted —
+> deactivated via `effective_until` (versioning ALTER also keys the unique on `effective_from`).
 ```json
-{ "code":"KE_INTERNET","order_within_group":["WIK_INTERNET_VAT"] }
-{ "code":"KE_VOICE","order_within_group":["WIK_EXCISE","WIK_VOICE_VAT"] }
+{ "tax_group_id":"txg_inet","operator_code":"WIK","code":"KE_INTERNET","name":"KE Internet","order_within_group":["WIK_INTERNET_VAT"],"regulator_reference":"KRA-VAT" }
+{ "tax_group_id":"txg_voice","operator_code":"WIK","code":"KE_VOICE","name":"KE Voice","order_within_group":["WIK_EXCISE","WIK_VOICE_VAT"],"regulator_reference":"KRA-EXC-VAT" }
 // rules
-{ "code":"WIK_INTERNET_VAT","taxable_category":"INTERNET","base_method":"BASE","rate":0.16 }
-{ "code":"WIK_EXCISE","taxable_category":"VOICE","base_method":"BASE","rate":0.20 }
-{ "code":"WIK_VOICE_VAT","taxable_category":"VOICE","base_method":"BASE_PLUS_PRIOR","rate":0.16 }
+{ "tax_rule_id":"txr_ivat","operator_code":"WIK","code":"WIK_INTERNET_VAT","name":"Internet VAT","taxable_category":"INTERNET","rate":0.1600,"base_method":"BASE","order_within_group":1,"rounding_mode":"HALF_UP","rounding_scale":2,"regulator":"KRA","regulator_tax_code":"VAT16","effective_from":"2026-01-01T00:00:00Z","effective_until":null }
+{ "tax_rule_id":"txr_exc","operator_code":"WIK","code":"WIK_EXCISE","name":"Voice Excise","taxable_category":"VOICE","rate":0.2000,"base_method":"BASE","order_within_group":1,"rounding_mode":"HALF_UP","rounding_scale":2,"regulator":"KRA","regulator_tax_code":"EXC20","effective_from":"2026-01-01T00:00:00Z","effective_until":null }
+{ "tax_rule_id":"txr_vvat","operator_code":"WIK","code":"WIK_VOICE_VAT","name":"Voice VAT","taxable_category":"VOICE","rate":0.1600,"base_method":"BASE_PLUS_PRIOR","order_within_group":2,"rounding_mode":"HALF_UP","rounding_scale":2,"regulator":"KRA","regulator_tax_code":"VAT16","effective_from":"2026-01-01T00:00:00Z","effective_until":null }
 ```
-**Reading:** internet = one rule (16% VAT). Voice **cascades**: 20% excise on the base, then 16% VAT on
-**base + excise** (`BASE_PLUS_PRIOR`) — Kenya's telecoms tax stack. `rules.tax-applicability` picks the
-group per item; the rules run in `order_within_group`.
+**Reading:** internet = one rule (16% VAT). Voice **cascades**: 20% excise on the base
+(`order_within_group:1`), then 16% VAT on **base + excise** (`BASE_PLUS_PRIOR`, position 2) — Kenya's
+telecoms tax stack. `rules.tax-applicability` picks the group per item; the group's JSON
+`order_within_group` lists which rules run, and each rule's integer `order_within_group` sequences them.
+`rounding_mode`/`rounding_scale` pin per-rule rounding.
 
-### `voice_tariff` (zones/prefixes) & `wallet_type` (catalog) & `homepass`
+### `voice_tariff` (legacy simple catalog · `destination`: `ONNET|OFFNET|INTERNATIONAL`) and the PLM-CFG-07 `voice_destination_zone` / `voice_destination_prefix` (longest-prefix model)
 ```json
-{ "zone":"LOCAL","prefix":"+2547","rate_per_min":2.0 }
-{ "zone":"INTL_UK","prefix":"+44","rate_per_min":15.0 }
-// wallet_type (consumed by Billing) — allow_negative / auto_debit
-{ "wallet_type_id":"wtyp_main","code":"MAIN_WALLET","allow_negative":false,"auto_debit":true }
-// homepass (status: UNDER_CONSTRUCTION|SELLABLE|RETIRED)
-{ "id":"hp_1","status":"SELLABLE","technology":"GPON","franchise_ref":"fr_nrb" }
+{ "voice_tariff_id":"vtar_local","operator_code":"WIK","code":"VOICE_LOCAL","name":"Local","destination":"ONNET","rate_per_min":2.0000,"setup_fee":0.0000,"min_charge_seconds":0 }
+{ "voice_tariff_id":"vtar_intl","operator_code":"WIK","code":"VOICE_INTL_UK","name":"International UK","destination":"INTERNATIONAL","rate_per_min":15.0000,"setup_fee":1.0000,"min_charge_seconds":30 }
+// voice_destination_zone (zone_type: ON_NET|NATIONAL|REGIONAL|INTERNATIONAL|TOLL_FREE|EMERGENCY|PREMIUM ; default_charge_policy: CHARGEABLE|ZERO_RATED|BLOCKED|QUARANTINE)
+{ "zone_id":"vdz_local","operator_code":"WIK","zone_code":"LOCAL","zone_name":"Kenya Mobile","zone_type":"NATIONAL","default_charge_policy":"CHARGEABLE","status":"ACTIVE" }
+{ "zone_id":"vdz_uk","operator_code":"WIK","zone_code":"INTL_UK","zone_name":"United Kingdom","zone_type":"INTERNATIONAL","default_charge_policy":"CHARGEABLE","status":"ACTIVE" }
+// voice_destination_prefix (longest-prefix wins via match_priority)
+{ "prefix_id":"vdp_254","operator_code":"WIK","prefix":"+2547","zone_id":"vdz_local","match_priority":10,"status":"ACTIVE","effective_from":"2026-01-01T00:00:00Z","effective_to":null,"notes":null }
+{ "prefix_id":"vdp_44","operator_code":"WIK","prefix":"+44","zone_id":"vdz_uk","match_priority":5,"status":"ACTIVE","effective_from":"2026-01-01T00:00:00Z","effective_to":null,"notes":"UK fixed+mobile" }
 ```
-**Reading:** voice rating does **longest-prefix** match (`+447…` → INTL_UK at 15/min). The wallet
-**catalog** defines prepaid wallet behaviour Billing instantiates. Only `SELLABLE` homepasses accept
-orders; `technology` picks the provisioning plane (see `provisioning.md`).
+**Reading:** voice rating does **longest-prefix** match (`+447…` matches `+44` → INTL_UK zone, its rate
+applies). The legacy `voice_tariff` is the simple ONNET/OFFNET/INTL catalog (`rate_per_min`/`setup_fee`/
+`min_charge_seconds`); the PLM-CFG-07 model splits it into `voice_destination_zone` (the priced bucket)
+and `voice_destination_prefix` (the dial-string→zone map ranked by `match_priority`).
+
+### `wallet_type` (catalog consumed by Billing) & `homepass` (the premises — **full width**)
+> `homepass.status` is **not** a hardcoded enum — it is a code from the `homepass_status_code` catalog
+> whose *flags* (`is_sellable`/`is_active`/…) drive behaviour; the codes below (RFS/WAI/RETIRED) are
+> illustrative. `homepass` accreted address/building/GIS/RoE/topology columns across several RLM
+> migrations (`network_path`/`services_supported`/`service_management_endpoints` from the topology
+> migration; the structured address + `property_type`/RoE from the address-lifecycle migration;
+> `geo_*` from the geo-placeholder migration; `has_been_sellable` from the status-catalog migration).
+```json
+{ "wallet_type_id":"wtyp_main","operator_code":"WIK","code":"MAIN_WALLET","name":"Main Wallet","unit":"currency","currency":"KES","allow_negative":false,"auto_debit":true }
+{ "wallet_type_id":"wtyp_voice","operator_code":"WIK","code":"VOICE_WALLET","name":"Voice Wallet","unit":"currency","currency":"KES","allow_negative":false,"auto_debit":true }
+{ "wallet_type_id":"wtyp_pts","operator_code":"WIK","code":"LOYALTY_POINTS","name":"Loyalty Points","unit":"points","currency":"KES","allow_negative":false,"auto_debit":false }
+// homepass — every domain column (created_at/updated_at omitted)
+{ "id":"hp_1","operator_code":"WIK","code":"HP-NRB-0001","address":"12 Karen Rd","country":"KE","region":"Nairobi","region_l1":"Nairobi","region_l2":null,"city":"Nairobi","area":"Karen","sub_area_1":"Bogani","sub_area_2":null,"road_name":"Karen Rd","building_number":"12","building_name":null,"apartment_number":null,"floor":null,"building_num_floors":1,"building_num_apartments":1,"property_type":"RES","owner_occupied":true,"outlets":2,"active_termination_points":1,"latitude":-1.3194000,"longitude":36.7062000,"altitude":1680.00,"map_code":null,"map_link":null,"google_place_id":"ChIJ_karen_001","not_serviceable_reason":null,"perm_date":"2025-11-01","survey_date":"2025-10-15","roe_signed_date":"2025-11-10","roe_document_link":"files://roe/hp_1.pdf","legacy_status_code":null,"directions":"Gate with red door","comments":null,"tech_region_id":"KE-NRB-KAREN","technology":"GPON","status":"RFS","has_been_active":true,"has_been_sellable":true,"network_nodes":["ONT-77","OLT-NRB-WTL-01"],"network_path":{"captureMode":"AUTO","nodes":[{"type":"ONT","code":"ONT-77","role":"LEAF","port":1}]},"service_management_endpoints":{"DATA":{"nodeCode":"OLT-NRB-WTL-01","port":1}},"services_supported":["DATA","VOICE","IPTV_MULTICAST"],"geo_lat":-1.3194000,"geo_lng":36.7062000,"geo_footprint":null,"geo_source":"CGIS_2026Q1","geo_imported_at":"2026-02-01T00:00:00Z" }
+{ "id":"hp_2","operator_code":"WIK","code":"HP-NRB-0002","address":"14 Karen Rd","country":"KE","region":"Nairobi","region_l1":"Nairobi","region_l2":null,"city":"Nairobi","area":"Karen","sub_area_1":"Bogani","sub_area_2":null,"road_name":"Karen Rd","building_number":"14","building_name":null,"apartment_number":null,"floor":null,"building_num_floors":1,"building_num_apartments":1,"property_type":"RES","owner_occupied":false,"outlets":0,"active_termination_points":0,"latitude":null,"longitude":null,"altitude":null,"map_code":null,"map_link":null,"google_place_id":null,"not_serviceable_reason":"under construction","perm_date":null,"survey_date":"2026-05-01","roe_signed_date":null,"roe_document_link":null,"legacy_status_code":null,"directions":null,"comments":null,"tech_region_id":"KE-NRB-KAREN","technology":"GPON","status":"WAI","has_been_active":false,"has_been_sellable":false,"network_nodes":[],"network_path":null,"service_management_endpoints":null,"services_supported":null,"geo_lat":null,"geo_lng":null,"geo_footprint":null,"geo_source":null,"geo_imported_at":null }
+{ "id":"hp_3","operator_code":"WIK","code":"HP-MSA-0007","address":"7 Nyali Rd","country":"KE","region":"Mombasa","region_l1":"Mombasa","region_l2":null,"city":"Mombasa","area":"Nyali","sub_area_1":null,"sub_area_2":null,"road_name":"Nyali Rd","building_number":"7","building_name":"Palm Court","apartment_number":"3B","floor":"3","building_num_floors":6,"building_num_apartments":24,"property_type":"MIXED","owner_occupied":false,"outlets":4,"active_termination_points":2,"latitude":-4.0100000,"longitude":39.7000000,"altitude":15.00,"map_code":"MSA-NYL-07","map_link":null,"google_place_id":"ChIJ_nyali_007","not_serviceable_reason":null,"perm_date":"2025-09-01","survey_date":"2025-08-20","roe_signed_date":"2025-09-05","roe_document_link":"files://roe/hp_3.pdf","legacy_status_code":"OLD_RFS","directions":null,"comments":"HFC plant","tech_region_id":"KE-MSA-NYALI","technology":"HFC","status":"RFS","has_been_active":true,"has_been_sellable":true,"network_nodes":["CM-12","DN-3"],"network_path":{"captureMode":"MANUAL","nodes":[{"type":"MODEM","code":"CM-12","role":"LEAF","port":1}]},"service_management_endpoints":{"DATA":{"nodeCode":"DN-3","port":2}},"services_supported":["DATA","VOICE"],"geo_lat":-4.0100000,"geo_lng":39.7000000,"geo_footprint":null,"geo_source":"CGIS_2026Q1","geo_imported_at":"2026-02-01T00:00:00Z" }
+{ "id":"hp_4","operator_code":"WIK","code":"HP-NRB-0099","address":"99 Karen Rd","country":"KE","region":"Nairobi","region_l1":"Nairobi","region_l2":null,"city":"Nairobi","area":"Karen","sub_area_1":null,"sub_area_2":null,"road_name":"Karen Rd","building_number":"99","building_name":null,"apartment_number":null,"floor":null,"building_num_floors":1,"building_num_apartments":1,"property_type":"RES","owner_occupied":true,"outlets":1,"active_termination_points":0,"latitude":-1.3200000,"longitude":36.7100000,"altitude":1675.00,"map_code":null,"map_link":null,"google_place_id":null,"not_serviceable_reason":"decommissioned","perm_date":null,"survey_date":null,"roe_signed_date":null,"roe_document_link":null,"legacy_status_code":null,"directions":null,"comments":null,"tech_region_id":"KE-NRB-KAREN","technology":"GPON","status":"RETIRED","has_been_active":true,"has_been_sellable":true,"network_nodes":["ONT-3"],"network_path":null,"service_management_endpoints":null,"services_supported":["DATA"],"geo_lat":-1.3200000,"geo_lng":36.7100000,"geo_footprint":null,"geo_source":null,"geo_imported_at":null }
+```
+**Reading:** the wallet **catalog** defines prepaid wallet behaviour Billing instantiates (`unit`
+currency vs points, `allow_negative`, `auto_debit`). For homepass, only a status whose `is_sellable`
+flag is set can take an order (hp_2's `WAI` = waiting/under construction; hp_4's `RETIRED` =
+decommissioned); `technology` picks the provisioning plane (GPON→OLT vs HFC→CMTS, see `provisioning.md`);
+`network_path`/`services_supported` are the derived topology reads; the structured address tuple
+(`country`…`apartment_number`) is the deployment-wide uniqueness key; `has_been_sellable` is the latch
+that fires `HomePassReachedSellable` only once. `geo_*` are the imported CGIS coordinates (superseding the
+deprecated `latitude`/`longitude`).
 
 ### `commercial_bundle` (`status`: `DRAFT|READY_FOR_REVIEW|APPROVED|ACTIVE|SUSPENDED|RETIRED|REJECTED|CANCELLED` · `bundle_type`: `ACQUISITION|RETENTION|MIGRATION|BUSINESS|STAFF|GENERAL`)
 ```json
-{ "bundle_code":"TRIPLE_SAVER","status":"ACTIVE","bundle_type":"ACQUISITION","package_ref":"pkg_triple","channel_code":"SALES_APP" }
-{ "bundle_code":"WINBACK","status":"READY_FOR_REVIEW","bundle_type":"RETENTION","package_ref":"pkg_inet" }
-{ "bundle_code":"STAFF_PLAN","status":"ACTIVE","bundle_type":"STAFF","package_ref":"pkg_inet","channel_code":"BACKOFFICE" }
-{ "bundle_code":"OLD_BIZ","status":"RETIRED","bundle_type":"BUSINESS","package_ref":"pkg_old" }
+{ "bundle_id":"bun_triple","operator_code":"WIK","bundle_code":"TRIPLE_SAVER","display_name":"Triple Saver","description":"Triple play acquisition bundle","status":"ACTIVE","bundle_type":"ACQUISITION","currency_code":"KES","launch_date":"2026-01-01","retire_date":null,"created_by_user_id":"u_mkt1" }
+{ "bundle_id":"bun_win","operator_code":"WIK","bundle_code":"WINBACK","display_name":"Winback","description":"Lapsed-customer retention","status":"READY_FOR_REVIEW","bundle_type":"RETENTION","currency_code":"KES","launch_date":null,"retire_date":null,"created_by_user_id":"u_mkt2" }
+{ "bundle_id":"bun_staff","operator_code":"WIK","bundle_code":"STAFF_PLAN","display_name":"Staff Plan","description":"Internal staff bundle","status":"ACTIVE","bundle_type":"STAFF","currency_code":"KES","launch_date":"2026-02-01","retire_date":null,"created_by_user_id":"u_hr1" }
+{ "bundle_id":"bun_oldbiz","operator_code":"WIK","bundle_code":"OLD_BIZ","display_name":"Old Business","description":"Retired SME bundle","status":"RETIRED","bundle_type":"BUSINESS","currency_code":"KES","launch_date":"2024-01-01","retire_date":"2026-03-01","created_by_user_id":"u_mkt1" }
 ```
-**Reading:** a bundle wraps a package for a purpose + channel; its status is a launch lifecycle (with
-review/approval). `channel_code` limits where it's offered (SALES_APP vs BACKOFFICE vs USSD).
+**Reading:** a bundle wraps a package for a purpose; its status is a launch lifecycle (with
+review/approval) and `launch_date`/`retire_date` bound its sale window. `bundle_type` is the commercial
+purpose. (The package and channel links live in child tables — `commercial_bundle` holds the bundle
+header.)
 
 ## 3. Services
 | Service | Responsibility |

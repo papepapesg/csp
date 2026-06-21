@@ -63,86 +63,110 @@ resolves the SKU `deposit_amount` and raises a `DEPOSIT_FORFEITURE` BIL-01 inten
 A swap with `defectConfirmed` records a `vendor_rma_stub` (`PENDING_BATCH`) for the v1.0 batch handoff
 (a real vendor-RMA integration is a connector).
 
-## 2. Data model — ≥4 sample rows + readings
+## 2. Data model — ≥4 **complete** sample rows + readings
+> **Completeness:** each row lists **every domain column** (nullables shown as `null`). The string
+> business key shown is the real primary key (or the surrogate `id` where the table has no business key,
+> e.g. `stock_movement`/`stock_balance`); `created_at`/`updated_at` are omitted by convention.
 
-### `equipment_sku` (PLM-CFG-06) · `category`: `ROUTER|ONT|STB|SPLITTER|CABLE|WALL_SOCKET|MOUNT_KIT|SMARTCARD`
+### `equipment_sku` (PLM-CFG-06) · `category`: `ROUTER|ONT|STB|SPLITTER|CABLE|WALL_SOCKET|MOUNT_KIT|SMARTCARD` · `ownership_semantics`: `RETURNABLE|CONSUMABLE|RENTED`
 ```json
-{ "sku_id":"WIK-ONT-HUAWEI-EG8145V5","category":"ONT","is_serialized":true,"deposit_amount":5000,"warranty_days":365,"active":true }
-{ "sku_id":"WIK-STB-4K","category":"STB","is_serialized":true,"deposit_amount":3000,"warranty_days":365,"active":true }
-{ "sku_id":"WIK-CABLE-CAT6","category":"CABLE","is_serialized":false,"deposit_amount":0,"warranty_days":0,"active":true }
-{ "sku_id":"WIK-ONT-OLD","category":"ONT","is_serialized":true,"deposit_amount":4000,"active":false }
+{ "sku_id":"WIK-ONT-HUAWEI-EG8145V5","operator_code":"WIK","name":"Huawei EG8145V5 ONT","category":"ONT","is_serialized":true,"ownership_semantics":"RETURNABLE","deposit_amount":5000,"warranty_days":365,"active":true }
+{ "sku_id":"WIK-STB-4K","operator_code":"WIK","name":"4K Android STB","category":"STB","is_serialized":true,"ownership_semantics":"RENTED","deposit_amount":3000,"warranty_days":365,"active":true }
+{ "sku_id":"WIK-CABLE-CAT6","operator_code":"WIK","name":"Cat6 Drop Cable (m)","category":"CABLE","is_serialized":false,"ownership_semantics":"CONSUMABLE","deposit_amount":0,"warranty_days":0,"active":true }
+{ "sku_id":"WIK-ONT-OLD","operator_code":"WIK","name":"Legacy ONT (retired)","category":"ONT","is_serialized":true,"ownership_semantics":"RETURNABLE","deposit_amount":4000,"warranty_days":90,"active":false }
 ```
 **Reading:** `is_serialized` decides whether each unit is tracked as an `equipment_instance` (ONT/STB)
-or only as bulk `stock_balance` (cable). `deposit_amount` is what an EQR forfeiture or out-of-warranty
-swap charges. `active:false` = retired SKU (no new stock).
+or only as bulk `stock_balance` (cable, a `CONSUMABLE`). `deposit_amount` is what an EQR forfeiture or
+out-of-warranty swap charges; `ownership_semantics` says whether the device is returnable/rented
+(deposit-bearing) or consumed. `active:false` = retired SKU (no new stock).
 
 ### `equipment_instance` · `state`: `IN_MAIN_WAREHOUSE|IN_CONTRACTOR_STOCK|RESERVED_FOR_WO|IN_FIELD_ACTIVE|IN_FIELD_DEFECTIVE|RECOVERED_BY_CONTRACTOR|RETURNED|FAULTY|RETIRED`
 ```json
-{ "instance_id":"eqi_1","sku_id":"WIK-ONT-HUAWEI-EG8145V5","serial":"SN-001","state":"IN_MAIN_WAREHOUSE","location_id":"WIK-WAREHOUSE-MAIN" }
-{ "instance_id":"eqi_2","sku_id":"WIK-ONT-HUAWEI-EG8145V5","serial":"SN-002","state":"IN_CONTRACTOR_STOCK","location_id":"WIK-VAN-ctr_9" }
-{ "instance_id":"eqi_3","sku_id":"WIK-STB-4K","serial":"SN-100","state":"IN_FIELD_ACTIVE","customer_id":"cust_1","subscription_id":"sub_1" }
-{ "instance_id":"eqi_4","sku_id":"WIK-ONT-OLD","serial":"SN-900","state":"IN_FIELD_DEFECTIVE","customer_id":"cust_2" }
+{ "instance_id":"eqi_1","operator_code":"WIK","sku_id":"WIK-ONT-HUAWEI-EG8145V5","serial":"SN-001","mac_address":"AC:DE:48:00:00:01","state":"IN_MAIN_WAREHOUSE","location_id":"WIK-WAREHOUSE-MAIN","customer_id":null,"subscription_id":null,"active":true }
+{ "instance_id":"eqi_2","operator_code":"WIK","sku_id":"WIK-ONT-HUAWEI-EG8145V5","serial":"SN-002","mac_address":"AC:DE:48:00:00:02","state":"IN_CONTRACTOR_STOCK","location_id":"WIK-VAN-ctr_9","customer_id":null,"subscription_id":null,"active":true }
+{ "instance_id":"eqi_3","operator_code":"WIK","sku_id":"WIK-STB-4K","serial":"SN-100","mac_address":null,"state":"IN_FIELD_ACTIVE","location_id":null,"customer_id":"cust_1","subscription_id":"sub_1","active":true }
+{ "instance_id":"eqi_4","operator_code":"WIK","sku_id":"WIK-ONT-OLD","serial":"SN-900","mac_address":"AC:DE:48:00:09:00","state":"IN_FIELD_DEFECTIVE","location_id":null,"customer_id":"cust_2","subscription_id":"sub_9","active":true }
 ```
 **Reading:** the state is *where the unit physically is + its condition*. eqi_1 is sellable warehouse
-stock; eqi_2 is on a contractor van; eqi_3 is installed at a customer (bound to a subscription); eqi_4
-is defective in the field (a swap candidate). A swap moves a source instance through
-`RESERVED_FOR_WO → RECOVERED_BY_CONTRACTOR` (or stays in field on EQR).
+stock; eqi_2 is on a contractor van; eqi_3 is installed at a customer (bound to a subscription, no
+`location_id` — it's in the field); eqi_4 is defective in the field (a swap candidate). A swap moves a
+source instance through `RESERVED_FOR_WO → RECOVERED_BY_CONTRACTOR` (or stays in field on EQR). `active`
+flips false only once the instance is terminally DECOMMISSIONED/RETIRED.
 
-### `stock_location` (`type`: `WAREHOUSE|CONTRACTOR_VAN`) & `stock_balance`
+### `stock_location` (`type`: `WAREHOUSE|CONTRACTOR_VAN`)
 ```json
-{ "location_id":"WIK-WAREHOUSE-MAIN","type":"WAREHOUSE","active":true }
-{ "location_id":"WIK-VAN-ctr_9","type":"CONTRACTOR_VAN","contractor_id":"ctr_9","active":true }
-{ "location_id":"WIK-WAREHOUSE-MSA","type":"WAREHOUSE","active":true }
-{ "balance":{ "location_id":"WIK-WAREHOUSE-MAIN","sku_id":"WIK-CABLE-CAT6","quantity":4200 } }
+{ "location_id":"WIK-WAREHOUSE-MAIN","operator_code":"WIK","type":"WAREHOUSE","name":"Main Warehouse (Nairobi)","contractor_id":null,"active":true }
+{ "location_id":"WIK-VAN-ctr_9","operator_code":"WIK","type":"CONTRACTOR_VAN","name":"Van — Contractor ctr_9","contractor_id":"ctr_9","active":true }
+{ "location_id":"WIK-WAREHOUSE-MSA","operator_code":"WIK","type":"WAREHOUSE","name":"Mombasa Warehouse","contractor_id":null,"active":true }
+{ "location_id":"WIK-VAN-ctr_4","operator_code":"WIK","type":"CONTRACTOR_VAN","name":"Van — Contractor ctr_4 (retired)","contractor_id":"ctr_4","active":false }
 ```
 **Reading:** stock lives at locations; a `CONTRACTOR_VAN` is a contractor's rolling stock (keyed to
-`contractor_id`). `stock_balance` is on-hand per (location, sku) for **non-serialized** SKUs (serialized
-units are counted by their instances).
+`contractor_id`). A WAREHOUSE has no `contractor_id`. `active:false` (the ctr_4 van) is a decommissioned
+location — no new movements post to it.
 
-### `stock_movement` · `reason_code` (catalog `stock_reason_code`: `direction` IN/OUT, `requires_approval`)
+### `stock_balance` (derived projection per (location, sku); `available = quantity − qty_reserved`)
 ```json
-{ "id":"sm_1","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MAIN","reason_code":"GOODS_RECEIPT","quantity":5000,"reference":"po_1" }
-{ "id":"sm_2","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-VAN-ctr_9","reason_code":"ISSUE","quantity":-50,"reference":"transfer_7" }
-{ "id":"sm_3","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MAIN","reason_code":"WRITE_OFF","quantity":-10,"reference":"appr_55" }
-{ "id":"sm_4","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MSA","reason_code":"INVENTORY_AUDIT_ADJUSTMENT","quantity":-3,"reference":"count_2" }
+{ "id":"sb_1","operator_code":"WIK","location_id":"WIK-WAREHOUSE-MAIN","sku_id":"WIK-CABLE-CAT6","quantity":4200,"qty_reserved":150 }
+{ "id":"sb_2","operator_code":"WIK","location_id":"WIK-VAN-ctr_9","sku_id":"WIK-CABLE-CAT6","quantity":300,"qty_reserved":0 }
+{ "id":"sb_3","operator_code":"WIK","location_id":"WIK-WAREHOUSE-MSA","sku_id":"WIK-CABLE-CAT6","quantity":80,"qty_reserved":80 }
+{ "id":"sb_4","operator_code":"WIK","location_id":"WIK-WAREHOUSE-MAIN","sku_id":"WIK-ONT-HUAWEI-EG8145V5","quantity":0,"qty_reserved":0 }
 ```
-**Reading:** movements are the **immutable ledger**; the `reason_code` (from the operator catalog)
-fixes the sign/direction and whether approval was needed. sm_1 is a goods receipt (+), sm_2 a transfer
-to a van (−), sm_3 an **approval-gated** write-off (its `reference` is the approval id), sm_4 the single
-correction a reconcile posts.
+**Reading:** `stock_balance` is on-hand per (location, sku) for **non-serialized** SKUs (serialized
+units are counted by their instances, so the ONT balance row sb_4 stays 0). `quantity` is the on-hand
+total; `qty_reserved` is the held-but-unavailable portion (sb_3 is fully reserved — nothing available).
+
+### `stock_movement` (append-only ledger) · `reason_code` (catalog `stock_reason_code`: `direction` IN/OUT/EITHER, `requires_approval`)
+```json
+{ "id":"sm_1","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MAIN","quantity":5000,"reason_code":"GOODS_RECEIPT","reference":"po_1","approved_by":null }
+{ "id":"sm_2","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-VAN-ctr_9","quantity":-50,"reason_code":"TRANSFER_OUT","reference":"transfer_7","approved_by":null }
+{ "id":"sm_3","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MAIN","quantity":-10,"reason_code":"WRITE_OFF_DAMAGE","reference":"appr_55","approved_by":"u_stockmgr2" }
+{ "id":"sm_4","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MSA","quantity":-3,"reason_code":"INVENTORY_AUDIT_ADJUSTMENT","reference":"scs_2","approved_by":"u_stockmgr1" }
+```
+**Reading:** movements are the **immutable ledger**; the `reason_code` (from the operator catalog
+`stock_reason_code`) fixes the sign/direction and whether approval was needed. sm_1 is a goods receipt
+(+), sm_2 a transfer to a van (−), sm_3 an **approval-gated** `WRITE_OFF_DAMAGE` (`reference` is the
+approval id, `approved_by` the second-person approver per R-OSR-SC-9), sm_4 the single
+`INVENTORY_AUDIT_ADJUSTMENT` a reconcile posts (its `reference` is the count session). `quantity` is
+signed (+ inbound, − outbound).
 
 ### `stock_reservation` · `status`: `ACTIVE|CONSUMED|RELEASED|EXPIRED`
 ```json
-{ "id":"sr_1","sku_id":"WIK-ONT-HUAWEI-EG8145V5","location_id":"WIK-WAREHOUSE-MAIN","wo_id":"wo_1","quantity":1,"status":"ACTIVE" }
-{ "id":"sr_2","sku_id":"WIK-STB-4K","wo_id":"wo_1","quantity":1,"status":"CONSUMED" }
-{ "id":"sr_3","sku_id":"WIK-ONT-HUAWEI-EG8145V5","wo_id":"wo_5","quantity":1,"status":"RELEASED" }
-{ "id":"sr_4","sku_id":"WIK-STB-4K","wo_id":"wo_8","quantity":1,"status":"EXPIRED" }
+{ "reservation_id":"rsv_1","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MAIN","qty":150,"wo_id":"wo_1","reference":"FTTH_INSTALL","status":"ACTIVE","expires_at":"2026-07-21T09:00:00Z","resolved_at":null }
+{ "reservation_id":"rsv_2","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MAIN","qty":40,"wo_id":"wo_1","reference":"FTTH_INSTALL","status":"CONSUMED","expires_at":"2026-07-20T09:00:00Z","resolved_at":"2026-06-20T12:30:00Z" }
+{ "reservation_id":"rsv_3","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MAIN","qty":25,"wo_id":"wo_5","reference":null,"status":"RELEASED","expires_at":"2026-07-19T09:00:00Z","resolved_at":"2026-06-21T11:45:00Z" }
+{ "reservation_id":"rsv_4","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MSA","qty":80,"wo_id":"wo_8","reference":null,"status":"EXPIRED","expires_at":"2026-06-18T09:00:00Z","resolved_at":"2026-06-18T09:05:00Z" }
 ```
-**Reading:** a reservation holds stock for a WO. `ACTIVE` (held) → `CONSUMED` (WO finalized) or
-`RELEASED` (WO cancelled) via the lifecycle listener; an un-actioned hold is swept `EXPIRED`. This is
-how install stock is promised without double-allocating.
+**Reading:** a reservation holds stock for a WO (it raises the location's `qty_reserved`). `ACTIVE`
+(held) → `CONSUMED` (WO finalized) or `RELEASED` (WO cancelled) via the lifecycle listener; an
+un-actioned hold past `expires_at` is swept `EXPIRED` (R-OSR-SC-7) — `resolved_at` records the terminal
+transition. This is how install stock is promised without double-allocating. (Serialized SKUs reserve
+the instance; bulk SKUs like cable reserve a `qty`.)
 
 ### `purchase_order` · `status`: `DRAFT|PENDING_APPROVAL|APPROVED|PARTIALLY_RECEIVED|RECEIVED|CANCELLED|REJECTED`
 ```json
-{ "po_id":"po_1","supplier":"Huawei","location_id":"WIK-WAREHOUSE-MAIN","status":"RECEIVED","total_value":150000 }
-{ "po_id":"po_2","supplier":"Casa","status":"PENDING_APPROVAL","total_value":900000,"approval_request_id":"appr_70" }
-{ "po_id":"po_3","supplier":"Local","status":"APPROVED","total_value":20000 }
-{ "po_id":"po_4","supplier":"X","status":"PARTIALLY_RECEIVED","total_value":50000 }
+{ "po_id":"po_1","operator_code":"WIK","supplier":"Huawei","location_id":"WIK-WAREHOUSE-MAIN","status":"RECEIVED","approval_request_id":"appr_60","approval_mode":"REQUIRES_APPROVAL","total_value":150000,"created_by":"u_proc1" }
+{ "po_id":"po_2","operator_code":"WIK","supplier":"Casa","location_id":"WIK-WAREHOUSE-MAIN","status":"PENDING_APPROVAL","approval_request_id":"appr_70","approval_mode":"REQUIRES_APPROVAL","total_value":900000,"created_by":"u_proc1" }
+{ "po_id":"po_3","operator_code":"WIK","supplier":"Local","location_id":"WIK-WAREHOUSE-MSA","status":"APPROVED","approval_request_id":null,"approval_mode":"AUTO_APPROVED","total_value":20000,"created_by":"u_proc2" }
+{ "po_id":"po_4","operator_code":"WIK","supplier":"FiberHome","location_id":"WIK-WAREHOUSE-MAIN","status":"PARTIALLY_RECEIVED","approval_request_id":"appr_72","approval_mode":"REQUIRES_APPROVAL","total_value":50000,"created_by":"u_proc2" }
 ```
-**Reading:** po_2 (big) is parked on an EM-CFG-04 approval (`approval_request_id` set). po_1 is fully
-received (stock posted + serials registered). po_4 had a partial delivery (more outstanding). A
+**Reading:** po_2 (big) is parked on an EM-CFG-04 approval (`approval_request_id` set,
+`approval_mode=REQUIRES_APPROVAL`). po_3 had no policy so it `AUTO_APPROVED` (no request id). po_1 is
+fully received (stock posted + serials registered). po_4 had a partial delivery (more outstanding). A
 `receive` is only allowed from `APPROVED`/`PARTIALLY_RECEIVED`.
 
 ### `equipment_swap_request` · `kind`: `SWAP_HFC|SWAP_GPON|EQP|EQU` · `status`: `CREATED|AWAITING_SLOT|WO_CREATED|FIELD_VISIT_IN_PROGRESS|SOURCE_RECOVERED|COMPLETED|COMPLETED_WITHOUT_RECOVERY|FAILED`
 ```json
-{ "swap_id":"swp_1","kind":"SWAP_GPON","status":"COMPLETED","chargeable":false,"source_instance_id":"eqi_4" }
-{ "swap_id":"swp_2","kind":"EQU","status":"COMPLETED","chargeable":true,"charge_code":"UPGRADE_FEE","charge_amount":5000 }
-{ "swap_id":"swp_3","kind":"EQP","status":"COMPLETED_WITHOUT_RECOVERY","chargeable":true,"charge_code":"DEPOSIT_FORFEITURE","charge_amount":3000 }
-{ "swap_id":"swp_4","kind":"SWAP_HFC","status":"FIELD_VISIT_IN_PROGRESS","chargeable":false }
+{ "swap_id":"swp_1","operator_code":"WIK","kind":"SWAP_GPON","source_instance_id":"eqi_4","target_instance_id":"eqi_1","subscription_id":"sub_9","customer_id":"cust_2","homepass_id":"hp_7","recovery_contractor_id":"ctr_9","status":"COMPLETED","chargeable":false,"charge_code":null,"charge_amount":null,"failure_code":null,"flow_payload":{"warranty":"in_warranty"},"work_order_id":"wo_30","slot_commitment_id":"sc_5","process_instance_id":"pi_30" }
+{ "swap_id":"swp_2","operator_code":"WIK","kind":"EQU","source_instance_id":"eqi_5","target_instance_id":"eqi_6","subscription_id":"sub_10","customer_id":"cust_3","homepass_id":"hp_8","recovery_contractor_id":"ctr_9","status":"COMPLETED","chargeable":true,"charge_code":"UPGRADE_FEE","charge_amount":5000,"failure_code":null,"flow_payload":{"upgrade":"wifi6"},"work_order_id":"wo_31","slot_commitment_id":"sc_6","process_instance_id":"pi_31" }
+{ "swap_id":"swp_3","operator_code":"WIK","kind":"EQP","source_instance_id":"eqi_7","target_instance_id":null,"subscription_id":"sub_11","customer_id":"cust_4","homepass_id":"hp_9","recovery_contractor_id":"ctr_4","status":"COMPLETED_WITHOUT_RECOVERY","chargeable":true,"charge_code":"DEPOSIT_FORFEITURE","charge_amount":3000,"failure_code":null,"flow_payload":{"recovered":false},"work_order_id":"wo_32","slot_commitment_id":"sc_7","process_instance_id":"pi_32" }
+{ "swap_id":"swp_4","operator_code":"WIK","kind":"SWAP_HFC","source_instance_id":"eqi_8","target_instance_id":null,"subscription_id":"sub_12","customer_id":"cust_5","homepass_id":"hp_3","recovery_contractor_id":"ctr_4","status":"FIELD_VISIT_IN_PROGRESS","chargeable":false,"charge_code":null,"charge_amount":null,"failure_code":null,"flow_payload":null,"work_order_id":"wo_33","slot_commitment_id":"sc_8","process_instance_id":"pi_33" }
 ```
 **Reading:** `kind` selects the flow (GPON/HFC defective swap, EQP pickup, EQU upgrade). swp_1 was a
-free warranty swap; swp_2 an upgrade (charged via BIL-01); swp_3 an EQR forfeiture (deposit billed);
-swp_4 is mid field-visit. The status is the swap workflow's progress.
+free in-warranty swap (source recovered, new `target_instance_id` installed); swp_2 an upgrade (charged
+via BIL-01); swp_3 an EQR forfeiture (`COMPLETED_WITHOUT_RECOVERY`, no target installed, deposit billed);
+swp_4 is mid field-visit. The swap stores its `work_order_id`, `slot_commitment_id` and
+`process_instance_id` (the driving workflow); `flow_payload` carries per-flow specifics; `failure_code`
+is set only on a `FAILED` swap.
 
 ## 3. Services (worked calls)
 | Service | Responsibility |
