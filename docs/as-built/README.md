@@ -13,22 +13,56 @@ behaviours were corrected after the forward design was written.
 - The writing of these docs *is* the onboarding exercise: you learn a module by producing
   its as-built doc from the code and proving each claim against that module's tests.
 
-## Reading order (onboarding)
-1. **`00_SPINE.md`** — the ~6 cross-cutting Foundation patterns every module reuses. Read once;
+## 📚 Reading order (follow top to bottom)
+
+A new dev should read these **in this exact sequence** — it goes spine → one end-to-end story →
+the engines → config → the revenue core → execution → edges. Each line says *why it's here*.
+
+**Phase 0 — Orient (the spine)**
+1. **`00_SPINE.md`** — the ~7 cross-cutting Foundation patterns (tenancy, errors, outbox events,
+   workflow, approvals, rules, idempotency/scope) + the worked **"Jane activates"** trace. Read once;
    then every module is "just business logic on top." **Start here.**
-2. **Golden-path trace** — open `Modules/Fulfillment/tests/Feature/FulfillmentJourneyTest.php`
-   and follow one order end-to-end (order → subscription + install WO → KYC gate → activation).
-   It exercises workflow, events, cross-module calls, approvals and billing in one story.
-3. **Module deep-dives**, in dependency / data-flow order:
+2. `_TEMPLATE.md` *(skim)* — the shape every module doc follows, so you know where to find things.
 
-   | Layer | Modules |
-   | --- | --- |
-   | Substrate | `Workflow`, `Rules`, `Rbac`, `Catalog` (packages/tariffs/discounts/tax-compute) |
-   | Core domain | `Ilm` → `Subscription` → `Billing` |
-   | Operations | `WorkOrder`, `Workforce`, `Osr`, `Provisioning`, `Fulfillment` |
-   | Edges | `Notification` (NOT-01 + ICN-01), `Ticketing`, `PaymentGateway`, `Reporting`, `ItOps` |
+**Phase 1 — See it work end-to-end (the golden path)**
+3. **`fulfillment.md`** *(read the Scenarios first)* alongside
+   `Modules/Fulfillment/tests/Feature/FulfillmentJourneyTest.php` — one order from capture → live,
+   threading workflow, events, approvals, Subscription, WorkOrder, ILM and Billing in a single story.
+   *(You'll re-read it in full at step 12.)*
 
-   `subscription.md` is the **gold-standard exemplar** — follow its shape for every module.
+**Phase 2 — The engines (the toolbox everything composes)**
+4. **`workflow.md`** — the process engine (definitions, external tasks, message catches, the worker).
+5. **`rules.md`** — decision tables + the evaluate/fallback seam.
+6. **`rbac.md`** — roles → permissions → scopes (the request guard).
+
+**Phase 3 — The config substrate**
+7. **`catalog.md`** — packages/versions/services, tariffs, **discounts**, **tax-compute**, wallet
+   catalog, HomePass topology + network nodes. Everything else prices/sells against this.
+
+**Phase 4 — The revenue core (read in this order — they build on each other)**
+8. **`ilm.md`** — customer/account masters, KYC, the flag & sub-status catalogs, CVM, `routingContext`.
+9. **`subscription.md`** — the lifecycle master + operation framework. **The gold-standard exemplar;**
+   follow its shape when writing any new doc.
+10. **`billing.md`** — charging, invoices, wallets, dunning, adjustments, tax invoices (the densest model).
+
+**Phase 5 — Operations (field + network execution)**
+11. **`workorder.md`** — WO lifecycle, dispatch, field audits.
+12. **`workforce.md`** — contractor capacity (the slots WorkOrder books).
+13. **`fulfillment.md`** *(now in full)* — the order-journey orchestrator.
+14. **`osr.md`** — equipment instances, stock chain, procurement, swaps.
+15. **`provisioning.md`** — ⭐ **the vendor-binding module**: service → HomePass/node path → target
+    plane → adapter → the network. Read §2.1 (the path) + §4 (the adapter contract) closely.
+
+**Phase 6 — The edges**
+16. **`notification.md`** — customer (NOT-01) + staff (ICN-01) pipelines.
+17. **`ticketing.md`** — tickets + SLA + ASR.
+18. **`paymentgateway.md`** — inbound payment-rail callbacks.
+19. **`reporting.md`** — the event-sourced metrics mart.
+20. **`itops.md`** — NOC console: heartbeats, worker control, trace.
+
+> **Each module doc reads the same way:** Purpose → 📖 Scenarios (start here) → Data model (sample
+> rows + readings) → Services → API → Events → Processes → Config → Dependencies → Invariants → Deltas.
+> Always cross-check a claim against the **test** it cites.
 
 ## How to write a module's as-built doc (the recipe)
 Read these six code sources **in order**; each maps to a section of `_TEMPLATE.md`:
