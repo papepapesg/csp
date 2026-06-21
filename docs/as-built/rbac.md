@@ -57,7 +57,7 @@ revoked — `active:false` with an `effective_to` close date → no access there
 is platform-wide. SUPER_ADMIN bypasses regardless. `effective_from`/`effective_to` bound a scope's
 validity window.
 
-### `rbac_permission_meta` (`scope_required`) & roles/permissions (spatie)
+### `rbac_permission_meta` (metadata only — does NOT grant) & roles/permissions (spatie)
 ```json
 { "permission_code":"workorder.assign","module_code":"WorkOrder","action_group":"assignment","risk_level":"MEDIUM","description":"Assign a work order to a technician","scope_required":true,"status":"ACTIVE" }
 { "permission_code":"billing.manage","module_code":"Billing","action_group":"billing","risk_level":"HIGH","description":"Manage billing artefacts","scope_required":false,"status":"ACTIVE" }
@@ -66,10 +66,29 @@ validity window.
 { "role":{ "id":4,"name":"DISPATCHER","guard_name":"api" } }
 { "permission":{ "id":12,"name":"workorder.assign","guard_name":"api" } }
 ```
-**Reading:** `scope_required=true` marks the permissions whose routes should carry a `scope:` gate
-(workorder.assign is region-scoped). The spatie `role`/`permission` rows (`id`, `name`, `guard_name`) are
-the enforcement engine — a role's grants are the "what can you do"; scopes are the "where". `risk_level`
-(up to `CRITICAL`) drives BO confirmation UX.
+**Reading:** `rbac_permission_meta` is **descriptive metadata about a permission, not a grant** —
+`scope_required=true` marks the permissions whose routes carry a `scope:` gate (workorder.assign is
+region-scoped); `risk_level` (up to `CRITICAL`) drives BO confirmation UX. The spatie `role`/`permission`
+rows (`id`, `name`, `guard_name`) are the catalogs. **None of these rows assign anything to a user** —
+that happens in the three spatie pivot tables below.
+
+### The grant pivots (spatie) — **where a user actually gets a role/permission**
+```json
+// model_has_roles — USER → ROLE (this is the assignment). model_id is the user's numeric id, NOT uid.
+{ "role_id":4, "model_type":"App\\Models\\User", "model_id":57 }    // user #57 IS a DISPATCHER
+{ "role_id":2, "model_type":"App\\Models\\User", "model_id":57 }    // …and also BILLING_LEAD
+// role_has_permissions — ROLE → PERMISSION (what the role can do)
+{ "role_id":4, "permission_id":12 }                                 // DISPATCHER may workorder.assign
+{ "role_id":4, "permission_id":11 }                                 // …and workorder.read
+// model_has_permissions — USER → PERMISSION directly (rare, bypasses roles)
+{ "permission_id":31, "model_type":"App\\Models\\User", "model_id":57 }
+```
+**Reading:** a user→role grant is a **`model_has_roles`** row (written by `User::syncRoles()`, called from
+`RbacController::assignRoles`); the role's powers come from **`role_has_permissions`** (written by
+`Role::syncPermissions()`). So "can user #57 assign a work order?" = does any of their `model_has_roles`
+roles have a `role_has_permissions` link to `workorder.assign` (id 12) — yes, via DISPATCHER. A direct
+`model_has_permissions` grant is the rare escape hatch. The **where** (data scope) is the separate
+`rbac_user_scope_assignment` axis above; `rbac_permission_meta` only annotates the permission.
 
 ### `rbac_change_audit` (immutable) · `change_type`: `ROLE_CREATED|ROLE_PERMISSIONS_SYNCED|PERMISSION_CREATED|USER_ROLE_ASSIGNED|USER_SCOPE_…`
 ```json
