@@ -58,5 +58,9 @@ Read these six code sources **in order**; each maps to a section of `_TEMPLATE.m
 | `workforce.md` | ✅ drafted |
 | `osr.md` | ✅ drafted |
 | `provisioning.md` | ✅ drafted |
-| Edges: `notification`, `ticketing`, `paymentgateway`, `reporting`, `itops` | ⬜ to do |
-| Substrate engines: `workflow`, `rules`, `rbac` (mostly in `00_SPINE`) | ⬜ short docs |
+| `notification.md` · `ticketing.md` · `paymentgateway.md` · `reporting.md` · `itops.md` | ✅ drafted |
+| `workflow.md` · `rules.md` · `rbac.md` | ✅ drafted |
+
+**All 17 module docs + the spine are drafted, each with worked scenarios.** Next: capstone
+golden-path flow docs (order-to-activation, billing-cycle/dunning) that stitch the modules into
+end-to-end narratives.
