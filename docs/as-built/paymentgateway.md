@@ -75,10 +75,13 @@ in `raw` for audit.
 | `GatewayCallbackService::handle` | ingest + dedupe a provider callback, resolve the account, call Billing `PaymentService::receiveAndApply`, emit a `GatewayCallback*` event |
 
 ## 4. API surface
-`POST /api/payment-gateway/{provider}/callbacks` (webhook), `GET /api/payment-gateway/callbacks[/{id}]`.
+`POST /api/payment-gateway/{provider}/callbacks` (webhook, `permission:payment.apply`; `{provider}` is one
+of `MPESA|VISA|BANK_TRANSFER`, else 404), `GET /api/payment-gateway/callbacks[/{id}]`
+(`permission:payment.read`). All under `auth:sanctum`.
 
-## 5. Integration (events)
-- **Emits:** `PaymentReceived` (consumed by Billing). **Consumes:** none (ingress edge).
+## 5. Integration (events) — topic `paymentgateway.callback`
+- **Emits:** `GatewayCallback{Received,Processed,Rejected,Duplicate}`. **Calls:** Billing
+  `PaymentService::receiveAndApply` synchronously (not via an event). **Consumes:** none (ingress edge).
 
 ## 6. Processes
 Stateless ingress; no workflow.

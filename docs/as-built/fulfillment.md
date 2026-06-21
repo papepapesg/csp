@@ -76,7 +76,7 @@ the deposit gate is *before* creation). order_5 was cancelled — its WO + sub w
 holds `process_instance_id` (the driving workflow), `package_version_id` (the pinned catalog version)
 and `billing_mode`.
 
-### `fulfillment_order_step` (append-only ledger) · `step`: `CAPTURE|VALIDATE|KYC|PAYMENT|INSTALL|SUBSCRIPTION|ACTIVATION` · `status`: `PENDING|DONE|SKIPPED|FAILED`
+### `fulfillment_order_step` (append-only ledger) · `step`: `CAPTURE|VALIDATE|SUBSCRIPTION|DEPOSIT|PAYMENT|INSTALL|KYC|ACTIVATION` · `status`: `PENDING|DONE|FAILED`
 ```json
 { "id":"st_1","order_id":"order_1","step":"CAPTURE","status":"DONE","result":null,"completed_at":"2026-06-20T09:00:00Z" }
 { "id":"st_2","order_id":"order_1","step":"SUBSCRIPTION","status":"DONE","result":{"subscriptionId":"sub_1"},"completed_at":"2026-06-20T09:01:00Z" }

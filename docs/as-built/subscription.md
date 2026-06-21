@@ -17,8 +17,9 @@
 ### 1. Pause an active subscription
 `POST /api/subscriptions/sub_123/pause {reason_code:'CUSTOMER_TRAVEL'}` → `OperationFramework::trigger
 ('PAUSE')`: single-in-flight check, write `subscription_operation` (`INITIATED`), start `sub-pause`.
-Workflow: `EnterPendingStatusHandler` flips `PENDING_PAUSE`; `PauseHandler` commits `PAUSED` +
-`subscription_pause_history`. Emits `SubscriptionPaused`. *Status: ACTIVE→PENDING_PAUSE→PAUSED.*
+Workflow: `EnterPendingStatusHandler` flips `PENDING_PAUSE`; `PauseHandler` commits `SUSPENDED` (with a
+pause reason — pause is a SUSPENDED rest state, not a separate one) + `subscription_pause_history`. Emits
+`SubscriptionPaused`. *Status: ACTIVE→PENDING_PAUSE→SUSPENDED.*
 
 ### 2. Concurrency — second op rejected (409)
 An `upgrade` while the pause runs (`final_state IS NULL`) → `trigger` throws `conflict(WAIT_FOR_OPERATION)`
@@ -59,9 +60,10 @@ outbox + pay-first parking.* *Proven by `SubscriptionApiTest`.*
 > `updated_at` are omitted by convention.
 
 ### `subscription` (the master)
-**Enum legend — `status_code`:** rest states `CREATED|PENDING_ACTIVATION|ACTIVE|PAUSED|SUSPENDED|
-RESTRICTED|TERMINATED|RETIRED`; **transient** `PENDING_{PAUSE,RESUME,SUSPEND_NP,UPGRADE,DOWNGRADE,
-RELOCATION,MIGRATION,TERMINATION}` (= an operation is mid-flight; cancel reverts to `prior`). Only
+**Enum legend — `status_code`:** rest states `CREATED|PENDING_ACTIVATION|ACTIVE|SUSPENDED|RESTRICTED|
+TERMINATED|RETIRED` (the `PAUSED` constant survives `@deprecated` — pause now resolves to `SUSPENDED`
+with a pause reason); **transient** `PENDING_{PAUSE,RESUME,SUSPEND_NP,UPGRADE,DOWNGRADE,RELOCATION,
+MIGRATION,TERMINATION}` (= an operation is mid-flight; cancel reverts to `prior`). Only
 `ACTIVE` is billable. `billing_mode` = `POSTPAID`(invoice)|`PREPAID`(wallet); `cycle_model` =
 `CALENDAR`|`ANNIVERSARY`. (`current_cycle_*`/`last_cycle_closed_window_end`/`next_cycle_charge_invoice_id`
 added by the cycle-window migration.)
@@ -79,18 +81,21 @@ reverts to ACTIVE — `current_transition_type=PAUSE`). sub_125 was suspended fo
 `cycle_anchor_day` drive proration + the `current_cycle_*` window the close worker reads.
 
 ### `subscription_operation` (per-command ledger)
-**Enum legend — `operation_kind`:** `ACTIVATE|PAUSE|RESUME|TERMINATE|UPGRADE|DOWNGRADE|RELOCATE|MIGRATE|
-SUSPEND_NP|RESTRICT` (RESTRICT = non-exclusive). **`current_state`:** `PENDING|RUNNING|COMPLETED|FAILED|
-CANCELLED`. **`final_state`:** `NULL`=in-flight (the single-in-flight key) else `COMPLETED|FAILED|
-CANCELLED`. (`cancel_actor_user_id` added by the operation-config migration alongside the partial
+**Enum legend — `operation_kind`:** `ACTIVATE|PAUSE|RESUME|TERMINATE|UPGRADE|DOWNGRADE|RELOCATION|
+MIGRATION|SUSPEND_NP|RESTRICT` (RESTRICT = non-exclusive; the kind persisted is `RELOCATION`/`MIGRATION`
+even though the route paths are `…/relocate`/`…/migrate`). **`current_state`** (granular narration vocabulary): `INITIATED|VALIDATING|
+PENDING_STATE_FLIP|BILLING_CALL|AWAITING_PAYMENT|FULFILLMENT_CALL|AWAITING_FULFILLMENT_RESPONSE|
+AWAITING_USER_TASK|COMMITTING_FINAL_STATE|EMITTING_EVENT|REVERTING|COMPLETED|FAILED|CANCELLED` (the older
+`PENDING`/`RUNNING` survive `@deprecated`). **`final_state`:** `NULL`=in-flight (the single-in-flight key)
+else the resulting `status_code`, or `FAILED|CANCELLED`. (`cancel_actor_user_id` added by the operation-config migration alongside the partial
 in-flight unique indexes.)
 ```json
-{ "operation_id":"op_1","operator_code":"WIK","subscription_id":"sub_124","operation_kind":"PAUSE","bpmn_process_key":"sub-pause","bpmn_process_instance_id":"pi_5501","initiating_actor_user_id":"u_csr2","initiating_actor_role":"CSR","idempotency_key":"pause-sub_124-1","idempotency_request_hash":"9f2c…ab","correlation_id":"corr_124","prior_subscription_status":"ACTIVE","current_state":"RUNNING","final_state":null,"failure_reason_code":null,"failure_reason_detail":null,"cancel_reason_code":null,"cancel_actor_user_id":null,"input":{"reasonCode":"CUSTOMER_TRAVEL"},"started_at":"2026-06-20T09:00:00Z","completed_at":null,"duration_ms":null }
+{ "operation_id":"op_1","operator_code":"WIK","subscription_id":"sub_124","operation_kind":"PAUSE","bpmn_process_key":"sub-pause","bpmn_process_instance_id":"pi_5501","initiating_actor_user_id":"u_csr2","initiating_actor_role":"CSR","idempotency_key":"pause-sub_124-1","idempotency_request_hash":"9f2c…ab","correlation_id":"corr_124","prior_subscription_status":"ACTIVE","current_state":"VALIDATING","final_state":null,"failure_reason_code":null,"failure_reason_detail":null,"cancel_reason_code":null,"cancel_actor_user_id":null,"input":{"reasonCode":"CUSTOMER_TRAVEL"},"started_at":"2026-06-20T09:00:00Z","completed_at":null,"duration_ms":null }
 { "operation_id":"op_2","operator_code":"WIK","subscription_id":"sub_123","operation_kind":"ACTIVATE","bpmn_process_key":"sub-activate","bpmn_process_instance_id":"pi_4400","initiating_actor_user_id":"u_sales1","initiating_actor_role":"SALES","idempotency_key":"activate-sub_123-1","idempotency_request_hash":"1a0e…77","correlation_id":"corr_123","prior_subscription_status":"PENDING_ACTIVATION","current_state":"COMPLETED","final_state":"COMPLETED","failure_reason_code":null,"failure_reason_detail":null,"cancel_reason_code":null,"cancel_actor_user_id":null,"input":{"packageRef":"pkg_triple"},"started_at":"2026-01-01T07:59:00Z","completed_at":"2026-01-01T08:00:00Z","duration_ms":60000 }
 { "operation_id":"op_3","operator_code":"WIK","subscription_id":"sub_125","operation_kind":"SUSPEND_NP","bpmn_process_key":"sub-suspend-np","bpmn_process_instance_id":"pi_6600","initiating_actor_user_id":null,"initiating_actor_role":"SYSTEM","idempotency_key":"suspendnp-sub_125-1","idempotency_request_hash":"77be…01","correlation_id":"corr_dun_2","prior_subscription_status":"ACTIVE","current_state":"COMPLETED","final_state":"COMPLETED","failure_reason_code":null,"failure_reason_detail":null,"cancel_reason_code":null,"cancel_actor_user_id":null,"input":{"dunningLevel":3},"started_at":"2026-06-10T00:00:00Z","completed_at":"2026-06-10T00:00:02Z","duration_ms":2000 }
 { "operation_id":"op_4","operator_code":"WIK","subscription_id":"sub_126","operation_kind":"RESTRICT","bpmn_process_key":"sub-restrict","bpmn_process_instance_id":null,"initiating_actor_user_id":"u_csr1","initiating_actor_role":"CSR","idempotency_key":"restrict-sub_126-1","idempotency_request_hash":"c4d2…9a","correlation_id":"corr_126","prior_subscription_status":"ACTIVE","current_state":"COMPLETED","final_state":"COMPLETED","failure_reason_code":null,"failure_reason_detail":null,"cancel_reason_code":null,"cancel_actor_user_id":null,"input":{"code":"OUTGOING_VOICE_BARRED"},"started_at":"2026-06-01T10:00:00Z","completed_at":"2026-06-01T10:00:01Z","duration_ms":1000 }
 ```
-**Reading:** op_1 is **in-flight** (`final_state=null`, `current_state=RUNNING`) — it blocks any other
+**Reading:** op_1 is **in-flight** (`final_state=null`, `current_state=VALIDATING`) — it blocks any other
 non-RESTRICT op on sub_124 and is the compensation source (`prior_subscription_status=ACTIVE`). op_2
 completed an activation. op_3 is a system-driven non-payment suspension (no `initiating_actor_user_id`).
 op_4 is a RESTRICT — it could have run concurrently with another op (non-exclusive). The

@@ -17,7 +17,7 @@
 skills and bookable windows (`max_concurrent`). *Operator config.*
 
 ### 2. Match + atomically commit capacity for a WO
-WorkOrder `autoAssign` calls `ContractorAvailabilityService::commit(slot, wo_id, when)` — atomically
+WorkOrder `autoAssign` calls `ContractorAvailabilityService::resolve(...)` then `commit(slot, wo_id, when)` — atomically
 reserves one of the slot's `max_concurrent` places, writing a `contractor_slot_commitment` (`ACTIVE`).
 *Foundation: DB transaction guarantees no over-booking.* *Proven by `WorkforceApiTest`.*
 
@@ -50,6 +50,30 @@ two-tier (outsourced → in-house) model.*
 > **Completeness:** each row lists **every domain column** (nullables shown as `null`). The string
 > business / composite key shown is the real primary key; `created_at`/`updated_at` are omitted by
 > convention.
+
+### `contractor` (the registry root) · `type`: `INTERNAL|EXTERNAL` · `status`: `ACTIVE|SUSPENDED|RETIRED`
+```json
+{ "contractor_id":"ctr_9","operator_code":"WIK","code":"FIBERCO","name":"FiberCo Ltd","type":"EXTERNAL","skills":["fiber-install","diagnostics"],"status":"ACTIVE" }
+{ "contractor_id":"ctr_4","operator_code":"WIK","code":"COASTNET","name":"CoastNet Engineers","type":"EXTERNAL","skills":["coax-install"],"status":"ACTIVE" }
+{ "contractor_id":"ctr_1","operator_code":"WIK","code":"INHOUSE","name":"WIK In-House Field","type":"INTERNAL","skills":null,"status":"ACTIVE" }
+{ "contractor_id":"ctr_0","operator_code":"WIK","code":"OLDCO","name":"OldCo (retired)","type":"EXTERNAL","skills":null,"status":"RETIRED" }
+```
+**Reading:** a contractor is the dispatch counterparty — `type` splits OUTSOURCED (`EXTERNAL`) from in-house
+(`INTERNAL`), `status` retires one without deleting it. `code` is the operator-unique short handle (`(operator,code)`
+unique). The per-(contractor,region,skill) certification lives in `contractor_region_skill`; the `skills` json here
+is a coarse summary.
+
+### `contractor_team` · `status`: `ACTIVE|…` · & `staff_member` · `role`: `TECHNICIAN|TEAM_LEAD|SUPERVISOR`
+```json
+{ "team_id":"team_2","contractor_id":"ctr_4","operator_code":"WIK","code":"NYALI-A","name":"Nyali Crew A","skills":["coax-install"],"status":"ACTIVE" }
+{ "staff_id":"stf_7","operator_code":"WIK","contractor_id":null,"team_id":null,"name":"Asha Mwangi","role":"TECHNICIAN","msisdn":"+254700000007","skills":["diagnostics"],"status":"ACTIVE" }
+{ "staff_id":"stf_9","operator_code":"WIK","contractor_id":"ctr_4","team_id":"team_2","name":"Juma Otieno","role":"TEAM_LEAD","msisdn":"+254700000009","skills":["coax-install"],"status":"ACTIVE" }
+{ "staff_id":"stf_3","operator_code":"WIK","contractor_id":"ctr_9","team_id":null,"name":"Wanjiru Kamau","role":"TECHNICIAN","msisdn":null,"skills":["fiber-install"],"status":"ACTIVE" }
+```
+**Reading:** a `contractor_team` (`team_id`) is a crew under a contractor; a `staff_member` (`staff_id`) is a named
+technician. A staff member with no `contractor_id` is **in-house** (stf_7) — the second tier the matcher falls back to
+when no outsourced contractor has capacity; one under a contractor/team is that crew's tech. `skills` drives skill
+matching; `role` ranks within a team.
 
 ### `contractor_availability_slot` · `day_of_week`: `MONDAY..SUNDAY|ALL_WEEK` · `service_scope`: `INSTALL|SUPPORT|MAINTENANCE|RECOVERY|AUDIT`
 ```json
@@ -112,13 +136,17 @@ fallback, EXCLUSIVE locks the region); cov_4 is a BACKUP recovery coverage that 
 ## 3. Services
 | Service | Responsibility |
 | --- | --- |
-| `ContractorAvailabilityService` | match (region+skill+spare capacity); `commit()` (atomic), `consume()`/`release()`, `consumeForWorkOrder()`/`releaseForWorkOrder()` (by WO id) |
+| `ContractorAvailabilityService` | `resolve()` (rank contractors by region+skill+spare capacity), `remainingCapacity()`; `commit()` (atomic), `consume()`/`release()`, `consumeForWorkOrder()`/`releaseForWorkOrder()` (by WO id) |
 
 ## 4. API surface
-`/api/contractors`, `…/availability-slots`, `…/slot-commitments`, `…/staff` under `permission:workforce.*`.
+`/api/contractors` (+`…/{contractor}/teams`), `/api/staff`, `/api/contractor-availability` (capacity query),
+`/api/contractor-slot-commitments` (+`…/{id}/consume`, `DELETE …/{id}` = release). Reads under
+`permission:workforce.read`; writes under `permission:workforce.manage` (+ `idempotency` on commit/consume/release).
 
 ## 5. Integration (events)
-- **Consumes:** `ResolveSlotCommitmentOnWoLifecycle` — `WorkOrderFinalized`→consume, `WorkOrderCancelled`→release.
+- **Emits** (topic `em.cs`): `ContractorSlotCommitment{Created,Consumed,Released}` on commit/consume/release.
+- **Consumes:** `ResolveSlotCommitmentOnWoLifecycle` (listener on `OutboxEventPublished`, matched by `event_type`)
+  — `WorkOrderFinalized`→consume, `WorkOrderCancelled`→release.
 - **Consumed by →** WorkOrder auto-assign (synchronous capacity query + commit).
 
 ## 6. Processes

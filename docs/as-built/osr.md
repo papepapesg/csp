@@ -23,9 +23,10 @@ registers each serial as an `equipment_instance` (`IN_MAIN_WAREHOUSE`). *Proven 
 ### 2. Reserve stock for an install WO → consume / release (event-driven)
 `StockService::reserve(wo_id, sku, location, qty)` writes a `stock_reservation` (`ACTIVE`). On
 `WorkOrderFinalized` → `ConsumeReservationOnWoLifecycle` (**listener on the outbox**) flips it
-`CONSUMED`; on `WorkOrderCancelled` → `RELEASED`. Unconsumed holds are swept `EXPIRED` by
-`sophix:stock:expire-reservations` (10 min). *Foundation: outbox listener + scheduled sweep.* *Proven
-by `StockReservationTest`.*
+`CONSUMED`; on `WorkOrderCancelled` → `RELEASED`. Unconsumed holds past `expires_at` are swept `EXPIRED`
+by the `sophix:stock:expire-reservations` command (registered for periodic invocation; the module's own
+schedule wiring is currently disabled). *Foundation: outbox listener + sweep command.* *Proven by
+`StockReservationTest`.*
 
 ### 3. A damaged write-off needs approval
 `POST /api/stock-movements` reason `WRITE_OFF` (`stock_reason_code.requires_approval=true`) →
@@ -60,8 +61,8 @@ resolves the SKU `deposit_amount` and raises a `DEPOSIT_FORFEITURE` BIL-01 inten
 (R-OSR-SC-8) → `DomainException`. *Shows: a hard stock invariant.* *Proven by `StockRulesTest`.*
 
 ### (bonus) 9. Defective recovered unit → vendor RMA
-A swap with `defectConfirmed` records a `vendor_rma_stub` (`PENDING_BATCH`) for the v1.0 batch handoff
-(a real vendor-RMA integration is a connector).
+A swap completed with `defectConfirmed` records a `vendor_rma_stub` row with `batch_ref='PENDING_BATCH'`
+for the v1.0 batch handoff (a real vendor-RMA integration is a connector).
 
 ## 2. Data model — ≥4 **complete** sample rows + readings
 > **Completeness:** each row lists **every domain column** (nullables shown as `null`). The string
@@ -91,7 +92,8 @@ out-of-warranty swap charges; `ownership_semantics` says whether the device is r
 stock; eqi_2 is on a contractor van; eqi_3 is installed at a customer (bound to a subscription, no
 `location_id` — it's in the field); eqi_4 is defective in the field (a swap candidate). A swap moves a
 source instance through `RESERVED_FOR_WO → RECOVERED_BY_CONTRACTOR` (or stays in field on EQR). `active`
-flips false only once the instance is terminally DECOMMISSIONED/RETIRED.
+flips false only once the instance reaches the terminal `RETIRED` state (the transition that emits the
+`EquipmentInstanceDecommissioned` event).
 
 ### `stock_location` (`type`: `WAREHOUSE|CONTRACTOR_VAN`)
 ```json
@@ -119,15 +121,29 @@ total; `qty_reserved` is the held-but-unavailable portion (sb_3 is fully reserve
 ```json
 { "id":"sm_1","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MAIN","quantity":5000,"reason_code":"GOODS_RECEIPT","reference":"po_1","approved_by":null }
 { "id":"sm_2","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-VAN-ctr_9","quantity":-50,"reason_code":"TRANSFER_OUT","reference":"transfer_7","approved_by":null }
-{ "id":"sm_3","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MAIN","quantity":-10,"reason_code":"WRITE_OFF_DAMAGE","reference":"appr_55","approved_by":"u_stockmgr2" }
+{ "id":"sm_3","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MAIN","quantity":-10,"reason_code":"WRITE_OFF","reference":"appr_55","approved_by":"u_stockmgr2" }
 { "id":"sm_4","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MSA","quantity":-3,"reason_code":"INVENTORY_AUDIT_ADJUSTMENT","reference":"scs_2","approved_by":"u_stockmgr1" }
 ```
-**Reading:** movements are the **immutable ledger**; the `reason_code` (from the operator catalog
-`stock_reason_code`) fixes the sign/direction and whether approval was needed. sm_1 is a goods receipt
-(+), sm_2 a transfer to a van (−), sm_3 an **approval-gated** `WRITE_OFF_DAMAGE` (`reference` is the
-approval id, `approved_by` the second-person approver per R-OSR-SC-9), sm_4 the single
+**Reading:** movements are the **immutable ledger**; the `reason_code` fixes the sign/direction and whether
+approval was needed. The catalog `stock_reason_code` seeds `RECEIPT|ISSUE|TRANSFER_IN|TRANSFER_OUT|INSTALL|RETURN|ADJUST|WRITE_OFF`
+(`ADJUST`/`WRITE_OFF` carry `requires_approval=true`); the services also post the literal flow codes
+`GOODS_RECEIPT` (PO receipt), `TRANSFER_OUT`/`TRANSFER_IN` (a two-tier transfer) and `INVENTORY_AUDIT_ADJUSTMENT`
+(reconcile). sm_1 is a goods receipt (+), sm_2 a transfer to a van (−), sm_3 an **approval-gated** `WRITE_OFF`
+(`reference` is the approval id, `approved_by` the second-person approver per R-OSR-SC-9), sm_4 the single
 `INVENTORY_AUDIT_ADJUSTMENT` a reconcile posts (its `reference` is the count session). `quantity` is
-signed (+ inbound, − outbound).
+signed (+ inbound, − outbound). (`stock_movement` has only `created_at` — no `updated_at` on this append-only ledger.)
+
+### `stock_reason_code` (operator catalog, composite-unique `(operator_code, code)`) · `direction`: `IN|OUT|EITHER`
+```json
+{ "id":1,"operator_code":"WIK","code":"RECEIPT","description":"Goods received into stock","direction":"IN","requires_approval":false,"active":true }
+{ "id":5,"operator_code":"WIK","code":"INSTALL","description":"Consumed on a customer install","direction":"OUT","requires_approval":false,"active":true }
+{ "id":7,"operator_code":"WIK","code":"ADJUST","description":"Inventory adjustment (count variance)","direction":"EITHER","requires_approval":true,"active":true }
+{ "id":8,"operator_code":"WIK","code":"WRITE_OFF","description":"Damaged/lost write-off","direction":"OUT","requires_approval":true,"active":true }
+```
+**Reading:** the operator-scoped reason catalog governs `stock_movement.reason_code`: `direction` fixes the
+allowed sign, `requires_approval=true` (ADJUST, WRITE_OFF) routes the movement through EM-CFG-04 before it
+posts. When a catalog exists for the operator, `StockService::move` rejects any non-catalog code
+(`UNKNOWN_STOCK_REASON`). Seeded codes: `RECEIPT|ISSUE|TRANSFER_IN|TRANSFER_OUT|INSTALL|RETURN|ADJUST|WRITE_OFF`.
 
 ### `stock_reservation` · `status`: `ACTIVE|CONSUMED|RELEASED|EXPIRED`
 ```json
@@ -142,17 +158,42 @@ un-actioned hold past `expires_at` is swept `EXPIRED` (R-OSR-SC-7) — `resolved
 transition. This is how install stock is promised without double-allocating. (Serialized SKUs reserve
 the instance; bulk SKUs like cable reserve a `qty`.)
 
-### `purchase_order` · `status`: `DRAFT|PENDING_APPROVAL|APPROVED|PARTIALLY_RECEIVED|RECEIVED|CANCELLED|REJECTED`
+### `purchase_order` · `status`: `DRAFT|PENDING_APPROVAL|APPROVED|RECEIVED|REJECTED`
 ```json
-{ "po_id":"po_1","operator_code":"WIK","supplier":"Huawei","location_id":"WIK-WAREHOUSE-MAIN","status":"RECEIVED","approval_request_id":"appr_60","approval_mode":"REQUIRES_APPROVAL","total_value":150000,"created_by":"u_proc1" }
-{ "po_id":"po_2","operator_code":"WIK","supplier":"Casa","location_id":"WIK-WAREHOUSE-MAIN","status":"PENDING_APPROVAL","approval_request_id":"appr_70","approval_mode":"REQUIRES_APPROVAL","total_value":900000,"created_by":"u_proc1" }
-{ "po_id":"po_3","operator_code":"WIK","supplier":"Local","location_id":"WIK-WAREHOUSE-MSA","status":"APPROVED","approval_request_id":null,"approval_mode":"AUTO_APPROVED","total_value":20000,"created_by":"u_proc2" }
-{ "po_id":"po_4","operator_code":"WIK","supplier":"FiberHome","location_id":"WIK-WAREHOUSE-MAIN","status":"PARTIALLY_RECEIVED","approval_request_id":"appr_72","approval_mode":"REQUIRES_APPROVAL","total_value":50000,"created_by":"u_proc2" }
+{ "po_id":"po_1","operator_code":"WIK","supplier":"Huawei","location_id":"WIK-WAREHOUSE-MAIN","status":"RECEIVED","approval_request_id":"appr_60","approval_mode":null,"total_value":150000,"created_by":"u_proc1" }
+{ "po_id":"po_2","operator_code":"WIK","supplier":"Casa","location_id":"WIK-WAREHOUSE-MAIN","status":"PENDING_APPROVAL","approval_request_id":"appr_70","approval_mode":null,"total_value":900000,"created_by":"u_proc1" }
+{ "po_id":"po_3","operator_code":"WIK","supplier":"Local","location_id":"WIK-WAREHOUSE-MSA","status":"APPROVED","approval_request_id":"appr_71","approval_mode":null,"total_value":20000,"created_by":"u_proc2" }
+{ "po_id":"po_4","operator_code":"WIK","supplier":"FiberHome","location_id":"WIK-WAREHOUSE-MAIN","status":"REJECTED","approval_request_id":"appr_72","approval_mode":null,"total_value":50000,"created_by":"u_proc2" }
 ```
-**Reading:** po_2 (big) is parked on an EM-CFG-04 approval (`approval_request_id` set,
-`approval_mode=REQUIRES_APPROVAL`). po_3 had no policy so it `AUTO_APPROVED` (no request id). po_1 is
-fully received (stock posted + serials registered). po_4 had a partial delivery (more outstanding). A
-`receive` is only allowed from `APPROVED`/`PARTIALLY_RECEIVED`.
+**Reading:** `approve()` opens an EM-CFG-04 request and stamps `approval_request_id`; if a policy makes the
+request `PENDING` the PO parks in `PENDING_APPROVAL` (po_2), otherwise it auto-approves straight to
+`APPROVED`. `decide()` then flips a parked PO to `APPROVED` (po_3) or `REJECTED` (po_4) on the SoD decision.
+po_1 is fully `RECEIVED` (stock posted + serials registered). A `receive` is only allowed from `APPROVED`.
+(`approval_mode` is a reserved EM-CFG-04 snapshot column — present in the schema but not yet written by the
+service, so always `null`.)
+
+### `purchase_order_line` (PO detail, FK → `purchase_order` cascade)
+```json
+{ "po_line_id":"pol_1","po_id":"po_1","sku_id":"WIK-ONT-HUAWEI-EG8145V5","quantity_ordered":100,"quantity_received":100,"unit_cost":1500 }
+{ "po_line_id":"pol_2","po_id":"po_2","sku_id":"WIK-STB-4K","quantity_ordered":300,"quantity_received":0,"unit_cost":3000 }
+{ "po_line_id":"pol_3","po_id":"po_3","sku_id":"WIK-CABLE-CAT6","quantity_ordered":5000,"quantity_received":0,"unit_cost":4 }
+{ "po_line_id":"pol_4","po_id":"po_4","sku_id":"WIK-ONT-HUAWEI-EG8145V5","quantity_ordered":40,"quantity_received":0,"unit_cost":1500 }
+```
+**Reading:** each line is a SKU on a PO; `receive` posts a `GOODS_RECEIPT` movement per line and bumps
+`quantity_received` (pol_1 is fully received against po_1; serialized lines also register one
+`equipment_instance` per serial). `unit_cost × quantity_ordered` rolls up to `purchase_order.total_value`.
+
+### `stock_count_session` · `status`: `OPEN|COUNTED|RECONCILED` · & `stock_count_line`
+```json
+{ "session_id":"scs_1","operator_code":"WIK","location_id":"WIK-WAREHOUSE-MAIN","status":"RECONCILED","variance_lines":1,"created_by":"u_stockmgr1","reconciled_at":"2026-06-19T16:00:00Z" }
+{ "session_id":"scs_2","operator_code":"WIK","location_id":"WIK-WAREHOUSE-MSA","status":"COUNTED","variance_lines":1,"created_by":"u_stockmgr1","reconciled_at":null }
+{ "count_line_id":"scl_1","session_id":"scs_1","sku_id":"WIK-CABLE-CAT6","system_qty":4200,"counted_qty":4200,"variance":0 }
+{ "count_line_id":"scl_2","session_id":"scs_2","sku_id":"WIK-CABLE-CAT6","system_qty":83,"counted_qty":80,"variance":-3 }
+```
+**Reading:** `InventoryAuditService` walks a session `open → count → reconcile`. `count` records
+`system_qty` vs `counted_qty` per SKU (`variance` is the delta; `variance_lines` counts non-zero lines);
+`reconcile` posts ONE `INVENTORY_AUDIT_ADJUSTMENT` movement per variance line (scl_2's −3 produced sm_4
+above, `reference=scs_2`) and stamps `reconciled_at`; a second reconcile is a no-op (R-OSR-05-09).
 
 ### `equipment_swap_request` · `kind`: `SWAP_HFC|SWAP_GPON|EQP|EQU` · `status`: `CREATED|AWAITING_SLOT|WO_CREATED|FIELD_VISIT_IN_PROGRESS|SOURCE_RECOVERED|COMPLETED|COMPLETED_WITHOUT_RECOVERY|FAILED`
 ```json
@@ -180,12 +221,14 @@ is set only on a `FAILED` swap.
 ## 4. API surface
 `/api/equipment-skus`, `/api/stock-{locations,balances,movements,reservations}`,
 `/api/equipment-instances`, `/api/purchase-orders` (+`…/approvals/{req}/decide`), `/api/stock-counts`,
-`/api/swap-requests`. `permission:stock.manage` (+ `idempotency` on creates/movements).
+`/api/swap-requests`. Reads under `permission:stock.read`; writes under `permission:stock.manage`
+(+ `idempotency` on stock-movements, equipment-instances/swap-requests creates, purchase-order receive).
 
 ## 5. Integration (events) — topic `osr.equipment`
-- **Emits:** `StockMoved`, `StockReservation{Reserved,Consumed,Released,Expired}`,
-  `EquipmentInstance{Registered,StateChanged,RecoveredByContractor,BoundToCustomer,Decommissioned}`,
-  `EquipmentSwap{Requested,Rejected,Completed}` (Completed carries `depositForfeited`+amount).
+- **Emits:** `StockMoved`, `StockReserved`, `StockReservation{Consumed,Released,Expired}`,
+  `EquipmentInstance{Registered,StateChanged,RecoveredByContractor,BoundToCustomer,UnboundFromCustomer,Decommissioned}`,
+  `EquipmentSkuCreated`, `EquipmentSourceRecovered`, `EquipmentSwap{Requested,Rejected,Completed}`
+  (Completed carries `depositForfeited`+amount).
 - **Consumes:** `ConsumeReservationOnWoLifecycle` (WO finalize→consume / cancel→release).
 
 ## 6. Processes (swap workflow)

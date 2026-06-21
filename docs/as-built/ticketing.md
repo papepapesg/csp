@@ -16,19 +16,26 @@
 SLA due-time stamped from the matching `sla_policy`. Emits `TicketCreated`. *Proven by `TicketApiTest`.*
 
 ### 2. Escalate to a truck roll → linked WO
-`POST …/{id}/work-orders` creates a WO-01 support WO linked back (`source_type=TICKET`). Ticket
-`IN_PROGRESS`. *Cross-module: WorkOrder.* *Proven by `TicketApiTest`.*
+`POST …/{id}/work-orders` creates a WO-01 support WO linked back (`source_type=TICKET`), writes a
+`ticket_link` (`relation=CREATED_FROM_TICKET`), and moves the ticket to `WAITING_WORK_ORDER`. Gated by the
+category's `wo_allowed` (TCK-3). Emits `TicketWorkOrderCreated`. *Cross-module: WorkOrder.* *Proven by
+`TicketApiTest::test_technical_ticket_raises_work_order`.*
 
 ### 3. WO finalized → auto-resolve (event-driven)
-`WorkOrderFinalized` (outbox) → `ResolveTicketOnWorkOrderFinalized` closes the linked ticket
-(`RESOLVED`). *Foundation: outbox listener.*
+`WorkOrderFinalized` (outbox) → `ResolveTicketOnWorkOrderFinalized` → `onWorkOrderFinalized` moves the
+linked ticket out of `WAITING_WORK_ORDER` to `RESOLVED` (or, if the category's `review_required` is set, to
+`UNDER_REVIEW`). A `WorkOrderCancelled` instead sends it back to `ASSIGNED`/`WAITING_INTERNAL` with
+`requires_review`. *Foundation: outbox listener.* *Proven by
+`TicketApiTest::test_finalizing_the_work_order_resolves_the_ticket`.*
 
 ### 4. Conversation on the timeline
 `POST …/{id}/comments` appends a `ticket_comment` + a `ticket_timeline` row (append-only audit).
 
-### 5. ASR — a new-service request (idempotent)
-`POST /api/tickets/asr` (idempotent) → `AsrService` validates a structured request + emits it downstream
-for fulfillment. *Proven by `AsrTest`.*
+### 5. ASR — a typed service request (idempotent)
+`POST /api/asr` (idempotent) → `AsrService::create` validates an `asr_type`, applies `rules.asr.routing`
+(queue + priority + auto-actions), and creates an ASR-typed ticket; a `TECHNICAL_TROUBLE` whose routing
+sets `autoCreateWorkOrder` auto-raises a support WO. *Proven by
+`AsrTest::test_technical_trouble_routes_to_noc_and_raises_work_order`.*
 
 ### 6. SLA breach surfaces on the NOC
 Past-due open tickets appear in ItOps `GET /api/noc/sla-overdue` (reads ticket SLA timestamps).
@@ -45,7 +52,7 @@ The `ticket_category_catalog` fixes the SLA matrix + default priority — an ope
 > which uses the DB default) are omitted by convention. `sla_policy`/`ticket_category_catalog` show their
 > natural keys (the surrogate auto-increment `id` on `sla_policy` is omitted as it has a composite key).
 
-### `ticket` · `status`: `OPEN|ASSIGNED|IN_PROGRESS|PENDING_WO|RESOLVED|CLOSED` · `priority`: `LOW|NORMAL|HIGH|URGENT` · `category`: `TECHNICAL|BILLING|INFORMATION|COMPLAINT|SERVICE_REQUEST` · `asr_type`: `TECHNICAL_TROUBLE|INFORMATION_REQUEST|COMPLAINT|SERVICE_REQUEST`
+### `ticket` · `status`: `OPEN|TRIAGED|ASSIGNED|IN_PROGRESS|WAITING_CUSTOMER|WAITING_INTERNAL|WAITING_WORK_ORDER|UNDER_REVIEW|RESOLVED|CLOSED|CANCELLED` (`PENDING_WO` is a legacy alias of `WAITING_WORK_ORDER`) · `priority`: `LOW|NORMAL|HIGH|URGENT` · `category`: `TECHNICAL|BILLING|INFORMATION|COMPLAINT|SERVICE_REQUEST` · `asr_type`: `TECHNICAL_TROUBLE|INFORMATION_REQUEST|COMPLAINT|SERVICE_REQUEST`
 ```json
 { "ticket_id":"tck_1","ticket_number":"TKT-2026-000101","operator_code":"WIK","category":"TECHNICAL","asr_type":"TECHNICAL_TROUBLE","subcategory":"NO_SIGNAL","priority":"URGENT","status":"OPEN","customer_id":"cust_1","account_id":"acct_1","subscription_id":"sub_1","subject":"No signal since morning","description":"Modem all red lights","queue":"noc-l1","assignee_id":null,"sla_due_at":"2026-06-20T16:00:00Z","first_response_due_at":"2026-06-20T13:00:00Z","first_response_at":null,"work_order_id":null,"resolution_code":null,"reopened_count":0,"requires_review":false,"resolution_note":null,"opened_by":"agent_7","resolved_at":null,"closed_at":null,"cancelled_at":null }
 { "ticket_id":"tck_2","ticket_number":"TKT-2026-000102","operator_code":"WIK","category":"BILLING","asr_type":"INFORMATION_REQUEST","subcategory":null,"priority":"NORMAL","status":"IN_PROGRESS","customer_id":"cust_2","account_id":"acct_2","subscription_id":null,"subject":"Invoice query","description":null,"queue":"billing","assignee_id":"agent_3","sla_due_at":"2026-06-22T09:00:00Z","first_response_due_at":"2026-06-20T17:00:00Z","first_response_at":"2026-06-20T15:00:00Z","work_order_id":null,"resolution_code":null,"reopened_count":0,"requires_review":false,"resolution_note":null,"opened_by":"agent_3","resolved_at":null,"closed_at":null,"cancelled_at":null }
@@ -60,22 +67,25 @@ NOC SLA-overdue view surfaces.
 
 ### `ticket_category_catalog` (operator category config) & `sla_policy` (response-hours matrix)
 ```json
-{ "operator_code":"WIK","category_code":"NO_SIGNAL","display_name":"No signal","type_code":"TECHNICAL","default_priority":"URGENT","default_queue":"noc-l1","default_asr_type":"TECHNICAL_TROUBLE","default_sla_policy":"TECH_URGENT","wo_allowed":true,"default_wo_kind":"SUPPORT","review_required":false,"active":true }
-{ "operator_code":"WIK","category_code":"BILLING_DISPUTE","display_name":"Billing dispute","type_code":"BILLING","default_priority":"NORMAL","default_queue":"billing","default_asr_type":"INFORMATION_REQUEST","default_sla_policy":null,"wo_allowed":false,"default_wo_kind":null,"review_required":false,"active":true }
-{ "operator_code":"WIK","category_code":"RELOCATION","display_name":"Service relocation","type_code":"SERVICE_REQUEST","default_priority":"NORMAL","default_queue":"provisioning","default_asr_type":"SERVICE_REQUEST","default_sla_policy":null,"wo_allowed":true,"default_wo_kind":"SHIFTING","review_required":true,"active":true }
-{ "operator_code":"WIK","category_code":"LEGACY_FAULT","display_name":"Legacy fault","type_code":"TECHNICAL","default_priority":"NORMAL","default_queue":null,"default_asr_type":null,"default_sla_policy":null,"wo_allowed":false,"default_wo_kind":null,"review_required":false,"active":false }
+{ "operator_code":"WIK","category_code":"NO_INTERNET","display_name":"No internet","type_code":"TECHNICAL_SUPPORT","default_priority":"HIGH","default_queue":"TECH_SUPPORT_L1","default_asr_type":"TECHNICAL_TROUBLE","default_sla_policy":null,"wo_allowed":true,"default_wo_kind":"SUPPORT","review_required":false,"active":true }
+{ "operator_code":"WIK","category_code":"BILLING_DISPUTE","display_name":"Billing dispute","type_code":"BILLING_COMPLAINT","default_priority":"NORMAL","default_queue":"BILLING_QUEUE","default_asr_type":"COMPLAINT","default_sla_policy":null,"wo_allowed":false,"default_wo_kind":null,"review_required":false,"active":true }
+{ "operator_code":"WIK","category_code":"INSTALL_INCOMPLETE","display_name":"Install incomplete","type_code":"INSTALLATION_FOLLOWUP","default_priority":"HIGH","default_queue":"TECH_SUPPORT_L1","default_asr_type":"SERVICE_REQUEST","default_sla_policy":null,"wo_allowed":true,"default_wo_kind":"SUPPORT","review_required":true,"active":true }
+{ "operator_code":"WIK","category_code":"GENERAL_INQUIRY","display_name":"General inquiry","type_code":"GENERAL_INQUIRY","default_priority":"LOW","default_queue":"CARE_QUEUE","default_asr_type":"INFORMATION_REQUEST","default_sla_policy":null,"wo_allowed":false,"default_wo_kind":null,"review_required":false,"active":false }
 ```
 ```json
-{ "operator_code":"WIK","category":"NO_SIGNAL","priority":"URGENT","response_hours":1 }
+{ "operator_code":"WIK","category":"NO_INTERNET","priority":"URGENT","response_hours":1 }
 { "operator_code":"WIK","category":"BILLING_DISPUTE","priority":"NORMAL","response_hours":8 }
 { "operator_code":"WIK","category":null,"priority":"HIGH","response_hours":4 }
 { "operator_code":null,"category":null,"priority":"NORMAL","response_hours":24 }
 ```
 **Reading:** the **category catalog** is operator config — default priority/queue/ASR type, whether it
 may spawn a WO (`wo_allowed` gates TCK-3) and of which `default_wo_kind`, and whether a finalized WO
-parks the ticket in review (`review_required`); `active=false` (LEGACY_FAULT) retires a category. The
-**SLA policy** resolves `response_hours` by **most-specific match** (category+priority > priority-only >
-the all-`null` operator default); editing rows tunes SLAs with no code.
+parks the ticket in `UNDER_REVIEW` (`review_required`, e.g. INSTALL_INCOMPLETE); `active=false` retires a
+category (the row shown as `active:false` here is illustrative). `type_code` is the operator type family
+(`TECHNICAL_SUPPORT`, `BILLING_COMPLAINT`, …) — distinct from `default_asr_type`. The **SLA policy**
+resolves `response_hours` by **most-specific match** (category+priority > priority-only > the all-`null`
+operator default; the WIK seed ships the priority-only defaults URGENT=4/HIGH=8/NORMAL=24/LOW=72);
+editing rows tunes SLAs with no code.
 
 ### `ticket_comment` / `ticket_timeline` (append-only)
 ```json
@@ -87,27 +97,59 @@ the all-`null` operator default); editing rows tunes SLAs with no code.
 ```json
 { "id":"tl_1","ticket_id":"tck_1","event_type":"CREATED","from_status":null,"to_status":"OPEN","actor_id":"agent_7","meta":null }
 { "id":"tl_2","ticket_id":"tck_1","event_type":"ASSIGNED","from_status":"OPEN","to_status":"ASSIGNED","actor_id":"sup_1","meta":{"assignee":"agent_7"} }
-{ "id":"tl_3","ticket_id":"tck_3","event_type":"WO_LINKED","from_status":"IN_PROGRESS","to_status":"PENDING_WO","actor_id":"agent_7","meta":{"work_order_id":"wo_2"} }
-{ "id":"tl_4","ticket_id":"tck_3","event_type":"RESOLVED","from_status":"PENDING_WO","to_status":"RESOLVED","actor_id":"system","meta":{"resolution_code":"FIXED_ON_SITE"} }
+{ "id":"tl_3","ticket_id":"tck_3","event_type":"WorkOrderCreatedFromTicket","from_status":"ASSIGNED","to_status":"WAITING_WORK_ORDER","actor_id":"agent_7","meta":{"workOrderId":"wo_2"} }
+{ "id":"tl_4","ticket_id":"tck_3","event_type":"LINKED_WORK_ORDER_FINALIZED","from_status":"WAITING_WORK_ORDER","to_status":"RESOLVED","actor_id":null,"meta":{"workOrderId":"wo_2","finalReason":"FIXED_ON_SITE"} }
 ```
 **Reading:** the timeline is the immutable history (created → assigned → WO linked → resolved), each row
 carrying the `from_status`/`to_status` transition + actor + `meta`; comments are the conversation, gated
 by `visibility` (INTERNAL vs CUSTOMER_VISIBLE) and the legacy `internal` flag. This is the audit a
 supervisor reads.
 
+### `ticket_link` (multi-entity links — TCK-2) · `entity_type`: `SUBSCRIPTION|INVOICE|WORK_ORDER|TICKET|CUSTOMER|…` · `relation`: `RELATED|DUPLICATE_OF|CAUSED_BY|CREATED_FROM_TICKET|…`
+```json
+{ "link_id":"tlnk_1","ticket_id":"tck_3","entity_type":"WORK_ORDER","entity_ref":"wo_2","relation":"CREATED_FROM_TICKET","linked_by":"agent_7" }
+{ "link_id":"tlnk_2","ticket_id":"tck_1","entity_type":"SUBSCRIPTION","entity_ref":"sub_1","relation":"RELATED","linked_by":"agent_7" }
+{ "link_id":"tlnk_3","ticket_id":"tck_2","entity_type":"INVOICE","entity_ref":"inv_56","relation":"RELATED","linked_by":"agent_3" }
+{ "link_id":"tlnk_4","ticket_id":"tck_4","entity_type":"TICKET","entity_ref":"tck_2","relation":"DUPLICATE_OF","linked_by":"sup_2" }
+```
+**Reading:** a ticket must reference at least one business entity (TCK-2) — either a column on `ticket`
+(customer/account/subscription/work_order) or a `ticket_link` row, or be an explicit internal category.
+Raising a WO inserts a `CREATED_FROM_TICKET` link (tlnk_1) as the auditable join. The
+`(ticket_id, entity_type, entity_ref, relation)` tuple is unique (links are idempotent via
+`updateOrInsert`).
+
+### `ticket_attachment` (file references — TCK-9) · `visibility`: `INTERNAL|CUSTOMER_VISIBLE`
+```json
+{ "attachment_id":"tatt_1","ticket_id":"tck_1","file_id":"file_77","file_name":"modem.jpg","content_type":"image/jpeg","size_bytes":48211,"visibility":"INTERNAL","uploaded_by":"agent_7" }
+{ "attachment_id":"tatt_2","ticket_id":"tck_3","file_id":"file_78","file_name":"site-report.pdf","content_type":"application/pdf","size_bytes":102400,"visibility":"CUSTOMER_VISIBLE","uploaded_by":"agent_7" }
+{ "attachment_id":"tatt_3","ticket_id":"tck_2","file_id":"file_79","file_name":"invoice-scan.png","content_type":"image/png","size_bytes":20480,"visibility":"INTERNAL","uploaded_by":"cust_2" }
+{ "attachment_id":"tatt_4","ticket_id":"tck_4","file_id":"file_80","file_name":"complaint.txt","content_type":null,"size_bytes":null,"visibility":"INTERNAL","uploaded_by":"sup_2" }
+```
+**Reading:** TCK only keeps a **reference** — the binary lives in `FOUNDATION_FILE_STORAGE` (`file_object`).
+`addAttachment` resolves the `file_id` against that store (404 if missing) and takes the authoritative
+`file_name`/`content_type`/`size_bytes` from it rather than trusting the caller (TCK-9: object keys carry
+no PII). `visibility` gates whether self-care can see the file. A gap-free human `ticket_number` is minted
+by the per-(operator, fiscal_year) `ticket_number_sequence` counter at create.
+
 ## 3. Services
 | Service | Responsibility |
 | --- | --- |
-| `TicketService` | ticket lifecycle (create/assign/comment/resolve), SLA capture, WO linkage |
-| `AsrService` | advanced service request capture/validation |
+| `TicketService` | ticket lifecycle (`create`/`assign`/`comment`/`addAttachment`/`linkEntity`/`createWorkOrder`/`resolve`/`reopen`/`cancel`/`close`), SLA + first-response capture, gap-free `ticket_number`, WO linkage, `onWorkOrderFinalized`/`onWorkOrderCancelled` |
+| `AsrService::create` | ASR-typed intake; applies `rules.asr.routing`, creates the ticket, auto-raises a WO when routing says so |
 
 ## 4. API surface
-`/api/tickets` (+ `/{id}/assign`, `/comments`, `/attachments`, `/work-orders`, `/resolve`),
-`/api/tickets/asr`, `/api/sla-policies`. `permission:ticketing.*`; creates idempotent.
+`/api/tickets` (+ `/{id}/assign`, `/comments`, `/attachments`, `/links`, `/work-orders`, `/resolve`,
+`/reopen`, `/cancel`, `/close`), `/api/asr`, `/api/sla-policies` (GET + POST). Permissions:
+`ticket.read` (reads), `ticket.create` (create/comment/attach/asr), `ticket.assign` (assign),
+`ticket.manage` (links/WO/resolve/reopen/cancel/close/SLA-policy write); create + raise-WO + ASR are
+`idempotency`-guarded.
 
-## 5. Integration (events)
-- **Emits:** `TicketCreated`, `TicketResolved`, ASR events.
-- **Consumes:** `WorkOrderFinalized` → resolve the linked ticket.
+## 5. Integration (events) — topic `ticketing.case`
+- **Emits:** `TicketCreated`, `TicketAssigned`, `TicketStatusChanged`, `TicketResolved`, `TicketClosed`,
+  `TicketWorkOrderCreated`, `TicketReopened`, `TicketCancelled`. (ASR intake emits no separate event — it
+  just creates a ticket, so the ticket events above fire.)
+- **Consumes:** `WorkOrderFinalized` → resolve the linked ticket; `WorkOrderCancelled` → send it back for
+  review (`ResolveTicketOnWorkOrderFinalized`).
 
 ## 6. Processes
 Service-level; ASR may start a fulfillment/WO flow.

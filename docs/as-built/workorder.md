@@ -139,11 +139,13 @@ action for the owning module. fad_4 is a `FOUND_EXTRA` with no expected item (an
 `/api/work-orders` (`workorder.assign` + **`scope:TECH_REGION`** + idempotency), assign/auto-assign/
 start/finalize/cancel/notes/attachments; `…/support-flow` & `…/shifting-flow`; `/api/field-audit-*`.
 
-## 5. Integration (events) — topic `workorder.field`
-- **Emits:** `WorkOrder{Created,Assigned,Started,FinalizationPending,Finalized,Reassigned,Cancelled}`,
-  `WorkOrder{Support,Shifting}Completed`, `WorkOrderEscalationCandidate`, `FieldAuditWorkOrderRequested`,
-  FA discrepancy events.
-- **Consumes:** `CreateFieldAuditWorkOrder` (FA → build the WO-01 work order).
+## 5. Integration (events) — topic `workorder.field` (FA events on topic `field.audit`)
+- **Emits** (topic `workorder.field`): `WorkOrder{Created,Assigned,Started,FinalizationPending,Finalized,Reassigned,Cancelled}`,
+  `WorkOrder{Support,Shifting}Completed`, `WorkOrderPhaseTransitioned`, `WorkOrderEscalationCandidate`.
+- **Emits** (topic `field.audit`): `FieldAuditWorkOrderRequested`, `FieldAuditCampaignCreated`,
+  `FieldAuditTaskCreated`, `FieldAuditTaskClosed`, `FieldAuditDiscrepancy{Opened,Routed}`.
+- **Consumes:** `CreateFieldAuditWorkOrder` (listener on `OutboxEventPublished`, matched on
+  `FieldAuditWorkOrderRequested` → build the WO-01 work order).
 - **Downstream:** Fulfillment/Subscription resume on `WorkOrderFinalized`; Workforce releases capacity;
   Ticketing resolves; Reporting counts.
 
