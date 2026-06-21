@@ -5,36 +5,46 @@
 
 ## 1. Purpose & boundaries
 - **Owns:** the **inbound callback** boundary — receive, de-duplicate, record provider payment
-  notifications, then hand a clean `PaymentReceived` to Billing.
-- **Does NOT own:** allocation/ledger (Billing `PaymentService`) or outbound initiation (a connector).
+  notifications, resolve the billing account, then hand the money to Billing
+  (`PaymentService::receiveAndApply`) and emit a `GatewayCallback*` audit event.
+- **Does NOT own:** allocation/ledger or billing-mode routing (Billing `PaymentService` — POSTPAID→invoices,
+  PREPAID→wallet top-up) or outbound initiation (a connector).
 - **Job:** the safe, idempotent front door for money-in from external rails.
 
 ## 📖 Scenarios (service + Foundation involvement)
 
 ### 1. M-Pesa STK success lands
-`POST /api/payment-gateway/mpesa/callbacks` → `GatewayCallbackService`: records a
-`payment_gateway_callback` (`PROCESSED`), emits **`PaymentReceived`** (topic `billing.money`) with
-amount + reference. Billing's `PaymentService` then allocates it. *Proven by `GatewayCallbackTest`.*
+`POST /api/payment-gateway/mpesa/callbacks` → `GatewayCallbackService::handle`: records a
+`payment_gateway_callback` (`RECEIVED`), resolves the account (ILM `payment_account_number`), calls
+Billing **`PaymentService::receiveAndApply`** which allocates it, then marks the callback `PROCESSED`
+and emits **`GatewayCallbackProcessed`** (topic `paymentgateway.callback`). *Proven by
+`GatewayCallbackTest::test_mpesa_callback_resolves_account_and_applies_payment`.*
 
 ### 2. Retried callback is ignored (dedup)
-The provider re-posts the same result → dedup by provider reference → recorded `DUPLICATE`, **no second**
-`PaymentReceived`. *Foundation: idempotent ingress — never double-credit.*
+The provider re-posts the same `(provider, external_ref)` → dedup hit → the **existing** callback is
+returned (no new row), only a `GatewayCallbackDuplicate` audit event fires; `receiveAndApply` is **not**
+called again. *Foundation: idempotent ingress — never double-credit.* *Proven by
+`GatewayCallbackTest::test_duplicate_callback_is_deduped`.*
 
-### 3. Failed payment callback
-A failure result → callback `FAILED`, no `PaymentReceived` emitted (nothing to allocate).
+### 3. Prepaid vs postpaid routing (Billing-owned)
+`receiveAndApply` routes by billing mode — a POSTPAID account's payment is applied to invoices, a PREPAID
+subscription's money is a wallet top-up (BIL-05). The gateway just hands the money over; it owns no
+ledger. *Proven by `GatewayCallbackTest::test_prepaid_callback_tops_up_the_wallet_not_an_invoice`.*
 
 ### 4. Card PSP callback
 `POST /api/payment-gateway/visa/callbacks` → same path, different provider parsing (adapter/config).
 
 ### 5. Bank-transfer notification
-A bank feed posts a transfer → recorded + `PaymentReceived` (method `BANK_TRANSFER`).
+A bank feed posts a transfer → recorded + applied (method `BANK_TRANSFER`).
 
-### 6. Malformed callback
-An unparseable body → recorded `IGNORED` with the raw payload kept for audit; no event.
+### 6. Account cannot be resolved → REJECTED
+A callback whose `account_ref` resolves to no billing account → callback `REJECTED`
+(`reject_reason=ACCOUNT_NOT_FOUND`), `GatewayCallbackRejected` emitted, no money applied. *Proven by
+`GatewayCallbackTest::test_unresolvable_account_is_rejected`.*
 
-### 7. Callback for an unknown reference
-A `PaymentReceived` whose reference matches no open invoice → Billing posts it to overpayment/credit
-(handled downstream, not here).
+### 7. Apply fails downstream → REJECTED
+If `receiveAndApply` throws, the callback is recorded `REJECTED` with the exception message as
+`reject_reason`; the raw payload is kept for audit.
 
 ### 8. Admin audits callbacks
 `GET /api/payment-gateway/callbacks[/{id}]` lists/inspects raw + parsed notifications.
@@ -46,21 +56,23 @@ A `PaymentReceived` whose reference matches no open invoice → Billing posts it
 ### `payment_gateway_callback` · `provider`: `MPESA|VISA|BANK_TRANSFER` · `status`: `RECEIVED|PROCESSED|REJECTED|DUPLICATE`
 ```json
 { "callback_id":"pgcb_1","operator_code":"WIK","provider":"MPESA","external_ref":"QGR7Xk12","account_ref":"254700000001","resolved_account_id":"acct_50","amount":5000.00,"currency":"KES","raw":{"TransID":"QGR7Xk12","TransAmount":"5000"},"status":"PROCESSED","payment_id":"pay_91","reject_reason":null,"received_at":"2026-06-20T09:00:00Z" }
-{ "callback_id":"pgcb_2","operator_code":"WIK","provider":"MPESA","external_ref":"QGR7Xk12","account_ref":"254700000001","resolved_account_id":"acct_50","amount":5000.00,"currency":"KES","raw":{"TransID":"QGR7Xk12"},"status":"DUPLICATE","payment_id":null,"reject_reason":"duplicate external_ref","received_at":"2026-06-20T09:00:05Z" }
-{ "callback_id":"pgcb_3","operator_code":"WIK","provider":"VISA","external_ref":"ch_99","account_ref":null,"resolved_account_id":null,"amount":2500.00,"currency":"KES","raw":{"id":"ch_99","status":"declined"},"status":"REJECTED","payment_id":null,"reject_reason":"CARD_DECLINED","received_at":"2026-06-20T10:00:00Z" }
+{ "callback_id":"pgcb_2","operator_code":"WIK","provider":"VISA","external_ref":"ch_88","account_ref":"UNKNOWN","resolved_account_id":null,"amount":2500.00,"currency":"KES","raw":{"id":"ch_88"},"status":"REJECTED","payment_id":null,"reject_reason":"ACCOUNT_NOT_FOUND","received_at":"2026-06-20T09:30:00Z" }
+{ "callback_id":"pgcb_3","operator_code":"WIK","provider":"VISA","external_ref":"ch_99","account_ref":"254700000003","resolved_account_id":null,"amount":2500.00,"currency":"KES","raw":{"id":"ch_99","status":"declined"},"status":"REJECTED","payment_id":null,"reject_reason":"card declined","received_at":"2026-06-20T10:00:00Z" }
 { "callback_id":"pgcb_4","operator_code":"WIK","provider":"BANK_TRANSFER","external_ref":"bt_7781","account_ref":"PAYBILL-22","resolved_account_id":null,"amount":12000.00,"currency":"KES","raw":{"ref":"bt_7781"},"status":"RECEIVED","payment_id":null,"reject_reason":null,"received_at":"2026-06-21T08:00:00Z" }
 ```
-**Reading:** `(provider, external_ref)` is the **dedup key** (a DB unique constraint) — pgcb_2 is a retry
-of pgcb_1, recorded `DUPLICATE` but **not** re-emitted, so money is never double-credited. `PROCESSED`
-is the only status that emitted `PaymentReceived` (and so the only one that fills `payment_id`); pgcb_3
-is a declined card (`REJECTED`, `reject_reason` set, no event); pgcb_4 is a freshly landed bank transfer
-still `RECEIVED` (not yet resolved to an account — `resolved_account_id:null`). The full provider body is
-kept in `raw` for audit.
+**Reading:** `(provider, external_ref)` is the **dedup key** (a DB unique constraint) — a re-posted
+callback never inserts a second row; the existing record is returned and only a `GatewayCallbackDuplicate`
+event fires, so money is never double-credited (no persisted `DUPLICATE` row results from a retry).
+`PROCESSED` is the only status that applied the payment (and so the only one that fills `payment_id` +
+`resolved_account_id`); pgcb_2 could not be matched to an account (`REJECTED`, `ACCOUNT_NOT_FOUND`) and
+pgcb_3 is a declined card (`REJECTED`, the apply threw — `reject_reason` is the exception message); pgcb_4
+is a freshly landed bank transfer still `RECEIVED` (handler not yet run). The full provider body is kept
+in `raw` for audit.
 
 ## 3. Services
 | Service | Responsibility |
 | --- | --- |
-| `GatewayCallbackService` | ingest + dedupe a provider callback; emit `PaymentReceived` on success |
+| `GatewayCallbackService::handle` | ingest + dedupe a provider callback, resolve the account, call Billing `PaymentService::receiveAndApply`, emit a `GatewayCallback*` event |
 
 ## 4. API surface
 `POST /api/payment-gateway/{provider}/callbacks` (webhook), `GET /api/payment-gateway/callbacks[/{id}]`.
