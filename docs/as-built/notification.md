@@ -133,17 +133,38 @@ address be skipped.
 back to the originating EM-CFG-04/flow. The group membership is the recipient model (distinct from the
 customer pipeline).
 
+### ICN: `staff_notification_delivery` (one row per recipient × channel) · `status`: `PENDING|DISPATCHED|ACKNOWLEDGED|FAILED|TERMINALLY_FAILED|SUPPRESSED`
+```json
+{ "delivery_id":"deliv_1","notification_id":"sn_1","operator_code":"WIK","recipient_user_id":"sup_01","recipient_identity":null,"channel":"IN_APP_PUSH","channel_priority_idx":0,"status":"DISPATCHED","attempts":1,"last_attempt_at":"2026-06-20T09:00:01Z","provider_message_id":"push-1","provider_response":{"ok":true},"failure_reason":null,"acknowledged_at":null,"next_retry_at":null }
+{ "delivery_id":"deliv_2","notification_id":"sn_1","operator_code":"WIK","recipient_user_id":"sup_02","recipient_identity":null,"channel":"EMAIL","channel_priority_idx":1,"status":"SUPPRESSED","attempts":0,"last_attempt_at":null,"provider_message_id":null,"provider_response":null,"failure_reason":null,"acknowledged_at":null,"next_retry_at":null }
+{ "delivery_id":"deliv_3","notification_id":"sn_2","operator_code":"WIK","recipient_user_id":"sup_01","recipient_identity":null,"channel":"SLACK","channel_priority_idx":0,"status":"ACKNOWLEDGED","attempts":1,"last_attempt_at":"2026-06-20T10:00:00Z","provider_message_id":"slack-77","provider_response":{"ts":"123.45"},"failure_reason":null,"acknowledged_at":"2026-06-20T10:05:00Z","next_retry_at":null }
+{ "delivery_id":"deliv_4","notification_id":"sn_dir","operator_code":"WIK","recipient_user_id":"director_9","recipient_identity":{"channel":"EMAIL","address":"director@wik.example"},"channel":"EMAIL","channel_priority_idx":0,"status":"DISPATCHED","attempts":1,"last_attempt_at":"2026-06-20T11:00:00Z","provider_message_id":"m-dir","provider_response":{"ok":true},"failure_reason":null,"acknowledged_at":null,"next_retry_at":null }
+```
+**Reading:** the delivery row is the per-(recipient, channel) attempt ledger — `channel_priority_idx`
+orders the channels a recipient is tried on (per the channel-config try-order / fallback mode). The
+first-ACK (deliv_3 `ACKNOWLEDGED`) suppresses the other still-pending rows (deliv_2 `SUPPRESSED`).
+`recipient_identity` is normally null (the address is resolved from the user's channel-identity), but a
+**DIRECT** send (deliv_4 — a named approver in no group) carries the explicit `{channel,address}` and the
+dispatcher hands it straight to the adapter with no directory lookup. `failure_reason` codes
+(`BOUNCE|ADAPTER_NOT_REGISTERED|NO_BINDING_FOR_CHANNEL|IDENTITY_UNRESOLVABLE|…`) explain a `FAILED`/
+`TERMINALLY_FAILED` row; `next_retry_at` drives the retry sweep. The `(notification_id, recipient_user_id,
+channel)` tuple is unique.
+
 ## 3. Services
 | Service | Responsibility |
 | --- | --- |
 | `NotificationOrchestrator` | NOT-01 pipeline (idempotency→route→preference→regulatory→render→dispatch→audit) |
 | `TemplateService` | template CRUD (Studio) |
 | `RenderRetryService`/`RetryScheduler`/`BounceService` | render retry, dispatch retry/escalation, bounce |
-| `Icn/StaffNotificationService` (+directory/dispatcher) | ICN-01 group fan-out (`dispatch`) + **direct-address send** (`dispatchDirect` — explicit `{channel,address}` recipients, no group) |
+| `Icn/Services/StaffNotificationService` (+ `DeliveryDispatcher`, `AckService`, directory) | ICN-01 group fan-out (`dispatch`) + **direct-address send** (`dispatchDirect` — explicit `{channel,address}` recipients on `recipient_identity`, no group); `DeliveryDispatcher` resolves the adapter + identity and sends each `staff_notification_delivery` row |
 
 ## 4. API surface
-`/api/notifications/preferences`, `/api/admin/notifications/{send,resend,dashboard,failure-queue,
-routing/pause}`, ICN staff catalog + inbox/ack. `permission:notification.*`.
+NOT-01: `GET/PUT /api/notifications/preferences` (`selfcare.access`), `/api/admin/notifications/{send,
+resend,dashboard,failure-queue,routing/pause,bounces}` + `render-failures/{id}/retry`
+(`notification.manage`), `/api/admin/templates/*` (`notification.template.manage`),
+`GET/POST /api/notifications` (`notification.read`/`notification.send`). ICN-01:
+`POST /api/staff-notifications` (`staff_notification.dispatch`), `…/inbox` + `…/{id}/ack` (own inbox, any
+staff user), plus the `staff-notification-*` catalog (`staff_notification.manage`).
 
 ## 5. Integration (events)
 - **Consumes (bridges):** `DunningNotificationBridge`, `AccountStatusNotificationBridge`,
@@ -151,7 +172,9 @@ routing/pause}`, ICN staff catalog + inbox/ack. `permission:notification.*`.
 - **Emits:** `Notification{Dispatched,Suppressed,Escalated,Undeliverable}`, ICN `StaffNotification{…}`.
 
 ## 6. Processes
-Scheduled retry/escalation/expiry workers (`RetryDispatch`, `RetryRender`, ICN `StaffRetry`/`StaffExpire`).
+Scheduled workers: `sophix:notification:retry-dispatch` (NOT-01 dispatch retry/escalation),
+`sophix:notification:retry-render` (re-render the `render_failure_queue`), `sophix:icn:retry` (ICN delivery
+retry), `sophix:icn:expire` (ICN ack-window expiry sweep).
 
 ## 7. Policy & config
 Routing rules, templates, channel config, customer & staff prefs, ICN groups + adapter bindings — all

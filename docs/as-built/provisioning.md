@@ -260,7 +260,8 @@ interface ProvisioningAdapter {
   public function pollStatus(ProvisioningCommand $command): ?ProvisioningResult;    // resolve an ASYNC command (null = still pending)
 }
 ```
-`ProvisioningResult::confirmed|accepted|failed(externalRef, response)`. `StubProvisioningAdapter` is
+`ProvisioningResult::confirmed(externalRef, response)` / `accepted(externalRef, response)` /
+`failed(error, final)`. `StubProvisioningAdapter` is
 the default (logs + mirrors desired; honours `forceFail`/`simulateAsync`/`simulateObservedStatus`/
 `simulateNotPresent`). A real driver translates `command.desired_state` into the vendor API.
 

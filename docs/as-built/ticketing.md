@@ -12,7 +12,8 @@
 ## 📖 Scenarios (service + Foundation involvement)
 
 ### 1. Create a ticket (SLA stamped from policy)
-`POST /api/tickets {category:'NO_SIGNAL', subscription_id}` → `TicketService::create`: ticket `OPEN`,
+`POST /api/tickets {category:'NO_INTERNET', subcategory:'NO_SIGNAL', subscription_id}` →
+`TicketService::create`: ticket `OPEN`,
 SLA due-time stamped from the matching `sla_policy`. Emits `TicketCreated`. *Proven by `TicketApiTest`.*
 
 ### 2. Escalate to a truck roll → linked WO
