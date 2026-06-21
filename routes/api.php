@@ -49,6 +49,7 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/approval-definitions', [ApprovalController::class, 'definitions']);
     Route::post('/approval-definitions', [ApprovalController::class, 'storeDefinition'])->middleware('permission:rbac.manage');
+    Route::post('/approval-approvers/invite', [ApprovalController::class, 'inviteApprover'])->middleware('permission:rbac.manage');
     Route::get('/approvals', [ApprovalController::class, 'index']);
     Route::post('/approvals', [ApprovalController::class, 'store'])->middleware('idempotency');
     Route::post('/approvals/{approvalRequest}/decide', [ApprovalController::class, 'decide']);
