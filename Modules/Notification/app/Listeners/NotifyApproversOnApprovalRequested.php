@@ -3,19 +3,21 @@
 namespace Modules\Notification\Listeners;
 
 use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalStage;
 use App\Foundation\Events\OutboxEventPublished;
+use App\Models\User;
 use Modules\Notification\Icn\Services\StaffNotificationService;
 
 /**
  * EM-CFG-04 -> ICN-01 bridge. When the approval engine opens a pending request — or advances the
- * chain to a new stage — notify the CURRENT stage's approver group (its approver_roles) through
- * ICN-01 so a human knows a decision awaits them. Without this, every approval request sat silent
- * until someone happened to look. Keyed to the request id + stage (idempotent on replay; a fresh
- * key per stage so each level's approvers are alerted in turn).
+ * chain to a new stage — notify the CURRENT stage's approver(s) through ICN-01 so a human knows a
+ * decision awaits them. Keyed to the request id + stage (idempotent on replay; a fresh key per
+ * stage so each level's approvers are alerted in turn).
  *
- * A stage that targets a NAMED USER (approver_kind = USER, e.g. an invited "director") has no role
- * group to resolve here; that person sees the pending request in their approval queue. Direct
- * per-user channel delivery is a follow-up (see as-built spine open items).
+ * - A ROLE stage notifies its `approver_roles` as ICN candidate groups (group → members).
+ * - A USER stage (a named approver, e.g. an invited "director" with no platform role) is sent a
+ *   DIRECT message to that person's address (their email here) via `dispatchDirect` — so the named
+ *   approver is reached even though they belong to no group.
  */
 class NotifyApproversOnApprovalRequested
 {
@@ -28,25 +30,65 @@ class NotifyApproversOnApprovalRequested
             return;
         }
         $request = ApprovalRequest::query()->find($event->payload['requestId'] ?? null);
-        // The working snapshot (approver_roles) always reflects the active stage; a USER stage or a
-        // role-less policy has no group to notify, so it is skipped (the approver acts from the queue).
-        $roles = $request?->approver_roles ?? [];
-        if (! $request || $roles === []) {
+        if (! $request) {
             return;
         }
-        $stage = (int) ($request->current_stage ?? 1);
+        $seq = (int) ($request->current_stage ?? 1);
+        $stage = $this->currentStage($request, $seq);
+        $vars = ['entityType' => $request->entity_type, 'requestId' => $request->request_id, 'stage' => $seq];
 
-        // Notify each distinct approver group for the active stage (RBAC role = ICN candidate group).
-        foreach (array_unique($roles) as $group) {
+        if (($stage['approver_kind'] ?? ApprovalStage::ROLE) === ApprovalStage::USER) {
+            // Named approver → reach them directly at their address (no group to resolve).
+            $email = $stage['approver_email'] ?? $this->lookupEmail($stage['approver_user_ref'] ?? null, $request->operator_code);
+            if (! $email) {
+                return;
+            }
+            $this->staff->dispatchDirect([
+                'operatorCode' => $request->operator_code,
+                'templateCode' => 'approval-needed',
+                'templateVariables' => $vars,
+                'recipients' => [['channel' => 'EMAIL', 'address' => $email]],
+                'sourceModule' => 'APPROVALS',
+                'sourceBusinessKey' => $request->request_id,
+                'urgency' => 'high',
+            ], idempotencyKey: "appr-notif-{$request->request_id}-s{$seq}-user");
+
+            return;
+        }
+
+        // ROLE stage: notify each distinct approver group (RBAC role = ICN candidate group).
+        $roles = $stage['approver_roles'] ?? ($request->approver_roles ?? []);
+        foreach (array_unique($roles ?? []) as $group) {
             $this->staff->dispatch([
                 'operatorCode' => $request->operator_code,
                 'templateCode' => 'approval-needed',
                 'candidateGroup' => $group,
-                'templateVariables' => ['entityType' => $request->entity_type, 'requestId' => $request->request_id, 'stage' => $stage],
+                'templateVariables' => $vars,
                 'sourceModule' => 'APPROVALS',
                 'sourceBusinessKey' => $request->request_id,
                 'urgency' => 'high',
-            ], idempotencyKey: "appr-notif-{$request->request_id}-s{$stage}-{$group}");
+            ], idempotencyKey: "appr-notif-{$request->request_id}-s{$seq}-{$group}");
         }
+    }
+
+    /** @return array<string,mixed> the active stage from the request's frozen chain snapshot. */
+    private function currentStage(ApprovalRequest $request, int $seq): array
+    {
+        foreach ($request->stages_snapshot ?? [] as $stage) {
+            if ((int) ($stage['sequence'] ?? 0) === $seq) {
+                return $stage;
+            }
+        }
+
+        return ['approver_kind' => ApprovalStage::ROLE, 'approver_roles' => $request->approver_roles ?? []];
+    }
+
+    private function lookupEmail(?string $uid, string $operator): ?string
+    {
+        if (! $uid) {
+            return null;
+        }
+
+        return User::query()->where('operator_code', $operator)->where('uid', $uid)->value('email');
     }
 }

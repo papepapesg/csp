@@ -4,6 +4,7 @@ namespace Modules\Notification\Tests\Feature;
 
 use App\Foundation\Approvals\ApprovalDefinition;
 use App\Foundation\Approvals\ApprovalService;
+use App\Foundation\Approvals\ApprovalStage;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use App\Models\User;
@@ -200,6 +201,46 @@ class Icn01Test extends TestCase
 
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'StaffNotificationTemplateRenderWarning']);
         $this->assertNotNull($n->notification_id);
+    }
+
+    public function test_direct_send_reaches_an_explicit_address(): void
+    {
+        // No group, no staff user — just an explicit email address the caller supplies.
+        $res = $this->svc()->dispatchDirect([
+            'operatorCode' => 'WIK', 'templateCode' => 'approval-needed',
+            'templateVariables' => ['entityType' => 'ADJUSTMENT', 'requestId' => 'appr_x', 'deeplinkUrl' => 'https://bo/a/1'],
+            'recipients' => [['channel' => 'EMAIL', 'address' => 'external.director@partner.example']],
+            'sourceModule' => 'APPROVALS', 'sourceBusinessKey' => 'appr_x',
+        ]);
+        $n = $res['notification'];
+
+        $this->assertSame('DIRECT', $n->candidate_group);
+        $d = StaffNotificationDelivery::where('notification_id', $n->notification_id)->where('channel', 'EMAIL')->first();
+        $this->assertSame('DISPATCHED', $d->status);
+        $this->assertSame('external.director@partner.example', $d->recipient_identity['address']);
+    }
+
+    public function test_user_stage_approval_emails_the_named_director_directly(): void
+    {
+        // A policy whose stage is a NAMED USER (a director with an invited login, no platform role).
+        $director = User::factory()->create(['operator_code' => 'WIK', 'email' => 'cvm.director@wik.sn', 'status' => 'INVITED']);
+        $def = ApprovalDefinition::query()->create([
+            'definition_id' => 'appd_dir', 'operator_code' => 'WIK', 'entity_type' => 'DIRECTOR_SIGNOFF',
+            'approver_roles' => [], 'required_approvals' => 1, 'active' => true,
+        ]);
+        ApprovalStage::query()->create([
+            'stage_id' => 'appds_dir', 'operator_code' => 'WIK', 'definition_id' => $def->definition_id,
+            'sequence' => 1, 'approver_kind' => 'USER', 'approver_user_ref' => $director->uid, 'approver_email' => $director->email, 'required_approvals' => 1,
+        ]);
+
+        $req = app(ApprovalService::class)->request(['entity_type' => 'DIRECTOR_SIGNOFF', 'entity_ref' => 'x1', 'requested_by' => 'u_maker']);
+        $this->artisan('sophix:outbox:dispatch')->assertSuccessful(); // fires the EM-CFG-04 -> ICN bridge
+
+        $n = StaffNotification::query()->where('source_business_key', $req->request_id)->where('candidate_group', 'DIRECT')->first();
+        $this->assertNotNull($n, 'the named director should be notified directly');
+        $d = StaffNotificationDelivery::where('notification_id', $n->notification_id)->first();
+        $this->assertSame('cvm.director@wik.sn', $d->recipient_identity['address']);
+        $this->assertSame('DISPATCHED', $d->status);
     }
 
     public function test_disabled_binding_suppresses_that_channel(): void

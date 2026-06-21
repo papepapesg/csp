@@ -112,14 +112,14 @@ Follow this once; it touches **every** pattern below. (Proven by `Subscription/t
   hierarchies (e.g. **CVM high-value retention: `CVM_MANAGER` → named director**) declare stages.
 - Owning modules resume on the outcome via a listener (e.g. `Ilm\Listeners\ResumeCvmOfferOnApproval`,
   `Osr` PO decide, `Provisioning` force-sync). The notification side is bridged to ICN-01
-  (`NotifyApproversOnApprovalRequested`), which alerts the **current stage's** role group on the
-  initial request and on each advance.
+  (`NotifyApproversOnApprovalRequested`), which alerts the **current stage's** approvers on the initial
+  request and on each advance: a **ROLE** stage notifies its `approver_roles` as candidate groups; a
+  **USER** stage is sent a **direct** message to the named person's address (`StaffNotificationService::
+  dispatchDirect`, EMAIL today) so an approver who belongs to no group is still reached.
 - **Pattern:** gate a sensitive action with `request()`, store the `request_id`, resume on
   `ApprovalApproved`/`ApprovalRejected`.
-- **Open item:** a `USER`-stage (named approver) currently surfaces in that person's approval queue but
-  is not yet *push*-notified — direct per-user ICN delivery (the ICN pipeline is group-based today) is a
-  follow-up. The distinct-approver guard is **within** a stage; cross-stage separation comes from each
-  stage targeting a different role/person.
+- The distinct-approver guard is **within** a stage; cross-stage separation comes from each stage
+  targeting a different role/person.
 
 ## 6. Rules — *operator-overridable decision tables*
 - `App\Foundation\Rules\RuleEngine::evaluate('rules.<package>', $facts)` returns a decision. The

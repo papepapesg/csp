@@ -20,6 +20,10 @@ use Modules\Notification\Models\Icn\StaffNotificationUserPref;
  * candidate group to staff users, computes each recipient's effective channel list
  * (R-ICN-01-D-4/5), persists the parent + per-(recipient x channel) delivery rows, then runs
  * the dispatcher inline. Idempotency-Key replays return the existing notification (R-D-11).
+ *
+ * `dispatchDirect()` is the group-less variant: it sends a templated message to explicit
+ * `{channel, address}` recipients (email, WhatsApp/MSISDN, …) — used to reach someone who belongs
+ * to no group, e.g. a named approver on a EM-CFG-04 USER stage.
  */
 class StaffNotificationService
 {
@@ -30,7 +34,7 @@ class StaffNotificationService
     ) {}
 
     /**
-     * @param array<string,mixed> $data
+     * @param  array<string,mixed>  $data
      * @return array{notification:StaffNotification, replay:bool}
      */
     public function dispatch(array $data, ?string $idempotencyKey = null): array
@@ -96,12 +100,103 @@ class StaffNotificationService
     }
 
     /**
+     * Direct-address send. Deliver a templated message to explicit destinations the caller supplies
+     * — `recipients: [{channel, address}]` (an email, a WhatsApp/MSISDN, a webhook id, …) — bypassing
+     * group resolution and per-user channel preferences. Used to reach someone who isn't a staff
+     * group member, e.g. a named approver (a USER-stage "director") at their email. Each recipient's
+     * address rides on its delivery row, so the channel adapter dispatches straight to it.
+     *
+     * @param  array<string,mixed>  $data  operatorCode?, templateCode, templateVariables?,
+     *                                     recipients:list<array{channel:string,address:string,identity?:array}>, urgency?, source*?
+     * @return array{notification:StaffNotification, replay:bool}
+     */
+    public function dispatchDirect(array $data, ?string $idempotencyKey = null): array
+    {
+        $operator = $data['operatorCode'] ?? Context::operatorCode();
+        Context::setOperatorCode($operator);
+
+        if ($idempotencyKey) {
+            $existing = StaffNotification::query()->where('operator_code', $operator)->where('idempotency_key', $idempotencyKey)->first();
+            if ($existing) {
+                return ['notification' => $existing, 'replay' => true];
+            }
+        }
+
+        $templateCode = $data['templateCode'];
+        $channelsForTemplate = StaffNotificationTemplate::channelsFor($operator, $templateCode);
+        if ($channelsForTemplate === []) {
+            throw DomainException::notFound("Template {$templateCode} not found for {$operator}.");
+        }
+        $this->assertRequiredVariables($operator, $templateCode, $channelsForTemplate, $data['templateVariables'] ?? []);
+
+        $recipients = array_values($data['recipients'] ?? []);
+        if ($recipients === []) {
+            throw DomainException::ruleRejected('NO_RECIPIENTS', 'A direct send needs at least one recipient.');
+        }
+        $cfg = StaffNotificationChannelConfig::forOperator($operator);
+        $ackWindow = (int) ($data['ackWindowHours'] ?? $cfg?->ack_window_hours ?? 24);
+
+        return DB::transaction(function () use ($operator, $data, $templateCode, $channelsForTemplate, $ackWindow, $recipients, $idempotencyKey) {
+            $notification = StaffNotification::query()->create([
+                'operator_code' => $operator,
+                'source_module' => $data['sourceModule'] ?? 'UNKNOWN',
+                'source_task_id' => $data['sourceTaskId'] ?? null,
+                'source_process_instance' => $data['sourceProcessInstance'] ?? null,
+                'source_business_key' => $data['sourceBusinessKey'] ?? null,
+                'candidate_group' => $data['candidateGroup'] ?? 'DIRECT',
+                'template_code' => $templateCode,
+                'template_variables' => $data['templateVariables'] ?? [],
+                'urgency' => $data['urgency'] ?? 'high',
+                'fallback_mode_override' => StaffNotificationChannelConfig::PARALLEL, // explicit recipients: just send each
+                'deeplink_url' => $data['deeplinkUrl'] ?? ($data['templateVariables']['deeplinkUrl'] ?? null),
+                'ack_window_hours' => $ackWindow,
+                'expected_recipients' => count($recipients),
+                'status' => StaffNotification::PROCESSING,
+                'idempotency_key' => $idempotencyKey,
+                'expires_at' => now()->addHours($ackWindow),
+            ]);
+
+            $this->emit(StaffNotificationEvents::CREATED, $notification, ['expectedRecipients' => count($recipients), 'direct' => true]);
+
+            $idx = 0;
+            foreach ($recipients as $recipient) {
+                $channel = $recipient['channel'];
+                $address = $recipient['address'] ?? null;
+                if (! in_array($channel, $channelsForTemplate, true) || ! $address) {
+                    continue; // no template variant for that channel, or no address — nothing to send
+                }
+                StaffNotificationDelivery::query()->create([
+                    'notification_id' => $notification->notification_id,
+                    'operator_code' => $operator,
+                    'recipient_user_id' => $recipient['userId'] ?? 'addr:'.$address, // synthetic id keeps the row unique + non-null
+                    'recipient_identity' => $recipient['identity'] ?? ['address' => $address],
+                    'channel' => $channel,
+                    'channel_priority_idx' => $idx++,
+                    'status' => StaffNotificationDelivery::PENDING,
+                    'attempts' => 0,
+                ]);
+            }
+
+            if ($notification->deliveries()->count() === 0) {
+                $notification->update(['status' => StaffNotification::EXPIRED, 'expiry_reason' => 'NO_RECIPIENTS']);
+                $this->emit(StaffNotificationEvents::EXPIRED, $notification, ['reason' => 'NO_RECIPIENTS']);
+
+                return ['notification' => $notification, 'replay' => false];
+            }
+
+            $this->dispatcher->dispatchNotification($notification);
+
+            return ['notification' => $notification->refresh(), 'replay' => false];
+        });
+    }
+
+    /**
      * R-ICN-01-D-4/5: effective channel list = (user priority ∩ enabled) − suppressed,
      * narrowed to channels that have a template variant, with quiet-hours removing all but
      * 'high' urgency. Deliverable channels get PENDING rows; removed channels get SUPPRESSED
      * rows so the audit shows why a recipient wasn't reached on them.
      *
-     * @param list<string> $channelsForTemplate
+     * @param  list<string>  $channelsForTemplate
      */
     private function createDeliveryRows(StaffNotification $notification, string $operator, string $userId, ?StaffNotificationChannelConfig $cfg, array $channelsForTemplate): void
     {

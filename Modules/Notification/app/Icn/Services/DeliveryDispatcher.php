@@ -4,6 +4,7 @@ namespace Modules\Notification\Icn\Services;
 
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
+use Illuminate\Support\Collection;
 use Modules\Notification\Icn\RecipientInfo;
 use Modules\Notification\Icn\StaffAdapterRegistry;
 use Modules\Notification\Icn\StaffNotificationEvents;
@@ -118,12 +119,18 @@ class DeliveryDispatcher
             return;
         }
 
-        $identity = StaffNotificationUserChannelIdentity::resolve($delivery->recipient_user_id, $delivery->channel);
-        $recipient = new RecipientInfo(
-            $delivery->recipient_user_id,
-            $identity?->identity_jsonb,
-            fn () => $this->directory->profile($delivery->recipient_user_id),
-        );
+        // A DIRECT send carries its address on the delivery row; otherwise resolve the recipient's
+        // staff channel-identity (falling back to the FOUNDATION_AUTH profile).
+        if ($delivery->recipient_identity) {
+            $recipient = new RecipientInfo($delivery->recipient_user_id, $delivery->recipient_identity, null);
+        } else {
+            $identity = StaffNotificationUserChannelIdentity::resolve($delivery->recipient_user_id, $delivery->channel);
+            $recipient = new RecipientInfo(
+                $delivery->recipient_user_id,
+                $identity?->identity_jsonb,
+                fn () => $this->directory->profile($delivery->recipient_user_id),
+            );
+        }
 
         $result = $adapter->dispatch($delivery, $message, $recipient);
         $delivery->attempts++;
@@ -202,7 +209,7 @@ class DeliveryDispatcher
         $delivery->save();
     }
 
-    /** @param \Illuminate\Support\Collection<int,StaffNotificationDelivery> $rows */
+    /** @param Collection<int,StaffNotificationDelivery> $rows */
     private function suppressRemaining($rows, int $afterIdx): void
     {
         foreach ($rows as $row) {

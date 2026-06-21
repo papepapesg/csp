@@ -20,9 +20,16 @@ ILM `CustomerAccountStatusChanged{customerVisible:true}` → `AccountStatusNotif
 `notification_log` (`DISPATCHED`). *Proven by `Not01PipelineTest`.*
 
 ### 2. An approval awaits a back-office group (ICN)
-Any EM-CFG-04 `ApprovalRequested` → `NotifyApproversOnApprovalRequested` →
-`StaffNotificationService::dispatch(template:'approval-needed', candidateGroup:<approver role>)` → the
-group's members get EMAIL/SLACK/IN_APP_PUSH per their prefs. *Proven by `Icn01Test`.*
+Any EM-CFG-04 `ApprovalRequested`/`ApprovalStageAdvanced` → `NotifyApproversOnApprovalRequested` → for a
+**ROLE** stage `StaffNotificationService::dispatch(template:'approval-needed', candidateGroup:<approver
+role>)` → the group's members get EMAIL/SLACK/IN_APP_PUSH per their prefs. *Proven by `Icn01Test`.*
+
+### (bonus) 2b. A named approver who's in no group (direct send)
+A **USER** stage (e.g. an invited *director*) has no candidate group, so the bridge calls
+`StaffNotificationService::dispatchDirect(template:'approval-needed', recipients:[{channel:'EMAIL',
+address:<director email>}])` — the explicit address rides on the delivery row
+(`recipient_identity`) and the channel adapter sends straight to it. Works for any address/channel
+(email, WhatsApp/MSISDN, webhook id). *Proven by `Icn01Test::test_user_stage_approval_emails_the_named_director_directly` + `…direct_send_reaches_an_explicit_address`.*
 
 ### 3. Dunning notice — channels from routing, not code
 BIL-04 `DunningStageAdvanced` → `DunningNotificationBridge` → orchestrator routes per the operator's
@@ -132,7 +139,7 @@ customer pipeline).
 | `NotificationOrchestrator` | NOT-01 pipeline (idempotency→route→preference→regulatory→render→dispatch→audit) |
 | `TemplateService` | template CRUD (Studio) |
 | `RenderRetryService`/`RetryScheduler`/`BounceService` | render retry, dispatch retry/escalation, bounce |
-| `Icn/StaffNotificationService` (+directory/dispatcher) | ICN-01 group fan-out + per-recipient channel plan |
+| `Icn/StaffNotificationService` (+directory/dispatcher) | ICN-01 group fan-out (`dispatch`) + **direct-address send** (`dispatchDirect` — explicit `{channel,address}` recipients, no group) |
 
 ## 4. API surface
 `/api/notifications/preferences`, `/api/admin/notifications/{send,resend,dashboard,failure-queue,

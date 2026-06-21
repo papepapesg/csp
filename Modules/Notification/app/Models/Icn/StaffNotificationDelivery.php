@@ -19,10 +19,15 @@ class StaffNotificationDelivery extends Model
     use HasPrefixedId;
 
     public const PENDING = 'PENDING';
+
     public const DISPATCHED = 'DISPATCHED';
+
     public const ACKNOWLEDGED = 'ACKNOWLEDGED';
+
     public const FAILED = 'FAILED';
+
     public const TERMINALLY_FAILED = 'TERMINALLY_FAILED';
+
     public const SUPPRESSED = 'SUPPRESSED';
 
     protected $table = 'staff_notification_delivery';
@@ -35,6 +40,7 @@ class StaffNotificationDelivery extends Model
 
     protected $casts = [
         'provider_response' => 'array',
+        'recipient_identity' => 'array',
         'attempts' => 'int',
         'channel_priority_idx' => 'int',
         'last_attempt_at' => 'datetime',
