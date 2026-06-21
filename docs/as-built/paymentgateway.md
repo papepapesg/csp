@@ -39,18 +39,23 @@ A `PaymentReceived` whose reference matches no open invoice → Billing posts it
 ### 8. Admin audits callbacks
 `GET /api/payment-gateway/callbacks[/{id}]` lists/inspects raw + parsed notifications.
 
-## 2. Data model — ≥4 sample rows + readings
+## 2. Data model — ≥4 **complete** sample rows + readings per table
+> **Completeness:** each row lists **every domain column** (nullables shown as `null`); the string
+> primary key shown is the real one and `created_at`/`updated_at` are omitted by convention.
 
-### `payment_gateway_callback` · `status`: `RECEIVED|PROCESSED|DUPLICATE|FAILED|IGNORED`
+### `payment_gateway_callback` · `provider`: `MPESA|VISA|BANK_TRANSFER` · `status`: `RECEIVED|PROCESSED|REJECTED|DUPLICATE`
 ```json
-{ "callback_id":"pgc_1","provider":"mpesa","provider_reference":"QGR7Xk12","amount":5000,"status":"PROCESSED" }
-{ "callback_id":"pgc_2","provider":"mpesa","provider_reference":"QGR7Xk12","status":"DUPLICATE" }
-{ "callback_id":"pgc_3","provider":"visa","provider_reference":"ch_99","amount":2500,"status":"FAILED" }
-{ "callback_id":"pgc_4","provider":"mpesa","provider_reference":null,"status":"IGNORED" }
+{ "callback_id":"pgcb_1","operator_code":"WIK","provider":"MPESA","external_ref":"QGR7Xk12","account_ref":"254700000001","resolved_account_id":"acct_50","amount":5000.00,"currency":"KES","raw":{"TransID":"QGR7Xk12","TransAmount":"5000"},"status":"PROCESSED","payment_id":"pay_91","reject_reason":null,"received_at":"2026-06-20T09:00:00Z" }
+{ "callback_id":"pgcb_2","operator_code":"WIK","provider":"MPESA","external_ref":"QGR7Xk12","account_ref":"254700000001","resolved_account_id":"acct_50","amount":5000.00,"currency":"KES","raw":{"TransID":"QGR7Xk12"},"status":"DUPLICATE","payment_id":null,"reject_reason":"duplicate external_ref","received_at":"2026-06-20T09:00:05Z" }
+{ "callback_id":"pgcb_3","operator_code":"WIK","provider":"VISA","external_ref":"ch_99","account_ref":null,"resolved_account_id":null,"amount":2500.00,"currency":"KES","raw":{"id":"ch_99","status":"declined"},"status":"REJECTED","payment_id":null,"reject_reason":"CARD_DECLINED","received_at":"2026-06-20T10:00:00Z" }
+{ "callback_id":"pgcb_4","operator_code":"WIK","provider":"BANK_TRANSFER","external_ref":"bt_7781","account_ref":"PAYBILL-22","resolved_account_id":null,"amount":12000.00,"currency":"KES","raw":{"ref":"bt_7781"},"status":"RECEIVED","payment_id":null,"reject_reason":null,"received_at":"2026-06-21T08:00:00Z" }
 ```
-**Reading:** the `provider_reference` is the **dedup key** — pgc_2 is a retry of pgc_1, recorded but not
-re-emitted. pgc_3 was a declined card (no event). pgc_4 was malformed (kept for audit, ignored).
-`PROCESSED` is the only status that emitted `PaymentReceived`.
+**Reading:** `(provider, external_ref)` is the **dedup key** (a DB unique constraint) — pgcb_2 is a retry
+of pgcb_1, recorded `DUPLICATE` but **not** re-emitted, so money is never double-credited. `PROCESSED`
+is the only status that emitted `PaymentReceived` (and so the only one that fills `payment_id`); pgcb_3
+is a declined card (`REJECTED`, `reject_reason` set, no event); pgcb_4 is a freshly landed bank transfer
+still `RECEIVED` (not yet resolved to an account — `resolved_account_id:null`). The full provider body is
+kept in `raw` for audit.
 
 ## 3. Services
 | Service | Responsibility |

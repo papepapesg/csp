@@ -55,52 +55,77 @@ listener.* *Proven by `FieldAuditCampaignTest`.*
 ### (bonus) 9. Finalization is gated on a checklist
 `finalize` is rejected unless the `wo_finalization_requirement` items are satisfied (R-WO finalize gate).
 
-## 2. Data model — ≥4 sample rows + readings
+## 2. Data model — ≥4 **complete** sample rows + readings
+> **Completeness:** each row lists **every domain column** (nullables shown as `null`). The string
+> business key shown is the real primary key; `created_at`/`updated_at` are omitted by convention.
 
-### `work_order` · `type`: `INSTALLATION|SUPPORT|SHIFTING|RELOCATION|EQUIPMENT|NOC|FIELD_AUDIT` · `status`: `PENDING|ASSIGNED|IN_PROGRESS|FINALIZATION_PENDING|COMPLETED|CANCELLED` · `priority`: `LOW|NORMAL|HIGH|URGENT` · `source_type`: `TICKET|SUBSCRIPTION_OP|FULFILLMENT|MANUAL|FIELD_AUDIT`
+### `work_order` · `type`: `INSTALLATION|SUPPORT|SHIFTING|RELOCATION|EQUIPMENT|NOC|FIELD_AUDIT` · `status`: `PENDING|ASSIGNED|IN_PROGRESS|FINALIZATION_PENDING|COMPLETED|CANCELLED` · `priority`: `LOW|NORMAL|HIGH|URGENT` · `source_type`: `TICKET|SUBSCRIPTION_OP|FULFILLMENT|MANUAL|FIELD_AUDIT` · `link_type`: `PARENT_CHILD|DEPENDENCY`
 ```json
-{ "work_order_id":"wo_1","type":"INSTALLATION","status":"COMPLETED","priority":"NORMAL","tech_region_id":"KE-NRB-KAREN","source_type":"FULFILLMENT","source_ref":"order_1" }
-{ "work_order_id":"wo_2","type":"SUPPORT","status":"IN_PROGRESS","priority":"URGENT","source_type":"TICKET","source_ref":"tkt_9" }
-{ "work_order_id":"wo_3","type":"SHIFTING","status":"ASSIGNED","priority":"NORMAL","source_type":"SUBSCRIPTION_OP" }
-{ "work_order_id":"wo_4","type":"FIELD_AUDIT","status":"PENDING","priority":"LOW","source_type":"FIELD_AUDIT","source_ref":"fat_1" }
+{ "work_order_id":"wo_1","operator_code":"WIK","type":"INSTALLATION","kind":null,"job_type_code":"FTTH_INSTALL","current_phase":null,"status":"COMPLETED","priority":"NORMAL","account_id":"acct_50","subscription_id":"sub_1","customer_id":"cust_50","homepass_id":"hp_1","tech_region_id":"KE-NRB-KAREN","contractor_id":"ctr_9","team_id":null,"assigned_technician_id":"tech_3","source_type":"FULFILLMENT","source_ref":"order_1","master_wo_id":null,"originating_context_type":null,"initial_reason":null,"escalation_candidate":false,"link_type":null,"scheduled_at":"2026-06-20T08:00:00Z","sla_due_at":"2026-06-21T08:00:00Z","assigned_at":"2026-06-20T07:30:00Z","first_response_at":"2026-06-20T08:05:00Z","started_at":"2026-06-20T09:00:00Z","finalized_at":"2026-06-20T10:30:00Z","warranty_until":"2026-09-18T00:00:00Z","resolution_code":"INSTALL_OK","final_reason":null,"required_skills":["fiber-install"],"findings":{"ontSerial":"SN-001"},"created_by":"u_desk1" }
+{ "work_order_id":"wo_2","operator_code":"WIK","type":"SUPPORT","kind":"SUPPORT","job_type_code":"NO_SIGNAL","current_phase":"SITE_VISIT","status":"IN_PROGRESS","priority":"URGENT","account_id":"acct_51","subscription_id":"sub_2","customer_id":"cust_51","homepass_id":"hp_2","tech_region_id":"KE-NRB-KAREN","contractor_id":null,"team_id":null,"assigned_technician_id":"staff_7","source_type":"TICKET","source_ref":"tkt_9","master_wo_id":null,"originating_context_type":"TICKET","initial_reason":"no signal at ONT","escalation_candidate":false,"link_type":null,"scheduled_at":"2026-06-21T10:00:00Z","sla_due_at":"2026-06-21T14:00:00Z","assigned_at":"2026-06-21T09:30:00Z","first_response_at":"2026-06-21T10:10:00Z","started_at":"2026-06-21T10:15:00Z","finalized_at":null,"warranty_until":null,"resolution_code":null,"final_reason":null,"required_skills":["diagnostics"],"findings":null,"created_by":"u_desk2" }
+{ "work_order_id":"wo_3","operator_code":"WIK","type":"SHIFTING","kind":"SHIFTING","job_type_code":null,"current_phase":"PHASE_1","status":"ASSIGNED","priority":"NORMAL","account_id":"acct_52","subscription_id":"sub_3","customer_id":"cust_52","homepass_id":"hp_3","tech_region_id":"KE-MSA-NYALI","contractor_id":"ctr_4","team_id":"team_2","assigned_technician_id":null,"source_type":"SUBSCRIPTION_OP","source_ref":"subop_77","master_wo_id":null,"originating_context_type":null,"initial_reason":null,"escalation_candidate":false,"link_type":null,"scheduled_at":"2026-06-23T08:00:00Z","sla_due_at":"2026-06-30T08:00:00Z","assigned_at":"2026-06-21T12:00:00Z","first_response_at":null,"started_at":null,"finalized_at":null,"warranty_until":null,"resolution_code":null,"final_reason":null,"required_skills":["fiber-install"],"findings":null,"created_by":"u_desk1" }
+{ "work_order_id":"wo_4","operator_code":"WIK","type":"FIELD_AUDIT","kind":"FIELD_AUDIT","job_type_code":null,"current_phase":null,"status":"PENDING","priority":"LOW","account_id":null,"subscription_id":null,"customer_id":"cust_60","homepass_id":null,"tech_region_id":"KE-NRB-KAREN","contractor_id":null,"team_id":null,"assigned_technician_id":null,"source_type":"FIELD_AUDIT","source_ref":"fat_1","master_wo_id":null,"originating_context_type":null,"initial_reason":null,"escalation_candidate":false,"link_type":null,"scheduled_at":null,"sla_due_at":"2026-06-28T08:00:00Z","assigned_at":null,"first_response_at":null,"started_at":null,"finalized_at":null,"warranty_until":null,"resolution_code":null,"final_reason":null,"required_skills":[],"findings":null,"created_by":"u_audit1" }
+{ "work_order_id":"wo_5","operator_code":"WIK","type":"SUPPORT","kind":"SUPPORT","job_type_code":"QCS","current_phase":"ESCALATED","status":"CANCELLED","priority":"HIGH","account_id":"acct_53","subscription_id":"sub_4","customer_id":"cust_53","homepass_id":"hp_4","tech_region_id":"KE-NRB-KAREN","contractor_id":"ctr_9","team_id":null,"assigned_technician_id":"tech_3","source_type":"SUBSCRIPTION_OP","source_ref":"subop_88","master_wo_id":"wo_2","originating_context_type":"TICKET","initial_reason":"repeat fault — quality control","escalation_candidate":true,"link_type":"PARENT_CHILD","scheduled_at":null,"sla_due_at":"2026-06-22T00:00:00Z","assigned_at":"2026-06-21T13:00:00Z","first_response_at":null,"started_at":null,"finalized_at":null,"warranty_until":null,"resolution_code":null,"final_reason":"CANCELLED_BY_DESK","required_skills":["diagnostics"],"findings":null,"created_by":"u_desk2" }
 ```
-**Reading:** `type` picks the flow + skills; `source_type/ref` is the **origin** (a fulfillment order, a
-ticket, a subscription op, a field-audit task) — the back-link other modules resume on. `priority` sets
-the SLA window at create (URGENT=4h … LOW=168h). The status is the lifecycle state machine.
+**Reading:** `type`/`kind` pick the flow + skills (`required_skills` filters auto-assign); `source_type/ref`
+is the **origin** (a fulfillment order, a ticket, a subscription op, a field-audit task) — the back-link
+other modules resume on. `priority` sets the SLA window at create (`sla_due_at`: URGENT=4h … LOW=168h),
+`first_response_at` is the SLA first-touch. `assigned_*`/`started_at`/`finalized_at` track the lifecycle;
+`current_phase` is the flow cursor for SUPPORT/SHIFTING. wo_5 is an escalation child (`master_wo_id`
++`link_type=PARENT_CHILD`, `escalation_candidate=true`) — a QCS WO spawned off wo_2. `warranty_until`
+links a finalized install to its warranty window; `findings` captures close-out evidence (the ONT serial).
 
-### `wo_job_type_catalog` & `wo_finalization_requirement`
+### `wo_job_type_catalog` (operator job-type config) · `kind`: `SUPPORT|SHIFTING|INSTALLATION` · `network_type`: `GPON|HFC|…`
 ```json
-{ "job_type_code":"FTTH_INSTALL","wo_type":"INSTALLATION","required_skills":["fiber-install"],"sla_hours":24 }
-{ "job_type_code":"HFC_INSTALL","wo_type":"INSTALLATION","required_skills":["coax-install"],"sla_hours":24 }
-{ "job_type_code":"NO_SIGNAL","wo_type":"SUPPORT","required_skills":["diagnostics"],"sla_hours":4 }
-{ "requirement":{ "wo_type":"INSTALLATION","code":"ONT_SERIAL","mandatory":true } }
+{ "id":"jtc_1","operator_code":"WIK","job_type_code":"FTTH_INSTALL","kind":"INSTALLATION","display_name":"FTTH Installation","description":"GPON new install","network_type":"GPON","requires_site_visit":true,"warranty_days":90 }
+{ "id":"jtc_2","operator_code":"WIK","job_type_code":"HFC_INSTALL","kind":"INSTALLATION","display_name":"HFC Installation","description":null,"network_type":"HFC","requires_site_visit":true,"warranty_days":90 }
+{ "id":"jtc_3","operator_code":"WIK","job_type_code":"NO_SIGNAL","kind":"SUPPORT","display_name":"No Signal Diagnostics","description":"loss-of-service fault","network_type":null,"requires_site_visit":true,"warranty_days":30 }
+{ "id":"jtc_4","operator_code":"WIK","job_type_code":"RPT","kind":"SUPPORT","display_name":"Remote Password/Profile Tweak","description":"desk-only fix","network_type":null,"requires_site_visit":false,"warranty_days":30 }
 ```
-**Reading:** the **job-type catalog** is operator config — it drives skill-matching for auto-assign and
-the per-type SLA. Finalization requirements are the close-out checklist (e.g. must capture the ONT
-serial) enforced at `finalize`.
+**Reading:** the **job-type catalog** is per-operator config — `requires_site_visit` drives the
+site-visit-decision gateway (jtc_4 is desk-only), `warranty_days` feeds warranty linkage, and the code
+drives skill-matching for auto-assign. *(The earlier `required_skills`/`sla_hours` sample columns were a
+doc shorthand and don't exist on this table — required skills live on `work_order.required_skills`, SLA
+is computed from priority.)*
 
-### `field_audit_task` · `audit_type`: `EQUIPMENT|NETWORK|KYC` · `status`: `CREATED|ASSIGNED|DISCREPANCY_OPEN|CLOSED`
+### `wo_finalization_requirements` (the close-out checklist) · `kind`: `INSTALLATION|SUPPORT|SHIFTING`
 ```json
-{ "audit_task_id":"fat_1","audit_type":"EQUIPMENT","task_type":"CUSTOMER_PREMISES","customer_id":"CUS-1","status":"CREATED" }
-{ "audit_task_id":"fat_2","audit_type":"EQUIPMENT","status":"DISCREPANCY_OPEN","wo_id":"wo_4" }
-{ "audit_task_id":"fat_3","audit_type":"NETWORK","task_type":"PLANT","status":"CLOSED" }
-{ "audit_task_id":"fat_4","audit_type":"KYC","status":"ASSIGNED" }
+{ "id":"finr_1","operator_code":"WIK","kind":"INSTALLATION","job_type_code":"FTTH_INSTALL","required_note_kinds":["findings","ont_serial"],"required_attachment_categories":["ont_photo","speedtest"],"min_attachments_per_category":{"ont_photo":1,"speedtest":1} }
+{ "id":"finr_2","operator_code":"WIK","kind":"INSTALLATION","job_type_code":null,"required_note_kinds":["findings"],"required_attachment_categories":["site_photo"],"min_attachments_per_category":{"site_photo":1} }
+{ "id":"finr_3","operator_code":"WIK","kind":"SUPPORT","job_type_code":null,"required_note_kinds":["findings","solution","final_reason_set"],"required_attachment_categories":null,"min_attachments_per_category":null }
+{ "id":"finr_4","operator_code":"WIK","kind":"SHIFTING","job_type_code":null,"required_note_kinds":["findings","bindings_captured"],"required_attachment_categories":["new_premises_photo"],"min_attachments_per_category":{"new_premises_photo":2} }
+```
+**Reading:** the per-`(operator,kind,job_type_code)` checklist the 2-step finalize enforces at
+second-confirm — required structured-note kinds plus required attachment categories and minimum counts.
+`job_type_code=null` (finr_2/3/4) is the default for the kind; a job-type-specific row (finr_1) overrides
+it (e.g. FTTH must capture the ONT serial + a speedtest before it can complete).
+
+### `field_audit_task` · `audit_type`: `EQUIPMENT|NETWORK|KYC` · `task_type`: `CUSTOMER_PREMISES|FIELD_SITE|POST_SWAP|INVESTIGATION` · `status`: `CREATED|ASSIGNED|IN_PROGRESS|SUBMITTED|DISCREPANCY_OPEN|CLOSED|CANCELLED`
+```json
+{ "audit_task_id":"fat_1","operator_code":"WIK","campaign_id":"fac_1","audit_type":"EQUIPMENT","task_type":"CUSTOMER_PREMISES","customer_id":"cust_60","account_id":"acct_60","subscription_id":"sub_60","homepass_id":"hp_10","wo_id":null,"assigned_to_user_id":null,"assigned_team_id":null,"status":"CREATED","source_event_ref":"evt_aa1","due_at":"2026-06-28T17:00:00Z","submitted_at":null,"closed_at":null }
+{ "audit_task_id":"fat_2","operator_code":"WIK","campaign_id":"fac_1","audit_type":"EQUIPMENT","task_type":"POST_SWAP","customer_id":"cust_61","account_id":"acct_61","subscription_id":"sub_61","homepass_id":"hp_11","wo_id":"wo_4","assigned_to_user_id":"tech_3","assigned_team_id":null,"status":"DISCREPANCY_OPEN","source_event_ref":"evt_aa2","due_at":"2026-06-25T17:00:00Z","submitted_at":"2026-06-24T15:00:00Z","closed_at":null }
+{ "audit_task_id":"fat_3","operator_code":"WIK","campaign_id":"fac_2","audit_type":"NETWORK","task_type":"FIELD_SITE","customer_id":null,"account_id":null,"subscription_id":null,"homepass_id":null,"wo_id":null,"assigned_to_user_id":"staff_7","assigned_team_id":"team_2","status":"CLOSED","source_event_ref":"evt_bb1","due_at":"2026-06-20T17:00:00Z","submitted_at":"2026-06-19T12:00:00Z","closed_at":"2026-06-19T16:00:00Z" }
+{ "audit_task_id":"fat_4","operator_code":"WIK","campaign_id":null,"audit_type":"KYC","task_type":"CUSTOMER_PREMISES","customer_id":"cust_62","account_id":"acct_62","subscription_id":null,"homepass_id":"hp_12","wo_id":null,"assigned_to_user_id":"staff_9","assigned_team_id":null,"status":"ASSIGNED","source_event_ref":"evt_cc1","due_at":"2026-06-27T17:00:00Z","submitted_at":null,"closed_at":null }
 ```
 **Reading:** one capability, **audit_type-driven** (equipment count, network plant, KYC re-check). A
-task moves `CREATED → ASSIGNED → (DISCREPANCY_OPEN | CLOSED)`. `wo_id` set = WO-backed (a tech is
-dispatched); otherwise it's a desk/mobile task.
+task moves `CREATED → ASSIGNED → IN_PROGRESS → SUBMITTED → (DISCREPANCY_OPEN | CLOSED)`. `wo_id` set
+(fat_2) = WO-backed (a tech is dispatched); otherwise it's a desk/mobile task. `campaign_id` ties the
+task to its campaign (fat_4 is an ad-hoc KYC task, no campaign); `source_event_ref` is the idempotency
+key on the originating event.
 
-### `field_audit_discrepancy` · `discrepancy_type`: `MISSING|WRONG_SERIAL|DAMAGED|FOUND_EXTRA|WRONG_LOCATION|NOT_ACCESSIBLE` · `severity`: `LOW|MEDIUM|HIGH` · `route_action`: `CREATE_TICKET|CREATE_RMA_RECOVERY|REQUEST_OSR_CORRECTION|REQUEST_WRITE_OFF|NO_ACTION` · `status`: `OPEN|ROUTED|PENDING_APPROVAL|ACTION_CREATED|RESOLVED|REJECTED`
+### `field_audit_discrepancy` · `discrepancy_type`: `MISSING|WRONG_SERIAL|FOUND_EXTRA|DAMAGED|WRONG_LOCATION|NOT_ACCESSIBLE` · `severity`: `LOW|MEDIUM|HIGH|CRITICAL` · `route_action`: `CREATE_TICKET|CREATE_RMA_RECOVERY|REQUEST_OSR_CORRECTION|REQUEST_WRITE_OFF|NO_ACTION` · `status`: `OPEN|ROUTED|PENDING_APPROVAL|ACTION_CREATED|RESOLVED|REJECTED|CLOSED`
 ```json
-{ "discrepancy_id":"fad_1","discrepancy_type":"MISSING","severity":"HIGH","route_action":"CREATE_RMA_RECOVERY","status":"ACTION_CREATED","routed_ref_type":"OSR_RMA" }
-{ "discrepancy_id":"fad_2","discrepancy_type":"WRONG_SERIAL","severity":"MEDIUM","route_action":"REQUEST_OSR_CORRECTION","status":"PENDING_APPROVAL","approval_request_id":"appr_3" }
-{ "discrepancy_id":"fad_3","discrepancy_type":"DAMAGED","severity":"MEDIUM","route_action":"CREATE_TICKET","status":"ACTION_CREATED","routed_ref_type":"TICKET" }
-{ "discrepancy_id":"fad_4","discrepancy_type":"FOUND_EXTRA","severity":"LOW","route_action":"NO_ACTION","status":"RESOLVED" }
+{ "discrepancy_id":"fad_1","operator_code":"WIK","audit_task_id":"fat_2","expected_item_id":"fae_1","observation_id":"fao_1","discrepancy_type":"MISSING","severity":"HIGH","status":"ACTION_CREATED","route_action":"CREATE_RMA_RECOVERY","routed_ref_type":"OSR_RMA","routed_ref_id":"rma_5","approval_request_id":null,"resolved_at":null }
+{ "discrepancy_id":"fad_2","operator_code":"WIK","audit_task_id":"fat_2","expected_item_id":"fae_2","observation_id":"fao_2","discrepancy_type":"WRONG_SERIAL","severity":"MEDIUM","status":"PENDING_APPROVAL","route_action":"REQUEST_OSR_CORRECTION","routed_ref_type":null,"routed_ref_id":null,"approval_request_id":"appr_3","resolved_at":null }
+{ "discrepancy_id":"fad_3","operator_code":"WIK","audit_task_id":"fat_2","expected_item_id":"fae_3","observation_id":"fao_3","discrepancy_type":"DAMAGED","severity":"MEDIUM","status":"ACTION_CREATED","route_action":"CREATE_TICKET","routed_ref_type":"TICKET","routed_ref_id":"tkt_44","approval_request_id":null,"resolved_at":null }
+{ "discrepancy_id":"fad_4","operator_code":"WIK","audit_task_id":"fat_3","expected_item_id":null,"observation_id":"fao_9","discrepancy_type":"FOUND_EXTRA","severity":"LOW","status":"RESOLVED","route_action":"NO_ACTION","routed_ref_type":null,"routed_ref_id":null,"approval_request_id":null,"resolved_at":"2026-06-19T16:00:00Z" }
 ```
-**Reading:** expected-vs-observed raises a typed discrepancy; `rules.field_audit.*` sets `severity` +
-`route_action`. **Risky** routes (`REQUEST_OSR_CORRECTION`/`REQUEST_WRITE_OFF`) go `PENDING_APPROVAL`
-(EM-CFG-04); safe ones route straight (TICKET/RMA); `NO_ACTION` self-resolves. FA never mutates OSR
-itself — it emits the routed action for the owning module.
+**Reading:** expected-vs-observed raises a typed discrepancy (linked to its `expected_item_id` +
+`observation_id`); `rules.field_audit.*` sets `severity` + `route_action`. **Risky** routes
+(`REQUEST_OSR_CORRECTION`/`REQUEST_WRITE_OFF`) go `PENDING_APPROVAL` (EM-CFG-04, `approval_request_id`
+set); safe ones route straight (`routed_ref_type`/`routed_ref_id` point at the created TICKET/RMA);
+`NO_ACTION` self-resolves (`resolved_at` stamped). FA never mutates OSR itself — it emits the routed
+action for the owning module. fad_4 is a `FOUND_EXTRA` with no expected item (an unexpected unit on site).
 
 ## 3. Services
 | Service | Responsibility |

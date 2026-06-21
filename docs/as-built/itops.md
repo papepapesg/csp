@@ -42,26 +42,30 @@ backlog, SLA-overdue tickets — the at-a-glance health.
 
 ## 2. Data model — ≥4 sample rows + readings
 
-### `service_control` · `command`: `RESTART|PAUSE|RESUME|null` & `service_heartbeat` · `status`: `UP|DOWN`
+### `service_control` · `command`: `RESTART|PAUSE|RESUME|null` & `service_heartbeat` · `status`: `UP|DOWN|STARTING`
 ```json
-{ "service":"workflow-worker","command":"PAUSE","acknowledged_at":"2026-06-20T10:00:00Z","requested_by":"u_noc" }
-{ "service":"outbox-dispatcher","command":null }
-{ "service":"provisioning-poller","command":"RESTART","acknowledged_at":null }
-{ "hb":{ "service":"workflow-worker","status":"UP","last_seen_at":"2026-06-20T10:05:00Z","metrics":{"lastBatch":7} } }
+{ "service":"workflow-worker","command":"PAUSE","requested_by":"u_noc","requested_at":"2026-06-20T10:00:00Z","acknowledged_at":"2026-06-20T10:00:03Z" }
+{ "service":"outbox-dispatcher","command":null,"requested_by":null,"requested_at":null,"acknowledged_at":null }
+{ "service":"provisioning-poller","command":"RESTART","requested_by":"u_noc","requested_at":"2026-06-20T10:02:00Z","acknowledged_at":null }
+{ "service":"scheduler","command":"RESUME","requested_by":"u_noc","requested_at":"2026-06-20T10:04:00Z","acknowledged_at":"2026-06-20T10:04:01Z" }
+{ "hb":{ "service":"workflow-worker","instance_id":"wf-w-1","status":"UP","metrics":{"lastBatch":7,"queueDepth":2},"last_seen_at":"2026-06-20T10:05:00Z" } }
+{ "hb":{ "service":"outbox-dispatcher","instance_id":"ob-d-1","status":"DOWN","metrics":null,"last_seen_at":"2026-06-20T09:40:00Z" } }
 ```
-**Reading:** `command=PAUSE` with an ack persists (the worker re-reads it on restart and stays down);
-`command=null` = run normally; `RESTART` un-acked = will stop once then clear. The heartbeat's
-`last_seen_at` + `status` is the liveness signal the overview reads.
+**Reading:** `command=PAUSE` with an `acknowledged_at` persists (the worker re-reads it on restart and
+stays down); `command=null` = run normally; `RESTART` un-acked (`acknowledged_at=null`) = will stop once
+then clear. The heartbeat's `last_seen_at` + `status` (per `instance_id`) is the liveness signal the
+overview reads; a stale `last_seen_at` reads unhealthy.
 
 ### `system_log`
 ```json
-{ "id":"log_1","level":"warning","message":"Provisioning rejected by NMS","context":{"target":"GPON"} }
-{ "id":"log_2","level":"info","message":"Routine heartbeat" }
-{ "id":"log_3","level":"error","message":"Tax signer timeout","context":{"invoice":"tax_9"} }
-{ "id":"log_4","level":"info","message":"Cycle close completed","context":{"closed":340} }
+{ "id":"log_1","level":"warning","channel":"provisioning","message":"Provisioning rejected by NMS","context":{"target":"GPON"},"correlation_id":"sub_1","logged_at":"2026-06-20T10:00:00Z" }
+{ "id":"log_2","level":"info","channel":null,"message":"Routine heartbeat","context":null,"correlation_id":null,"logged_at":"2026-06-20T10:05:00Z" }
+{ "id":"log_3","level":"error","channel":"billing","message":"Tax signer timeout","context":{"invoice":"tax_9"},"correlation_id":"tax_9","logged_at":"2026-06-20T10:06:00Z" }
+{ "id":"log_4","level":"info","channel":"billing","message":"Cycle close completed","context":{"closed":340},"correlation_id":null,"logged_at":"2026-06-20T10:10:00Z" }
 ```
-**Reading:** structured logs on the **database** channel, filterable by `level` + free-text `q` — the
-NOC's searchable operational record.
+**Reading:** structured logs on the **database** channel, filterable by `level` + free-text `q` (and
+groupable by `channel`/`correlation_id`) — the NOC's searchable operational record. `correlation_id`
+threads a log line into an end-to-end trace.
 
 ## 3. Services & support
 | Component | Responsibility |

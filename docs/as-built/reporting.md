@@ -42,7 +42,10 @@ If a mart row is manually changed, reconcile flags the delta. *Proven by `Report
 ### 8. A new metric = one MetricMap line
 Add a `MetricMap` case (+ the emitting event) and the projector counts it — no schema change.
 
-## 2. Data model — ≥4 sample rows + readings
+## 2. Data model — ≥4 **complete** sample rows + readings per table
+> **Completeness:** the row lists **every domain column**. The mart has a single table with a composite
+> natural key `(operator_code, metric_date, metric_key)`; its auto-increment `id` and the
+> `created_at`/`updated_at` audit timestamps are omitted by convention.
 
 ### `report_daily_metric` (operator, date, metric_key → value)
 ```json

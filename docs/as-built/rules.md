@@ -46,17 +46,20 @@ deploy.
 
 ## 2. Data model — ≥4 sample rows + readings
 
-### `decision_table` (rows of input conditions → output, per package)
+### `decision_table` · `hit_policy`: `FIRST|COLLECT` · `status`: `DRAFT|DEPLOYED|RETIRED`
 ```json
-{ "id":"dt_1","rule_set":"rules.tax-applicability","operator_code":"WIK","conditions":{"taxableKind":"PACKAGE","customerCategory":"RES"},"outcome":{"taxGroup":"KE_INTERNET"} }
-{ "id":"dt_2","rule_set":"rules.tax-applicability","operator_code":"WIK","conditions":{"taxableKind":"USAGE","serviceCategory":"VOICE"},"outcome":{"taxGroup":"KE_VOICE"} }
-{ "id":"dt_3","rule_set":"rules.tax-applicability","operator_code":"WIK","conditions":{"taxableKind":"USAGE","serviceCategory":"DATA"},"outcome":{"taxGroup":"NONE"} }
-{ "id":"dt_4","rule_set":"rules.cvm.offer","operator_code":"WIK","conditions":{"discountPercent":{">=":20}},"outcome":{"requireApproval":true,"approvalPolicy":"CVM_HIGH_VALUE"} }
+{ "table_id":"dt_1","rule_set":"rules.tax-applicability","version":1,"operator_code":"WIK","name":"Tax applicability","description":"Tax group by taxable kind","hit_policy":"FIRST","inputs":["taxableKind","customerCategory","serviceCategory"],"rules":[{"when":[{"var":"taxableKind","op":"=","value":"PACKAGE"},{"var":"customerCategory","op":"=","value":"RES"}],"then":{"taxGroup":"KE_INTERNET"}},{"when":[{"var":"taxableKind","op":"=","value":"USAGE"},{"var":"serviceCategory","op":"=","value":"VOICE"}],"then":{"taxGroup":"KE_VOICE"}},{"when":[{"var":"taxableKind","op":"=","value":"USAGE"},{"var":"serviceCategory","op":"=","value":"DATA"}],"then":{"taxGroup":"NONE"}}],"default_output":{"taxGroup":"NONE"},"status":"DEPLOYED","created_by":"u_studio" }
+{ "table_id":"dt_2","rule_set":"rules.tax-applicability","version":1,"operator_code":null,"name":"Tax applicability (default)","description":null,"hit_policy":"FIRST","inputs":["taxableKind"],"rules":[{"when":[{"var":"taxableKind","op":"=","value":"PACKAGE"}],"then":{"taxGroup":"KE_INTERNET"}}],"default_output":{"taxGroup":"NONE"},"status":"DEPLOYED","created_by":"u_studio" }
+{ "table_id":"dt_3","rule_set":"rules.cvm.offer","version":2,"operator_code":"WIK","name":"CVM offer approval","description":"High-value discount gate","hit_policy":"FIRST","inputs":["offerType","discountPercent"],"rules":[{"when":[{"var":"discountPercent","op":">=","value":20}],"then":{"requireApproval":true,"approvalPolicy":"CVM_HIGH_VALUE"}}],"default_output":{"requireApproval":false},"status":"DEPLOYED","created_by":"u_studio" }
+{ "table_id":"dt_4","rule_set":"rules.field_audit.equipment.discrepancy","version":1,"operator_code":"WIK","name":"Discrepancy routing","description":null,"hit_policy":"COLLECT","inputs":["discrepancyType"],"rules":[{"when":[{"var":"discrepancyType","op":"=","value":"MISSING"}],"then":{"severity":"HIGH","routeAction":"ESCALATE"}}],"default_output":null,"status":"DRAFT","created_by":"u_studio" }
 ```
-**Reading:** each row is a (conditions → outcome) for a **rule package**. dt_3's `taxGroup:NONE` makes
-data usage **tax-exempt** (an enum value that inverts behaviour). dt_4 says discounts ≥ 20% need
-approval. Rows are operator-scoped, so a WIK table overrides the default. Evaluate returns the matching
-outcome (or the registered fallback if no table).
+**Reading:** each table holds `rules` (a list of `when` conditions → `then` outcome) for a **rule
+package** (`rule_set`), evaluated under `hit_policy` (`FIRST` = first match wins, `COLLECT` = gather all)
+with a `default_output` when nothing matches. dt_1's `taxGroup:NONE` for data usage makes it
+**tax-exempt** (an outcome that inverts behaviour); dt_3 says discounts ≥ 20% need approval. Tables are
+operator-scoped + versioned, so a WIK table (`operator_code:WIK`) overrides the default
+(`operator_code:null`); only `DEPLOYED` tables evaluate (dt_4 is still `DRAFT`). Evaluate returns the
+matching outcome (or `default_output`, else the registered code fallback if no table).
 
 ## 3. Engine
 | Component | Responsibility |

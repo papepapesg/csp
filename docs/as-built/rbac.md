@@ -44,37 +44,43 @@ loses access to that region.
 
 ## 2. Data model — ≥4 sample rows + readings
 
-### `rbac_user_scope` · `scope_type`: `GLOBAL|OPERATOR|FRANCHISE|TECH_REGION|CONTRACTOR|TEAM|CHANNEL`
+### `rbac_user_scope_assignment` · `scope_type`: `GLOBAL|OPERATOR|FRANCHISE|TECH_REGION|CONTRACTOR|TEAM|CHANNEL`
 ```json
-{ "id":"us_1","auth_user_id":"u_1","scope_type":"TECH_REGION","scope_value":"KE-NRB-KAREN","active":true }
-{ "id":"us_2","auth_user_id":"u_2","scope_type":"OPERATOR","scope_value":"WIK","active":true }
-{ "id":"us_3","auth_user_id":"u_3","scope_type":"GLOBAL","scope_value":"*","active":true }
-{ "id":"us_4","auth_user_id":"u_1","scope_type":"TECH_REGION","scope_value":"KE-MSA-NYALI","active":false }
+{ "scope_assignment_id":"usa_1","operator_code":"WIK","auth_user_id":"u_1","scope_type":"TECH_REGION","scope_value":"KE-NRB-KAREN","scope_label":"Karen","effective_from":"2026-06-01T00:00:00Z","effective_to":null,"active":true,"created_by_user_id":"admin_1" }
+{ "scope_assignment_id":"usa_2","operator_code":"WIK","auth_user_id":"u_2","scope_type":"OPERATOR","scope_value":"WIK","scope_label":"Wik Telecom","effective_from":null,"effective_to":null,"active":true,"created_by_user_id":"admin_1" }
+{ "scope_assignment_id":"usa_3","operator_code":"WIK","auth_user_id":"u_3","scope_type":"GLOBAL","scope_value":"*","scope_label":null,"effective_from":null,"effective_to":null,"active":true,"created_by_user_id":"admin_1" }
+{ "scope_assignment_id":"usa_4","operator_code":"WIK","auth_user_id":"u_1","scope_type":"TECH_REGION","scope_value":"KE-MSA-NYALI","scope_label":"Nyali","effective_from":"2026-06-01T00:00:00Z","effective_to":"2026-06-15T00:00:00Z","active":false,"created_by_user_id":"admin_2" }
 ```
 **Reading:** `withinScope(user, type, value)` is true if the user holds **GLOBAL**, an **OPERATOR** scope
-matching the tenant, or an **exact** type+value. u_1 is scoped to Karen only (us_4 to Mombasa is revoked
-→ no access there). u_2 sees all of WIK; u_3 is platform-wide. SUPER_ADMIN bypasses regardless.
+matching the tenant, or an **exact** type+value. u_1 is scoped to Karen only (usa_4 to Mombasa/Nyali is
+revoked — `active:false` with an `effective_to` close date → no access there). u_2 sees all of WIK; u_3
+is platform-wide. SUPER_ADMIN bypasses regardless. `effective_from`/`effective_to` bound a scope's
+validity window.
 
 ### `rbac_permission_meta` (`scope_required`) & roles/permissions (spatie)
 ```json
-{ "permission_code":"workorder.assign","module":"WorkOrder","risk":"MEDIUM","scope_required":true }
-{ "permission_code":"billing.manage","module":"Billing","risk":"HIGH","scope_required":false }
-{ "permission_code":"customer.read","module":"Ilm","risk":"LOW","scope_required":false }
-{ "role":{ "code":"DISPATCHER","permissions":["workorder.read","workorder.assign","workforce.read"] } }
+{ "permission_code":"workorder.assign","module_code":"WorkOrder","action_group":"assignment","risk_level":"MEDIUM","description":"Assign a work order to a technician","scope_required":true,"status":"ACTIVE" }
+{ "permission_code":"billing.manage","module_code":"Billing","action_group":"billing","risk_level":"HIGH","description":"Manage billing artefacts","scope_required":false,"status":"ACTIVE" }
+{ "permission_code":"customer.read","module_code":"Ilm","action_group":"customer","risk_level":"LOW","description":"Read customer records","scope_required":false,"status":"ACTIVE" }
+{ "permission_code":"rbac.manage","module_code":"Rbac","action_group":"admin","risk_level":"CRITICAL","description":"Manage roles, permissions and scopes","scope_required":false,"status":"ACTIVE" }
+{ "role":{ "id":4,"name":"DISPATCHER","guard_name":"api" } }
+{ "permission":{ "id":12,"name":"workorder.assign","guard_name":"api" } }
 ```
 **Reading:** `scope_required=true` marks the permissions whose routes should carry a `scope:` gate
-(workorder.assign is region-scoped). The role→permission grant is the "what can you do"; scopes are the
-"where". `risk` drives BO confirmation UX.
+(workorder.assign is region-scoped). The spatie `role`/`permission` rows (`id`, `name`, `guard_name`) are
+the enforcement engine — a role's grants are the "what can you do"; scopes are the "where". `risk_level`
+(up to `CRITICAL`) drives BO confirmation UX.
 
-### `rbac_change_audit` (immutable)
+### `rbac_change_audit` (immutable) · `change_type`: `ROLE_CREATED|ROLE_PERMISSIONS_SYNCED|PERMISSION_CREATED|USER_ROLE_ASSIGNED|USER_SCOPE_…`
 ```json
-{ "id":"ca_1","action":"USER_SCOPE_ASSIGNED","entity":"u_1","new":{"scopeType":"TECH_REGION","scopeValue":"KE-NRB-KAREN"},"actor":"admin_1" }
-{ "id":"ca_2","action":"ROLE_PERMISSIONS_UPDATED","entity":"DISPATCHER","actor":"admin_1" }
-{ "id":"ca_3","action":"USER_SCOPE_REVOKED","entity":"u_1","actor":"admin_2" }
-{ "id":"ca_4","action":"ROLE_ASSIGNED","entity":"u_2","new":{"role":"BILLING_LEAD"},"actor":"admin_1" }
+{ "audit_id":"rba_1","operator_code":"WIK","change_type":"USER_SCOPE_ASSIGNED","target_type":"USER_ROLE","target_id":"u_1","actor_user_id":"admin_1","before_json":null,"after_json":{"scopeType":"TECH_REGION","scopeValue":"KE-NRB-KAREN"},"reason_code":"ONBOARDING" }
+{ "audit_id":"rba_2","operator_code":"WIK","change_type":"ROLE_PERMISSIONS_SYNCED","target_type":"ROLE","target_id":"DISPATCHER","actor_user_id":"admin_1","before_json":{"permissions":["workorder.read"]},"after_json":{"permissions":["workorder.read","workorder.assign"]},"reason_code":null }
+{ "audit_id":"rba_3","operator_code":"WIK","change_type":"USER_SCOPE_REVOKED","target_type":"USER_ROLE","target_id":"u_1","actor_user_id":"admin_2","before_json":{"scopeValue":"KE-MSA-NYALI"},"after_json":{"active":false},"reason_code":"TRANSFER" }
+{ "audit_id":"rba_4","operator_code":"WIK","change_type":"USER_ROLE_ASSIGNED","target_type":"USER_ROLE","target_id":"u_2","actor_user_id":"admin_1","before_json":null,"after_json":{"role":"BILLING_LEAD"},"reason_code":null }
 ```
-**Reading:** every grant/revoke/role change writes an append-only audit row (who, what, before/after) —
-RBAC changes are themselves fully traceable.
+**Reading:** every grant/revoke/role change writes an append-only audit row — who (`actor_user_id`), what
+(`change_type` on `target_type`/`target_id`), before/after (`before_json`/`after_json`) and an optional
+`reason_code` — so RBAC changes are themselves fully traceable.
 
 ## 3. Services & middleware
 | Component | Responsibility |
