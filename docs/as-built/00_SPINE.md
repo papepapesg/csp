@@ -106,10 +106,12 @@ Follow this once; it touches **every** pattern below. (Proven by `Subscription/t
   with its `stage_sequence`. When a stage's quorum is met it **advances** (emits
   `ApprovalStageAdvanced`); the **final** stage flips to `APPROVED` (emits `ApprovalApproved`, topic
   `platform.approvals`). A **reject at any stage** fails the whole chain (`ApprovalRejected`).
-- **Back-compat:** a definition with **no** `approval_stage` rows runs as a **single implicit stage**
-  from the legacy flat columns (`approver_roles`/`required_approvals`/`allow_requester`) — most
-  single-approver gates (force-sync, stock write-off, field-audit) stay that way; only genuine
-  hierarchies (e.g. **CVM high-value retention: `CVM_MANAGER` → named director**) declare stages.
+- **Every approval is a chain.** All seeded policies declare an **explicit** chain via
+  `ApprovalDefinition::defineChain($op, $entityType, $action, [$stage, …])` — a **single-stage** chain
+  where one approver suffices (force-sync, field-audit), a **multi-stage** one for a hierarchy (CVM
+  high-value retention: `CVM_MANAGER` → named director). The flat header columns mirror stage 1.
+- **Back-compat:** a definition with **no** `approval_stage` rows still runs as a single implicit stage
+  from the legacy flat columns, so older/inline policies keep working unchanged.
 - Owning modules resume on the outcome via a listener (e.g. `Ilm\Listeners\ResumeCvmOfferOnApproval`,
   `Osr` PO decide, `Provisioning` force-sync). The notification side is bridged to ICN-01
   (`NotifyApproversOnApprovalRequested`), which alerts the **current stage's** approvers on the initial

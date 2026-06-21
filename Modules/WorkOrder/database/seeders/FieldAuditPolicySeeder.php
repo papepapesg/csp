@@ -51,16 +51,15 @@ class FieldAuditPolicySeeder extends Seeder
             ['ruleId' => 'R-FA-KYD-001', 'when' => [['var' => 'discrepancyType', 'op' => 'eq', 'value' => 'WRONG_LOCATION']], 'then' => ['severity' => 'CRITICAL', 'routeAction' => 'CREATE_TICKET']],
         ], ['severity' => 'CRITICAL', 'routeAction' => 'CREATE_TICKET'], ['discrepancyType', 'auditType', 'conditionStatus']);
 
-        // Severe audits require a supervisor approval before close (EM-CFG-04).
-        ApprovalDefinition::query()->updateOrCreate(
-            ['operator_code' => config('sophix.default_operator', 'WIK'), 'entity_type' => 'FIELD_AUDIT', 'action' => null],
-            ['definition_id' => Id::make('appd'), 'approver_roles' => ['OSR_SUPERVISOR', 'CUSTOMER_CARE_SUPERVISOR'], 'required_approvals' => 1, 'active' => true],
-        );
+        $op = config('sophix.default_operator', 'WIK');
+        // Severe audits require a supervisor approval before close (EM-CFG-04) — single-stage chain.
+        ApprovalDefinition::defineChain($op, 'FIELD_AUDIT', null, [
+            ['name' => 'Supervisor review', 'approver_kind' => 'ROLE', 'approver_roles' => ['OSR_SUPERVISOR', 'CUSTOMER_CARE_SUPERVISOR']],
+        ]);
         // Risky discrepancy routes (OSR correction / write-off) require approval before the OSR action.
-        ApprovalDefinition::query()->updateOrCreate(
-            ['operator_code' => config('sophix.default_operator', 'WIK'), 'entity_type' => 'FIELD_AUDIT_DISCREPANCY', 'action' => null],
-            ['definition_id' => Id::make('appd'), 'approver_roles' => ['OSR_SUPERVISOR'], 'required_approvals' => 1, 'active' => true],
-        );
+        ApprovalDefinition::defineChain($op, 'FIELD_AUDIT_DISCREPANCY', null, [
+            ['name' => 'OSR supervisor review', 'approver_kind' => 'ROLE', 'approver_roles' => ['OSR_SUPERVISOR']],
+        ]);
     }
 
     private function deploy(string $ruleSet, array $rules, array $default, array $inputs): void

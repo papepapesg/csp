@@ -3,7 +3,6 @@
 namespace Modules\Ilm\Database\Seeders;
 
 use App\Foundation\Approvals\ApprovalDefinition;
-use App\Foundation\Approvals\ApprovalStage;
 use App\Foundation\Support\Id;
 use App\Models\User;
 use Illuminate\Database\Seeder;
@@ -66,24 +65,14 @@ class CvmPolicySeeder extends Seeder
         // It is a real HIERARCHY, not a single sign-off: stage 1 the CVM manager (a platform role),
         // then stage 2 a named director — a senior who holds NO platform role, just an invited login.
         $operator = config('sophix.default_operator', 'WIK');
-        $def = ApprovalDefinition::query()->updateOrCreate(
-            ['operator_code' => $operator, 'entity_type' => 'CVM_OFFER', 'action' => 'CVM_HIGH_VALUE_RETENTION_OFFER'],
-            ['definition_id' => Id::make('appd'), 'threshold_amount' => null, 'approver_roles' => ['CVM_MANAGER'], 'required_approvals' => 1, 'active' => true],
-        );
-
-        // The named director gets a lightweight login so they can act on the USER stage.
         $director = User::query()->firstOrCreate(
             ['email' => 'cvm.director@wik.sn', 'operator_code' => $operator],
             ['name' => 'CVM Director', 'status' => 'INVITED', 'password' => Hash::make(Str::random(40))],
         );
 
-        ApprovalStage::query()->updateOrCreate(
-            ['definition_id' => $def->definition_id, 'sequence' => 1],
-            ['stage_id' => Id::make('appds'), 'operator_code' => $operator, 'name' => 'CVM manager review', 'approver_kind' => 'ROLE', 'approver_roles' => ['CVM_MANAGER'], 'required_approvals' => 1],
-        );
-        ApprovalStage::query()->updateOrCreate(
-            ['definition_id' => $def->definition_id, 'sequence' => 2],
-            ['stage_id' => Id::make('appds'), 'operator_code' => $operator, 'name' => 'Director sign-off', 'approver_kind' => 'USER', 'approver_user_ref' => $director->uid, 'approver_email' => $director->email, 'required_approvals' => 1],
-        );
+        ApprovalDefinition::defineChain($operator, 'CVM_OFFER', 'CVM_HIGH_VALUE_RETENTION_OFFER', [
+            ['name' => 'CVM manager review', 'approver_kind' => 'ROLE', 'approver_roles' => ['CVM_MANAGER']],
+            ['name' => 'Director sign-off', 'approver_kind' => 'USER', 'approver_user_ref' => $director->uid, 'approver_email' => $director->email],
+        ]);
     }
 }

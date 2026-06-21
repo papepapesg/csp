@@ -38,10 +38,10 @@ class ProvisioningTargetSeeder extends Seeder
         }
 
         // R-PROV-07: gate destructive force-sync through EM-CFG-04 by default (a manual approval
-        // step before the network is touched). Operators tune approver_roles / thresholds here.
-        ApprovalDefinition::query()->updateOrCreate(
-            ['operator_code' => 'WIK', 'entity_type' => 'PROVISIONING_FORCE_SYNC', 'action' => 'FORCE_SYNC'],
-            ['definition_id' => Id::make('appd'), 'approver_roles' => [], 'required_approvals' => 1, 'active' => true],
-        );
+        // step before the network is touched) — declared as a single-stage chain. Operators tune the
+        // stage's approver(s) or add a second stage here.
+        ApprovalDefinition::defineChain('WIK', 'PROVISIONING_FORCE_SYNC', 'FORCE_SYNC', [
+            ['name' => 'NOC approval', 'approver_kind' => 'ROLE', 'approver_roles' => []],
+        ]);
     }
 }
