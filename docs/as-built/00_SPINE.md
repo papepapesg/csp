@@ -131,6 +131,112 @@ ProcessInstanceEnded → operation ledger reconciled`.
 **An approval:** `Service → ApprovalService.request() → (PENDING) → decide endpoint →
 ApprovalApproved (outbox) → owning-module resume listener applies the outcome`.
 
+---
+
+## 📖 Foundation scenarios (the patterns at work)
+
+### 1. Tenancy isolation (pattern 1)
+A WIK-scoped user `GET /api/customers` — `BelongsToOperator`'s global scope silently adds
+`where operator_code='WIK'`, so MSA rows are invisible. A client can't widen this with a body field;
+only `X-Operator-Code` + the `platform.cross_operator` permission changes the `Context` operator.
+
+### 2. Outbox publish + dispatch (pattern 3)
+`SubscriptionService::transitionStatus(ACTIVE)` runs **inside a DB transaction**: it updates the row
+**and** inserts an `outbox_events` row for `SubscriptionActivated`. If the tx rolls back, neither
+happens. A minute later `sophix:outbox:dispatch` picks up the unpublished row, fires
+`OutboxEventPublished`, and stamps `published_at`. *Atomic state+event, then async fan-out.*
+
+### 3. Inbox dedupe (pattern 3)
+`ReportMetricProjector` receives the event, does `inbox_events.firstOrCreate(event_id, consumer)`; the
+row's `processed_at` is null → it projects and stamps it. A **re-dispatch** of the same `event_id` finds
+`processed_at` set → returns immediately. *At-most-once per consumer.*
+
+### 4. Approval auto-approves when no policy (pattern 5)
+`ApprovalService::request({entity_type:'PURCHASE_ORDER'})` with **no** matching `approval_definition` →
+the request is created `AUTO_APPROVED` and emits `ApprovalAutoApproved`. *Out-of-the-box flows aren't
+blocked; an operator opts into gating by adding a definition row.*
+
+### 5. Approval gated + segregation of duties (pattern 5)
+With a definition, the request is `PENDING`. The **requester** calling `decide(approve:true)` →
+`SELF_APPROVAL_NOT_ALLOWED` (403) unless `allow_requester`. A **different** approver holding an
+`approver_roles` role → an `approval_decision` row is written, `approvals_count` increments; when it
+reaches `required_approvals` the request flips `APPROVED` and emits `ApprovalApproved`.
+
+### 6. Idempotent retry replays (pattern 7)
+`POST …/activate` with `Idempotency-Key: k1` stores `{key, request_hash, response, status}` in
+`idempotency_keys`. The client times out and retries with **the same key + same body** → the middleware
+returns the **stored response**, the controller never runs twice.
+
+### 7. Idempotency conflict (pattern 7)
+The same `Idempotency-Key: k1` with a **different body** → `request_hash` mismatch → **409** (a key may
+not be reused for a different request).
+
+### 8. Scope gate (pattern 7)
+A region-scoped dispatcher `POST /api/work-orders {tech_region_id:'KE-NRB-KAREN'}` → `scope:TECH_REGION,
+tech_region_id` calls `withinScope` → true (exact match) → allowed; `KE-MSA-NYALI` → **403 OUT_OF_SCOPE**;
+a `SUPER_ADMIN` bypasses.
+
+### 9. Rules: table else fallback (pattern 6)
+`RuleEngine::evaluate('rules.tax-applicability', facts)` returns a deployed `decision_table` match;
+`rules.billing.adjustment-approval` with no table deployed → the **registered code fallback** answers.
+*A package always resolves deterministically.*
+
+### 10. Workflow start → drain → correlate (pattern 4)
+`OperationFramework::trigger('PAUSE')` → `WorkflowEngine.start('sub-pause')` creates `external_task`
+rows; `sophix:workflow:work` drains them; a `messageCatch` parks until
+`correlateMessage('sub-payment-confirmed', …)` (fired by a listener on `InvoicePaid`) resumes it.
+
+## Foundation data model — sample rows + readings
+
+### `outbox_events` (the transactional outbox) & `inbox_events` (consumer dedupe)
+```json
+{ "event_id":"evt_1","event_type":"SubscriptionActivated","topic":"subscription.lifecycle","aggregate_id":"sub_1","operator_code":"WIK","published_at":"2026-06-20T10:01:00Z","payload":{"subscriptionId":"sub_1"} }
+{ "event_id":"evt_2","event_type":"InvoiceGenerated","topic":"billing.money","aggregate_id":"inv_9","published_at":null,"attempts":0 }
+{ "event_id":"evt_3","event_type":"ApprovalRequested","topic":"platform.approvals","aggregate_id":"appr_5","published_at":"…" }
+// inbox
+{ "event_id":"evt_1","consumer":"reporting.metrics","processed_at":"2026-06-20T10:01:05Z" }
+```
+**Reading:** an outbox row with `published_at=null` (evt_2) is **committed but not yet dispatched** — the
+dispatcher will fan it out and stamp the time; `attempts` counts dispatch tries. The inbox row says
+"the `reporting.metrics` consumer already processed evt_1" — a replay is a no-op. `topic` groups events
+for routing/Kafka.
+
+### `approval_definition` & `approval_request` (`status`: `PENDING|AUTO_APPROVED|APPROVED|REJECTED`)
+```json
+// definition (the policy)
+{ "definition_id":"appd_1","entity_type":"PURCHASE_ORDER","action":"FORCE_SYNC","approver_roles":["NOC_LEAD"],"required_approvals":1,"threshold_amount":null,"allow_requester":false,"active":true }
+{ "definition_id":"appd_2","entity_type":"ADJUSTMENT","approver_roles":["BILLING_LEAD"],"required_approvals":2,"threshold_amount":10000 }
+// request (an instance)
+{ "request_id":"appr_5","entity_type":"PURCHASE_ORDER","entity_ref":"po_2","status":"PENDING","approvals_count":0,"requested_by":"u_buyer" }
+{ "request_id":"appr_6","entity_type":"CVM_OFFER","entity_ref":"cvo_2","status":"AUTO_APPROVED" }
+```
+**Reading:** the **definition** is the per-operator policy (who approves, how many, above what amount,
+may the requester self-approve). `threshold_amount` (appd_2) means amounts **below** 10,000 auto-approve
+and only larger ones need the 2 approvals. The **request** is one instance: appr_5 is parked PENDING
+(waiting on a NOC_LEAD ≠ the requester); appr_6 had no policy → AUTO_APPROVED.
+
+### `approval_decision` (immutable audit) · `decision`: `APPROVE|REJECT|REQUEST_REVISION|CANCEL`
+```json
+{ "decision_id":"appdec_1","request_id":"appr_7","decision":"APPROVE","actor_user_id":"u_lead1","decided_at":"…" }
+{ "decision_id":"appdec_2","request_id":"appr_8","decision":"APPROVE","actor_user_id":"u_lead1" }
+{ "decision_id":"appdec_3","request_id":"appr_8","decision":"APPROVE","actor_user_id":"u_lead2" }
+{ "decision_id":"appdec_4","request_id":"appr_9","decision":"REJECT","actor_user_id":"u_lead2","comment":"out of policy" }
+```
+**Reading:** one **immutable** row per decision (who, what, when, why). appr_8 needed 2 approvals →
+two rows from **different** actors (SoD). The request's final status is derived from these rows; the
+audit can never be edited.
+
+### `idempotency_keys`
+```json
+{ "key":"act-sub_1-1","operator_code":"WIK","request_hash":"a1b2…","status_code":202,"status":"COMPLETED" }
+{ "key":"pay-acc_1-9","operator_code":"WIK","request_hash":"9f8e…","status_code":201,"status":"COMPLETED" }
+{ "key":"order-c","operator_code":"WIK","request_hash":"33aa…","status_code":201,"status":"COMPLETED" }
+{ "key":"in-flight-1","operator_code":"WIK","request_hash":"77bc…","status":"IN_PROGRESS" }
+```
+**Reading:** the middleware keys on (operator, key). A retry with the same key + matching `request_hash`
+**replays** the stored `status_code`/response; a mismatched hash → 409. `IN_PROGRESS` guards against a
+concurrent duplicate while the first request is still running.
+
 ## Scheduled workers (`routes/console.php`)
 Outbox dispatch + workflow tick (every minute); billing cycle-close (30 min); provisioning
 poll-async (5 min) / reconcile (hourly); subscription operation-timeouts (every minute); stock
