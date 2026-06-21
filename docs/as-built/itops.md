@@ -1,36 +1,67 @@
 # ItOps — As-Built Design (NOC console)
 
-> **Module path:** `Modules/ItOps` · **Source-of-truth tests:** `ItOpsTest`, `NocConsoleTest`
+> **Module path:** `Modules/ItOps` · **Tests:** `ItOpsTest`, `NocConsoleTest`
 
 ## 1. Purpose & boundaries
-- **Owns:** operational observability + control — worker **heartbeats**, **service control**
-  (RESTART / PAUSE / RESUME), the searchable **system log**, the NOC overview, and an end-to-end
-  **trace** that stitches a journey across modules.
+- **Owns:** operational observability + control — worker **heartbeats**, **service control** (RESTART/
+  PAUSE/RESUME), the searchable **system log**, the NOC overview, and an end-to-end **trace**.
 - **Does NOT own:** the business domains — it watches and steers the platform's own workers.
-- **Job:** let operators see "is the platform healthy?" and pause/restart workers safely.
+- **Job:** "is the platform healthy?" + pause/restart workers safely.
 
-## 📖 Scenarios — read these first
+## 📖 Scenarios (service + Foundation involvement)
 
-### Scenario A — NOC pauses the workflow worker
-1. **Request:** `POST /api/noc/services/workflow-worker/stop` → writes a `service_control` row
-   (`command=PAUSE`) + marks the heartbeat `DOWN`.
-2. The worker calls `Heartbeat::shouldStop('workflow-worker')` each loop: a `PAUSE` returns `true`
-   **and persists** (so a supervisor-restarted worker stays down) — unlike `RESTART`, which is a
-   one-shot ack-and-clear.
-3. `POST …/start` writes `command=RESUME`, which clears the pause; the next worker loop proceeds.
-- **Proven by:** `ItOpsTest::test_pause_stops_the_worker_and_persists_until_resume`.
+### 1. NOC pauses the workflow worker (persists across restarts)
+`POST /api/noc/services/workflow-worker/stop` → `service_control{command:PAUSE}` + heartbeat `DOWN`. The
+worker's `Heartbeat::shouldStop` returns true **and persists** the PAUSE (a restarted worker stays
+down). *Proven by `ItOpsTest::test_pause_stops_the_worker_and_persists_until_resume`.*
 
-### Scenario B — trace a customer journey
-- `GET /api/noc/trace?subscriptionId=sub_1` reconstructs the timeline across outbox events, workflow
-  instances/tasks, provisioning commands and tickets — one chronological view.
-- **Proven by:** `NocConsoleTest::test_end_to_end_trace_reconstructs_a_subscription_journey`.
+### 2. Resume
+`POST …/start` → `command:RESUME` clears the pause; the next worker loop proceeds.
 
-## 2. Data model
-| Table | Purpose | Invariants |
-| --- | --- | --- |
-| `service_heartbeat` | last-seen + metrics per worker | best-effort |
-| `service_control` | pending command (RESTART/PAUSE/RESUME) | PAUSE persists; RESTART one-shot |
-| `system_log` | searchable structured logs (DB channel) | level/q filterable |
+### 3. One-shot restart
+`POST /api/itops/services/{service}/restart` → `command:RESTART`; `shouldStop` returns true **once**,
+acks + clears, so the supervisor-restarted worker runs normally. *Proven by `ItOpsTest`.*
+
+### 4. Liveness heartbeats
+Each worker calls `Heartbeat::ping('workflow-worker', …)` per loop → `service_heartbeat` `UP` with
+metrics; a stale `last_seen_at` reads as unhealthy on the overview.
+
+### 5. Search the logs
+`GET /api/itops/logs?level=warning&q=NMS` → filtered `system_log` rows (DB log channel).
+
+### 6. Trace a journey
+`GET /api/noc/trace?subscriptionId=sub_1` reconstructs the timeline across outbox events, workflow
+instances/tasks, provisioning commands and tickets. *Proven by `NocConsoleTest`.*
+
+### 7. NOC overview counters
+`GET /api/noc/overview` → running instances, workflow incidents, provisioning mismatches, outbox
+backlog, SLA-overdue tickets — the at-a-glance health.
+
+### 8. SLA-overdue list
+`GET /api/noc/sla-overdue` surfaces past-due open tickets (reads Ticketing SLA timestamps).
+
+## 2. Data model — ≥4 sample rows + readings
+
+### `service_control` · `command`: `RESTART|PAUSE|RESUME|null` & `service_heartbeat` · `status`: `UP|DOWN`
+```json
+{ "service":"workflow-worker","command":"PAUSE","acknowledged_at":"2026-06-20T10:00:00Z","requested_by":"u_noc" }
+{ "service":"outbox-dispatcher","command":null }
+{ "service":"provisioning-poller","command":"RESTART","acknowledged_at":null }
+{ "hb":{ "service":"workflow-worker","status":"UP","last_seen_at":"2026-06-20T10:05:00Z","metrics":{"lastBatch":7} } }
+```
+**Reading:** `command=PAUSE` with an ack persists (the worker re-reads it on restart and stays down);
+`command=null` = run normally; `RESTART` un-acked = will stop once then clear. The heartbeat's
+`last_seen_at` + `status` is the liveness signal the overview reads.
+
+### `system_log`
+```json
+{ "id":"log_1","level":"warning","message":"Provisioning rejected by NMS","context":{"target":"GPON"} }
+{ "id":"log_2","level":"info","message":"Routine heartbeat" }
+{ "id":"log_3","level":"error","message":"Tax signer timeout","context":{"invoice":"tax_9"} }
+{ "id":"log_4","level":"info","message":"Cycle close completed","context":{"closed":340} }
+```
+**Reading:** structured logs on the **database** channel, filterable by `level` + free-text `q` — the
+NOC's searchable operational record.
 
 ## 3. Services & support
 | Component | Responsibility |
@@ -40,7 +71,7 @@
 
 ## 4. API surface
 `/api/itops/{logs,services,services/{s}/restart}`, `/api/noc/{overview,sla-overdue,trace,
-services/{s}/stop,services/{s}/start}`. Guarded by `permission:itops.{view,manage}`.
+services/{s}/stop,services/{s}/start}`. `permission:itops.{view,manage}`.
 
 ## 5. Integration
 - **Reads:** outbox/workflow/provisioning/ticket tables for the overview + trace; workers `ping`.

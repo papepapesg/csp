@@ -1,49 +1,70 @@
 # Reporting — As-Built Design (REP-01)
 
 > **Capability codes:** REP-01 (event-sourced reporting mart) · **Module path:** `Modules/Reporting`
-> **Source-of-truth tests:** `ReportingApiTest`, `ReportExportReconcileTest`
+> **Tests:** `ReportingApi`, `ReportExportReconcile`
 
 ## 1. Purpose & boundaries
 - **Owns:** the **reporting mart** — daily metrics projected from domain events — plus dashboards,
   export and a reconciliation check.
 - **Does NOT own:** the source events (other modules) nor the external DWH (a connector). It is a
-  **read model**, never a writer of business state.
-- **Job:** turn the event stream into queryable operator-scoped daily metrics, idempotently.
+  **read model**, never a business-state writer.
+- **Job:** turn the event stream into queryable operator-scoped daily metrics, **idempotently**.
 
-## 📖 Scenarios — read these first
+## 📖 Scenarios (service + Foundation involvement)
 
-### Scenario A — a subscription activation shows up on the dashboard
-1. Subscription emits `SubscriptionActivated`. `sophix:outbox:dispatch` fires `OutboxEventPublished`.
-2. `ReportMetricProjector` dedupes via the **inbox** (one row per `event_id`+consumer), looks up
-   `MetricMap::for('SubscriptionActivated')` → `[['subscriptions_activated', 1]]`, and increments
-   that `report_daily_metric` for (operator, date).
-3. `GET /api/reports/dashboards/operations-overview` reads the mart and shows the count. A re-dispatch
-   of the same event **does not double-count** (inbox).
-- **Proven by:** `ReportingApiTest::test_dashboard_projects_metrics_from_outbox_events` and
-  `…_is_idempotent_on_redispatch`.
+### 1. An activation shows up on the dashboard
+Subscription emits `SubscriptionActivated` → `sophix:outbox:dispatch` fires `OutboxEventPublished` →
+`ReportMetricProjector`: inbox-dedupe, `MetricMap::for('SubscriptionActivated')` →
+`[['subscriptions_activated',1]]`, increments the `report_daily_metric`. `GET /api/reports/dashboards/
+operations-overview` reads it. *Proven by `ReportingApiTest`.*
 
-### Scenario B — does the mart match the events? (reconcile)
-- `GET /api/reports/reconcile` re-projects from the raw events via the **same `MetricMap`** and
-  compares to the mart, flagging drift.
-- **Proven by:** `ReportExportReconcileTest`.
+### 2. Re-dispatch doesn't double-count
+The same event fired again → the **inbox** (`event_id`+consumer) short-circuits → counts unchanged.
+*Foundation: at-most-once projection.* *Proven by `ReportingApiTest::…idempotent_on_redispatch`.*
 
-## 2. Data model
-| Table | Purpose | Invariants |
-| --- | --- | --- |
-| `report_daily_metric` | (operator, date, metric_key) → value | upsert/increment, locked |
-| `inbox_events` (Foundation) | per-consumer dedupe | at-most-once projection |
+### 3. A termination is projected
+`SubscriptionTerminated` → `subscriptions_terminated += 1`. *Proven by
+`ReportingApiTest::test_subscription_termination_is_projected`.*
+
+### 4. Payment amount aggregates
+`PaymentReceived` → `[['payments_count',1],['payments_amount', amount]]` → revenue dashboard.
+
+### 5. Reconcile — mart matches events
+`GET /api/reports/reconcile` re-projects from raw events via the **same `MetricMap`** and compares to the
+mart → in-sync. *Proven by `ReportExportReconcileTest`.*
+
+### 6. Reconcile detects drift
+If a mart row is manually changed, reconcile flags the delta. *Proven by `ReportExportReconcileTest`.*
+
+### 7. CSV export to the DWH
+`GET /api/reports/export/{code}` streams mart rows (the DWH boundary via `ReportExportService`).
+
+### 8. A new metric = one MetricMap line
+Add a `MetricMap` case (+ the emitting event) and the projector counts it — no schema change.
+
+## 2. Data model — ≥4 sample rows + readings
+
+### `report_daily_metric` (operator, date, metric_key → value)
+```json
+{ "operator_code":"WIK","metric_date":"2026-06-20","metric_key":"subscriptions_activated","value":12 }
+{ "operator_code":"WIK","metric_date":"2026-06-20","metric_key":"subscriptions_terminated","value":2 }
+{ "operator_code":"WIK","metric_date":"2026-06-20","metric_key":"payments_amount","value":248000 }
+{ "operator_code":"WIK","metric_date":"2026-06-20","metric_key":"invoices_generated","value":340 }
+```
+**Reading:** one row per (operator, day, metric). Values are **upserted/incremented** under a lock as
+events arrive. The dashboards select metric subsets; the keys come from `MetricMap` (the event→metric
+contract). `inbox_events` (Foundation) guarantees each event counts once.
 
 ## 3. Services & projector
 | Component | Responsibility |
 | --- | --- |
-| `Projectors/ReportMetricProjector` | the live projection (event → metric via `MetricMap`) |
-| `Support/MetricMap` | **single source of truth** for event→metric mapping (shared by projector + reconcile) |
-| `ReportExportService` | CSV/feed export (the DWH boundary) |
-| `ReportReconciliationService` | re-project + compare |
+| `Projectors/ReportMetricProjector` | live projection (event → metric via `MetricMap`) |
+| `Support/MetricMap` | **single source** for event→metric mapping (live + reconcile) |
+| `ReportExportService` / `ReportReconciliationService` | export (DWH boundary) / re-project + compare |
 
 ## 4. API surface
 `/api/reports/dashboards/{code}`, `/api/reports/metrics`, `/api/reports/export/{code}`,
-`/api/reports/reconcile`. Guarded by `permission:report.*`.
+`/api/reports/reconcile`. `permission:report.*`.
 
 ## 5. Integration (events)
 - **Consumes:** all domain events via `OutboxEventPublished` (only those in `MetricMap` count).
@@ -53,7 +74,7 @@
 Live projection on dispatch; export/reconcile on demand or scheduled.
 
 ## 7. Policy & config
-`MetricMap` is the declared event→metric contract; dashboards select metric subsets.
+`MetricMap` is the declared contract; dashboards select metric subsets.
 
 ## 8. Cross-module dependencies
 - **Reacts to →** every module's events. **Connector seam →** external DWH/ETL via `ReportExportService`.
@@ -65,5 +86,4 @@ Live projection on dispatch; export/reconcile on demand or scheduled.
 | single mapping | live + reconcile derive identical totals | shared `MetricMap` |
 
 ## 10. Open items / deltas
-- New metric = add a `MetricMap` line (+ the emitting event). `subscriptions_terminated` is wired and
-  test-covered (was a false-positive "orphan").
+- New metric = a `MetricMap` line (+ the emitting event). `subscriptions_terminated` is wired + tested.
