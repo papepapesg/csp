@@ -96,9 +96,18 @@ class CvmTest extends TestCase
         ]);
         $this->assertSame(CvmOfferInstance::PENDING_APPROVAL, $offer->status);
 
-        // The approver grants the EM-CFG-04 request (SUPER_ADMIN may always act).
+        // The EM-CFG-04 chain is a hierarchy: the CVM manager clears stage 1, THEN the named
+        // director (an invited login, no platform role) signs off stage 2 — distinct approvers.
+        $svc = app(ApprovalService::class);
+        $manager = User::factory()->create(['operator_code' => 'WIK']);
+        $manager->assignRole('CVM_MANAGER');
+        $director = User::query()->where('email', 'cvm.director@wik.sn')->firstOrFail();
+
         $request = ApprovalRequest::query()->find($offer->approval_request_id);
-        app(ApprovalService::class)->decide($request, true, User::query()->first());
+        $svc->decide($request, true, $manager);                 // stage 1 → advances, still PENDING
+        $this->assertSame('PENDING', $request->refresh()->status);
+        $this->assertSame(2, (int) $request->current_stage);
+        $svc->decide($request, true, $director);                // stage 2 → APPROVED
 
         // Dispatching the outbox fires ResumeCvmOfferOnApproval, which releases the offer.
         $this->artisan('sophix:outbox:dispatch')->assertSuccessful();
@@ -116,8 +125,11 @@ class CvmTest extends TestCase
             'discountPercent' => 25, 'discountRef' => 'DISC-RET-25',
         ]);
 
+        // A reject at the first stage (the CVM manager) fails the whole chain.
+        $manager = User::factory()->create(['operator_code' => 'WIK']);
+        $manager->assignRole('CVM_MANAGER');
         $request = ApprovalRequest::query()->find($offer->approval_request_id);
-        app(ApprovalService::class)->decide($request, false, User::query()->first(), 'too generous');
+        app(ApprovalService::class)->decide($request, false, $manager, 'too generous');
         $this->artisan('sophix:outbox:dispatch')->assertSuccessful();
 
         $this->assertSame(CvmOfferInstance::REJECTED, $offer->refresh()->status);

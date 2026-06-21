@@ -7,6 +7,7 @@ use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -73,7 +74,7 @@ class ApprovalService
         return $request;
     }
 
-    public function decide(ApprovalRequest $request, bool $approve, ?\App\Models\User $actorUser = null, ?string $reason = null): ApprovalRequest
+    public function decide(ApprovalRequest $request, bool $approve, ?User $actorUser = null, ?string $reason = null): ApprovalRequest
     {
         if ($request->status !== ApprovalRequest::PENDING) {
             throw DomainException::conflict('Approval request is not pending.');
@@ -205,7 +206,7 @@ class ApprovalService
     }
 
     /** APR-5: enforce the current stage's approver target (a role pool, or a specific named user). */
-    private function assertStageApprover(array $stage, ?\App\Models\User $actorUser): void
+    private function assertStageApprover(array $stage, ?User $actorUser): void
     {
         if ($actorUser && $actorUser->hasRole('SUPER_ADMIN')) {
             return; // platform super-admin may always act
