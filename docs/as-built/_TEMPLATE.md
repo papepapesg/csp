@@ -8,33 +8,35 @@
 - **Does NOT own:** <what it delegates to other modules — name them>
 - One-paragraph summary of the module's job.
 
-## 📖 Scenarios — read these first
-> Concrete walk-throughs an entry-level dev can follow. Each: a real actor + situation, the API
-> call (with sample JSON), what the service does step-by-step, the rows/state that change, the
-> events that fire + who reacts, and the **test that proves it**.
+## 📖 Scenarios (≥ 8) — read these first
+> **At least 8** concrete walk-throughs covering happy paths, every enum branch, failures, and
+> cross-module reactions. Each must name **which services** are involved and **how the Foundation
+> works** (outbox/events, workflow, approvals, idempotency, rules, scope) + the **proving test**.
+> Cover: create/activate · each state transition · each `<enum>` value's branch · an approval-gated
+> path · an async/worker path · a failure+retry · a cross-module reaction (event → other module) ·
+> an idempotent retry.
 
-### Scenario A — <the happy path, e.g. "Jane orders X">
-1. **Request:** `POST /api/<…>` ```json {"…":"…"}```
-2. **Service does:** <step → step → step>
-3. **State change:** `<table>` gets <row …>; `<status>`: A → B
-4. **Events:** emits `<Event>` → `<Listener in module Y>` does <…>
-5. **Proven by:** `<TestClass::test_…>`
+### Scenario 1 — <happy path>
+Services: `<A> → <B>`. Foundation: <outbox/workflow/…>. 1) `POST /api/<…>` `{…}` → 2) <service steps>
+→ 3) `<table>` `<status>`: A→B → 4) emits `<Event>` → `<Listener>` reacts. *Proven by `<Test>`.*
 
-### Scenario B — <an edge/failure, e.g. "wallet too low / approval needed">
-<same shape — show the branch and what differs>
+### Scenario 2 … 8 — <enum branches, approval, async worker, failure+retry, cross-module, idempotent>
+<same shape; one per branch/behaviour>
 
-## 2. Data model — **sample rows + how to read them**
-> For each key table: the columns + **enum legend** (what each value *does*), then a **sample row**
-> and a plain-English **reading**. Enums drive behaviour, so spell out what each value triggers.
+## 2. Data model — **≥ 4 sample rows + readings per table**
+> **Every** table (ledger, config, catalog) gets an **enum legend** (what each value *does*) and
+> **at least 4 sample rows** chosen to contrast the enum states, then a plain-English **reading**.
 
 ### `<table>`
 **Enum legend — `<status_col>`:** `A` = <behaviour>, `B` = <behaviour>, `C` (transient) = <…>.
-**Sample row:**
 ```json
-{ "<id>":"…", "<status_col>":"B", "<enum2>":"X", "…":"…" }
+{ "<id>":"r1", "<status_col>":"A", "<enum2>":"X" }   // typical
+{ "<id>":"r2", "<status_col>":"B", "<enum2>":"Y" }   // a different state
+{ "<id>":"r3", "<status_col>":"C", "<enum2>":"X" }   // the transient/edge
+{ "<id>":"r4", "<status_col>":"A", "<enum2>":"Z" }   // another enum2 branch
 ```
-**Reading:** "<row id> is a <thing> currently <status B = …>; because `<enum2>=X` it <behaves …>.
-Next legal transition is → <…>." Repeat with a 2nd row in a *different* enum state to contrast.
+**Reading:** contrast the rows — *r1 is <…>; r2 differs because `<status_col>=B` ⇒ <…>; r3 is
+transient ⇒ <…>; r4 shows `<enum2>=Z` ⇒ <…>.* Spell out what each enum value triggers.
 
 ## 3. Services & responsibilities
 | Service | Responsibility | Key methods |
