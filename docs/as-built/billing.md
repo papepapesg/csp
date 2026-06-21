@@ -70,110 +70,162 @@ A payment moment → `TaxEventBridge` → `TaxInvoiceGenerator` issues a `tax_in
 decomposition), then `sophix:billing:tax-sign` calls the signer; failure → `tax-retry` backoff →
 `TaxInvoiceSigningGaveUp`. *Proven by `Tax01Test`.*
 
-## 2. Data model — ≥4 sample rows + readings
+## 2. Data model — ≥4 **complete** sample rows + readings
+> **Completeness:** each row lists **every domain column** (nullables shown as `null`). The surrogate
+> primary key shown is the real one (a string business key, e.g. `invoice_id`); `created_at`/`updated_at`
+> are omitted by convention. Several tables grew via ALTER migrations — the new columns are flagged in
+> each table's note.
 
 ### `invoice` · `type`: `STANDARD|TAX|CREDIT_NOTE|DEBIT_NOTE` · `status`: `OPEN|PARTIALLY_PAID|PAID|VOID|OVERDUE`
+> `grouping_dimension`/`grouping_key_values` added by the structured-lines migration; `customer_snapshot`
+> by the snapshot migration. (`status` has exactly the five enum values above — a fully-applied note sits
+> `PAID` with `amount_due=0`.)
 ```json
-{ "invoice_id":"inv_1","type":"STANDARD","status":"OPEN","billing_mode":"POSTPAID","total_amount":5000,"amount_due":5000,"due_date":"2026-07-15","legal_invoice_number":"INV-WIK-2026-000123" }
-{ "invoice_id":"inv_2","type":"STANDARD","status":"PAID","total_amount":1500,"amount_due":0 }
-{ "invoice_id":"inv_3","type":"CREDIT_NOTE","status":"ISSUED","original_invoice_id":"inv_1","total_amount":800,"amount_due":0 }
-{ "invoice_id":"inv_4","type":"TAX","status":"ISSUED","total_amount":5000,"legal_invoice_number":"TAX-WIK-2026-000045" }
+{ "invoice_id":"inv_1","legal_invoice_number":"INV-WIK-2026-000123","account_id":"acc_1","customer_snapshot":{"name":"Jane Mwangi","taxId":"A012345678Z"},"customer_id":"cust_1","subscription_id":"sub_123","operator_code":"WIK","type":"STANDARD","grouping_dimension":"WALLET","grouping_key_values":"MAIN","currency":"KES","billing_mode":"POSTPAID","status":"OPEN","original_invoice_id":null,"issue_date":"2026-06-30T00:00:00Z","due_date":"2026-07-15T00:00:00Z","subtotal_amount":4310.34,"tax_amount_total":689.66,"tax_summary":{"VAT16":689.66},"total_amount":5000.00,"amount_paid":0.00,"amount_due":5000.00 }
+{ "invoice_id":"inv_2","legal_invoice_number":"INV-WIK-2026-000124","account_id":"acc_1","customer_snapshot":{"name":"Jane Mwangi","taxId":"A012345678Z"},"customer_id":"cust_1","subscription_id":"sub_123","operator_code":"WIK","type":"STANDARD","grouping_dimension":"WALLET","grouping_key_values":"VOICE","currency":"KES","billing_mode":"POSTPAID","status":"PAID","original_invoice_id":null,"issue_date":"2026-06-30T00:00:00Z","due_date":"2026-07-15T00:00:00Z","subtotal_amount":1293.10,"tax_amount_total":206.90,"tax_summary":{"VAT16":206.90},"total_amount":1500.00,"amount_paid":1500.00,"amount_due":0.00 }
+{ "invoice_id":"inv_3","legal_invoice_number":"CN-WIK-2026-000007","account_id":"acc_1","customer_snapshot":{"name":"Jane Mwangi","taxId":"A012345678Z"},"customer_id":"cust_1","subscription_id":"sub_123","operator_code":"WIK","type":"CREDIT_NOTE","grouping_dimension":"SINGLE","grouping_key_values":null,"currency":"KES","billing_mode":"POSTPAID","status":"PAID","original_invoice_id":"inv_1","issue_date":"2026-07-01T00:00:00Z","due_date":null,"subtotal_amount":800.00,"tax_amount_total":0.00,"tax_summary":null,"total_amount":800.00,"amount_paid":0.00,"amount_due":0.00 }
+{ "invoice_id":"inv_4","legal_invoice_number":"TAX-WIK-2026-000045","account_id":"acc_2","customer_snapshot":{"name":"Acme Ltd","taxId":"P051234567X"},"customer_id":"cust_3","subscription_id":"sub_9","operator_code":"WIK","type":"TAX","grouping_dimension":"SINGLE","grouping_key_values":null,"currency":"KES","billing_mode":"POSTPAID","status":"PAID","original_invoice_id":"inv_2","issue_date":"2026-06-30T00:00:00Z","due_date":null,"subtotal_amount":4310.34,"tax_amount_total":689.66,"tax_summary":{"VAT16":689.66},"total_amount":5000.00,"amount_paid":5000.00,"amount_due":0.00 }
 ```
-**Reading:** inv_1 is owed (`OPEN`, due-dated → becomes dunnable past due). inv_2 is settled. inv_3 is a
-**credit note** linked to inv_1 (so inv_1 can't be bulk-reversed — it has linked notes). inv_4 is a
-signed **TAX** invoice — immutable, never adjusted (adjust the commercial one instead).
+**Reading:** inv_1 is owed (`OPEN`, due-dated → becomes dunnable past due). inv_2 is settled (`PAID`,
+`amount_due=0`). inv_3 is a **credit note** linked to inv_1 via `original_invoice_id` (so inv_1 can't be
+bulk-reversed — it has linked notes); notes write `tax_amount_total=0` (inclusive treatment, §10). inv_4
+is a **TAX** invoice — immutable, never adjusted (adjust the commercial one instead). `customer_snapshot`
+freezes the bill-to identity; `grouping_dimension=WALLET` is what split internet (inv_1) from voice
+(inv_2).
 
 ### `invoice_line` · `line_type`: `SUMMARY|DETAIL`
+> All of `line_type`/`parent_summary_line_id`/`service_category_code`/`package_ref`/`wallet_type_code`/
+> `tax_breakdown`/`sort_order` were added by the structured-lines migration.
 ```json
-{ "id":"il_1","invoice_id":"inv_1","line_type":"SUMMARY","service_category_code":"SUBSCRIPTION","package_ref":"pkg_triple","subtotal":4200,"tax_amount":672 }
-{ "id":"il_2","invoice_id":"inv_1","line_type":"DETAIL","parent_summary_line_id":"il_1","service_category_code":"INTERNET","subtotal":3000 }
-{ "id":"il_3","invoice_id":"inv_1","line_type":"DETAIL","parent_summary_line_id":"il_1","service_category_code":"TV","subtotal":1200 }
-{ "id":"il_4","invoice_id":"inv_5","line_type":"DETAIL","service_category_code":"VOICE","subtotal":300,"wallet_type_code":"VOICE_WALLET" }
+{ "id":"il_1","invoice_id":"inv_1","line_type":"SUMMARY","parent_summary_line_id":null,"service_category_code":"SUBSCRIPTION","package_ref":"pkg_triple","wallet_type_code":null,"description":"Triple Play monthly","service_ref":null,"quantity":1.00,"unit_price":4200.00,"subtotal":4200.00,"tax_amount":672.00,"tax_breakdown":{"VAT16":672.00},"sort_order":0 }
+{ "id":"il_2","invoice_id":"inv_1","line_type":"DETAIL","parent_summary_line_id":"il_1","service_category_code":"INTERNET","package_ref":"pkg_triple","wallet_type_code":null,"description":"Internet 100M","service_ref":"svc_inet","quantity":1.00,"unit_price":3000.00,"subtotal":3000.00,"tax_amount":480.00,"tax_breakdown":{"VAT16":480.00},"sort_order":1 }
+{ "id":"il_3","invoice_id":"inv_1","line_type":"DETAIL","parent_summary_line_id":"il_1","service_category_code":"TV","package_ref":"pkg_triple","wallet_type_code":null,"description":"IPTV Premium","service_ref":"svc_tv","quantity":1.00,"unit_price":1200.00,"subtotal":1200.00,"tax_amount":192.00,"tax_breakdown":{"VAT16":192.00},"sort_order":2 }
+{ "id":"il_4","invoice_id":"inv_2","line_type":"DETAIL","parent_summary_line_id":null,"service_category_code":"VOICE","package_ref":null,"wallet_type_code":"VOICE_WALLET","description":"Voice usage","service_ref":"svc_voice","quantity":150.00,"unit_price":2.00,"subtotal":300.00,"tax_amount":48.00,"tax_breakdown":{"EXC20":50.00,"VAT16":48.00},"sort_order":1 }
 ```
 **Reading:** il_1 is the customer-facing **SUMMARY** (package), il_2/il_3 its **DETAIL** breakdown
-(Internet+TV priced as the package). il_4 is voice usage on a *different* invoice (WALLET grouping put
-voice on its own document, routed to `VOICE_WALLET`).
+(Internet+TV priced as the package, linked via `parent_summary_line_id`). il_4 is voice usage on a
+*different* invoice (WALLET grouping put voice on its own document, routed to `VOICE_WALLET`).
+`sort_order` fixes presentation; `tax_breakdown` carries the per-line components.
 
-### `payment_ledger` · `method`: `MPESA|VISA|BANK_TRANSFER|OFFLINE`
+### `payment_ledger` · `method`: `MPESA|VISA|BANK_TRANSFER|OFFLINE` · `status`: `RECEIVED|APPLIED|PARTIALLY_APPLIED|REVERSED`
+> `customer_id`/`payment_reference`/`reversal_of_payment_id`/`reversal_reason_code`/`reversed_by` added
+> by the payment-application alignment migration (which also adds the `(account_id, payment_reference)`
+> dedup unique).
 ```json
-{ "payment_id":"pay_1","account_id":"acc_1","paid_amount":5000,"method":"MPESA","payment_reference":"QGR7Xk...","status":"APPLIED" }
-{ "payment_id":"pay_2","account_id":"acc_1","paid_amount":6000,"method":"MPESA","status":"APPLIED" }
-{ "payment_id":"pay_3","account_id":"acc_2","paid_amount":1500,"method":"OFFLINE","payment_reference":"cash-rcpt-9","status":"APPLIED" }
-{ "payment_id":"pay_4","account_id":"acc_1","paid_amount":5000,"method":"VISA","status":"REVERSED" }
+{ "payment_id":"pay_1","account_id":"acc_1","customer_id":"cust_1","operator_code":"WIK","method":"MPESA","gateway_ref":"MPESA-QGR7Xk","payment_reference":"QGR7Xk","currency":"KES","paid_amount":5000.00,"unallocated_amount":0.00,"status":"APPLIED","reversal_of_payment_id":null,"reversal_reason_code":null,"reversed_by":null,"received_at":"2026-07-02T10:00:00Z" }
+{ "payment_id":"pay_2","account_id":"acc_1","customer_id":"cust_1","operator_code":"WIK","method":"MPESA","gateway_ref":"MPESA-QGR8Zz","payment_reference":"QGR8Zz","currency":"KES","paid_amount":6000.00,"unallocated_amount":1000.00,"status":"PARTIALLY_APPLIED","reversal_of_payment_id":null,"reversal_reason_code":null,"reversed_by":null,"received_at":"2026-07-03T10:00:00Z" }
+{ "payment_id":"pay_3","account_id":"acc_2","customer_id":"cust_3","operator_code":"WIK","method":"OFFLINE","gateway_ref":null,"payment_reference":"cash-rcpt-9","currency":"KES","paid_amount":1500.00,"unallocated_amount":0.00,"status":"APPLIED","reversal_of_payment_id":null,"reversal_reason_code":null,"reversed_by":null,"received_at":"2026-07-04T09:00:00Z" }
+{ "payment_id":"pay_4","account_id":"acc_1","customer_id":"cust_1","operator_code":"WIK","method":"VISA","gateway_ref":"VISA-9931","payment_reference":"VISA-9931","currency":"KES","paid_amount":5000.00,"unallocated_amount":0.00,"status":"REVERSED","reversal_of_payment_id":"pay_1","reversal_reason_code":"CHARGEBACK","reversed_by":"u_fin1","received_at":"2026-07-05T11:00:00Z" }
 ```
-**Reading:** every payment carries a **dedup reference** (gateway ref or Idempotency-Key) so a retried
-callback never double-applies. pay_2 overpaid (6000 > invoice) → surplus → `account_credit_balance`.
-pay_3 is cash (OFFLINE, reference = the receipt). pay_4 was reversed (chargeback).
+**Reading:** every payment carries a **dedup reference** (`payment_reference`, gateway ref or
+Idempotency-Key) so a retried callback never double-applies. pay_2 overpaid (6000 > invoice) → the
+`unallocated_amount` surplus posts to `account_credit_balance`. pay_3 is cash (OFFLINE, reference = the
+receipt). pay_4 was reversed (chargeback) and points back at the original via `reversal_of_payment_id`
+with `reversed_by` for the SoD trail.
 
 ### `billing_intent` · `intent_type`: `PRORATION|PAUSE_FEE|RECONNECTION_FEE|DEPOSIT_REFUND|…` · `status`: `PENDING|CHARGED|CONFIRMED|WAIVED|REFUNDED` · `settlement_channel`: `INVOICE|WALLET|CREDIT|NONE`
+> `settlement_channel` added by the settlement-channel migration; `state_callback` (JSON) by the
+> state-callback migration.
 ```json
-{ "intent_id":"bint_1","subscription_id":"sub_1","intent_type":"PRORATION","amount":350.0,"status":"CONFIRMED","settlement_channel":"INVOICE","pay_first":false }
-{ "intent_id":"bint_2","subscription_id":"sub_1","intent_type":"RECONNECTION_FEE","amount":500.0,"status":"PENDING","pay_first":true,"state_callback":{"targetStatus":"ACTIVE"},"invoice_id":"inv_9" }
-{ "intent_id":"bint_3","subscription_id":"sub_2","intent_type":"DEPOSIT_REFUND","amount":-2500.0,"status":"CONFIRMED","settlement_channel":"CREDIT" }
-{ "intent_id":"bint_4","subscription_id":"sub_3","intent_type":"PAUSE_FEE","amount":0.0,"status":"CONFIRMED","settlement_channel":"NONE" }
+{ "intent_id":"bint_1","operator_code":"WIK","subscription_id":"sub_1","account_id":"acc_1","operation_id":"op_up_1","intent_type":"PRORATION","amount":350.00,"currency":"KES","pay_first":false,"status":"CONFIRMED","settlement_channel":"INVOICE","state_callback":null,"invoice_id":"inv_7","confirmed_at":"2026-06-15T12:00:00Z" }
+{ "intent_id":"bint_2","operator_code":"WIK","subscription_id":"sub_1","account_id":"acc_1","operation_id":"op_recon_1","intent_type":"RECONNECTION_FEE","amount":500.00,"currency":"KES","pay_first":true,"status":"PENDING","settlement_channel":"INVOICE","state_callback":{"transitionCode":"RECONNECT_AFTER_FEE","targetStatus":"ACTIVE"},"invoice_id":"inv_9","confirmed_at":null }
+{ "intent_id":"bint_3","operator_code":"WIK","subscription_id":"sub_2","account_id":"acc_2","operation_id":"op_term_3","intent_type":"DEPOSIT_REFUND","amount":-2500.00,"currency":"KES","pay_first":false,"status":"CONFIRMED","settlement_channel":"CREDIT","state_callback":null,"invoice_id":null,"confirmed_at":"2026-06-18T09:00:00Z" }
+{ "intent_id":"bint_4","operator_code":"WIK","subscription_id":"sub_3","account_id":"acc_3","operation_id":"op_pause_4","intent_type":"PAUSE_FEE","amount":0.00,"currency":"KES","pay_first":false,"status":"CONFIRMED","settlement_channel":"NONE","state_callback":null,"invoice_id":null,"confirmed_at":"2026-06-19T09:00:00Z" }
 ```
 **Reading:** bint_2 is **pay-first** (`PENDING` until `inv_9` is paid; then its `state_callback` flips the
-sub ACTIVE). bint_3 is a **negative** amount (credit) → posts to account credit (`CREDIT` channel).
-bint_4 is a zero/skip (the event applied but nothing to charge → `NONE`).
+sub ACTIVE). bint_3 is a **negative** amount (credit) → posts to account credit (`CREDIT` channel, no
+invoice). bint_4 is a zero/skip (the event applied but nothing to charge → `NONE`). Each intent ties back
+to the Subscription `operation_id` that raised it.
 
-### `billable_event` · `amount_sign_policy`: `POSITIVE_ONLY|NEGATIVE_ONLY|SIGNED` · `trigger_type`: `SAGA_INTENT|LIFECYCLE_EVENT|ADMIN_ACTION|CUSTOMER_PURCHASE|EXTERNAL_PAYMENT|SCHEDULED` · `status`: `DRAFT|ACTIVE|RETIRED`
+### `billable_event` · `amount_sign_policy`: `POSITIVE_ONLY|NEGATIVE_ONLY|SIGNED` · `trigger_type`: `SAGA_INTENT|LIFECYCLE_EVENT|ADMIN_ACTION|CUSTOMER_PURCHASE|EXTERNAL_PAYMENT|SCHEDULED` · `applicability`: `PREPAID_ONLY|POSTPAID_ONLY|ANY` · `status`: `DRAFT|ACTIVE|RETIRED`
 ```json
-{ "id":"bev_1","code":"RECONNECTION_FEE_AFTER_DUNNING","amount_sign_policy":"POSITIVE_ONLY","trigger_type":"EXTERNAL_PAYMENT","pay_first_required":true,"state_callback":{"transitionCode":"RECONNECT_AFTER_FEE","targetStatus":"ACTIVE"},"status":"ACTIVE" }
-{ "id":"bev_2","code":"INSTALLATION_FEE","amount_sign_policy":"POSITIVE_ONLY","trigger_type":"SAGA_INTENT","trigger_intent_code":"INSTALL_FEE_INTENT","status":"ACTIVE" }
-{ "id":"bev_3","code":"DEPOSIT_REFUND","amount_sign_policy":"NEGATIVE_ONLY","trigger_type":"LIFECYCLE_EVENT","status":"ACTIVE" }
-{ "id":"bev_4","code":"GOODWILL_CREDIT","amount_sign_policy":"NEGATIVE_ONLY","trigger_type":"ADMIN_ACTION","status":"DRAFT" }
+{ "id":"bev_1","operator_code":"WIK","code":"RECONNECTION_FEE_AFTER_DUNNING","description":"Reconnection fee after dunning","category_code":"FEE","service_refs":["svc_inet"],"currency":"KES","applicability":"ANY","amount_sign_policy":"POSITIVE_ONLY","pay_first_required":true,"trigger_type":"EXTERNAL_PAYMENT","trigger_intent_code":null,"trigger_event_type":null,"trigger_filter_drl":null,"trigger_schedule":null,"state_callback":{"transitionCode":"RECONNECT_AFTER_FEE","targetStatus":"ACTIVE"},"eligibility_franchise_refs":null,"eligibility_package_refs":null,"eligibility_segment_refs":null,"display_order":100,"status":"ACTIVE","notes":null,"created_by":"u_admin","updated_by":"u_admin","retired_at":null }
+{ "id":"bev_2","operator_code":"WIK","code":"INSTALLATION_FEE","description":"One-off installation fee","category_code":"FEE","service_refs":["svc_inet"],"currency":"KES","applicability":"ANY","amount_sign_policy":"POSITIVE_ONLY","pay_first_required":true,"trigger_type":"SAGA_INTENT","trigger_intent_code":"INSTALL_FEE_INTENT","trigger_event_type":null,"trigger_filter_drl":null,"trigger_schedule":null,"state_callback":null,"eligibility_franchise_refs":["fr_nrb"],"eligibility_package_refs":null,"eligibility_segment_refs":null,"display_order":100,"status":"ACTIVE","notes":null,"created_by":"u_admin","updated_by":null,"retired_at":null }
+{ "id":"bev_3","operator_code":"WIK","code":"DEPOSIT_REFUND","description":"Refund of installation deposit","category_code":"REFUND","service_refs":null,"currency":"KES","applicability":"ANY","amount_sign_policy":"NEGATIVE_ONLY","pay_first_required":false,"trigger_type":"LIFECYCLE_EVENT","trigger_intent_code":null,"trigger_event_type":"SubscriptionTerminated","trigger_filter_drl":null,"trigger_schedule":null,"state_callback":null,"eligibility_franchise_refs":null,"eligibility_package_refs":null,"eligibility_segment_refs":null,"display_order":100,"status":"ACTIVE","notes":null,"created_by":"u_admin","updated_by":null,"retired_at":null }
+{ "id":"bev_4","operator_code":"WIK","code":"GOODWILL_CREDIT","description":"Discretionary goodwill credit","category_code":"CREDIT","service_refs":null,"currency":"KES","applicability":"POSTPAID_ONLY","amount_sign_policy":"NEGATIVE_ONLY","pay_first_required":false,"trigger_type":"ADMIN_ACTION","trigger_intent_code":null,"trigger_event_type":null,"trigger_filter_drl":null,"trigger_schedule":null,"state_callback":null,"eligibility_franchise_refs":null,"eligibility_package_refs":null,"eligibility_segment_refs":null,"display_order":200,"status":"DRAFT","notes":"awaiting finance sign-off","created_by":"u_admin","updated_by":null,"retired_at":null }
 ```
-**Reading:** the catalog **governs what BIL-01 may charge**. bev_1 is pay-first with a state_callback
-(reconnection). bev_3 is `NEGATIVE_ONLY` (a refund — a positive amount is rejected). bev_4 is `DRAFT`
-(not yet chargeable). An intent whose type doesn't resolve to an `ACTIVE` event is rejected.
+**Reading:** the catalog **governs what BIL-01 may charge**. bev_1 is pay-first with a `state_callback`
+(reconnection) triggered by an `EXTERNAL_PAYMENT`. bev_2 fires off a `SAGA_INTENT` (`trigger_intent_code`)
+and is franchise-scoped. bev_3 is `NEGATIVE_ONLY` (a refund — a positive amount is rejected) wired to a
+lifecycle `trigger_event_type`. bev_4 is `DRAFT`/`POSTPAID_ONLY` (not yet chargeable). An intent whose
+type doesn't resolve to an `ACTIVE` event is rejected; `currency` is derived from the `service_refs` and
+immutable.
 
-### `dunning_program` (`billing_mode`: `POSTPAID|PREPAID|PREPAYMENT`) & `dunning_state` (`status`: `ACTIVE|CLEARED|SUSPENDED_BY_PAUSE|PENDING_TERMINATION_REVIEW|RECOVERY_FAILED|ARCHIVED`, `current_level` int)
+### `dunning_program` (`billing_mode`: `POSTPAID|PREPAID|PREPAYMENT`) — versioned catalog
+> PK is the ULID `id`; uniqueness is `(code, version)`. `level_definitions` is the ordered escalation
+> JSON (no default — always present).
 ```json
-// program (versioned; pinned on the state at entry)
-{ "id":"dprg_1","code":"wik_postpaid_standard","version":1,"billing_mode":"POSTPAID","pre_termination_review_required":true,"level_definitions":[{"level":1,"name":"WARNING","grace_period_days":7,"action_workflow_intent":"WARNING_ONLY"},{"level":2,"name":"RESTRICTED","grace_period_days":7,"action_workflow_intent":"RESTRICTION_ADD"},{"level":3,"name":"SUSPENDED","grace_period_days":14,"action_workflow_intent":"SUSPEND_NP"},{"level":4,"name":"TERMINATED","action_workflow_intent":"TERMINATION"}] }
-// state
-{ "dunning_id":"dun_1","account_id":"acc_1","current_level":1,"status":"ACTIVE","dunning_program_ref":"wik_postpaid_standard","dunning_program_version":1,"outstanding_debt_amount":5000 }
-{ "dunning_id":"dun_2","account_id":"acc_2","current_level":3,"status":"ACTIVE","outstanding_debt_amount":12000 }
-{ "dunning_id":"dun_3","account_id":"acc_3","current_level":0,"status":"CLEARED" }
-{ "dunning_id":"dun_4","account_id":"acc_4","current_level":4,"status":"PENDING_TERMINATION_REVIEW" }
+{ "id":"dprg_1","code":"wik_postpaid_standard","version":1,"description":"WIK postpaid standard dunning","operator_code":"WIK","billing_mode":"POSTPAID","level_definitions":[{"level":1,"name":"WARNING","grace_period_days":7,"action_workflow_intent":"WARNING_ONLY"},{"level":2,"name":"RESTRICTED","grace_period_days":7,"action_workflow_intent":"RESTRICTION_ADD"},{"level":3,"name":"SUSPENDED","grace_period_days":14,"action_workflow_intent":"SUSPEND_NP"},{"level":4,"name":"TERMINATED","action_workflow_intent":"TERMINATION"}],"pre_termination_review_required":true,"published_at":"2026-01-01T00:00:00Z","retired_at":null,"created_by":"u_admin" }
+{ "id":"dprg_2","code":"wik_prepaid_standard","version":1,"description":"WIK prepaid standard dunning","operator_code":"WIK","billing_mode":"PREPAID","level_definitions":[{"level":1,"name":"WARNING","grace_period_days":0,"action_workflow_intent":"WARNING_ONLY"},{"level":2,"name":"SUSPENDED","grace_period_days":3,"action_workflow_intent":"SUSPEND_NP"}],"pre_termination_review_required":false,"published_at":"2026-01-01T00:00:00Z","retired_at":null,"created_by":"u_admin" }
+{ "id":"dprg_3","code":"wik_postpaid_standard","version":2,"description":"WIK postpaid standard dunning v2","operator_code":"WIK","billing_mode":"POSTPAID","level_definitions":[{"level":1,"name":"WARNING","grace_period_days":5,"action_workflow_intent":"WARNING_ONLY"},{"level":2,"name":"SUSPENDED","grace_period_days":10,"action_workflow_intent":"SUSPEND_NP"},{"level":3,"name":"TERMINATED","action_workflow_intent":"TERMINATION"}],"pre_termination_review_required":true,"published_at":"2026-06-01T00:00:00Z","retired_at":null,"created_by":"u_admin" }
+{ "id":"dprg_old","code":"wik_legacy","version":1,"description":"Retired legacy program","operator_code":"WIK","billing_mode":"POSTPAID","level_definitions":[{"level":1,"name":"WARNING","action_workflow_intent":"WARNING_ONLY"}],"pre_termination_review_required":false,"published_at":"2024-01-01T00:00:00Z","retired_at":"2026-01-01T00:00:00Z","created_by":"u_admin" }
 ```
-**Reading:** the program is **versioned** and **pinned** on the state at entry (R-BIL-04-C-1) — editing
-the policy never disturbs in-flight episodes. dun_1 is at WARNING; dun_2 reached SUSPENDED; dun_3
-recovered (`CLEARED`, level 0); dun_4 hit terminate but is parked for the mandatory review window.
+### `dunning_state` (`status`: `ACTIVE|CLEARED|SUSPENDED_BY_PAUSE|PENDING_TERMINATION_REVIEW|RECOVERY_FAILED|ARCHIVED`, `current_level` int 0..4)
+> The dd-alignment migration added `billing_mode`/`triggering_event_type`/`next_evaluation_at`/
+> `review_due_at`/`last_workflow_failure_code`; the program-catalog migration added the program pinning
+> (`dunning_program_ref`/`_version`), `entered_dunning_at`, `outstanding_debt_currency`,
+> `applied_restriction_codes`, `triggering_event_ref`, the workflow-failure backoff trio, and
+> `cleared_at`/`archived_at`.
+```json
+{ "dunning_id":"dun_1","operator_code":"WIK","account_id":"acc_1","subscription_id":"sub_123","billing_mode":"POSTPAID","triggering_event_type":"InvoiceOverdue","current_level":1,"entered_level_at":"2026-07-16T00:00:00Z","entered_dunning_at":"2026-07-16T00:00:00Z","outstanding_debt_amount":5000.00,"outstanding_debt_currency":"KES","status":"ACTIVE","last_scanned_at":"2026-07-16T01:00:00Z","next_evaluation_at":"2026-07-23T00:00:00Z","review_due_at":null,"last_workflow_failure_code":null,"dunning_program_ref":"wik_postpaid_standard","dunning_program_version":1,"applied_restriction_codes":[],"triggering_event_ref":"inv_1","last_workflow_failure_at":null,"workflow_failure_attempts":0,"cleared_at":null,"archived_at":null }
+{ "dunning_id":"dun_2","operator_code":"WIK","account_id":"acc_2","subscription_id":"sub_9","billing_mode":"POSTPAID","triggering_event_type":"InvoiceOverdue","current_level":3,"entered_level_at":"2026-07-10T00:00:00Z","entered_dunning_at":"2026-06-20T00:00:00Z","outstanding_debt_amount":12000.00,"outstanding_debt_currency":"KES","status":"ACTIVE","last_scanned_at":"2026-07-16T01:00:00Z","next_evaluation_at":"2026-07-24T00:00:00Z","review_due_at":null,"last_workflow_failure_code":null,"dunning_program_ref":"wik_postpaid_standard","dunning_program_version":1,"applied_restriction_codes":["OUTGOING_VOICE_BARRED"],"triggering_event_ref":"inv_55","last_workflow_failure_at":null,"workflow_failure_attempts":0,"cleared_at":null,"archived_at":null }
+{ "dunning_id":"dun_3","operator_code":"WIK","account_id":"acc_3","subscription_id":"sub_5","billing_mode":"PREPAID","triggering_event_type":"CyclePaymentMissed","current_level":0,"entered_level_at":null,"entered_dunning_at":"2026-06-01T00:00:00Z","outstanding_debt_amount":0.00,"outstanding_debt_currency":"KES","status":"CLEARED","last_scanned_at":"2026-07-01T01:00:00Z","next_evaluation_at":null,"review_due_at":null,"last_workflow_failure_code":null,"dunning_program_ref":"wik_prepaid_standard","dunning_program_version":1,"applied_restriction_codes":[],"triggering_event_ref":"cycle_2026_06_sub_5","last_workflow_failure_at":null,"workflow_failure_attempts":0,"cleared_at":"2026-07-01T01:00:00Z","archived_at":null }
+{ "dunning_id":"dun_4","operator_code":"WIK","account_id":"acc_4","subscription_id":"sub_7","billing_mode":"POSTPAID","triggering_event_type":"InvoiceOverdue","current_level":4,"entered_level_at":"2026-07-12T00:00:00Z","entered_dunning_at":"2026-06-10T00:00:00Z","outstanding_debt_amount":30000.00,"outstanding_debt_currency":"KES","status":"PENDING_TERMINATION_REVIEW","last_scanned_at":"2026-07-16T01:00:00Z","next_evaluation_at":null,"review_due_at":"2026-07-19T00:00:00Z","last_workflow_failure_code":"FULFILLMENT_TIMEOUT","dunning_program_ref":"wik_postpaid_standard","dunning_program_version":1,"applied_restriction_codes":["OUTGOING_VOICE_BARRED"],"triggering_event_ref":"inv_77","last_workflow_failure_at":"2026-07-15T00:00:00Z","workflow_failure_attempts":2,"cleared_at":null,"archived_at":null }
+```
+**Reading:** the program is **versioned** and **pinned** on the state at entry (R-BIL-04-C-1,
+`dunning_program_ref`+`dunning_program_version`) — editing the policy (publishing v2, dprg_3) never
+disturbs in-flight episodes. dun_1 is at WARNING; dun_2 reached SUSPENDED with a restriction applied;
+dun_3 recovered (`CLEARED`, level 0, `cleared_at` set); dun_4 hit terminate but is parked for the
+mandatory review window (`review_due_at`) and is backing off after a workflow failure
+(`workflow_failure_attempts=2`). `next_evaluation_at` is the E-1/E-2 scan cadence.
 
 ### `adjustment_request` · `direction`: `CREDIT|DEBIT` · `scope`: `FULL|LINE|AMOUNT` · `status`: `PROPOSED|PENDING_APPROVAL|APPROVED|APPLIED|REJECTED|APPLICATION_FAILED|CANCELLED_BY_PROPOSER`
+> `required_approvals`/`approval_rule_id` added by the required-approvals migration.
 ```json
-{ "adjustment_id":"adj_1","direction":"CREDIT","scope":"FULL","parent_invoice_id":"inv_1","amount":5000,"reason_code":"SLA_COMPENSATION","status":"APPLIED","note_invoice_id":"inv_3" }
-{ "adjustment_id":"adj_2","direction":"DEBIT","scope":"LINE","parent_invoice_id":"inv_2","line_ref":"il_4","amount":300,"reason_code":"BILLING_ERROR","status":"PENDING_APPROVAL","required_approvals":2 }
-{ "adjustment_id":"adj_3","direction":"CREDIT","scope":"AMOUNT","service_category_code":"GOODWILL","amount":1000,"reason_code":"GOODWILL","status":"PROPOSED" }
-{ "adjustment_id":"adj_4","direction":"CREDIT","scope":"FULL","parent_invoice_id":"inv_2","amount":1500,"reason_code":"DISPUTE","status":"REJECTED" }
+{ "adjustment_id":"adj_1","operator_code":"WIK","customer_id":"cust_1","account_id":"acc_1","subscription_id":"sub_123","parent_invoice_id":"inv_1","target_wallet_ref":null,"billing_mode":"POSTPAID","direction":"CREDIT","scope":"FULL","line_ref":null,"service_category_code":null,"amount":5000.00,"currency":"KES","reason_code":"SLA_COMPENSATION","justification":"3-day outage credit","status":"APPLIED","required_approvals":1,"approval_rule_id":"rule_adj_std","proposed_by":"u_csr1","note_invoice_id":"inv_3","limit_overridden":false,"failure_reason":null,"applied_at":"2026-07-01T00:00:00Z" }
+{ "adjustment_id":"adj_2","operator_code":"WIK","customer_id":"cust_1","account_id":"acc_1","subscription_id":"sub_123","parent_invoice_id":"inv_2","target_wallet_ref":null,"billing_mode":"POSTPAID","direction":"DEBIT","scope":"LINE","line_ref":"il_4","service_category_code":null,"amount":300.00,"currency":"KES","reason_code":"BILLING_ERROR","justification":"under-billed voice","status":"PENDING_APPROVAL","required_approvals":2,"approval_rule_id":"rule_adj_debit","proposed_by":"u_csr2","note_invoice_id":null,"limit_overridden":false,"failure_reason":null,"applied_at":null }
+{ "adjustment_id":"adj_3","operator_code":"WIK","customer_id":"cust_2","account_id":"acc_5","subscription_id":null,"parent_invoice_id":null,"target_wallet_ref":null,"billing_mode":"POSTPAID","direction":"CREDIT","scope":"AMOUNT","line_ref":null,"service_category_code":"GOODWILL","amount":1000.00,"currency":"KES","reason_code":"GOODWILL","justification":"retention gesture","status":"PROPOSED","required_approvals":1,"approval_rule_id":"rule_adj_std","proposed_by":"u_csr1","note_invoice_id":null,"limit_overridden":false,"failure_reason":null,"applied_at":null }
+{ "adjustment_id":"adj_4","operator_code":"WIK","customer_id":"cust_1","account_id":"acc_1","subscription_id":"sub_123","parent_invoice_id":"inv_2","target_wallet_ref":null,"billing_mode":"POSTPAID","direction":"CREDIT","scope":"FULL","line_ref":null,"service_category_code":null,"amount":1500.00,"currency":"KES","reason_code":"DISPUTE","justification":"customer dispute rejected","status":"REJECTED","required_approvals":2,"approval_rule_id":"rule_adj_high","proposed_by":"u_csr2","note_invoice_id":null,"limit_overridden":false,"failure_reason":null,"applied_at":null }
 ```
-**Reading:** scope drives the amount source — `FULL`=parent total, `LINE`=a specific line (capped),
-`AMOUNT`=free-form (needs a finance category). adj_1 is applied (a `CREDIT_NOTE` `inv_3` was issued).
-adj_2 needs 2 approvals (multi-step). A reason code is always mandatory; its `direction` must justify
-the note direction.
+**Reading:** scope drives the amount source — `FULL`=parent total, `LINE`=a specific line (`line_ref`,
+capped), `AMOUNT`=free-form (needs `service_category_code`). adj_1 is applied (a `CREDIT_NOTE` `inv_3`
+was issued → `note_invoice_id`). adj_2 needs 2 approvals (`required_approvals=2`, multi-step). A
+`reason_code` is always mandatory; its `direction` must justify the note direction. `target_wallet_ref`
+directs a PREPAID note at a specific wallet; `limit_overridden` records a `/override-limit` exercise.
 
-### `wallet` & `wallet_transaction` (PREPAID)
+### `wallet` (`status`: `ACTIVE|FROZEN|CLOSED`) & `wallet_transaction` (PREPAID)
+> The multiwallet migration added `wallet_code`/`customer_id` and re-keyed uniqueness to
+> `(subscription_id, wallet_code)`; the expiry migration added `expires_at`. (The routing key is the
+> catalog `wallet_code`, not a `wallet_type_code` column.)
 ```json
-{ "wallet_id":"wal_1","subscription_id":"sub_2","wallet_type_code":"MAIN_WALLET","balance":1200,"currency":"KES","status":"ACTIVE" }
-{ "wallet_id":"wal_2","subscription_id":"sub_2","wallet_type_code":"VOICE_WALLET","balance":0,"status":"ACTIVE" }
-{ "wallet_id":"wal_3","subscription_id":"sub_5","wallet_type_code":"MAIN_WALLET","balance":50,"status":"EXPIRED" }
-{ "wtx_1":"…","wallet_id":"wal_1","type":"TOPUP","amount":1000 }
+{ "wallet_id":"wal_1","subscription_id":"sub_2","wallet_code":"MAIN_WALLET","account_id":"acc_2","customer_id":"cust_3","operator_code":"WIK","currency":"KES","balance":1200.00,"status":"ACTIVE","expires_at":"2026-09-01T00:00:00Z" }
+{ "wallet_id":"wal_2","subscription_id":"sub_2","wallet_code":"VOICE_WALLET","account_id":"acc_2","customer_id":"cust_3","operator_code":"WIK","currency":"KES","balance":0.00,"status":"ACTIVE","expires_at":null }
+{ "wallet_id":"wal_3","subscription_id":"sub_5","wallet_code":"MAIN_WALLET","account_id":"acc_5","customer_id":"cust_2","operator_code":"WIK","currency":"KES","balance":50.00,"status":"CLOSED","expires_at":"2026-06-01T00:00:00Z" }
+// wallet_transaction (direction: CREDIT|DEBIT ; reason: TOPUP|CYCLE_CHARGE|REFUND|BONUS|CORRECTION|RECOVERY)
+{ "id":"wtx_1","wallet_id":"wal_1","direction":"CREDIT","reason":"TOPUP","amount":1000.00,"balance_after":1200.00,"reference":"MPESA-QGR9aa" }
+{ "id":"wtx_2","wallet_id":"wal_1","direction":"DEBIT","reason":"CYCLE_CHARGE","amount":300.00,"balance_after":900.00,"reference":"cycle_2026_06_sub_2" }
 ```
-**Reading:** a prepaid sub may carry several typed wallets (MAIN, VOICE) routed by `wallet_type_code`;
-cycle close debits the matching wallet. wal_2 empty → a voice cycle would freeze (Scenario 2). wal_3
-expired (its balance is swept by `sophix:wallet:expire`). Transactions are the per-move ledger.
+**Reading:** a prepaid sub may carry several typed wallets (MAIN, VOICE) routed by `wallet_code`; cycle
+close debits the matching wallet. wal_2 empty → a voice cycle would freeze (Scenario 2). wal_3 is
+`CLOSED` (its `expires_at` passed; balance swept by `sophix:wallet:expire`). `wallet_transaction` is the
+per-move ledger — each row records `direction`/`reason`/`balance_after` for audit.
 
 ### `pro_forma` (`status`: `ACTIVE|SUPERSEDED`), `rated_event`, `account_credit_balance`
+> `rated_event.invoice_id` (the POSTPAID settlement ref) added by the link-rated-events migration.
+> `account_credit_balance` PK is `account_id` (one balance row per account).
 ```json
-{ "pro_forma_id":"pf_1","subscription_id":"sub_2","status":"ACTIVE","cycle_end":"2026-07-01","total_amount":1500,"superseded_by":null }
-{ "pro_forma_id":"pf_0","subscription_id":"sub_2","status":"SUPERSEDED","superseded_by":"pf_1" }
-{ "rated_id":"rat_1","subscription_id":"sub_1","tariff_code":"VOICE_LOCAL","amount":12.5,"billed":false }
-{ "account_id":"acc_1","balance":1000,"currency":"KES" }
+{ "pro_forma_id":"pf_1","operator_code":"WIK","subscription_id":"sub_2","customer_id":"cust_3","currency":"KES","total_amount":1500.00,"lines":[{"desc":"Internet 100M","amount":1500.00}],"customer_snapshot":{"name":"Acme Ltd"},"cycle_end":"2026-07-01T00:00:00Z","idempotency_cycle_key":"cycle_2026_07_sub_2","status":"ACTIVE","superseded_by":null }
+{ "pro_forma_id":"pf_0","operator_code":"WIK","subscription_id":"sub_2","customer_id":"cust_3","currency":"KES","total_amount":1400.00,"lines":[{"desc":"Internet 100M","amount":1400.00}],"customer_snapshot":{"name":"Acme Ltd"},"cycle_end":"2026-07-01T00:00:00Z","idempotency_cycle_key":"cycle_2026_07_sub_2_v0","status":"SUPERSEDED","superseded_by":"pf_1" }
+// rated_event
+{ "rated_id":"rat_1","operator_code":"WIK","usage_id":"usg_1","subscription_id":"sub_1","tariff_code":"VOICE_LOCAL","rate":2.0000,"amount":12.5000,"currency":"KES","billed":false,"invoice_id":null }
+{ "rated_id":"rat_2","operator_code":"WIK","usage_id":"usg_2","subscription_id":"sub_1","tariff_code":"VOICE_INTL_UK","rate":15.0000,"amount":45.0000,"currency":"KES","billed":true,"invoice_id":"inv_2" }
+// account_credit_balance (PK account_id)
+{ "account_id":"acc_1","operator_code":"WIK","currency":"KES","balance":1000.00 }
 ```
 **Reading:** the prepaid **pro forma** projects next cycle (Day-25); regenerating supersedes the prior
-one and records `superseded_by` (the chain). `rated_event.billed=false` = unbilled usage the next cycle
-close will sweep. `account_credit_balance` is auto-drawn on the next invoice.
+one and records `superseded_by` (the chain), keyed by `idempotency_cycle_key`. `rated_event.billed=false`
+(rat_1) = unbilled usage the next cycle close will sweep; rat_2 is settled (`billed=true`,
+`invoice_id=inv_2`). `account_credit_balance` (one row per account) is auto-drawn on the next invoice.
 
 ## 3. Services (worked calls)
 | Service | Responsibility |
