@@ -106,14 +106,14 @@ op_4 is a RESTRICT — it could have run concurrently with another op (non-exclu
 **`subscription_pause_config`** (PK `operator_code`) are one-row-per-operator(-kind) policy.
 **`subscription_restriction`** is the restriction *catalog* (the activated bars, by `restriction_code`).
 ```json
-{ "subscription_operation_config":{ "operator_code":"WIK","operation_kind":"MIGRATE","default_bpmn_process_key":"sub-migrate","operation_timeout_seconds":90,"billing_call_timeout_seconds":30,"fulfillment_call_timeout_seconds":60,"feature_flags":null,"enabled":false,"updated_by":"u_admin" } }
+{ "subscription_operation_config":{ "operator_code":"WIK","operation_kind":"MIGRATION","default_bpmn_process_key":"sub-migration","operation_timeout_seconds":90,"billing_call_timeout_seconds":30,"fulfillment_call_timeout_seconds":60,"feature_flags":null,"enabled":false,"updated_by":"u_admin" } }
 { "subscription_operation_config":{ "operator_code":"WIK","operation_kind":"PAUSE","default_bpmn_process_key":"sub-pause-wik","operation_timeout_seconds":120,"billing_call_timeout_seconds":30,"fulfillment_call_timeout_seconds":60,"feature_flags":{"requireFee":true},"enabled":true,"updated_by":"u_admin" } }
 { "subscription_pause_config":{ "operator_code":"WIK","customer_self_service_enabled":true,"scheduled_pause_enabled":true,"max_future_scheduled_resume_days":90,"min_pause_hours":24,"customer_notification_enabled":true,"updated_by":"u_admin" } }
 { "subscription_restriction":{ "restriction_id":"srest_voice","operator_code":"WIK","restriction_code":"OUTGOING_VOICE_BARRED","name":"Outgoing voice barred","fulfillment_action":"AAA_RESTRICT_OUTGOING_VOICE","customer_self_service_eligible":false,"admin_only":true,"is_active":true } }
 ```
 **Reading:** `subscription_operation_config` enables/disables a kind per operator or points it at a
 **custom BPMN** (PAUSE → `sub-pause-wik`) and sets the per-call timeouts/`feature_flags` — pure config.
-`MIGRATE` disabled → `trigger` rejects it. `subscription_pause_config` sets the voluntary-pause policy
+`MIGRATION` disabled → `trigger` rejects it. `subscription_pause_config` sets the voluntary-pause policy
 (self-service switch, scheduled-pause window, minimum duration, notify). `subscription_restriction`
 catalogs each bar with the `fulfillment_action` FUL-04 broadcasts and who may apply it
 (`customer_self_service_eligible`/`admin_only`).

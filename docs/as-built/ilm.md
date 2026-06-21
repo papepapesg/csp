@@ -21,13 +21,14 @@
 *Proven by `CustomerApiTest`.*
 
 ### 2. Sub-status change driven by the catalog (approval-gated)
-`PATCH …/accounts/acc_1 {sub_status:'hold'}` → `AccountService::update`: the
+`PATCH /api/customer-accounts/acc_1 {sub_status:'hold'}` → `AccountService::update`: the
 `customer_sub_status_catalog` validates the code, **derives** `main_status` (clone), and because
 `requires_approval=true` it rejects without an `approval_reference` (R-ILM-S-2). With one it commits +
 writes `account_status_history` + emits `CustomerAccountStatusChanged`. *Proven by `AccountFlagTest`.*
 
 ### 3. Raise an NPD flag → attention banner + faster dunning
-`PUT …/flags/NPD` → `setFlag`: catalog-gated; sets `attention_banner` and emits `CustomerAccountFlagSet`.
+`PUT /api/customer-accounts/acc_3/flags/NPD` → `setFlag`: catalog-gated; sets `attention_banner` and emits
+`CustomerAccountFlagSet`.
 Because the catalog marks NPD `affects_dunning=true`, BIL-04's next scan calls
 `hasDunningAccelerantFlag` → **waives the grace window** (R-ILM-F-3). *Cross-module read.* *Proven by
 `AccountFlagTest`, `DunningTest`.*
@@ -45,7 +46,7 @@ re-broadcasts the network, and Notification's `AccountStatusNotificationBridge` 
 
 ### 6. CVM evaluate → segment → activity (idempotent)
 `POST /api/cvm/customers/CUS-1/evaluate {signals}` → `CvmEvaluationService`: writes a
-`cvm_signal_profile`, computes churn score, assigns a `cvm_segment_membership` (e.g.
+`cvm_customer_signal_profile`, computes churn score, assigns a `cvm_segment_membership` (e.g.
 `RETENTION_HIGH_RISK`), and opens a `cvm_activity` — **idempotent by source event** (same event → same
 activity). Emits `CvmCustomerEvaluated`/`CvmActivityCreated`. *Proven by `CvmTest`.*
 
@@ -134,21 +135,23 @@ approval reference (and `approval_roles_jsonb` names which roles may sign it); `
 makes the change emit `CustomerAccountStatusChanged` for FUL-03. An operator adds a state by adding a
 row — no code.
 
-### `cvm_offer_instance` (`offer_type`: `RETENTION_DISCOUNT|UPGRADE_OFFER|WINBACK_PACKAGE|GOODWILL_CREDIT|PAYMENT_REMINDER` · `status`: `DRAFT|PROPOSED|ACCEPTED|REJECTED|EXPIRED|APPLIED|FAILED`)
+### `cvm_offer_instance` (`offer_type`: `RETENTION_DISCOUNT|UPGRADE_OFFER|WINBACK_PACKAGE|GOODWILL_CREDIT|PAYMENT_REMINDER` · `status`: `DRAFT|PENDING_APPROVAL|PROPOSED|ACCEPTED|REJECTED|EXPIRED|APPLIED|FAILED`)
 ```json
 { "offer_instance_id":"cvo_1","operator_code":"WIK","activity_id":"cva_1","customer_id":"CUS-1","subscription_id":"sub_123","offer_type":"RETENTION_DISCOUNT","campaign_code":null,"discount_ref":"disc_ret25","discount_percent":10.00,"status":"APPLIED","approval_request_id":null,"expires_at":"2026-07-31T00:00:00Z" }
 { "offer_instance_id":"cvo_2","operator_code":"WIK","activity_id":"cva_1","customer_id":"CUS-1","subscription_id":"sub_123","offer_type":"RETENTION_DISCOUNT","campaign_code":null,"discount_ref":null,"discount_percent":25.00,"status":"PROPOSED","approval_request_id":"appr_9","expires_at":"2026-07-31T00:00:00Z" }
 { "offer_instance_id":"cvo_3","operator_code":"WIK","activity_id":null,"customer_id":"CUS-3","subscription_id":null,"offer_type":"UPGRADE_OFFER","campaign_code":"Q3_UPSELL","discount_ref":null,"discount_percent":null,"status":"DRAFT","approval_request_id":null,"expires_at":null }
 { "offer_instance_id":"cvo_4","operator_code":"WIK","activity_id":null,"customer_id":"CUS-9","subscription_id":"sub_50","offer_type":"WINBACK_PACKAGE","campaign_code":"WINBACK","discount_ref":null,"discount_percent":null,"status":"EXPIRED","approval_request_id":null,"expires_at":"2026-05-01T00:00:00Z" }
 ```
-### `cvm_activity` (`activity_type`: `RETENTION_CALL|PAYMENT_RECOVERY|UPSELL_OFFER|WINBACK|SERVICE_RECOVERY` · `priority`: `LOW|MEDIUM|HIGH|CRITICAL` · `status`: `OFFERED|ACCEPTED|DECLINED|EXPIRED`)
+### `cvm_activity` (`activity_type`: `RETENTION_CALL|PAYMENT_RECOVERY|UPSELL_OFFER|WINBACK|SERVICE_RECOVERY` · `priority`: `LOW|MEDIUM|HIGH|CRITICAL` · `status`: `OPEN|IN_PROGRESS|WAITING_CUSTOMER|COMPLETED|CANCELLED|EXPIRED`)
 > The EM-03 full-model migration added `activity_type`/`account_id`/`source_event_ref` (idempotency
 > unique `(operator_code, source_event_ref)`), `assigned_to_user_id`/`assigned_team_id`/`priority`/
-> `due_at`/`closed_at`, and relaxed the legacy `type` column to nullable (kept as `type`).
+> `due_at`/`closed_at`, and relaxed the legacy `type` column to nullable (kept as `type`). (The `status`
+> vocabulary is the `CvmActivity` model lifecycle `OPEN→IN_PROGRESS→WAITING_CUSTOMER→COMPLETED/CANCELLED/
+> EXPIRED`; the DB column default remains the legacy `'OFFERED'`, overwritten on the first write.)
 ```json
-{ "activity_id":"cva_1","operator_code":"WIK","account_id":"acc_1","activity_type":"PAYMENT_RECOVERY","customer_id":"CUS-1","subscription_id":"sub_123","type":"RECOVERY","trigger_reason":"NON_PAYMENT","source_event_ref":"DunningStageAdvanced:acc_1:3","offer_code":null,"offer_details":null,"status":"OFFERED","channel":"OUTBOUND_CALL","assigned_to":null,"assigned_to_user_id":"u_ret1","assigned_team_id":"team_ret","priority":"HIGH","due_at":"2026-06-22T17:00:00Z","outcome_reason":null,"expires_at":"2026-06-30T00:00:00Z","decided_at":null,"closed_at":null }
-{ "activity_id":"cva_2","operator_code":"WIK","account_id":"acc_3","activity_type":"UPSELL_OFFER","customer_id":"CUS-3","subscription_id":null,"type":null,"trigger_reason":"UPSELL","source_event_ref":"CvmCustomerEvaluated:CUS-3:2026-06","offer_code":"UPGRADE_200M","offer_details":{"toPackage":"pkg_inet_200"},"status":"OFFERED","channel":"SMS","assigned_to":null,"assigned_to_user_id":null,"assigned_team_id":"team_sales","priority":"MEDIUM","due_at":null,"outcome_reason":null,"expires_at":"2026-07-15T00:00:00Z","decided_at":null,"closed_at":null }
-{ "activity_id":"cva_3","operator_code":"WIK","account_id":"acc_2","activity_type":"RETENTION_CALL","customer_id":"CUS-1","subscription_id":"sub_126","type":"RETENTION","trigger_reason":"CHURN_RISK","source_event_ref":"CvmCustomerEvaluated:CUS-1:2026-05","offer_code":"RET_25","offer_details":{"percent":25},"status":"ACCEPTED","channel":"OUTBOUND_CALL","assigned_to":null,"assigned_to_user_id":"u_ret1","assigned_team_id":"team_ret","priority":"CRITICAL","due_at":"2026-05-20T17:00:00Z","outcome_reason":"customer accepted","expires_at":"2026-05-31T00:00:00Z","decided_at":"2026-05-19T10:00:00Z","closed_at":"2026-05-19T10:05:00Z" }
+{ "activity_id":"cva_1","operator_code":"WIK","account_id":"acc_1","activity_type":"PAYMENT_RECOVERY","customer_id":"CUS-1","subscription_id":"sub_123","type":"RECOVERY","trigger_reason":"NON_PAYMENT","source_event_ref":"DunningStageAdvanced:acc_1:3","offer_code":null,"offer_details":null,"status":"OPEN","channel":"OUTBOUND_CALL","assigned_to":null,"assigned_to_user_id":"u_ret1","assigned_team_id":"team_ret","priority":"HIGH","due_at":"2026-06-22T17:00:00Z","outcome_reason":null,"expires_at":"2026-06-30T00:00:00Z","decided_at":null,"closed_at":null }
+{ "activity_id":"cva_2","operator_code":"WIK","account_id":"acc_3","activity_type":"UPSELL_OFFER","customer_id":"CUS-3","subscription_id":null,"type":null,"trigger_reason":"UPSELL","source_event_ref":"CvmCustomerEvaluated:CUS-3:2026-06","offer_code":"UPGRADE_200M","offer_details":{"toPackage":"pkg_inet_200"},"status":"IN_PROGRESS","channel":"SMS","assigned_to":null,"assigned_to_user_id":null,"assigned_team_id":"team_sales","priority":"MEDIUM","due_at":null,"outcome_reason":null,"expires_at":"2026-07-15T00:00:00Z","decided_at":null,"closed_at":null }
+{ "activity_id":"cva_3","operator_code":"WIK","account_id":"acc_2","activity_type":"RETENTION_CALL","customer_id":"CUS-1","subscription_id":"sub_126","type":"RETENTION","trigger_reason":"CHURN_RISK","source_event_ref":"CvmCustomerEvaluated:CUS-1:2026-05","offer_code":"RET_25","offer_details":{"percent":25},"status":"COMPLETED","channel":"OUTBOUND_CALL","assigned_to":null,"assigned_to_user_id":"u_ret1","assigned_team_id":"team_ret","priority":"CRITICAL","due_at":"2026-05-20T17:00:00Z","outcome_reason":"customer accepted","expires_at":"2026-05-31T00:00:00Z","decided_at":"2026-05-19T10:00:00Z","closed_at":"2026-05-19T10:05:00Z" }
 { "activity_id":"cva_4","operator_code":"WIK","account_id":"acc_4","activity_type":"WINBACK","customer_id":"CUS-9","subscription_id":"sub_50","type":"WINBACK","trigger_reason":"CHURNED","source_event_ref":"CvmCustomerEvaluated:CUS-9:2026-04","offer_code":"WINBACK","offer_details":null,"status":"EXPIRED","channel":"EMAIL","assigned_to":null,"assigned_to_user_id":null,"assigned_team_id":null,"priority":"LOW","due_at":null,"outcome_reason":"no response","expires_at":"2026-05-01T00:00:00Z","decided_at":null,"closed_at":"2026-05-01T00:00:00Z" }
 ```
 **Reading:** cvo_1 (10%, under threshold) applied straight through; cvo_2 (25%) is parked on EM-CFG-04
@@ -168,8 +171,10 @@ legacy `type` column survives nullable alongside the new `activity_type`.
 | `CvmOfferService` | retention offers (EM-CFG-04 gated; resume; SIP-03 on accept) |
 
 ## 4. API surface
-`/api/customers`, `…/accounts`, `…/kyc`, `…/flags`, `…/overview`, `/api/cvm/customers/{id}/evaluate`,
-`/api/cvm-offers/{id}/accept`. `permission:customer.*`; KYC decisions config-gated.
+`/api/customers`, `/api/customer-accounts/{account}` (+ `…/flags/{flagCode}`, `…/kyc`),
+`/api/customers/{id}/overview`, `/api/cvm/customers/{id}/evaluate`, `/api/cvm-offers/{id}/accept`.
+Resource-scoped permissions `customer.read|create|update` (no `customer.*` wildcard; all mutations use
+`customer.update`); KYC decisions config-gated.
 
 ## 5. Integration (events)
 - **Topic `ilm.customer`:** `CustomerCreated/Updated`, `CustomerKyc{Approved,Rejected}`,
