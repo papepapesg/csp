@@ -23,29 +23,54 @@
 ### Scenario B — <an edge/failure, e.g. "wallet too low / approval needed">
 <same shape — show the branch and what differs>
 
-## 2. Data model
-| Table | Purpose | Key invariants |
-| --- | --- | --- |
-| `<table>` | <…> | <unique keys, status enums, append-only, FKs> |
+## 2. Data model — **sample rows + how to read them**
+> For each key table: the columns + **enum legend** (what each value *does*), then a **sample row**
+> and a plain-English **reading**. Enums drive behaviour, so spell out what each value triggers.
+
+### `<table>`
+**Enum legend — `<status_col>`:** `A` = <behaviour>, `B` = <behaviour>, `C` (transient) = <…>.
+**Sample row:**
+```json
+{ "<id>":"…", "<status_col>":"B", "<enum2>":"X", "…":"…" }
+```
+**Reading:** "<row id> is a <thing> currently <status B = …>; because `<enum2>=X` it <behaves …>.
+Next legal transition is → <…>." Repeat with a 2nd row in a *different* enum state to contrast.
 
 ## 3. Services & responsibilities
 | Service | Responsibility | Key methods |
 | --- | --- | --- |
 | `<Service>` | <…> | `method()` — <what it guarantees> |
 
-## 4. API surface
+**Worked call — `<Service::method>`:**
+```php
+$svc->method($arg, ['k'=>'v']);   // → <what it does step by step> → returns <X>
+```
+
+## 4. API surface (+ controller examples)
 | Method + path | Permission | Idempotent? | Scope? | Controller→service |
 | --- | --- | --- | --- | --- |
 | `POST /api/<…>` | `<perm>` | yes/no | `<scope>` | `<Controller@action>` → `<Service::m>` |
+
+**Worked request/response — `<Controller@action>`:**
+```http
+POST /api/<…>            →   201 { "<id>":"…", "status":"…" }
+{ "field":"value" }
+```
+<one line: what the controller validates and which service it calls>
 
 ## 5. Integration (events)
 - **Emits:** `<EventType>` (topic `<topic>`) — <when / payload keys / who consumes>
 - **Consumes:** `<EventType>` via `<Listener>` — <what it does>
 
-## 6. Processes (workflow)
+## 6. Processes (workflow) — with handler examples
 - **Flows:** `<process key>` — <when triggered, terminal states>
 - **Handlers (topics):** `<topic>` → `<Handler>` — <what the step does, outputs>
 - Trigger entrypoint: `<Service::method>`; reconciliation: `<…>`
+
+**Worked handler — `<Handler>` (topic `<topic>`):**
+> Invoked by the worker when the flow reaches the `<node>` node.
+> **Reads vars:** `{subscriptionId, …}` · **Does:** <…> · **Outputs:** `{<key>:<val>}` (drives the
+> next gateway) · **On fail:** `TaskResult::fail(...)` (retryable? <y/n>).
 
 ## 7. Policy & config (no-code knobs)
 - **Rules packages:** `<rules.xxx>` — <inputs → outputs, fallback>
