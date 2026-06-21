@@ -99,107 +99,143 @@ Implement `class HuaweiNceGponAdapter implements ProvisioningAdapter` (§4), see
 `provisioning_adapter_config{target_code, adapter_class:HuaweiNceGponAdapter::class}` row. Every
 command for that target now drives the OLT. **No platform code change.**
 
-## 2. Data model — 4 sample rows + readings per table
+## 2. Data model — ≥4 **complete** sample rows + readings per table
+> **Completeness:** each row lists **every domain column** (nullables shown as `null`). The surrogate
+> primary key shown is the real one; `created_at`/`updated_at` are omitted by convention. `network_node`
+> and `homepass` are **Catalog-owned** — shown here only as the path context; their full-width sample
+> rows live in `catalog.md` (`homepass` is ~50 columns of structured address/GIS/RoE, **projected** below
+> to the columns provisioning's path resolution actually reads).
 
 ### `network_node` (Catalog — the plant tree)
-**`type`:** `HEADEND|OLT|SPLITTER|FAT|FDT|ONT` (GPON) · `DISTRIBUTION_NODE|AMPLIFIER|LINE_EXTENDER` (HFC) · `VOIPSWITCH|NMS|OTHER`. Tree via `parent_node_code`.
+**`type`:** `HEADEND|OLT|SPLITTER|FAT|FDT|ONT` (GPON) · `DISTRIBUTION_NODE|AMPLIFIER|LINE_EXTENDER` (HFC) · `VOIPSWITCH|NMS|OTHER`. Tree via `parent_node_code`. **`status`:** `ACTIVE` (default).
 ```json
-{ "node_id":"nnode_he","code":"HEADEND-NRB","type":"HEADEND","parent_node_code":null }
-{ "node_id":"nnode_olt","code":"OLT-NRB-WTL-01","type":"OLT","parent_node_code":"HEADEND-NRB" }
-{ "node_id":"nnode_fat","code":"FAT-F12","type":"FAT","parent_node_code":"SPLITTER-S1H" }
-{ "node_id":"nnode_ont","code":"ONT-77","type":"ONT","parent_node_code":"FAT-F12" }
+{ "node_id":"nnode_he","operator_code":"WIK","code":"HEADEND-NRB","type":"HEADEND","name":"Nairobi Headend","parent_node_code":null,"description":"Westlands core","metadata":{"site":"WTL"},"status":"ACTIVE" }
+{ "node_id":"nnode_olt","operator_code":"WIK","code":"OLT-NRB-WTL-01","type":"OLT","name":"Westlands OLT 01","parent_node_code":"HEADEND-NRB","description":null,"metadata":{"ports":16},"status":"ACTIVE" }
+{ "node_id":"nnode_fat","operator_code":"WIK","code":"FAT-F12","type":"FAT","name":"FAT F12","parent_node_code":"SPLITTER-S1H","description":null,"metadata":null,"status":"ACTIVE" }
+{ "node_id":"nnode_ont","operator_code":"WIK","code":"ONT-77","type":"ONT","name":"ONT 77","parent_node_code":"FAT-F12","description":"customer leaf","metadata":null,"status":"ACTIVE" }
 ```
 **Reading:** the chain root is the HEADEND (no parent); ONT-77 is the customer leaf. Walking
 `parent_node_code` (ONT→FAT→…→OLT→HEADEND) gives the physical path; the serving **OLT** maps to the
 GPON **target plane**. An HFC HomePass would chain modem→AMPLIFIER→DISTRIBUTION_NODE→HEADEND and map
 to a CMTS target instead.
 
-### `homepass` (Catalog — the premises)
+### `homepass` (Catalog — the premises) · **projected** to provisioning-relevant columns
+> Full ~50-column schema (structured address, building, GIS lat/lng, RoE dates) is in `catalog.md`.
+> `status` is **not** a hardcoded enum — it's a code from the `homepass_status_code` catalog whose
+> *flags* (`is_sellable`, `is_active`, …) drive behaviour; the codes below are illustrative.
 ```json
-{ "id":"hp_1","status":"SELLABLE","technology":"GPON","house_type_code":"APARTMENT","franchise_ref":"fr_nrb" }
-{ "id":"hp_2","status":"UNDER_CONSTRUCTION","technology":"GPON","house_type_code":"VILLA","franchise_ref":"fr_nrb" }
-{ "id":"hp_3","status":"SELLABLE","technology":"HFC","house_type_code":"APARTMENT","franchise_ref":"fr_msa" }
-{ "id":"hp_4","status":"RETIRED","technology":"GPON","house_type_code":"OFFICE","franchise_ref":"fr_nrb" }
+{ "id":"hp_1","operator_code":"WIK","code":"HP-NRB-0001","status":"RFS","technology":"GPON","house_type_code":"M2M","network_nodes":["ONT-77","OLT-NRB-WTL-01"],"tech_region_id":"KE-NRB-KAREN","has_been_active":true,"has_been_sellable":true }
+{ "id":"hp_2","operator_code":"WIK","code":"HP-NRB-0002","status":"WAI","technology":"GPON","house_type_code":"S1H","network_nodes":[],"tech_region_id":"KE-NRB-KAREN","has_been_active":false,"has_been_sellable":false }
+{ "id":"hp_3","operator_code":"WIK","code":"HP-MSA-0007","status":"RFS","technology":"HFC","house_type_code":"M2M","network_nodes":["CM-12","DN-3"],"tech_region_id":"KE-MSA-NYALI","has_been_active":true,"has_been_sellable":true }
+{ "id":"hp_4","operator_code":"WIK","code":"HP-NRB-0099","status":"RETIRED","technology":"GPON","house_type_code":"OFF","network_nodes":["ONT-3"],"tech_region_id":"KE-NRB-KAREN","has_been_active":true,"has_been_sellable":true }
 ```
-**Reading:** only `SELLABLE` premises can take an order (hp_2 isn't built yet; hp_4 is decommissioned).
-`technology` decides the node chain + target plane (GPON vs HFC). `franchise_ref` ties to RBAC scope.
+**Reading:** only a status whose `is_sellable` flag is set can take an order (hp_2's `WAI` = waiting/under
+construction; hp_4's `RETIRED` = decommissioned). `technology` decides the node chain + target plane
+(GPON→OLT vs HFC→CMTS); `network_nodes` is the cached path (leaf→…→headend); `tech_region_id` ties to
+RBAC scope. `has_been_sellable` is the latch that makes `HomePassReachedSellable` fire only once.
 
 ### `provisioning_target` (the vendor plane) · `type`: `GPON|HFC|VOIP|NMS`
 ```json
-{ "target_code":"HUAWEI_NCE_GPON_KE","type":"GPON","name":"Huawei NCE GPON","endpoint":"https://nce.wik:18002","active":true }
-{ "target_code":"CMTS_HFC_KE","type":"HFC","name":"Casa CMTS (Clearcable NOMS)","endpoint":"https://noms.wik","active":true }
-{ "target_code":"SIP_VOICE_KE","type":"VOIP","name":"VoipSwitch","endpoint":"sip://vs.wik","active":true }
-{ "target_code":"DEFAULT_NMS","type":"NMS","name":"Default NMS","endpoint":null,"active":true }
+{ "target_code":"HUAWEI_NCE_GPON_KE","operator_code":"WIK","type":"GPON","name":"Huawei NCE GPON","endpoint":"https://nce.wik:18002","active":true }
+{ "target_code":"CMTS_HFC_KE","operator_code":"WIK","type":"HFC","name":"Casa CMTS (Clearcable NOMS)","endpoint":"https://noms.wik","active":true }
+{ "target_code":"SIP_VOICE_KE","operator_code":"WIK","type":"VOIP","name":"VoipSwitch","endpoint":"sip://vs.wik","active":true }
+{ "target_code":"DEFAULT_NMS","operator_code":"WIK","type":"NMS","name":"Default NMS","endpoint":null,"active":true }
 ```
 **Reading:** one plane per technology; a triple-play subscription touches several (internet→GPON,
 voice→VOIP). `DEFAULT_NMS` is the catch-all the POC seeds point at.
 
-### `provisioning_adapter_config` (⭐ the vendor binding) · `execution_mode_default`: `SYNC_REQUIRED|ASYNC_ACCEPTED`
+### `provisioning_adapter_config` (⭐ the vendor binding) · `execution_mode_default`: `SYNC_REQUIRED|ASYNC_ACCEPTED` · `status`: `ACTIVE|SUSPENDED`
 ```json
-{ "adapter_config_id":"pac_1","target_code":"HUAWEI_NCE_GPON_KE","adapter_class":"…\\HuaweiNceGponAdapter","execution_mode_default":"ASYNC_ACCEPTED","retry_policy_json":{"baseSeconds":30,"factor":2},"status":"ACTIVE" }
-{ "adapter_config_id":"pac_2","target_code":"SIP_VOICE_KE","adapter_class":"…\\SipVoiceAdapter","execution_mode_default":"SYNC_REQUIRED","status":"ACTIVE" }
-{ "adapter_config_id":"pac_3","target_code":"DEFAULT_NMS","adapter_class":"…\\StubProvisioningAdapter","execution_mode_default":"SYNC_REQUIRED","status":"ACTIVE" }
-{ "adapter_config_id":"pac_4","target_code":"CMTS_HFC_KE","adapter_class":"…\\CasaCmtsAdapter","execution_mode_default":"ASYNC_ACCEPTED","status":"SUSPENDED" }
+{ "adapter_config_id":"pac_1","operator_code":"WIK","provisioner_key":"GPON_INET","target_code":"HUAWEI_NCE_GPON_KE","adapter_class":"…\\HuaweiNceGponAdapter","execution_mode_default":"ASYNC_ACCEPTED","timeout_ms":25000,"max_retry_count":5,"retry_policy_json":{"baseSeconds":30,"factor":2},"status":"ACTIVE" }
+{ "adapter_config_id":"pac_2","operator_code":"WIK","provisioner_key":null,"target_code":"SIP_VOICE_KE","adapter_class":"…\\SipVoiceAdapter","execution_mode_default":"SYNC_REQUIRED","timeout_ms":15000,"max_retry_count":3,"retry_policy_json":null,"status":"ACTIVE" }
+{ "adapter_config_id":"pac_3","operator_code":"WIK","provisioner_key":null,"target_code":"DEFAULT_NMS","adapter_class":"…\\StubProvisioningAdapter","execution_mode_default":"SYNC_REQUIRED","timeout_ms":25000,"max_retry_count":5,"retry_policy_json":null,"status":"ACTIVE" }
+{ "adapter_config_id":"pac_4","operator_code":"WIK","provisioner_key":null,"target_code":"CMTS_HFC_KE","adapter_class":"…\\CasaCmtsAdapter","execution_mode_default":"ASYNC_ACCEPTED","timeout_ms":40000,"max_retry_count":8,"retry_policy_json":{"baseSeconds":60,"factor":2},"status":"SUSPENDED" }
 ```
-**Reading:** **this row is the swappable seam** — change `adapter_class` to repoint a plane.
+**Reading:** **this row is the swappable seam** — change `adapter_class` to repoint a plane. The optional
+`provisioner_key` (pac_1) refines the binding to a specific PLM service provisioner; `timeout_ms`/
+`max_retry_count`/`retry_policy_json` are the per-target resilience knobs.
 `ASYNC_ACCEPTED` ⇒ commands sit `ACCEPTED` until the poll worker confirms. `status=SUSPENDED` (pac_4)
 ⇒ that plane is parked (e.g. maintenance) and the registry treats it as unavailable. The default seed
 (pac_3) uses the stub so flows run with no hardware.
 
 ### `provisioning_desired_state` (the reconcile baseline) · `desired_status`: `ACTIVE|SUSPENDED|RESTRICTED|TERMINATED|NOT_PRESENT`
 ```json
-{ "desired_state_id":"pds_1","subscription_id":"sub_123","homepass_id":"hp_1","service_ref":"svc_inet","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_123:svc_inet","desired_status":"ACTIVE","desired_profile":{"speedProfile":"100M"} }
-{ "desired_state_id":"pds_2","subscription_id":"sub_123","service_ref":"svc_voice","target_code":"SIP_VOICE_KE","subscriber_key":"sub_123:svc_voice","desired_status":"ACTIVE","desired_profile":{"callerId":true} }
-{ "desired_state_id":"pds_3","subscription_id":"sub_9","service_ref":"svc_inet","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_9:svc_inet","desired_status":"SUSPENDED","desired_profile":{} }
-{ "desired_state_id":"pds_4","subscription_id":"sub_7","service_ref":"svc_inet","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_7:svc_inet","desired_status":"NOT_PRESENT","desired_profile":{} }
+{ "desired_state_id":"pds_1","operator_code":"WIK","subscription_id":"sub_123","customer_id":"cust_50","homepass_id":"hp_1","service_ref":"svc_inet","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_123:svc_inet","desired_status":"ACTIVE","desired_profile":{"speedProfile":"100M","vlan":101},"source_module":"Subscription","source_ref":"subop_991","effective_from":"2026-06-20T09:00:00Z" }
+{ "desired_state_id":"pds_2","operator_code":"WIK","subscription_id":"sub_123","customer_id":"cust_50","homepass_id":"hp_1","service_ref":"svc_voice","target_code":"SIP_VOICE_KE","subscriber_key":"sub_123:svc_voice","desired_status":"ACTIVE","desired_profile":{"callerId":true},"source_module":"Subscription","source_ref":"subop_991","effective_from":"2026-06-20T09:00:00Z" }
+{ "desired_state_id":"pds_3","operator_code":"WIK","subscription_id":"sub_9","customer_id":"cust_12","homepass_id":"hp_7","service_ref":"svc_inet","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_9:svc_inet","desired_status":"SUSPENDED","desired_profile":{},"source_module":"Ilm","source_ref":"acct_status_sync","effective_from":"2026-06-18T00:00:00Z" }
+{ "desired_state_id":"pds_4","operator_code":"WIK","subscription_id":"sub_7","customer_id":"cust_8","homepass_id":null,"service_ref":"svc_inet","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_7:svc_inet","desired_status":"NOT_PRESENT","desired_profile":{},"source_module":"Subscription","source_ref":"term_55","effective_from":"2026-06-15T00:00:00Z" }
 ```
 **Reading:** one row per (subscriber, service, plane). pds_1/2 = a triple-play sub provisioned across
 two planes. pds_3 = suspended (reconcile expects the plane to report SUSPENDED). pds_4 = terminated, so
 the subscriber should be **absent** — a present subscriber is now drift.
 
-### `provisioning_command` (the dispatch ledger) · `action`: `ACTIVATE|MODIFY|DEACTIVATE|SUSPEND|RESUME` · `status`: `PENDING→SENT→CONFIRMED|ACCEPTED|FAILED|MISMATCH`
+### `provisioning_command` (the dispatch ledger) · `action`: `ACTIVATE|MODIFY|DEACTIVATE|SUSPEND|RESUME` · `status`: `PENDING→SENT→CONFIRMED|ACCEPTED|FAILED|MISMATCH` · `execution_mode`: `SYNC|ASYNC_ACCEPTED`
 ```json
-{ "command_id":"pcmd_1","broadcast_id":"bcast_1","subscription_id":"sub_123","service_ref":"svc_inet","action":"ACTIVATE","target_code":"HUAWEI_NCE_GPON_KE","status":"CONFIRMED","external_ref":"NMS-AB12","execution_mode":"SYNC_REQUIRED","attempts":1 }
-{ "command_id":"pcmd_2","broadcast_id":"bcast_1","subscription_id":"sub_123","service_ref":"svc_voice","action":"ACTIVATE","target_code":"SIP_VOICE_KE","status":"ACCEPTED","external_ref":"VS-7781","execution_mode":"ASYNC_ACCEPTED","attempts":1 }
-{ "command_id":"pcmd_3","subscription_id":"sub_5","action":"ACTIVATE","target_code":"HUAWEI_NCE_GPON_KE","status":"FAILED","last_error":"OLT rejected: profile unknown","attempts":3 }
-{ "command_id":"pcmd_4","subscription_id":"sub_9","action":"SUSPEND","target_code":"HUAWEI_NCE_GPON_KE","status":"CONFIRMED","attempts":1 }
+{ "command_id":"pcmd_1","operator_code":"WIK","broadcast_id":"bcast_1","subscription_id":"sub_123","service_ref":"svc_inet","action":"ACTIVATE","target_code":"HUAWEI_NCE_GPON_KE","desired_state":{"desiredStatus":"ACTIVE","speedProfile":"100M"},"observed_state":null,"status":"CONFIRMED","external_ref":"NMS-AB12","request":{"op":"create-sub"},"response":{"ok":true},"attempts":1,"last_error":null,"correlation_id":"corr_77","sent_at":"2026-06-20T09:00:01Z","confirmed_at":"2026-06-20T09:00:02Z","execution_mode":"SYNC","accepted_at":null }
+{ "command_id":"pcmd_2","operator_code":"WIK","broadcast_id":"bcast_1","subscription_id":"sub_123","service_ref":"svc_voice","action":"ACTIVATE","target_code":"SIP_VOICE_KE","desired_state":{"desiredStatus":"ACTIVE","callerId":true},"observed_state":null,"status":"ACCEPTED","external_ref":"VS-7781","request":{"op":"add-line"},"response":{"queued":true},"attempts":1,"last_error":null,"correlation_id":"corr_77","sent_at":"2026-06-20T09:00:01Z","confirmed_at":null,"execution_mode":"ASYNC_ACCEPTED","accepted_at":"2026-06-20T09:00:01Z" }
+{ "command_id":"pcmd_3","operator_code":"WIK","broadcast_id":"bcast_4","subscription_id":"sub_5","service_ref":"svc_inet","action":"ACTIVATE","target_code":"HUAWEI_NCE_GPON_KE","desired_state":{"desiredStatus":"ACTIVE","speedProfile":"1G"},"observed_state":null,"status":"FAILED","external_ref":null,"request":{"op":"create-sub"},"response":{"error":"profile unknown"},"attempts":3,"last_error":"OLT rejected: profile unknown","correlation_id":"corr_88","sent_at":"2026-06-20T10:00:00Z","confirmed_at":null,"execution_mode":"SYNC","accepted_at":null }
+{ "command_id":"pcmd_4","operator_code":"WIK","broadcast_id":"bcast_9","subscription_id":"sub_9","service_ref":"svc_inet","action":"SUSPEND","target_code":"HUAWEI_NCE_GPON_KE","desired_state":{"desiredStatus":"SUSPENDED"},"observed_state":null,"status":"CONFIRMED","external_ref":"NMS-CD34","request":{"op":"suspend"},"response":{"ok":true},"attempts":1,"last_error":null,"correlation_id":"corr_90","sent_at":"2026-06-18T00:00:01Z","confirmed_at":"2026-06-18T00:00:02Z","execution_mode":"SYNC","accepted_at":null }
 ```
 **Reading:** `broadcast_id=bcast_1` groups the two commands from one triple-play ACTIVATE (internet
-confirmed sync, voice accepted async). pcmd_3 exhausted retries (`attempts:3`, `FAILED`). The command
-is the audit of *what was sent to which plane and how it went*.
+confirmed sync — `confirmed_at` set; voice accepted async — `accepted_at` set, `confirmed_at` still
+null until the poll worker resolves it). pcmd_3 exhausted retries (`attempts:3`, `FAILED`, `last_error`
+recorded, no `external_ref`). `correlation_id` threads a command back to the originating flow; the
+command is the audit of *what was sent to which plane and how it went*.
 
 ### `provisioning_command_attempt` (per-try audit) · `status`: `SUCCESS|FAILED_RETRYABLE|FAILED_FINAL|TIMEOUT`
+> (`created_at` uses the DB default; omitted by convention along with the audit timestamps.)
 ```json
-{ "attempt_id":"pcma_1","command_id":"pcmd_1","adapter_class":"…\\HuaweiNceGponAdapter","status":"SUCCESS","vendor_status_code":"OK" }
-{ "attempt_id":"pcma_2","command_id":"pcmd_3","adapter_class":"…\\HuaweiNceGponAdapter","status":"FAILED_RETRYABLE","error_code":"ADAPTER_REJECTED" }
-{ "attempt_id":"pcma_3","command_id":"pcmd_3","adapter_class":"…\\HuaweiNceGponAdapter","status":"FAILED_FINAL","error_code":"PROFILE_UNKNOWN" }
-{ "attempt_id":"pcma_4","command_id":"pcmd_2","adapter_class":"…\\SipVoiceAdapter","status":"TIMEOUT","error_code":"VENDOR_TIMEOUT" }
+{ "attempt_id":"pcma_1","operator_code":"WIK","command_id":"pcmd_1","attempt_no":1,"adapter_class":"…\\HuaweiNceGponAdapter","status":"SUCCESS","response_payload":{"externalRef":"NMS-AB12"},"vendor_status_code":"OK","duration_ms":420,"error_code":null }
+{ "attempt_id":"pcma_2","operator_code":"WIK","command_id":"pcmd_3","attempt_no":1,"adapter_class":"…\\HuaweiNceGponAdapter","status":"FAILED_RETRYABLE","response_payload":{"err":"busy"},"vendor_status_code":"503","duration_ms":1500,"error_code":"ADAPTER_REJECTED" }
+{ "attempt_id":"pcma_3","operator_code":"WIK","command_id":"pcmd_3","attempt_no":3,"adapter_class":"…\\HuaweiNceGponAdapter","status":"FAILED_FINAL","response_payload":{"err":"profile unknown"},"vendor_status_code":"422","duration_ms":1300,"error_code":"PROFILE_UNKNOWN" }
+{ "attempt_id":"pcma_4","operator_code":"WIK","command_id":"pcmd_2","attempt_no":1,"adapter_class":"…\\SipVoiceAdapter","status":"TIMEOUT","response_payload":null,"vendor_status_code":null,"duration_ms":15000,"error_code":"VENDOR_TIMEOUT" }
 ```
-**Reading:** pcmd_3 has two attempts (retryable then final) — this ledger explains *why* a command
-failed and which adapter/vendor code returned it. Invaluable for vendor-integration debugging.
+**Reading:** pcmd_3 has two attempts (`attempt_no` 1 retryable → 3 final) — this ledger explains *why* a
+command failed and which adapter/vendor code returned it. `duration_ms` flags the slow TIMEOUT (15 s vs
+~0.4 s success). Invaluable for vendor-integration debugging.
 
-### `provisioning_observed_state` (last poll) & `provisioning_reconciliation_run`/`_item`
+### `provisioning_observed_state` (last poll — mirror of what the plane reports)
 ```json
-// observed_state (mirror of what the plane reports)
-{ "observed_state_id":"pos_1","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_123:svc_inet","observed_status":"ACTIVE","observed_profile":{"speedProfile":"100M"} }
-{ "observed_state_id":"pos_2","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_9:svc_inet","observed_status":"ACTIVE" }
-// reconciliation_run
-{ "run_id":"prr_1","target_code":"HUAWEI_NCE_GPON_KE","status":"COMPLETED","desired_count":120,"observed_count":120,"mismatch_count":1 }
-{ "run_id":"prr_2","target_code":null,"status":"RUNNING","desired_count":0 }
-// reconciliation_item  (status: OPEN|IN_REVIEW|RESOLVED|IGNORED)
-{ "item_id":"pri_1","run_id":"prr_1","subscription_id":"sub_9","subscriber_key":"sub_9:svc_inet","desired_status":"SUSPENDED","observed_status":"ACTIVE","status":"OPEN","diff":{"desiredStatus":"SUSPENDED","observedStatus":"ACTIVE"} }
-{ "item_id":"pri_2","subscription_id":"sub_5","status":"RESOLVED","resolution":"FORCE_SYNCED","resolved_by":"u_noc" }
+{ "observed_state_id":"pos_1","operator_code":"WIK","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_123:svc_inet","observed_status":"ACTIVE","observed_profile":{"speedProfile":"100M"},"source_run_id":"prr_1","collected_at":"2026-06-21T01:00:00Z" }
+{ "observed_state_id":"pos_2","operator_code":"WIK","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_9:svc_inet","observed_status":"ACTIVE","observed_profile":{},"source_run_id":"prr_1","collected_at":"2026-06-21T01:00:00Z" }
+{ "observed_state_id":"pos_3","operator_code":"WIK","target_code":"SIP_VOICE_KE","subscriber_key":"sub_123:svc_voice","observed_status":"ACTIVE","observed_profile":{"callerId":true},"source_run_id":"prr_1","collected_at":"2026-06-21T01:00:00Z" }
+{ "observed_state_id":"pos_4","operator_code":"WIK","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_7:svc_inet","observed_status":null,"observed_profile":null,"source_run_id":"prr_1","collected_at":"2026-06-21T01:00:00Z" }
 ```
-**Reading:** pos_2 vs pds_3 = **drift** (network says ACTIVE, BSS wants SUSPENDED) → that's pri_1
-(`OPEN`). A run summarises a pass (`mismatch_count`); an item is one subscriber's discrepancy with its
-`diff`, moving `OPEN→IN_REVIEW` (force-sync raised) `→RESOLVED` (or `IGNORED` if NOC decides it's fine).
+**Reading:** one row per (plane, subscriber), upserted each run (`source_run_id`/`collected_at` show
+which pass wrote it). pos_1/pos_3 match their desired rows (clean). **pos_2 vs pds_3 = drift** (network
+says ACTIVE, BSS wants SUSPENDED). pos_4 reports `null` (subscriber absent) which *matches* pds_4's
+`NOT_PRESENT` — absence is the correct observation there.
+
+### `provisioning_reconciliation_run` (one pass) · `scope_type`: `FULL_TARGET|REGION|SUBSCRIPTION|SERVICE_CLASS` · `status`: `RUNNING|COMPLETED|FAILED|PARTIAL`
+```json
+{ "run_id":"prr_1","operator_code":"WIK","target_code":"HUAWEI_NCE_GPON_KE","scope_type":"FULL_TARGET","scope_value":null,"status":"COMPLETED","desired_count":120,"observed_count":120,"mismatch_count":1,"started_at":"2026-06-21T01:00:00Z","completed_at":"2026-06-21T01:03:00Z" }
+{ "run_id":"prr_2","operator_code":"WIK","target_code":null,"scope_type":"FULL_TARGET","scope_value":null,"status":"RUNNING","desired_count":0,"observed_count":0,"mismatch_count":0,"started_at":"2026-06-21T02:00:00Z","completed_at":null }
+{ "run_id":"prr_3","operator_code":"WIK","target_code":"HUAWEI_NCE_GPON_KE","scope_type":"SUBSCRIPTION","scope_value":"sub_9","status":"COMPLETED","desired_count":1,"observed_count":1,"mismatch_count":1,"started_at":"2026-06-20T12:00:00Z","completed_at":"2026-06-20T12:00:05Z" }
+{ "run_id":"prr_4","operator_code":"WIK","target_code":"SIP_VOICE_KE","scope_type":"FULL_TARGET","scope_value":null,"status":"FAILED","desired_count":30,"observed_count":0,"mismatch_count":0,"started_at":"2026-06-21T01:00:00Z","completed_at":"2026-06-21T01:00:30Z" }
+```
+**Reading:** prr_1 is the hourly full sweep of the GPON plane (120 desired = 120 observed, 1 mismatch).
+prr_2 (`target_code=null`) is an all-targets pass still `RUNNING`. prr_3 is a **scoped** rerun of just
+`sub_9` (after a fix). prr_4 `FAILED` — the SIP plane was unreachable, so `observed_count=0` and no
+mismatches are opened (a failed fetch is not treated as drift).
+
+### `provisioning_reconciliation_item` (one mismatch) · `status`: `OPEN|RESOLVED|IGNORED` (UI surfaces `IN_REVIEW` once a force-sync is raised) · `resolution`: `FORCE_SYNCED|MANUAL|MATCHED_SINCE`
+```json
+{ "item_id":"pri_1","operator_code":"WIK","run_id":"prr_1","target_code":"HUAWEI_NCE_GPON_KE","subscription_id":"sub_9","service_ref":"svc_inet","subscriber_key":"sub_9:svc_inet","desired_status":"SUSPENDED","observed_status":"ACTIVE","diff":{"desiredStatus":"SUSPENDED","observedStatus":"ACTIVE"},"status":"OPEN","resolution":null,"resolved_by":null,"resolved_at":null }
+{ "item_id":"pri_2","operator_code":"WIK","run_id":"prr_3","target_code":"HUAWEI_NCE_GPON_KE","subscription_id":"sub_5","service_ref":"svc_inet","subscriber_key":"sub_5:svc_inet","desired_status":"ACTIVE","observed_status":"SUSPENDED","diff":{"desiredStatus":"ACTIVE","observedStatus":"SUSPENDED"},"status":"RESOLVED","resolution":"FORCE_SYNCED","resolved_by":"u_noc2","resolved_at":"2026-06-20T12:30:00Z" }
+{ "item_id":"pri_3","operator_code":"WIK","run_id":"prr_1","target_code":"HUAWEI_NCE_GPON_KE","subscription_id":"sub_3","service_ref":"svc_inet","subscriber_key":"sub_3:svc_inet","desired_status":"ACTIVE","observed_status":null,"diff":{"desiredStatus":"ACTIVE","observedStatus":null},"status":"IGNORED","resolution":"MANUAL","resolved_by":"u_noc1","resolved_at":"2026-06-21T08:00:00Z" }
+{ "item_id":"pri_4","operator_code":"WIK","run_id":"prr_3","target_code":"HUAWEI_NCE_GPON_KE","subscription_id":"sub_9","service_ref":"svc_inet","subscriber_key":"sub_9:svc_inet","desired_status":"SUSPENDED","observed_status":"SUSPENDED","diff":null,"status":"RESOLVED","resolution":"MATCHED_SINCE","resolved_by":null,"resolved_at":"2026-06-20T13:00:00Z" }
+```
+**Reading:** pri_1 is the live drift (`OPEN`, no resolution yet). pri_2 was corrected by a force-sync
+(`FORCE_SYNCED`, `resolved_by=u_noc2`). pri_3 a NOC decided to leave (`IGNORED`/`MANUAL`). pri_4 shows
+auto-close: a later run found desired==observed, so the prior item is resolved `MATCHED_SINCE` with no
+human (`resolved_by=null`).
 
 ### `provisioning_force_sync_request` · `sync_direction`: `BSS_TO_NETWORK|NETWORK_TO_BSS|MARK_IGNORE` · `status`: `PENDING_APPROVAL|APPROVED|RUNNING|COMPLETED|FAILED|CANCELLED`
 ```json
-{ "force_sync_id":"pfs_1","source_item_id":"pri_1","subscription_id":"sub_9","target_code":"HUAWEI_NCE_GPON_KE","sync_direction":"BSS_TO_NETWORK","requested_action":"REAPPLY_PROFILE","status":"PENDING_APPROVAL","approval_request_id":"appr_77","requested_by_user_id":"u_noc1" }
-{ "force_sync_id":"pfs_2","source_item_id":"pri_2","sync_direction":"BSS_TO_NETWORK","status":"COMPLETED","command_id":"pcmd_88","requested_by_user_id":"u_noc1","approved_by_user_id":"u_noc2" }
-{ "force_sync_id":"pfs_3","sync_direction":"NETWORK_TO_BSS","status":"APPROVED","reason":"network is source of truth here" }
-{ "force_sync_id":"pfs_4","sync_direction":"MARK_IGNORE","status":"CANCELLED","reason":"expected during migration" }
+{ "force_sync_id":"pfs_1","operator_code":"WIK","source_item_id":"pri_1","subscription_id":"sub_9","service_ref":"svc_inet","target_code":"HUAWEI_NCE_GPON_KE","sync_direction":"BSS_TO_NETWORK","requested_action":"REAPPLY_PROFILE","status":"PENDING_APPROVAL","approval_request_id":"appr_77","requested_by_user_id":"u_noc1","approved_by_user_id":null,"command_id":null,"reason":null }
+{ "force_sync_id":"pfs_2","operator_code":"WIK","source_item_id":"pri_2","subscription_id":"sub_5","service_ref":"svc_inet","target_code":"HUAWEI_NCE_GPON_KE","sync_direction":"BSS_TO_NETWORK","requested_action":"REAPPLY_PROFILE","status":"COMPLETED","approval_request_id":"appr_78","requested_by_user_id":"u_noc1","approved_by_user_id":"u_noc2","command_id":"pcmd_88","reason":null }
+{ "force_sync_id":"pfs_3","operator_code":"WIK","source_item_id":"pri_3","subscription_id":"sub_3","service_ref":"svc_inet","target_code":"HUAWEI_NCE_GPON_KE","sync_direction":"NETWORK_TO_BSS","requested_action":null,"status":"APPROVED","approval_request_id":"appr_79","requested_by_user_id":"u_noc1","approved_by_user_id":"u_noc2","command_id":null,"reason":"network is source of truth here" }
+{ "force_sync_id":"pfs_4","operator_code":"WIK","source_item_id":null,"subscription_id":null,"service_ref":null,"target_code":"HUAWEI_NCE_GPON_KE","sync_direction":"MARK_IGNORE","requested_action":null,"status":"CANCELLED","approval_request_id":null,"requested_by_user_id":"u_noc1","approved_by_user_id":null,"command_id":null,"reason":"expected during migration" }
 ```
 **Reading:** `BSS_TO_NETWORK` re-pushes desired (the common case). `NETWORK_TO_BSS` would update BSS to
 match the network; `MARK_IGNORE` accepts the diff. pfs_2 shows the **SoD** trail (`requested_by` ≠
