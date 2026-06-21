@@ -60,32 +60,40 @@ prepaid `wallet`s of those types and routes usage by `wallet_type_code`. *Cross-
 `CatalogCacheInvalidator` (listener) + Billing's `EvictPlmCatalogCache` drop cached snapshots on
 catalog lifecycle events (`Foundation/Cache`).
 
-## 2. Data model — ≥4 sample rows + readings
+## 2. Data model — ≥4 **complete** sample rows + readings
+> **Completeness:** each row lists **every domain column** (nullables shown as `null`). The surrogate
+> primary key shown is the real one (a string ULID business key, e.g. `id`/`discount_id`);
+> `created_at`/`updated_at` are omitted by convention. `homepass` is **Catalog-owned** and ~50 columns
+> wide — its **full-width** rows live here (provisioning.md projects it).
 
-### `package` (`status`: `DRAFT|ACTIVE|END_OF_SALE|RETIRED`) & `package_version`
+### `package` (`status`: `DRAFT|ACTIVE|INACTIVE|END_OF_LIFE`) & `package_version` (`status`: `PENDING|ACTIVE|SUPERSEDED`)
 ```json
-{ "id":"pkg_triple","code":"TRIPLE_PLAY","status":"ACTIVE" }
-{ "id":"pkg_inet","code":"INET_100","status":"ACTIVE" }
-{ "id":"pkg_promo","code":"BLACK_FRIDAY","status":"DRAFT" }
-{ "id":"pkg_old","code":"INET_50","status":"END_OF_SALE" }
+{ "id":"pkg_triple","operator_code":"WIK","code":"TRIPLE_PLAY","name":"Triple Play","display_name":"Triple Play 100M","description":"Internet + TV + Voice","status":"ACTIVE","billing_frequency_days":30,"default_wallet_ref":null,"default_tax_group_ref":"KE_INTERNET","target_franchises":["fr_nrb"],"target_tech_regions":["KE-NRB-KAREN"],"current_version_id":"pv_1","retired_at":null }
+{ "id":"pkg_inet","operator_code":"WIK","code":"INET_100","name":"Internet 100M","display_name":null,"description":null,"status":"ACTIVE","billing_frequency_days":30,"default_wallet_ref":null,"default_tax_group_ref":"KE_INTERNET","target_franchises":null,"target_tech_regions":null,"current_version_id":"pv_2","retired_at":null }
+{ "id":"pkg_promo","operator_code":"WIK","code":"BLACK_FRIDAY","name":"Black Friday","display_name":"Black Friday 2026","description":"Seasonal acquisition","status":"DRAFT","billing_frequency_days":30,"default_wallet_ref":null,"default_tax_group_ref":null,"target_franchises":null,"target_tech_regions":null,"current_version_id":null,"retired_at":null }
+{ "id":"pkg_old","operator_code":"WIK","code":"INET_50","name":"Internet 50M","display_name":null,"description":null,"status":"INACTIVE","billing_frequency_days":30,"default_wallet_ref":null,"default_tax_group_ref":"KE_INTERNET","target_franchises":null,"target_tech_regions":null,"current_version_id":"pv_old","retired_at":"2026-05-01T00:00:00Z" }
 // version (the priced thing proration reads)
-{ "package_version_id":"pv_1","package_id":"pkg_triple","price":5000,"currency":"KES","status":"ACTIVE","effective_from":"2026-01-01" }
+{ "id":"pv_1","package_id":"pkg_triple","price":5000.00,"currency":"KES","target_franchises":["fr_nrb"],"target_tech_regions":null,"effective_from":"2026-01-01T00:00:00Z","effective_until":null,"status":"ACTIVE" }
+{ "id":"pv_old","package_id":"pkg_old","price":2500.00,"currency":"KES","target_franchises":null,"target_tech_regions":null,"effective_from":"2025-01-01T00:00:00Z","effective_until":"2026-05-01T00:00:00Z","status":"SUPERSEDED" }
 ```
-**Reading:** the **package** is priced via its **version** (`pv_1.price`), not its components. `DRAFT`
-isn't sellable; `END_OF_SALE` keeps existing subs but takes no new orders; `RETIRED` is gone. A price
-change = a new `package_version` (history preserved).
+**Reading:** the **package** is priced via its **version** (`pv_1.price`), not its components.
+`current_version_id` points at the live priced version. `DRAFT` isn't sellable; `INACTIVE`/`END_OF_LIFE`
+keeps existing subs but takes no new orders (`retired_at` stamped). A price change = a new
+`package_version` (history preserved; the prior one goes `SUPERSEDED` with `effective_until` set).
+`target_franchises`/`target_tech_regions` scope where it may be sold.
 
 ### `service` (`consumption_model`: `FLAT|USAGE`)
 ```json
-{ "id":"svc_inet","code":"INTERNET","consumption_model":"FLAT","revenue_category":"INTERNET","provisioner_key":"gpon_inet","network_profile_shape":{"speed":"100M","vlan":101},"is_addressable":true }
-{ "id":"svc_tv","code":"TV","consumption_model":"FLAT","revenue_category":"TV","provisioner_key":"iptv","network_profile_shape":{"bouquet":"PREMIUM"} }
-{ "id":"svc_voice","code":"VOICE","consumption_model":"USAGE","revenue_category":"VOICE","provisioner_key":"sip","default_wallet_ref":"VOICE_WALLET" }
-{ "id":"svc_data","code":"DATA","consumption_model":"USAGE","revenue_category":"DATA","default_wallet_ref":"DATA_WALLET" }
+{ "id":"svc_inet","operator_code":"WIK","name":"Internet","code":"INTERNET","description":"Broadband access","service_class_id":"scls_inet","service_group":"BROADBAND","is_addressable":true,"equipment_requirement_ref":"eqr_ont","consumption_model":"FLAT","revenue_category":"INTERNET","network_profile_shape":{"speed":"100M","vlan":101},"provisioner_key":"gpon_inet","default_wallet_ref":null,"default_tax_group_ref":"KE_INTERNET","status":"ACTIVE","retired_at":null }
+{ "id":"svc_tv","operator_code":"WIK","name":"TV","code":"TV","description":"IPTV bouquet","service_class_id":"scls_tv","service_group":"VIDEO","is_addressable":true,"equipment_requirement_ref":"eqr_stb","consumption_model":"FLAT","revenue_category":"TV","network_profile_shape":{"bouquet":"PREMIUM"},"provisioner_key":"iptv","default_wallet_ref":null,"default_tax_group_ref":"KE_INTERNET","status":"ACTIVE","retired_at":null }
+{ "id":"svc_voice","operator_code":"WIK","name":"Voice","code":"VOICE","description":"Fixed voice","service_class_id":"scls_voice","service_group":"VOICE","is_addressable":false,"equipment_requirement_ref":null,"consumption_model":"USAGE","revenue_category":"VOICE","network_profile_shape":null,"provisioner_key":"sip","default_wallet_ref":"VOICE_WALLET","default_tax_group_ref":"KE_VOICE","status":"ACTIVE","retired_at":null }
+{ "id":"svc_data","operator_code":"WIK","name":"Mobile Data","code":"DATA","description":"Metered data","service_class_id":"scls_data","service_group":"DATA","is_addressable":false,"equipment_requirement_ref":null,"consumption_model":"USAGE","revenue_category":"DATA","network_profile_shape":null,"provisioner_key":null,"default_wallet_ref":"DATA_WALLET","default_tax_group_ref":null,"status":"ACTIVE","retired_at":null }
 ```
 **Reading:** `consumption_model` splits **FLAT** (billed as the package fee) vs **USAGE** (metered →
 rated events → its own charge, routed to `default_wallet_ref`). `network_profile_shape` +
-`provisioner_key` are exactly what Provisioning puts in a command's `desired_profile`. `revenue_category`
-is how Billing groups usage and how voice lands on its own invoice.
+`provisioner_key` are exactly what Provisioning puts in a command's `desired_profile`; `is_addressable`
+marks the services that get provisioned. `revenue_category` is how Billing groups usage and how voice
+lands on its own invoice. Every service belongs to a `service_class_id` (the coarse class).
 
 ### `discount` (`discount_type`: `PERCENT|FIXED`) & `discount_assignment` (`scope`: `CUSTOMER|SUBSCRIPTION|PACKAGE|CAMPAIGN|ALL`)
 ```json

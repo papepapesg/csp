@@ -39,39 +39,61 @@ Past-due open tickets appear in ItOps `GET /api/noc/sla-overdue` (reads ticket S
 ### 8. Category drives SLA + routing
 The `ticket_category` fixes the SLA matrix + default priority — an operator tunes SLAs as data.
 
-## 2. Data model — ≥4 sample rows + readings
+## 2. Data model — ≥4 **complete** sample rows + readings per table
+> **Completeness:** each row lists **every domain column** (nullables shown as `null`). The string
+> primary key shown is the real one; `created_at`/`updated_at` (and `ticket_timeline`'s `created_at`,
+> which uses the DB default) are omitted by convention. `sla_policy`/`ticket_category_catalog` show their
+> natural keys (the surrogate auto-increment `id` on `sla_policy` is omitted as it has a composite key).
 
-### `ticket` · `status`: `OPEN|IN_PROGRESS|RESOLVED|CLOSED` · `priority`: `LOW|NORMAL|HIGH|URGENT`
+### `ticket` · `status`: `OPEN|ASSIGNED|IN_PROGRESS|PENDING_WO|RESOLVED|CLOSED` · `priority`: `LOW|NORMAL|HIGH|URGENT` · `category`: `TECHNICAL|BILLING|INFORMATION|COMPLAINT|SERVICE_REQUEST` · `asr_type`: `TECHNICAL_TROUBLE|INFORMATION_REQUEST|COMPLAINT|SERVICE_REQUEST`
 ```json
-{ "ticket_id":"tkt_1","category":"NO_SIGNAL","status":"OPEN","priority":"URGENT","subscription_id":"sub_1","sla_due_at":"2026-06-20T16:00:00Z" }
-{ "ticket_id":"tkt_2","category":"BILLING_QUERY","status":"IN_PROGRESS","priority":"NORMAL","work_order_id":null }
-{ "ticket_id":"tkt_3","category":"NO_SIGNAL","status":"RESOLVED","priority":"HIGH","work_order_id":"wo_2" }
-{ "ticket_id":"tkt_4","category":"COMPLAINT","status":"CLOSED","priority":"LOW" }
+{ "ticket_id":"tck_1","ticket_number":"TKT-2026-000101","operator_code":"WIK","category":"TECHNICAL","asr_type":"TECHNICAL_TROUBLE","subcategory":"NO_SIGNAL","priority":"URGENT","status":"OPEN","customer_id":"cust_1","account_id":"acct_1","subscription_id":"sub_1","subject":"No signal since morning","description":"Modem all red lights","queue":"noc-l1","assignee_id":null,"sla_due_at":"2026-06-20T16:00:00Z","first_response_due_at":"2026-06-20T13:00:00Z","first_response_at":null,"work_order_id":null,"resolution_code":null,"reopened_count":0,"requires_review":false,"resolution_note":null,"opened_by":"agent_7","resolved_at":null,"closed_at":null,"cancelled_at":null }
+{ "ticket_id":"tck_2","ticket_number":"TKT-2026-000102","operator_code":"WIK","category":"BILLING","asr_type":"INFORMATION_REQUEST","subcategory":null,"priority":"NORMAL","status":"IN_PROGRESS","customer_id":"cust_2","account_id":"acct_2","subscription_id":null,"subject":"Invoice query","description":null,"queue":"billing","assignee_id":"agent_3","sla_due_at":"2026-06-22T09:00:00Z","first_response_due_at":"2026-06-20T17:00:00Z","first_response_at":"2026-06-20T15:00:00Z","work_order_id":null,"resolution_code":null,"reopened_count":0,"requires_review":false,"resolution_note":null,"opened_by":"agent_3","resolved_at":null,"closed_at":null,"cancelled_at":null }
+{ "ticket_id":"tck_3","ticket_number":"TKT-2026-000103","operator_code":"WIK","category":"TECHNICAL","asr_type":"TECHNICAL_TROUBLE","subcategory":"NO_SIGNAL","priority":"HIGH","status":"RESOLVED","customer_id":"cust_3","account_id":"acct_3","subscription_id":"sub_3","subject":"Intermittent drops","description":null,"queue":"noc-l1","assignee_id":"agent_7","sla_due_at":"2026-06-19T16:00:00Z","first_response_due_at":"2026-06-19T13:00:00Z","first_response_at":"2026-06-19T12:30:00Z","work_order_id":"wo_2","resolution_code":"FIXED_ON_SITE","reopened_count":1,"requires_review":false,"resolution_note":"Replaced ONT","opened_by":"agent_7","resolved_at":"2026-06-19T15:00:00Z","closed_at":null,"cancelled_at":null }
+{ "ticket_id":"tck_4","ticket_number":"TKT-2026-000104","operator_code":"WIK","category":"COMPLAINT","asr_type":"COMPLAINT","subcategory":null,"priority":"LOW","status":"CLOSED","customer_id":"cust_4","account_id":"acct_4","subscription_id":null,"subject":"Rude agent","description":null,"queue":"complaints","assignee_id":"sup_2","sla_due_at":"2026-06-18T16:00:00Z","first_response_due_at":"2026-06-18T13:00:00Z","first_response_at":"2026-06-18T12:00:00Z","work_order_id":null,"resolution_code":"APOLOGY_ISSUED","reopened_count":0,"requires_review":true,"resolution_note":"Escalated, apology sent","opened_by":"agent_1","resolved_at":"2026-06-18T14:00:00Z","closed_at":"2026-06-19T09:00:00Z","cancelled_at":null }
 ```
-**Reading:** the status is the resolution lifecycle; the SLA `sla_due_at` is stamped at create from the
-category policy (URGENT NO_SIGNAL = 4h). tkt_3 was resolved by its linked WO (`wo_2`). A past-due `OPEN`
-ticket is what the NOC SLA-overdue view surfaces.
+**Reading:** `status` is the resolution lifecycle; `sla_due_at`/`first_response_due_at` are stamped at
+create from the matching `sla_policy` (URGENT TECHNICAL = 4h here). tck_3 was resolved by its linked WO
+(`work_order_id=wo_2`) and `reopened_count` shows it bounced once; tck_4 is `requires_review` (a
+supervisor gate). `asr_type` tags the ASR-01..04 specialisation; a past-due `OPEN` ticket is what the
+NOC SLA-overdue view surfaces.
 
-### `ticket_category` & `sla_policy`
+### `ticket_category_catalog` (operator category config) & `sla_policy` (response-hours matrix)
 ```json
-{ "category_code":"NO_SIGNAL","default_priority":"URGENT","spawns_work_order":true }
-{ "category_code":"BILLING_QUERY","default_priority":"NORMAL","spawns_work_order":false }
-{ "sla":{ "category_code":"NO_SIGNAL","priority":"URGENT","response_hours":1,"resolution_hours":4 } }
-{ "sla":{ "category_code":"BILLING_QUERY","priority":"NORMAL","response_hours":8,"resolution_hours":48 } }
+{ "operator_code":"WIK","category_code":"NO_SIGNAL","display_name":"No signal","type_code":"TECHNICAL","default_priority":"URGENT","default_queue":"noc-l1","default_asr_type":"TECHNICAL_TROUBLE","default_sla_policy":"TECH_URGENT","wo_allowed":true,"default_wo_kind":"SUPPORT","review_required":false,"active":true }
+{ "operator_code":"WIK","category_code":"BILLING_DISPUTE","display_name":"Billing dispute","type_code":"BILLING","default_priority":"NORMAL","default_queue":"billing","default_asr_type":"INFORMATION_REQUEST","default_sla_policy":null,"wo_allowed":false,"default_wo_kind":null,"review_required":false,"active":true }
+{ "operator_code":"WIK","category_code":"RELOCATION","display_name":"Service relocation","type_code":"SERVICE_REQUEST","default_priority":"NORMAL","default_queue":"provisioning","default_asr_type":"SERVICE_REQUEST","default_sla_policy":null,"wo_allowed":true,"default_wo_kind":"SHIFTING","review_required":true,"active":true }
+{ "operator_code":"WIK","category_code":"LEGACY_FAULT","display_name":"Legacy fault","type_code":"TECHNICAL","default_priority":"NORMAL","default_queue":null,"default_asr_type":null,"default_sla_policy":null,"wo_allowed":false,"default_wo_kind":null,"review_required":false,"active":false }
 ```
-**Reading:** the **category** is operator config — its default priority + whether it needs a field visit;
-the **SLA policy** is the per-(category, priority) response/resolution matrix that stamps the ticket's
-due-times. Tune SLAs by editing rows.
+```json
+{ "operator_code":"WIK","category":"NO_SIGNAL","priority":"URGENT","response_hours":1 }
+{ "operator_code":"WIK","category":"BILLING_DISPUTE","priority":"NORMAL","response_hours":8 }
+{ "operator_code":"WIK","category":null,"priority":"HIGH","response_hours":4 }
+{ "operator_code":null,"category":null,"priority":"NORMAL","response_hours":24 }
+```
+**Reading:** the **category catalog** is operator config — default priority/queue/ASR type, whether it
+may spawn a WO (`wo_allowed` gates TCK-3) and of which `default_wo_kind`, and whether a finalized WO
+parks the ticket in review (`review_required`); `active=false` (LEGACY_FAULT) retires a category. The
+**SLA policy** resolves `response_hours` by **most-specific match** (category+priority > priority-only >
+the all-`null` operator default); editing rows tunes SLAs with no code.
 
 ### `ticket_comment` / `ticket_timeline` (append-only)
 ```json
-{ "id":"tc_1","ticket_id":"tkt_1","author_id":"agent_7","body":"Dispatching tech." }
-{ "tl_1":{ "ticket_id":"tkt_1","event":"CREATED","at":"…" } }
-{ "tl_2":{ "ticket_id":"tkt_1","event":"WO_LINKED","detail":"wo_2" } }
-{ "tl_3":{ "ticket_id":"tkt_1","event":"RESOLVED" } }
+{ "id":"tc_1","ticket_id":"tck_1","author_id":"agent_7","visibility":"INTERNAL","body":"Dispatching tech.","internal":true }
+{ "id":"tc_2","ticket_id":"tck_1","author_id":"agent_7","visibility":"CUSTOMER_VISIBLE","body":"A technician is on the way.","internal":false }
+{ "id":"tc_3","ticket_id":"tck_2","author_id":"cust_2","visibility":"CUSTOMER_VISIBLE","body":"Any update?","internal":false }
+{ "id":"tc_4","ticket_id":"tck_3","author_id":"agent_7","visibility":"INTERNAL","body":"ONT swapped on site.","internal":true }
 ```
-**Reading:** the timeline is the immutable history (created → assigned → WO linked → resolved); comments
-are the conversation. This is the audit a supervisor reads.
+```json
+{ "id":"tl_1","ticket_id":"tck_1","event_type":"CREATED","from_status":null,"to_status":"OPEN","actor_id":"agent_7","meta":null }
+{ "id":"tl_2","ticket_id":"tck_1","event_type":"ASSIGNED","from_status":"OPEN","to_status":"ASSIGNED","actor_id":"sup_1","meta":{"assignee":"agent_7"} }
+{ "id":"tl_3","ticket_id":"tck_3","event_type":"WO_LINKED","from_status":"IN_PROGRESS","to_status":"PENDING_WO","actor_id":"agent_7","meta":{"work_order_id":"wo_2"} }
+{ "id":"tl_4","ticket_id":"tck_3","event_type":"RESOLVED","from_status":"PENDING_WO","to_status":"RESOLVED","actor_id":"system","meta":{"resolution_code":"FIXED_ON_SITE"} }
+```
+**Reading:** the timeline is the immutable history (created → assigned → WO linked → resolved), each row
+carrying the `from_status`/`to_status` transition + actor + `meta`; comments are the conversation, gated
+by `visibility` (INTERNAL vs CUSTOMER_VISIBLE) and the legacy `internal` flag. This is the audit a
+supervisor reads.
 
 ## 3. Services
 | Service | Responsibility |

@@ -46,40 +46,68 @@ window. *Config-driven matching.*
 When no contractor fits, the matcher uses a `StaffMember` whose skills cover the job. *Shows: the
 two-tier (outsourced → in-house) model.*
 
-## 2. Data model — ≥4 sample rows + readings
+## 2. Data model — ≥4 **complete** sample rows + readings
+> **Completeness:** each row lists **every domain column** (nullables shown as `null`). The string
+> business / composite key shown is the real primary key; `created_at`/`updated_at` are omitted by
+> convention.
 
-### `contractor_availability_slot`
+### `contractor_availability_slot` · `day_of_week`: `MONDAY..SUNDAY|ALL_WEEK` · `service_scope`: `INSTALL|SUPPORT|MAINTENANCE|RECOVERY|AUDIT`
 ```json
-{ "slot_id":"slot_1","contractor_id":"ctr_9","tech_region_id":"KE-NRB-KAREN","service_scope":"INSTALL","day_of_week":"ALL_WEEK","hour_start":"08:00","hour_end":"17:00","max_concurrent":5,"emergency_only":false,"active":true }
-{ "slot_id":"slot_2","contractor_id":"ctr_9","tech_region_id":"KE-NRB-KAREN","service_scope":"SUPPORT","day_of_week":"MON","max_concurrent":3,"emergency_only":false,"active":true }
-{ "slot_id":"slot_3","contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","service_scope":"INSTALL","max_concurrent":2,"emergency_only":true,"active":true }
-{ "slot_id":"slot_4","contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","max_concurrent":1,"active":false }
+{ "slot_id":"slot_1","operator_code":"WIK","contractor_id":"ctr_9","tech_region_id":"KE-NRB-KAREN","service_scope":"INSTALL","day_of_week":"ALL_WEEK","hour_start":"08:00:00","hour_end":"17:00:00","timezone":"Africa/Nairobi","max_concurrent":5,"emergency_only":false,"active":true,"effective_from":"2026-01-01","effective_to":null }
+{ "slot_id":"slot_2","operator_code":"WIK","contractor_id":"ctr_9","tech_region_id":"KE-NRB-KAREN","service_scope":"SUPPORT","day_of_week":"MONDAY","hour_start":"09:00:00","hour_end":"13:00:00","timezone":"Africa/Nairobi","max_concurrent":3,"emergency_only":false,"active":true,"effective_from":null,"effective_to":null }
+{ "slot_id":"slot_3","operator_code":"WIK","contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","service_scope":"INSTALL","day_of_week":"ALL_WEEK","hour_start":"00:00:00","hour_end":"23:59:00","timezone":"Africa/Nairobi","max_concurrent":2,"emergency_only":true,"active":true,"effective_from":"2026-03-01","effective_to":null }
+{ "slot_id":"slot_4","operator_code":"WIK","contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","service_scope":"SUPPORT","day_of_week":"SUNDAY","hour_start":"08:00:00","hour_end":"12:00:00","timezone":"Africa/Nairobi","max_concurrent":1,"emergency_only":false,"active":false,"effective_from":"2026-01-01","effective_to":"2026-05-31" }
 ```
-**Reading:** a slot is a bookable window: region + service scope + hours + **`max_concurrent`** (the
-capacity number). slot_3 is emergency-only (URGENT WOs only); slot_4 is inactive (not bookable). The
-matcher needs region + skill + scope + a free place in `max_concurrent`.
+**Reading:** a slot is a bookable window: region + service scope + day/hour range (in `timezone`) +
+**`max_concurrent`** (the capacity number). slot_3 is emergency-only (URGENT WOs only); slot_4 is
+inactive (`active:false`, and its `effective_to` has lapsed) — not bookable. The matcher needs region +
+skill + scope + a free place in `max_concurrent` inside the slot's effective window.
 
-### `contractor_slot_commitment` · `status`: `ACTIVE|CONSUMED|RELEASED`
+### `contractor_slot_commitment` · `status`: `ACTIVE|CONSUMED|RELEASED|EXPIRED`
 ```json
-{ "commitment_id":"sc_1","slot_id":"slot_1","wo_id":"wo_1","status":"ACTIVE","committed_for":"2026-06-22T09:00:00Z" }
-{ "commitment_id":"sc_2","slot_id":"slot_1","wo_id":"wo_2","status":"CONSUMED" }
-{ "commitment_id":"sc_3","slot_id":"slot_2","wo_id":"wo_5","status":"RELEASED" }
-{ "commitment_id":"sc_4","slot_id":"slot_1","wo_id":"wo_7","status":"ACTIVE" }
+{ "commitment_id":"sc_1","operator_code":"WIK","slot_id":"slot_1","contractor_id":"ctr_9","wo_id":"wo_1","committed_for_datetime":"2026-06-22T09:00:00Z","qty":1,"status":"ACTIVE","consumed_at":null,"released_at":null,"expired_at":null }
+{ "commitment_id":"sc_2","operator_code":"WIK","slot_id":"slot_1","contractor_id":"ctr_9","wo_id":"wo_2","committed_for_datetime":"2026-06-20T10:00:00Z","qty":1,"status":"CONSUMED","consumed_at":"2026-06-20T12:30:00Z","released_at":null,"expired_at":null }
+{ "commitment_id":"sc_3","operator_code":"WIK","slot_id":"slot_2","contractor_id":"ctr_9","wo_id":"wo_5","committed_for_datetime":"2026-06-21T11:00:00Z","qty":1,"status":"RELEASED","consumed_at":null,"released_at":"2026-06-21T11:45:00Z","expired_at":null }
+{ "commitment_id":"sc_4","operator_code":"WIK","slot_id":"slot_1","contractor_id":"ctr_9","wo_id":"wo_7","committed_for_datetime":"2026-06-22T14:00:00Z","qty":1,"status":"EXPIRED","consumed_at":null,"released_at":null,"expired_at":"2026-06-22T15:00:00Z" }
 ```
-**Reading:** each row is one WO's **hold** on a slot. `ACTIVE` counts against `max_concurrent`; it
-becomes `CONSUMED` (WO finalized — capacity used) or `RELEASED` (WO cancelled — capacity freed). With
-slot_1 at `max_concurrent:5`, two ACTIVE + one CONSUMED leaves 2 free places.
+**Reading:** each row is one WO's **hold** on a slot (`qty` places against `max_concurrent`). `ACTIVE`
+counts against capacity; it becomes `CONSUMED` (WO finalized — capacity used, `consumed_at` stamped),
+`RELEASED` (WO cancelled — capacity freed) or `EXPIRED` (un-actioned hold swept). With slot_1 at
+`max_concurrent:5`, one ACTIVE + one CONSUMED + one EXPIRED leaves capacity for new bookings (only the
+ACTIVE row still counts). The `*_at` timestamps record which terminal transition fired.
 
-### `skill_catalog` & `contractor_region_skill` / `contractor_region_scope`
+### `skill_catalog` (operator-extensible, EM-02 §3.3) · composite PK `(operator_code, skill_code)` · `category`: `TECHNICAL_INSTALL|TECHNICAL_SUPPORT|SOFT_SKILL|…`
 ```json
-{ "skill_code":"fiber-install","name":"FTTH installation","active":true }
-{ "skill_code":"coax-install","name":"HFC installation","active":true }
-{ "skill_code":"diagnostics","name":"Fault diagnostics","active":true }
-{ "region_skill":{ "contractor_id":"ctr_9","tech_region_id":"KE-NRB-KAREN","skill_code":"fiber-install" } }
+{ "operator_code":"WIK","skill_code":"fiber-install","display_name":"FTTH installation","category":"TECHNICAL_INSTALL","active":true }
+{ "operator_code":"WIK","skill_code":"coax-install","display_name":"HFC installation","category":"TECHNICAL_INSTALL","active":true }
+{ "operator_code":"WIK","skill_code":"diagnostics","display_name":"Fault diagnostics","category":"TECHNICAL_SUPPORT","active":true }
+{ "operator_code":"WIK","skill_code":"vip-handling","display_name":"VIP customer handling","category":"SOFT_SKILL","active":false }
 ```
-**Reading:** the **skill catalog** is operator-extensible (EM-02 §3.3) — *distinct from* Catalog's
-`TechContractorSkill` (contractor config vs capacity, intentional). A contractor's region-skill rows say
-"ctr_9 does fiber installs in Karen", which the auto-assign matcher requires.
+**Reading:** the **skill catalog** is operator-extensible — *distinct from* Catalog's
+`TechContractorSkill` (contractor config vs capacity, intentional). `category` groups skills; `active:false`
+(vip-handling) retires a code without deleting it.
+
+### `contractor_region_skill` (the WO routing filter, EM-02 §3.4) · composite PK `(contractor_id, tech_region_id, skill_code)`
+```json
+{ "contractor_id":"ctr_9","tech_region_id":"KE-NRB-KAREN","operator_code":"WIK","skill_code":"fiber-install","active":true }
+{ "contractor_id":"ctr_9","tech_region_id":"KE-NRB-KAREN","operator_code":"WIK","skill_code":"diagnostics","active":true }
+{ "contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","operator_code":"WIK","skill_code":"coax-install","active":true }
+{ "contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","operator_code":"WIK","skill_code":"fiber-install","active":false }
+```
+**Reading:** these rows say "ctr_9 is certified for fiber installs + diagnostics in Karen", which the
+auto-assign matcher requires. The certification is **per (contractor, region, skill)** — ctr_4's
+fiber-install in Nyali is `active:false` (de-certified), so it won't match there.
+
+### `contractor_region_scope` (per-region service coverage, EM-02 §3.2) · `service_scope`: `INSTALL|SUPPORT|MAINTENANCE|RECOVERY|AUDIT` · `coverage_role`: `PRIMARY|BACKUP|EXCLUSIVE`
+```json
+{ "coverage_id":"cov_1","operator_code":"WIK","contractor_id":"ctr_9","tech_region_id":"KE-NRB-KAREN","service_scope":"INSTALL","coverage_role":"PRIMARY","effective_from":"2026-01-01","effective_to":null }
+{ "coverage_id":"cov_2","operator_code":"WIK","contractor_id":"ctr_9","tech_region_id":"KE-NRB-KAREN","service_scope":"SUPPORT","coverage_role":"PRIMARY","effective_from":"2026-01-01","effective_to":null }
+{ "coverage_id":"cov_3","operator_code":"WIK","contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","service_scope":"INSTALL","coverage_role":"PRIMARY","effective_from":"2026-03-01","effective_to":null }
+{ "coverage_id":"cov_4","operator_code":"WIK","contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","service_scope":"RECOVERY","coverage_role":"BACKUP","effective_from":"2026-03-01","effective_to":"2026-06-30" }
+```
+**Reading:** coverage is **time-versioned** (`effective_from`/`effective_to`) and scoped per
+(contractor, region, service_scope). `coverage_role` ranks contractors (PRIMARY first, BACKUP as
+fallback, EXCLUSIVE locks the region); cov_4 is a BACKUP recovery coverage that lapses end of June.
 
 ## 3. Services
 | Service | Responsibility |
