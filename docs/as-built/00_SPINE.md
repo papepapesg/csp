@@ -302,10 +302,16 @@ Columns: `event_id, event_type, topic, aggregate_type, aggregate_id, operator_co
 { "event_id":"evt_3","event_type":"ApprovalRequested","topic":"platform.approvals","aggregate_type":"ApprovalRequest","aggregate_id":"appr_5","operator_code":"WIK","correlation_id":"corr_91","payload":{"requestId":"appr_5","entityType":"PURCHASE_ORDER","status":"PENDING"},"headers":null,"published_at":"2026-06-20T10:02:00Z","attempts":1 }
 { "event_id":"evt_4","event_type":"WorkOrderFinalized","topic":"workorder.field","aggregate_type":"WorkOrder","aggregate_id":"wo_1","operator_code":"WIK","correlation_id":"corr_92","payload":{"workOrderId":"wo_1"},"headers":null,"published_at":null,"attempts":2 }
 ```
-**Reading:** `published_at=null` (evt_2) = **committed but not yet dispatched**; the dispatcher fans it
-out, stamps `published_at`, and bumps `attempts`. evt_4 has `attempts:2` and is still unpublished (two
-failed dispatch tries — it'll retry). `correlation_id` threads one business action across events;
-`topic` is the routing/Kafka channel; `headers` is null when none were set.
+**Read each row — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **evt_1** | A `SubscriptionActivated` event that was **already delivered** (`published_at` set) on the first try (`attempts:1`). |
+| **evt_2** | An `InvoiceGenerated` event **written but not yet sent** (`published_at:null`, `attempts:0`) — it committed together with the invoice; the dispatcher will pick it up next run. |
+| **evt_3** | An `ApprovalRequested` event, delivered; its `payload` carries the request id + status the listeners need. |
+| **evt_4** | A `WorkOrderFinalized` event **still unsent after two failed tries** (`attempts:2`, `published_at:null`) — it keeps retrying. |
+
+**The columns that did the work:** `published_at` = sent or not · `attempts` = retry count · `correlation_id` threads one business action across events · `topic` = the channel · `payload` = what listeners read.
 
 ### `inbox_events` (per-consumer dedupe)
 Columns: `event_id, consumer, event_type, processed_at`.
@@ -315,9 +321,16 @@ Columns: `event_id, consumer, event_type, processed_at`.
 { "event_id":"evt_4","consumer":"fulfillment.resume","event_type":"WorkOrderFinalized","processed_at":"2026-06-20T10:03:00Z" }
 { "event_id":"evt_4","consumer":"workforce.capacity","event_type":"WorkOrderFinalized","processed_at":null }
 ```
-**Reading:** dedupe is **per (event_id, consumer)** — the same event evt_1 is processed independently by
-two consumers (reporting + notification). evt_4's `workforce.capacity` row has `processed_at=null`
-(claimed but not yet done); a re-dispatch to a consumer whose `processed_at` is set is a no-op.
+**Read each row — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **evt_1 · reporting.metrics** | Reporting has **already counted** this activation (`processed_at` set). |
+| **evt_1 · notification.bridge** | The **same** event, processed **independently** by Notification — its own dedupe row, so both ran once. |
+| **evt_4 · fulfillment.resume** | Fulfillment has already handled this WorkOrderFinalized. |
+| **evt_4 · workforce.capacity** | Workforce **claimed** it but hasn't finished (`processed_at:null`) — and a redelivery to any consumer whose `processed_at` is set is a no-op. |
+
+Dedupe is **per (event_id, consumer)** — that's why one event can have four rows.
 
 ### `approval_definition` (the policy header — *WHEN* approval is needed)
 Columns: `definition_id, operator_code, entity_type, action, threshold_amount, active`. **No approver
@@ -329,11 +342,17 @@ columns** — *who* approves lives only in `approval_stage` (below). Every defin
 { "definition_id":"appd_5","operator_code":"WIK","entity_type":"PURCHASE_ORDER","action":"PO_APPROVAL","threshold_amount":500000.00,"active":true }
 { "definition_id":"appd_4","operator_code":"WIK","entity_type":"DISCOUNT","action":null,"threshold_amount":50000.00,"active":false }
 ```
-**Reading:** the policy header answers *when*. `action=null` (appd_2) matches any action of that
-entity_type; `threshold_amount` auto-approves amounts **below** it (appd_2 below 10,000; appd_5 a PO
-below 500,000). appd_4 is `active:false` → ignored (discounts auto-approve until re-enabled). *Who*
-approves is entirely in the `approval_stage` rows — a one-stage chain for a simple gate, multi-stage for
-a hierarchy (appd_3 CVM, appd_5 PO below).
+**Read each row — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **appd_1** | A force-sync **always** needs approval (`threshold_amount:null` = no free pass). |
+| **appd_2** | Any ADJUSTMENT (`action:null` = all actions) of **10,000 or more** needs approval; below that it auto-approves. |
+| **appd_3** | Every high-value CVM retention offer needs approval — its approver chain is in `approval_stage` below. |
+| **appd_5** | A purchase order of **500,000 or more** needs approval — chain below. |
+| **appd_4** | A DISCOUNT policy that is **switched off** (`active:false`) → ignored; discounts auto-approve until it's re-enabled. |
+
+*Who* approves is entirely in the `approval_stage` rows — one stage for a simple gate, several for a hierarchy.
 
 ### `approval_stage` (the ordered chain) · `approver_kind`: `ROLE | USER`
 Columns: `stage_id, operator_code, definition_id, sequence, name, approver_kind, approver_roles, approver_user_ref, approver_email, required_approvals, allow_requester`.
@@ -343,12 +362,17 @@ Columns: `stage_id, operator_code, definition_id, sequence, name, approver_kind,
 { "stage_id":"appds_3","operator_code":"WIK","definition_id":"appd_5","sequence":1,"name":"Finance lead","approver_kind":"ROLE","approver_roles":["BILLING_LEAD"],"approver_user_ref":null,"approver_email":null,"required_approvals":2,"allow_requester":false }
 { "stage_id":"appds_4","operator_code":"WIK","definition_id":"appd_5","sequence":2,"name":"Finance director","approver_kind":"USER","approver_roles":null,"approver_user_ref":"usr_findir","approver_email":"fin.director@wik.sn","required_approvals":1,"allow_requester":false }
 ```
-**Reading:** the chain runs **in `sequence` order** — stage 2 opens only after stage 1's quorum is met.
-A `ROLE` stage (appds_1/3) is cleared by **any** holder of `approver_roles`; a `USER` stage (appds_2/4)
-must be cleared by **that specific named person** (`usr_dir9` / `cvm.director@wik.sn`) — a *director* who
-holds **no platform role**, just an invited login (`POST /api/approval-approvers/invite`). appds_3 needs
-`required_approvals:2` **distinct** finance leads before the director (appds_4) is even asked. So appd_3 =
-"CVM manager → director"; appd_5 = "two finance leads → finance director".
+**Read each row — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **appds_1** | appd_3 **stage 1**: any **CVM_MANAGER** (a `ROLE`) signs first. |
+| **appds_2** | appd_3 **stage 2**: only the **named director** `cvm.director@wik.sn` (a `USER`, no platform role, invited login) signs last. |
+| **appds_3** | appd_5 **stage 1**: needs **two distinct BILLING_LEADs** (`required_approvals:2`) before it moves on. |
+| **appds_4** | appd_5 **stage 2**: then the **named finance director** signs. |
+
+So appd_3 reads "CVM manager → director" and appd_5 reads "two finance leads → finance director". The
+chain always runs in `sequence` order — a later stage opens only after the earlier one's quorum is met.
 
 ### `approval_request` (an instance) · `status`: `PENDING|AUTO_APPROVED|APPROVED|REJECTED`
 Columns: `request_id, operator_code, entity_type, action, entity_ref, amount, payload, status, current_stage, total_stages, approvals_count, stages_snapshot, requested_by, decided_by, decision_reason, decided_at`. The active stage (its approver target, quorum, SoD toggle) is read from `stages_snapshot[current_stage]` — **not** duplicated on the row.
@@ -358,13 +382,18 @@ Columns: `request_id, operator_code, entity_type, action, entity_ref, amount, pa
 { "request_id":"appr_10","operator_code":"WIK","entity_type":"CVM_OFFER","action":"CVM_HIGH_VALUE_RETENTION_OFFER","entity_ref":"cvo_7","amount":null,"payload":{"discountPercent":25},"status":"PENDING","current_stage":2,"total_stages":2,"approvals_count":0,"stages_snapshot":[{"sequence":1,"approver_kind":"ROLE","approver_roles":["CVM_MANAGER"],"required_approvals":1,"allow_requester":false},{"sequence":2,"approver_kind":"USER","approver_user_ref":"usr_dir9","approver_email":"cvm.director@wik.sn","required_approvals":1,"allow_requester":false}],"requested_by":"u_agent","decided_by":"u_cvmmgr","decision_reason":null,"decided_at":null }
 { "request_id":"appr_9","operator_code":"WIK","entity_type":"ADJUSTMENT","action":null,"entity_ref":"adj_4","amount":1500.00,"payload":{},"status":"REJECTED","current_stage":1,"total_stages":1,"approvals_count":0,"stages_snapshot":[{"sequence":1,"approver_kind":"ROLE","approver_roles":["BILLING_LEAD"],"required_approvals":2,"allow_requester":false}],"requested_by":"u_agent","decided_by":"u_lead2","decision_reason":"out of policy","decided_at":"2026-06-20T11:05:00Z" }
 ```
-**Reading:** the request carries only the **frozen chain** (`stages_snapshot`) + **progress**
-(`current_stage`, `approvals_count`); the active stage is read from the snapshot, never copied onto the
-row. appr_5 is a single-stage gate parked `PENDING`. appr_6 had no policy → `AUTO_APPROVED` (empty chain,
-`stages_snapshot:null`). **appr_10 is mid-chain**: the CVM manager cleared stage 1 so `current_stage`
-advanced to **2** (`approvals_count` reset to 0), awaiting the `USER` stage's `cvm.director@wik.sn`.
-appr_9 was rejected at stage 1 → the whole chain is `REJECTED`. `stages_snapshot` is frozen at request
-time, so later policy edits don't change an in-flight request.
+**Read each row — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **appr_5** | A force-sync request **parked PENDING** on its single stage — nobody has decided yet (`approvals_count:0`). |
+| **appr_6** | A goodwill credit with **no policy** → **AUTO_APPROVED** instantly (`stages_snapshot:null` = no chain to walk). |
+| **appr_10** | **Mid-chain**: the CVM manager cleared stage 1, so it **advanced to stage 2** (`current_stage:2`, count reset) — now waiting on the director. |
+| **appr_9** | An adjustment **REJECTED at stage 1** (`decision_reason:"out of policy"`) — one reject fails the whole chain. |
+
+The request only carries the **frozen chain** (`stages_snapshot`) + **progress** (`current_stage`,
+`approvals_count`); the active stage is read from the snapshot, never copied onto the row, and the
+snapshot is frozen at request time so later policy edits don't change an in-flight request.
 
 ### `approval_decision` (immutable audit) · `decision`: `APPROVE|REJECT|REQUEST_REVISION|CANCEL`
 Columns: `decision_id, request_id, operator_code, decision, stage_sequence, actor_user_id, comment, decided_at`.
@@ -374,11 +403,18 @@ Columns: `decision_id, request_id, operator_code, decision, stage_sequence, acto
 { "decision_id":"appdec_3","request_id":"appr_10","operator_code":"WIK","decision":"APPROVE","stage_sequence":1,"actor_user_id":"u_cvmmgr","comment":"manager ok","decided_at":"2026-06-20T11:02:00Z" }
 { "decision_id":"appdec_4","request_id":"appr_9","operator_code":"WIK","decision":"REJECT","stage_sequence":1,"actor_user_id":"u_lead2","comment":"out of policy","decided_at":"2026-06-20T11:05:00Z" }
 ```
-**Reading:** one **immutable** row per decision, tagged with the `stage_sequence` it belongs to. appr_8's
-stage 1 needed 2 approvals → appdec_1 + appdec_2 from **different** actors (a second APPROVE by the same
-person in the same stage → `409 DUPLICATE_STAGE_APPROVER`). appdec_3 is u_cvmmgr clearing appr_10's
-stage 1 (which advanced it to stage 2). The request's `approvals_count`/`current_stage`/`status` is
-derived from these rows; this audit can never be edited.
+**Read each row — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **appdec_1** | u_lead1 **approved appr_8 stage 1** (the first of two needed). |
+| **appdec_2** | u_lead2 — a **different** person — also approved appr_8 stage 1, so the **quorum of 2 is met**. |
+| **appdec_3** | u_cvmmgr approved **appr_10 stage 1**, which advanced that request to stage 2. |
+| **appdec_4** | u_lead2 **rejected appr_9 at stage 1**. |
+
+One **immutable** row per decision, tagged with `stage_sequence`. A second APPROVE by the **same** person
+in the same stage is refused (`409 DUPLICATE_STAGE_APPROVER`). The request's count/stage/status is
+derived from these rows; this audit is never edited.
 
 ### `idempotency_keys`
 Columns: `key, operator_code, request_hash, response_status, response_body`.
@@ -388,12 +424,17 @@ Columns: `key, operator_code, request_hash, response_status, response_body`.
 { "key":"order-c","operator_code":"WIK","request_hash":"33aa55bb77","response_status":500,"response_body":"{\"error\":\"INTERNAL\"}" }
 { "key":"in-flight-1","operator_code":"WIK","request_hash":"77bcd9ee11","response_status":null,"response_body":null }
 ```
-**Reading:** the middleware keys on (operator, key) and stores the outcome. A retry with the same key +
-matching `request_hash` **replays** the stored `response_status`/`response_body` (even a 500 — `order-c`
-replays the error rather than re-running, since the business write may have committed). A **different**
-`request_hash` → 409 conflict. `response_status=null` (`in-flight-1`) = the row was reserved but the
-handler hasn't finished → a concurrent duplicate gets 409 "still being processed". *(There is no status
-enum — the null response IS the in-flight marker.)*
+**Read each row — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **act-sub_1-1** | A successful activate (`response_status:202`) — a retry with the **same body** replays the stored 202, the handler never runs twice. |
+| **pay-acc_1-9** | A successful payment (`201`) — replays the stored `payment_id` on retry. |
+| **order-c** | A request that ended **500** — a retry **replays the error**, not re-runs it (the business write may already have committed). |
+| **in-flight-1** | A key **reserved but not finished** (`response_status:null`) — a concurrent duplicate gets `409 "still being processed"`. |
+
+A **different** `request_hash` for the same key → `409` conflict. There is **no status enum** — a null
+`response_status` *is* the in-flight marker.
 
 ## Scheduled workers (`routes/console.php`)
 Outbox dispatch + workflow tick (every minute); billing cycle-close (30 min); provisioning
