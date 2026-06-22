@@ -127,7 +127,7 @@ stateDiagram-v2
     RECEIVED --> REJECTED: "no account or apply throws"
     PROCESSED --> [*]
     REJECTED --> [*]
-    note right of RECEIVED: "a re-post emits DUPLICATE only, no new row"
+    note right of RECEIVED: a re-post emits DUPLICATE only, no new row
 ```
 
 **Reading:** `(provider, external_ref)` is the **dedup key** (a DB unique constraint) — a re-posted

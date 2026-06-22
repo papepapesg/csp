@@ -64,7 +64,7 @@ sequenceDiagram
     participant G as Group members
     A->>S: "ApprovalRequested for a ROLE stage"
     S->>G: "fan out to every member"
-    Note over G: "each member tried on their channels"
+    Note over G: each member tried on their channels
     G-->>S: "first member ACKs"
     S->>G: "suppress the rest"
 ```

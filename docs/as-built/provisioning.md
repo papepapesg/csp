@@ -99,12 +99,18 @@ A subscription upgrade flow broadcasts `action:MODIFY` with `desired_state.speed
 seam handles changes, and desired-state is the single baseline.*
 
 ### 4. Account suspended in ILM → the network follows (cross-module via the outbox)
-ILM `AccountService` emits `CustomerAccountStatusChanged{affectsProvisioning:true,status:INACTIVE}`
-to the **outbox**. `sophix:outbox:dispatch` fires `OutboxEventPublished` →
-`SyncProvisioningOnAccountStatusChanged` looks up the account's subscriptions and **re-broadcasts**
-each provisioned target at `SUSPENDED` (action `ACCOUNT_STATUS_SYNC`). *Shows: a domain event in one
-module driving provisioning, the whole Foundation event backbone (R-ILM-S-3).* *(ReconciliationTest::
-test_account_status_change_syncs_provisioning.)*
+
+**The story in plain English:** When a customer's account is suspended (say for non-payment) in another
+module, the network should follow without anyone re-typing anything. The account-status change ripples
+out through the event backbone and every service that customer had provisioned gets re-pushed as
+suspended.
+
+**Who does what:** ILM `AccountService` emits
+`CustomerAccountStatusChanged{affectsProvisioning:true,status:INACTIVE}` to the **outbox**.
+`sophix:outbox:dispatch` fires `OutboxEventPublished` → `SyncProvisioningOnAccountStatusChanged` looks up
+the account's subscriptions and **re-broadcasts** each provisioned target at `SUSPENDED` (action
+`ACCOUNT_STATUS_SYNC`). *Shows: a domain event in one module driving provisioning, the whole Foundation
+event backbone (R-ILM-S-3).* *(ReconciliationTest::test_account_status_change_syncs_provisioning.)*
 
 ### 5. Terminate → desired NOT_PRESENT
 Termination broadcasts `action:DEACTIVATE`, `desired_state.desiredStatus:NOT_PRESENT`.
@@ -120,13 +126,41 @@ prior OPEN items auto-resolve (`MATCHED_SINCE`). Emits `ProvisioningReconciliati
 *(ReconciliationTest::test_clean_reconciliation_has_no_mismatch.)*
 
 ### 7. Reconcile drift → force-sync (EM-CFG-04 + SoD)
-A target reports `SUSPENDED` while desired is `ACTIVE` → `run()` opens a
-`provisioning_reconciliation_item` (`OPEN`) and emits `…ItemOpened`; it does **not** auto-fix
-(R-PROV-08). NOC `POST …/items/{item}/force-sync` → `requestForceSync` opens an **EM-CFG-04**
-(`Foundation/Approvals`) request → force-sync `PENDING_APPROVAL`, item `IN_REVIEW`. Execute-before-
-approve → **409**. A **different** approver `…/approve` (SoD: requester can't self-approve) → APPROVED
-→ `…/execute` re-broadcasts desired state; item `RESOLVED`. *(ReconciliationTest::
-test_drift_opens_item_and_force_sync_resolves.)*
+
+**The story in plain English:** Reconciliation finds the network and the BSS disagree — the OLT says a
+subscriber is active when we wanted them suspended. The system never quietly fixes this itself; that
+would be risky. Instead it opens a drift item for a human in the NOC. To push a correction, the NOC asks
+for it, and a *different* person must approve it before it runs — two pairs of eyes on anything that
+touches the live network.
+
+**Who does what:**
+1. A target reports `SUSPENDED` while desired is `ACTIVE` → `run()` opens a
+   `provisioning_reconciliation_item` (`OPEN`) and emits `…ItemOpened`; it does **not** auto-fix
+   (R-PROV-08).
+2. NOC `POST …/items/{item}/force-sync` → `requestForceSync` opens an **EM-CFG-04**
+   (`Foundation/Approvals`) request → force-sync `PENDING_APPROVAL`, item `IN_REVIEW`.
+3. Trying to execute before approval → **409**.
+4. A **different** approver `…/approve` (SoD: requester can't self-approve) → APPROVED.
+5. `…/execute` re-broadcasts the desired state; item `RESOLVED`.
+
+```mermaid
+sequenceDiagram
+    participant RC as ReconciliationService
+    actor NOC as NOC requester
+    participant AP as Approvals EM-CFG-04
+    actor APR as A different approver
+    RC->>RC: "drift found, item OPEN"
+    NOC->>RC: "force-sync"
+    RC->>AP: "request approval"
+    AP-->>RC: "PENDING_APPROVAL, item IN_REVIEW"
+    NOC->>RC: "execute too early"
+    RC-->>NOC: "409 blocked"
+    APR->>AP: "approve, not the requester"
+    AP-->>RC: "APPROVED"
+    NOC->>RC: "execute, re-broadcast"
+    RC->>RC: "item RESOLVED"
+```
+*(ReconciliationTest::test_drift_opens_item_and_force_sync_resolves.)*
 
 ### 8. Vendor rejects the command → retry → give up
 `adapter.dispatch` returns `failed` (or throws) → command `FAILED`, a `provisioning_command_attempt`
@@ -216,6 +250,23 @@ the subscriber should be **absent** — a present subscriber is now drift.
 { "command_id":"pcmd_3","operator_code":"WIK","broadcast_id":"bcast_4","subscription_id":"sub_5","service_ref":"svc_inet","action":"ACTIVATE","target_code":"HUAWEI_NCE_GPON_KE","desired_state":{"desiredStatus":"ACTIVE","speedProfile":"1G"},"observed_state":null,"status":"FAILED","external_ref":null,"request":{"op":"create-sub"},"response":{"error":"profile unknown"},"attempts":3,"last_error":"OLT rejected: profile unknown","correlation_id":"corr_88","sent_at":"2026-06-20T10:00:00Z","confirmed_at":null,"execution_mode":"SYNC","accepted_at":null }
 { "command_id":"pcmd_4","operator_code":"WIK","broadcast_id":"bcast_9","subscription_id":"sub_9","service_ref":"svc_inet","action":"SUSPEND","target_code":"HUAWEI_NCE_GPON_KE","desired_state":{"desiredStatus":"SUSPENDED"},"observed_state":null,"status":"CONFIRMED","external_ref":"NMS-CD34","request":{"op":"suspend"},"response":{"ok":true},"attempts":1,"last_error":null,"correlation_id":"corr_90","sent_at":"2026-06-18T00:00:01Z","confirmed_at":"2026-06-18T00:00:02Z","execution_mode":"SYNC","accepted_at":null }
 ```
+The command's own lifecycle — a sync vendor jumps straight to `CONFIRMED`; an async vendor parks at
+`ACCEPTED` until the poll worker confirms it; a vendor rejection ends `FAILED`; reconciliation can later
+flag a confirmed command's subscriber as `MISMATCH`:
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> SENT: "dispatched to adapter"
+    SENT --> CONFIRMED: "sync vendor confirms"
+    SENT --> ACCEPTED: "async vendor accepts"
+    SENT --> FAILED: "vendor rejects"
+    ACCEPTED --> CONFIRMED: "poll worker confirms"
+    ACCEPTED --> FAILED: "poll gives up"
+    CONFIRMED --> MISMATCH: "reconcile finds drift"
+    CONFIRMED --> [*]
+    FAILED --> [*]
+```
+
 **Reading:** `broadcast_id=bcast_1` groups the two commands from one triple-play ACTIVATE (internet
 confirmed sync — `confirmed_at` set; voice accepted async — `accepted_at` set, `confirmed_at` still
 null until the poll worker resolves it). pcmd_3 exhausted retries (`attempts:3`, `FAILED`, `last_error`
@@ -265,6 +316,19 @@ mismatches are opened (a failed fetch is not treated as drift).
 { "item_id":"pri_3","operator_code":"WIK","run_id":"prr_1","target_code":"HUAWEI_NCE_GPON_KE","subscription_id":"sub_3","service_ref":"svc_inet","subscriber_key":"sub_3:svc_inet","desired_status":"ACTIVE","observed_status":null,"diff":{"desiredStatus":"ACTIVE","observedStatus":null},"status":"IGNORED","resolution":"MANUAL","resolved_by":"u_noc1","resolved_at":"2026-06-21T08:00:00Z" }
 { "item_id":"pri_4","operator_code":"WIK","run_id":"prr_3","target_code":"HUAWEI_NCE_GPON_KE","subscription_id":"sub_9","service_ref":"svc_inet","subscriber_key":"sub_9:svc_inet","desired_status":"SUSPENDED","observed_status":"SUSPENDED","diff":null,"status":"RESOLVED","resolution":"MATCHED_SINCE","resolved_by":null,"resolved_at":"2026-06-20T13:00:00Z" }
 ```
+A drift item's lifecycle — it opens `OPEN`, the UI shows `IN_REVIEW` once a force-sync is raised, and it
+closes either `RESOLVED` (fixed or matched again on a later run) or `IGNORED` (a NOC decided to leave it):
+```mermaid
+stateDiagram-v2
+    [*] --> OPEN: "drift found"
+    OPEN --> IN_REVIEW: "force-sync raised"
+    IN_REVIEW --> RESOLVED: "force-synced"
+    OPEN --> RESOLVED: "matched on a later run"
+    OPEN --> IGNORED: "NOC leaves it"
+    RESOLVED --> [*]
+    IGNORED --> [*]
+```
+
 **Reading:** pri_1 is the live drift (`OPEN`, no resolution yet). pri_2 was corrected by a force-sync
 (`FORCE_SYNCED`, `resolved_by=u_noc2`). pri_3 a NOC decided to leave (`IGNORED`/`MANUAL`). pri_4 shows
 auto-close: a later run found desired==observed, so the prior item is resolved `MATCHED_SINCE` with no
@@ -277,6 +341,21 @@ human (`resolved_by=null`).
 { "force_sync_id":"pfs_3","operator_code":"WIK","source_item_id":"pri_3","subscription_id":"sub_3","service_ref":"svc_inet","target_code":"HUAWEI_NCE_GPON_KE","sync_direction":"NETWORK_TO_BSS","requested_action":null,"status":"APPROVED","approval_request_id":"appr_79","requested_by_user_id":"u_noc1","approved_by_user_id":"u_noc2","command_id":null,"reason":"network is source of truth here" }
 { "force_sync_id":"pfs_4","operator_code":"WIK","source_item_id":null,"subscription_id":null,"service_ref":null,"target_code":"HUAWEI_NCE_GPON_KE","sync_direction":"MARK_IGNORE","requested_action":null,"status":"CANCELLED","approval_request_id":null,"requested_by_user_id":"u_noc1","approved_by_user_id":null,"command_id":null,"reason":"expected during migration" }
 ```
+A force-sync request's lifecycle — it waits `PENDING_APPROVAL`, a different approver moves it to
+`APPROVED`, execution runs it (`RUNNING` then `COMPLETED`), or it is `CANCELLED`/`FAILED`:
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING_APPROVAL
+    PENDING_APPROVAL --> APPROVED: "a different approver signs off"
+    PENDING_APPROVAL --> CANCELLED: "withdrawn"
+    APPROVED --> RUNNING: "execute"
+    RUNNING --> COMPLETED: "re-broadcast done"
+    RUNNING --> FAILED: "execution error"
+    COMPLETED --> [*]
+    CANCELLED --> [*]
+    FAILED --> [*]
+```
+
 **Reading:** `BSS_TO_NETWORK` re-pushes desired (the common case). `NETWORK_TO_BSS` would update BSS to
 match the network; `MARK_IGNORE` accepts the diff. pfs_2 shows the **SoD** trail (`requested_by` ≠
 `approved_by`) + the corrective `command_id`. `approval_request_id` links the EM-CFG-04 decision.
