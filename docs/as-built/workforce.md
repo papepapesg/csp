@@ -225,9 +225,12 @@ ctr_4 will not match for fiber there.
 { "coverage_id":"cov_3","operator_code":"WIK","contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","service_scope":"INSTALL","coverage_role":"PRIMARY","effective_from":"2026-03-01","effective_to":null }
 { "coverage_id":"cov_4","operator_code":"WIK","contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","service_scope":"RECOVERY","coverage_role":"BACKUP","effective_from":"2026-03-01","effective_to":"2026-06-30" }
 ```
-**Reading:** coverage is **time-versioned** (`effective_from`/`effective_to`) and scoped per
-(contractor, region, service_scope). `coverage_role` ranks contractors (PRIMARY first, BACKUP as
-fallback, EXCLUSIVE locks the region); cov_4 is a BACKUP recovery coverage that lapses end of June.
+**Reading:** coverage says which contractor serves which region for which service, and it is
+**time-versioned** via `effective_from`/`effective_to`. Each row is scoped per (contractor, region,
+service_scope).
+- `coverage_role` ranks contractors: PRIMARY first, BACKUP as the fallback, EXCLUSIVE locks the region to
+  one contractor.
+- cov_4 is a BACKUP recovery coverage that lapses at the end of June.
 
 ## 3. Services
 | Service | Responsibility |

@@ -323,12 +323,31 @@ above, `reference=scs_2`) and stamps `reconciled_at`; a second reconcile is a no
 { "swap_id":"swp_3","operator_code":"WIK","kind":"EQP","source_instance_id":"eqi_7","target_instance_id":null,"subscription_id":"sub_11","customer_id":"cust_4","homepass_id":"hp_9","recovery_contractor_id":"ctr_4","status":"COMPLETED_WITHOUT_RECOVERY","chargeable":true,"charge_code":"DEPOSIT_FORFEITURE","charge_amount":3000,"failure_code":null,"flow_payload":{"recovered":false},"work_order_id":"wo_32","slot_commitment_id":"sc_7","process_instance_id":"pi_32" }
 { "swap_id":"swp_4","operator_code":"WIK","kind":"SWAP_HFC","source_instance_id":"eqi_8","target_instance_id":null,"subscription_id":"sub_12","customer_id":"cust_5","homepass_id":"hp_3","recovery_contractor_id":"ctr_4","status":"FIELD_VISIT_IN_PROGRESS","chargeable":false,"charge_code":null,"charge_amount":null,"failure_code":null,"flow_payload":null,"work_order_id":"wo_33","slot_commitment_id":"sc_8","process_instance_id":"pi_33" }
 ```
-**Reading:** `kind` selects the flow (GPON/HFC defective swap, EQP pickup, EQU upgrade). swp_1 was a
-free in-warranty swap (source recovered, new `target_instance_id` installed); swp_2 an upgrade (charged
-via BIL-01); swp_3 an EQR forfeiture (`COMPLETED_WITHOUT_RECOVERY`, no target installed, deposit billed);
-swp_4 is mid field-visit. The swap stores its `work_order_id`, `slot_commitment_id` and
-`process_instance_id` (the driving workflow); `flow_payload` carries per-flow specifics; `failure_code`
-is set only on a `FAILED` swap.
+**Reading:** `kind` selects the flow (GPON/HFC defective swap, EQP pickup, EQU upgrade). In the rows above:
+- **swp_1** — a free in-warranty swap (source recovered, a new `target_instance_id` installed).
+- **swp_2** — an upgrade, charged via BIL-01.
+- **swp_3** — an EQR forfeiture (`COMPLETED_WITHOUT_RECOVERY`, no target installed, deposit billed).
+- **swp_4** — mid field-visit.
+
+Each swap stores its `work_order_id`, `slot_commitment_id` and `process_instance_id` (the driving
+workflow); `flow_payload` carries per-flow specifics; `failure_code` is set only on a `FAILED` swap.
+
+The swap's `status` lifecycle (the happy path branches three ways at the end — recovered, refused, or
+failed):
+```mermaid
+stateDiagram-v2
+    [*] --> CREATED
+    CREATED --> AWAITING_SLOT: validated
+    AWAITING_SLOT --> WO_CREATED: slot reserved
+    WO_CREATED --> FIELD_VISIT_IN_PROGRESS: technician on site
+    FIELD_VISIT_IN_PROGRESS --> SOURCE_RECOVERED: old unit recovered
+    SOURCE_RECOVERED --> COMPLETED: swap finished
+    FIELD_VISIT_IN_PROGRESS --> COMPLETED_WITHOUT_RECOVERY: customer refuses return
+    FIELD_VISIT_IN_PROGRESS --> FAILED: visit fails
+    COMPLETED --> [*]
+    COMPLETED_WITHOUT_RECOVERY --> [*]
+    FAILED --> [*]
+```
 
 ### `vendor_rma_stub` (v1.0 vendor-handoff stub)
 ```json

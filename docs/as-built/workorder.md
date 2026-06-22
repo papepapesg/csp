@@ -15,21 +15,8 @@
 
 > **What a "work order" is:** a single job a field technician (or a desk agent) has to carry out — install
 > a customer, fix a fault, relocate a service, inspect equipment. Each work order moves through a fixed set
-> of statuses from the moment it is created until it is finished or cancelled:
->
-> ```mermaid
-> stateDiagram-v2
->     [*] --> PENDING: created
->     PENDING --> ASSIGNED: a technician is picked
->     ASSIGNED --> IN_PROGRESS: technician starts work
->     IN_PROGRESS --> FINALIZATION_PENDING: work done awaiting checklist
->     FINALIZATION_PENDING --> COMPLETED: checklist satisfied
->     PENDING --> CANCELLED: called off
->     ASSIGNED --> CANCELLED: called off
->     IN_PROGRESS --> CANCELLED: called off
->     COMPLETED --> [*]
->     CANCELLED --> [*]
-> ```
+> of statuses from the moment it is created until it is finished or cancelled (see the lifecycle diagram in
+> the Data model section).
 
 ### 1. Create + auto-assign an install WO (scope-gated)
 
@@ -238,10 +225,14 @@ table — required skills live on `work_order.required_skills`, and the SLA is c
 { "id":"finr_3","operator_code":"WIK","kind":"SUPPORT","job_type_code":null,"required_note_kinds":["findings","solution","final_reason_set"],"required_attachment_categories":null,"min_attachments_per_category":null }
 { "id":"finr_4","operator_code":"WIK","kind":"SHIFTING","job_type_code":null,"required_note_kinds":["findings","bindings_captured"],"required_attachment_categories":["new_premises_photo"],"min_attachments_per_category":{"new_premises_photo":2} }
 ```
-**Reading:** the per-`(operator,kind,job_type_code)` checklist the 2-step finalize enforces at
-second-confirm — required structured-note kinds plus required attachment categories and minimum counts.
-`job_type_code=null` (finr_2/3/4) is the default for the kind; a job-type-specific row (finr_1) overrides
-it (e.g. FTTH must capture the ONT serial + a speedtest before it can complete).
+**Reading:**
+- This is the per-`(operator, kind, job_type_code)` checklist that the 2-step finalize enforces at the
+  second-confirm step.
+- A row lists the required structured-note kinds plus the required attachment categories and their minimum
+  counts.
+- `job_type_code=null` (`finr_2` / `finr_3` / `finr_4`) is the default for that kind; a job-type-specific
+  row (`finr_1`) overrides the default — e.g. FTTH must capture the ONT serial and a speedtest before it
+  can complete.
 
 ### `field_audit_task` · `audit_type`: `EQUIPMENT|NETWORK|KYC` · `task_type`: `CUSTOMER_PREMISES|FIELD_SITE|POST_SWAP|INVESTIGATION` · `status`: `CREATED|ASSIGNED|IN_PROGRESS|SUBMITTED|DISCREPANCY_OPEN|CLOSED|CANCELLED`
 ```json
