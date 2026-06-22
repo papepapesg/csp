@@ -44,6 +44,28 @@ Follow this once; it touches **every** pattern below. (Proven by `Subscription/t
 > The shape never changes: **thin controller → service (mutate + emit in one tx) → async dispatch →
 > listeners/workflow react.** Learn it here; every module repeats it.
 
+```mermaid
+sequenceDiagram
+    actor Agent
+    participant API as "API + middleware"
+    participant Op as OperationFramework
+    participant Box as "outbox + dispatch"
+    participant Wkr as "workflow worker"
+    participant Prov as Provisioning
+    participant Down as "Billing / Reporting / Notification"
+    Agent->>API: POST /activate (token, Idempotency-Key)
+    API->>Op: permission + scope + idempotency OK
+    Note over Op: ONE DB transaction
+    Op->>Op: write subscription_operation (INITIATED)
+    Op->>Box: publish SubscriptionOperationStarted
+    Op-->>Agent: 202 Accepted (operation id)
+    Box->>Down: OutboxEventPublished (async, deduped by inbox)
+    Box->>Wkr: start sub-activate process
+    Wkr->>Wkr: Validate then BillingIntent (may park on payment)
+    Wkr->>Prov: Activate then broadcast() to the network
+    Note over Wkr,Down: SubscriptionActivated → Billing anchors cycle,<br/>Reporting counts, Notification welcomes
+```
+
 ---
 
 ## 1. Tenancy & Context — *who and which operator*
@@ -72,6 +94,25 @@ Follow this once; it touches **every** pattern below. (Proven by `Subscription/t
 - Module **listeners** subscribe to `OutboxEventPublished`, switch on `$published->event->event_type`,
   and react. Consumers dedupe through an **inbox** (`InboxEvent`, one row per `event_id`+consumer)
   so replays never double-process (e.g. `Reporting\Projectors\ReportMetricProjector`).
+
+> **Why an outbox?** Writing the state change and "sending" the event in the *same* DB transaction means
+> they can never disagree — if the transaction rolls back, the event was never queued either. A separate
+> dispatcher then delivers it, and the inbox makes re-delivery safe.
+
+```mermaid
+flowchart LR
+    subgraph TX["one DB transaction"]
+      S["state change<br/>(e.g. status → ACTIVE)"]
+      O["insert outbox_events row"]
+    end
+    S -. commit together .- O
+    O --> D["sophix:outbox:dispatch<br/>(every minute)"]
+    D --> E["fire OutboxEventPublished"]
+    E --> L1["listener A"]
+    E --> L2["listener B"]
+    L1 --> IB["inbox_events firstOrCreate<br/>(event_id, consumer) → run once"]
+    L2 --> IB
+```
 - **Pattern:** publish a `DomainEvent(type, topic, payload, aggregateType, aggregateId)` from inside
   your service's transaction; never call another module synchronously for a side-effect that can be
   a reaction. In tests, drive it with `$this->artisan('sophix:outbox:dispatch')`.
@@ -88,6 +129,24 @@ Follow this once; it touches **every** pattern below. (Proven by `Subscription/t
 - Message catches resume via `WorkflowEngine::correlateMessage(name, businessKey, vars)` — used to
   wake a parked flow on an event (e.g. `WorkOrderFinalized`, `CustomerKycApproved`).
 - **Mantra:** *new flow = compose registered topics (config); new step = register one handler (code).*
+
+> **The loop in a picture:** start an instance → the engine drops a task on a queue → a worker drains it
+> and runs the handler → the flow advances. When a step must wait, it **parks** until a message wakes it.
+
+```mermaid
+sequenceDiagram
+    participant Svc as "a module service"
+    participant Eng as WorkflowEngine
+    participant Q as "external task queue"
+    participant Wkr as "sophix:workflow:work"
+    Svc->>Eng: start(processKey, businessKey, vars)
+    Eng->>Q: create ExternalTask(s) per node
+    Wkr->>Q: fetch-and-lock a CREATED task by topic
+    Wkr->>Wkr: run the TaskHandler
+    Wkr->>Eng: complete → advance to next node
+    Note over Eng: a messageCatch node PARKS the instance…
+    Svc->>Eng: correlateMessage(name, businessKey) → resumes it
+```
 
 ## 5. Approvals — *EM-CFG-04, config-driven maker-checker as an ordered chain*
 - **`approval_definition`** is purely the policy *header* (WHEN: operator + entity_type + optional action
@@ -123,6 +182,25 @@ Follow this once; it touches **every** pattern below. (Proven by `Subscription/t
   `ApprovalApproved`/`ApprovalRejected`.
 - The distinct-approver guard is **within** a stage; cross-stage separation comes from each stage
   targeting a different role/person.
+
+> **Worked example — "manager then director":** a 2-stage chain. Stage 1 is a ROLE (`CVM_MANAGER`),
+> stage 2 is a named USER (a director with an invited login, no platform role). The request only reaches
+> the director after a manager clears stage 1.
+
+```mermaid
+sequenceDiagram
+    actor R as Requester
+    participant Eng as ApprovalService
+    actor M as "Manager (stage 1, ROLE)"
+    actor D as "Director (stage 2, USER)"
+    R->>Eng: request() → PENDING on stage 1
+    Note over Eng,D: director cannot act yet (not their stage) → 403
+    M->>Eng: decide(approve) → stage 1 quorum met
+    Eng->>Eng: advance → PENDING on stage 2 (ApprovalStageAdvanced)
+    D->>Eng: decide(approve) → final stage
+    Eng-->>R: APPROVED (ApprovalApproved)
+    Note over Eng: a reject at ANY stage → REJECTED (whole chain fails)
+```
 
 ## 6. Rules — *operator-overridable decision tables*
 - `App\Foundation\Rules\RuleEngine::evaluate('rules.<package>', $facts)` returns a decision. The
