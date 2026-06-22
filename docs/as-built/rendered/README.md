@@ -1,3 +1,5 @@
+> 📱 **Rendered view** — diagrams below are images so they show in the GitHub app. Editable source (with mermaid): [`../README.md`](../README.md).
+
 # SOPHIX V3 — As-Built Design (code-true)
 
 This folder is the **reverse-engineered, code-true design** of the platform: written *from*
@@ -80,12 +82,6 @@ the engines → config → the revenue core → execution → edges. Each line s
 > into a plain-English sentence** ("**dasg_1** = customer cust_1 gets 25% off, granted by hand, live now")
 > in a little table — *illustrate via the data*, not a dense paragraph re-defining columns. A short
 > "the columns that did the work" list can follow. Exemplar: `catalog.md` `discount_assignment`.
-
-> **Reading on the GitHub mobile app?** The app doesn't render mermaid (you'd see code, not a picture).
-> Read the **`rendered/`** mirror instead — e.g. [`rendered/00_SPINE.md`](rendered/00_SPINE.md) — where
-> every diagram is a committed PNG image, so it shows as a picture on web **and** in the app. Regenerate
-> with `node docs/as-built/build-rendered.cjs`. (The top-level `*.md` keep the editable mermaid source,
-> which renders natively on github.com.)
 
 > **DOCX output:** `node docs/as-built/build-docx.cjs <file.md …>` renders every mermaid block to a PNG
 > and produces `docs/as-built/docx/<file>.docx` with the diagrams embedded as images (needs `pandoc` +
