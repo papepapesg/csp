@@ -20,6 +20,36 @@
 > matrix at bootstrap. **“Where are the UI actions?”** → `rbac_frontend_action` (the catalog) +
 > `rbac_role_frontend_action` (role→action visibility), resolved per user by `GET …/navigation` (§2/§3).
 
+**The big picture in plain English:** access has two guards. On every request the API asks three things in
+order — *who are you* (the JWT/auth), *are you allowed to do this action* (the permission), and *does it apply
+here* (the data scope). Separately, the UI asks a softer question — *which buttons and menus should I even
+draw for this user* (the frontend actions). The UI guard is convenience only; the request guard is the real
+security, and it re-checks every time.
+
+**Guard order on a request — JWT → permission → scope:**
+```mermaid
+flowchart LR
+    JWT["JWT / auth<br/>(who are you)"] --> PERM{"permission:<br/>code held?"}
+    PERM -- no --> D1["403 forbidden"]
+    PERM -- yes --> SCOPE{"scope:<br/>within scope?"}
+    SCOPE -- no --> D2["403 OUT_OF_SCOPE"]
+    SCOPE -- yes --> OK["handler runs"]
+```
+
+**The grant model — where a user gets what a role can do.** A user does not hold permissions directly (usually);
+they hold roles, and roles hold permissions. Follow the pivots left-to-right:
+```mermaid
+flowchart LR
+    U["user<br/>(numeric id)"] --> MHR["model_has_roles"]
+    MHR --> R["role"]
+    R --> RHP["role_has_permissions"]
+    RHP --> P["permission"]
+    U -. "rare direct grant" .-> MHP["model_has_permissions"]
+    MHP -.-> P
+```
+A user's **effective permissions** = the union of `role_has_permissions` across all their `model_has_roles`
+roles, plus any direct `model_has_permissions` grants.
+
 ## 📖 Scenarios (service + Foundation involvement)
 
 ### 1. Create a role and grant it permissions
@@ -52,12 +82,32 @@ The region-scoped dispatcher `POST /api/work-orders {tech_region_id:'KE-NRB-KARE
 A `SUPER_ADMIN` (or a GLOBAL/OPERATOR scope holder) bypasses the scope check entirely.
 
 ### 7. UI action visibility (the frontend matrix — “where are the UI actions”)
-`GET /api/rbac/users/{u}/navigation` → loads `rbac_frontend_action` (ACTIVE), keeps each action whose
-`required_permission_code` is in the user's **effective permissions**, returns
+
+**The story in plain English:** When the back-office app loads, it asks the server "which menus and buttons
+should I show this user?" The server keeps the list of all renderable actions and the permission each one
+needs, then hands back only the ones this user's permissions unlock. So a dispatcher sees the "Assign
+technician" button and a care agent doesn't — but this is only about drawing the screen, not about security.
+
+**Who does what:** `GET /api/rbac/users/{u}/navigation` → loads `rbac_frontend_action` (ACTIVE), keeps each
+action whose `required_permission_code` is in the user's **effective permissions**, returns
 `{actionCode, type, displayName, app}`. So the **“Assign technician”** BUTTON
 (`required_permission_code: workorder.assign`) renders for a DISPATCHER but is hidden for a
 CUSTOMER_CARE_AGENT. The BO SPA calls this to build the menu and show/hide controls. *Visibility is UX,
 never security — the API still enforces `permission:`/`scope:` regardless.*
+
+```mermaid
+sequenceDiagram
+    participant SPA as "BO SPA"
+    participant API as "navigation endpoint"
+    participant FA as rbac_frontend_action
+    participant PERM as "user effective permissions"
+    SPA->>API: GET users u navigation
+    API->>FA: load ACTIVE actions
+    API->>PERM: get user permissions
+    API->>API: keep action if required_permission_code in permissions
+    API-->>SPA: visible actions list
+    SPA->>SPA: render menus and buttons
+```
 
 ### 8. Manage the frontend action catalog
 `POST /api/rbac/frontend-actions {app_code, action_code, action_type:'BUTTON', display_name, required_permission_code}`

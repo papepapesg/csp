@@ -10,28 +10,70 @@
   **read model**, never a business-state writer.
 - **Job:** turn the event stream into queryable operator-scoped daily metrics, **idempotently**.
 
+**The big picture in plain English:** every time something noteworthy happens elsewhere (a subscription
+activates, a payment lands), it emits an event. Reporting listens, checks it hasn't already counted that exact
+event, looks up which metrics the event bumps (via the `MetricMap`), and increments the right daily-metric
+rows under a lock. The result is a tidy table of "per operator, per day, per metric → a number" that
+dashboards read. It only ever reads events and adds them up — it never changes business state.
+
+```mermaid
+flowchart LR
+    EV["domain event<br/>e.g. SubscriptionActivated"] --> IB{"inbox: seen<br/>event_id + consumer?"}
+    IB -- yes --> SKIP["skip (no double count)"]
+    IB -- no --> MM["MetricMap.for(event)<br/>= metric_key + delta"]
+    MM --> LK["locked increment<br/>report_daily_metric"]
+    LK --> DASH["dashboards read"]
+```
+
 ## 📖 Scenarios (service + Foundation involvement)
 
 ### 1. An activation shows up on the dashboard
-Subscription emits `SubscriptionActivated` → `sophix:outbox:dispatch` fires `OutboxEventPublished` →
-`ReportMetricProjector`: inbox-dedupe, `MetricMap::for('SubscriptionActivated')` →
-`[['subscriptions_activated',1]]`, increments the `report_daily_metric`. `GET /api/reports/dashboards/
-operations-overview` reads it. *Proven by `ReportingApiTest`.*
+
+**The story in plain English:** A new subscription goes live somewhere in the platform. Reporting hears about
+it, decides it counts as one activation for today, and bumps the day's "subscriptions activated" tally — which
+the operations dashboard then shows.
+
+**Who does what:**
+1. Subscription emits `SubscriptionActivated` → `sophix:outbox:dispatch` fires `OutboxEventPublished`.
+2. `ReportMetricProjector` runs: inbox-dedupe, then `MetricMap::for('SubscriptionActivated')` →
+   `[['subscriptions_activated',1]]`.
+3. It increments the matching `report_daily_metric` row.
+4. `GET /api/reports/dashboards/operations-overview` reads it.
+
+**Worked example — before/after for one metric row** (operator `WIK`, date `2026-06-20`):
+
+| metric_key | value before | event | value after |
+|---|---:|---|---:|
+| subscriptions_activated | 12 | `SubscriptionActivated` → `+1` | **13** |
+
+*Proven by `ReportingApiTest`.*
 
 ### 2. Re-dispatch doesn't double-count
-The same event fired again → the **inbox** (`event_id`+consumer) short-circuits → counts unchanged.
-*Foundation: at-most-once projection.* *Proven by `ReportingApiTest::…idempotent_on_redispatch`.*
+
+**The story in plain English:** The same event gets delivered twice (a redelivery, a retry). Reporting
+recognises it has already counted that exact event and quietly ignores the repeat, so the numbers stay
+correct.
+
+**Who does what:** The same event fired again → the **inbox** (`event_id`+consumer) short-circuits → counts
+unchanged. So in the worked example above, a redelivery of that `SubscriptionActivated` leaves the value at
+**13**, not 14. *Foundation: at-most-once projection.* *Proven by
+`ReportingApiTest::…idempotent_on_redispatch`.*
 
 ### 3. A termination is projected
 `SubscriptionTerminated` → `subscriptions_terminated += 1`. *Proven by
 `ReportingApiTest::test_subscription_termination_is_projected`.*
 
 ### 4. Payment amount aggregates
-`PaymentReceived` → `[['payments_count',1],['payments_amount', amount]]` → revenue dashboard.
+`PaymentReceived` → `[['payments_count',1],['payments_amount', amount]]` → revenue dashboard. (One event can
+bump **several** metric rows — here a count and an amount.)
 
 ### 5. Reconcile — mart matches events
-`GET /api/reports/reconcile` re-projects from raw events via the **same `MetricMap`** and compares to the
-mart → in-sync. *Proven by `ReportExportReconcileTest`.*
+
+**The story in plain English:** To trust the dashboard, Reporting can rebuild the totals from scratch off the
+raw events and check they match what's stored. If they agree, the mart is in sync.
+
+**Who does what:** `GET /api/reports/reconcile` re-projects from raw events via the **same `MetricMap`** and
+compares to the mart → in-sync. *Proven by `ReportExportReconcileTest`.*
 
 ### 6. Reconcile detects drift
 If a mart row is manually changed, reconcile flags the delta. *Proven by `ReportExportReconcileTest`.*
