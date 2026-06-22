@@ -188,10 +188,18 @@ command for that target now drives the OLT. **No platform code change.**
 { "node_id":"nnode_fat","operator_code":"WIK","code":"FAT-F12","type":"FAT","name":"FAT F12","parent_node_code":"SPLITTER-S1H","description":null,"metadata":null,"status":"ACTIVE" }
 { "node_id":"nnode_ont","operator_code":"WIK","code":"ONT-77","type":"ONT","name":"ONT 77","parent_node_code":"FAT-F12","description":"customer leaf","metadata":null,"status":"ACTIVE" }
 ```
-**Reading:** the chain root is the HEADEND (no parent); ONT-77 is the customer leaf. Walking
-`parent_node_code` (ONT→FAT→…→OLT→HEADEND) gives the physical path; the serving **OLT** maps to the
-GPON **target plane**. An HFC HomePass would chain modem→AMPLIFIER→DISTRIBUTION_NODE→HEADEND and map
-to a CMTS target instead.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **HEADEND-NRB** | The **root** of the plant tree (`parent_node_code=null`) — the Nairobi headend everything hangs off. |
+| **OLT-NRB-WTL-01** | An **OLT** that sits under the headend (`parent_node_code=HEADEND-NRB`); this is the GPON box that maps a HomePass to the GPON plane. |
+| **FAT-F12** | A fibre access terminal hanging off a splitter (`parent_node_code=SPLITTER-S1H`) — a mid-tree node. |
+| **ONT-77** | The **customer leaf** (`type=ONT`, `parent_node_code=FAT-F12`) — the box at the premises. |
+
+**The columns that did that work:**
+- **The tree** = `parent_node_code` links each node to its parent; walking it from the leaf (ONT→FAT→…→OLT→HEADEND) gives the physical path, and the serving OLT maps to the GPON target plane.
+- An HFC HomePass would chain modem→AMPLIFIER→DISTRIBUTION_NODE→HEADEND and map to a CMTS target instead.
 
 ### `homepass` (Catalog — the premises) · **projected** to provisioning-relevant columns
 > Full ~50-column schema (structured address, building, GIS lat/lng, RoE dates) is in `catalog.md`.
@@ -203,10 +211,19 @@ to a CMTS target instead.
 { "id":"hp_3","operator_code":"WIK","code":"HP-MSA-0007","status":"RFS","technology":"HFC","house_type_code":"M2M","network_nodes":["CM-12","DN-3"],"tech_region_id":"KE-MSA-NYALI","has_been_active":true,"has_been_sellable":true }
 { "id":"hp_4","operator_code":"WIK","code":"HP-NRB-0099","status":"RETIRED","technology":"GPON","house_type_code":"OFF","network_nodes":["ONT-3"],"tech_region_id":"KE-NRB-KAREN","has_been_active":true,"has_been_sellable":true }
 ```
-**Reading:** only a status whose `is_sellable` flag is set can take an order (hp_2's `WAI` = waiting/under
-construction; hp_4's `RETIRED` = decommissioned). `technology` decides the node chain + target plane
-(GPON→OLT vs HFC→CMTS); `network_nodes` is the cached path (leaf→…→headend); `tech_region_id` ties to
-RBAC scope. `has_been_sellable` is the latch that makes `HomePassReachedSellable` fire only once.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **hp_1** | A GPON premises that is **ready for service** (`status=RFS`) and **can take an order**; its cached node path is `[ONT-77, OLT-NRB-WTL-01]`, and it has previously been sellable/active. |
+| **hp_2** | A GPON premises still **under construction** (`status=WAI`), with **no node path yet** (`network_nodes=[]`) and never sellable/active — an order can't land here. |
+| **hp_3** | An **HFC** (cable) premises that's RFS and orderable; its path runs through cable nodes (`network_nodes=[CM-12, DN-3]`), so it maps to a CMTS plane, not GPON. |
+| **hp_4** | A **decommissioned** premises (`status=RETIRED`) — not orderable now even though it was sellable/active in the past. |
+
+**The columns that did that work:**
+- **Can it take an order** = whether `status`'s catalog flag `is_sellable` is set (RFS yes; WAI/RETIRED no).
+- **Which plane** = `technology` (GPON→OLT vs HFC→CMTS); `network_nodes` is the cached leaf→…→headend path.
+- **Scope & latch** = `tech_region_id` ties to RBAC scope; `has_been_sellable` is the latch that makes `HomePassReachedSellable` fire only once.
 
 ### `provisioning_target` (the vendor plane) · `type`: `GPON|HFC|VOIP|NMS`
 ```json
@@ -215,8 +232,16 @@ RBAC scope. `has_been_sellable` is the latch that makes `HomePassReachedSellable
 { "target_code":"SIP_VOICE_KE","operator_code":"WIK","type":"VOIP","name":"VoipSwitch","endpoint":"sip://vs.wik","active":true }
 { "target_code":"DEFAULT_NMS","operator_code":"WIK","type":"NMS","name":"Default NMS","endpoint":null,"active":true }
 ```
-**Reading:** one plane per technology; a triple-play subscription touches several (internet→GPON,
-voice→VOIP). `DEFAULT_NMS` is the catch-all the POC seeds point at.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **HUAWEI_NCE_GPON_KE** | The live **GPON** plane (`type=GPON`, `active=true`) — where internet provisioning lands, reachable at its `endpoint`. |
+| **CMTS_HFC_KE** | The live **HFC/cable** plane (`type=HFC`) — where cable-modem services land. |
+| **SIP_VOICE_KE** | The live **VOIP** plane (`type=VOIP`) — where voice lines land. |
+| **DEFAULT_NMS** | The catch-all **NMS** plane (`type=NMS`, `endpoint=null`) that the POC seeds point at when no real vendor applies. |
+
+A triple-play subscription touches several of these (internet→GPON, voice→VOIP); there's one plane per technology.
 
 ### `provisioning_adapter_config` (⭐ the vendor binding) · `execution_mode_default`: `SYNC_REQUIRED|ASYNC_ACCEPTED` · `status`: `ACTIVE|SUSPENDED`
 ```json
@@ -225,12 +250,19 @@ voice→VOIP). `DEFAULT_NMS` is the catch-all the POC seeds point at.
 { "adapter_config_id":"pac_3","operator_code":"WIK","provisioner_key":null,"target_code":"DEFAULT_NMS","adapter_class":"…\\StubProvisioningAdapter","execution_mode_default":"SYNC_REQUIRED","timeout_ms":25000,"max_retry_count":5,"retry_policy_json":null,"status":"ACTIVE" }
 { "adapter_config_id":"pac_4","operator_code":"WIK","provisioner_key":null,"target_code":"CMTS_HFC_KE","adapter_class":"…\\CasaCmtsAdapter","execution_mode_default":"ASYNC_ACCEPTED","timeout_ms":40000,"max_retry_count":8,"retry_policy_json":{"baseSeconds":60,"factor":2},"status":"SUSPENDED" }
 ```
-**Reading:** **this row is the swappable seam** — change `adapter_class` to repoint a plane. The optional
-`provisioner_key` (pac_1) refines the binding to a specific PLM service provisioner; `timeout_ms`/
-`max_retry_count`/`retry_policy_json` are the per-target resilience knobs.
-`ASYNC_ACCEPTED` ⇒ commands sit `ACCEPTED` until the poll worker confirms. `status=SUSPENDED` (pac_4)
-⇒ that plane is parked (e.g. maintenance) and the registry treats it as unavailable. The default seed
-(pac_3) uses the stub so flows run with no hardware.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pac_1** | Binds the GPON plane to the **Huawei NCE adapter** for a specific service (`provisioner_key=GPON_INET`); it's **async** (`execution_mode_default=ASYNC_ACCEPTED`, so commands sit ACCEPTED until polled) and **ACTIVE**, with its own timeout/retry knobs. |
+| **pac_2** | Binds the voice plane to the **SIP adapter**, **synchronously** (`SYNC_REQUIRED`, so commands confirm inline) — `provisioner_key=null` means it applies to the whole target. |
+| **pac_3** | The **default seed**: the NMS plane bound to the **stub adapter** (sync), so flows run with **no real hardware**. |
+| **pac_4** | The CMTS/HFC binding, but **SUSPENDED** (`status=SUSPENDED`) — that plane is parked (e.g. maintenance) and the registry treats it as unavailable. |
+
+**The columns that did that work:**
+- **The swappable seam** = `adapter_class` — change it to repoint a plane; the optional `provisioner_key` refines the binding to a specific PLM service provisioner.
+- **Sync vs async** = `execution_mode_default` (`ASYNC_ACCEPTED` ⇒ commands sit `ACCEPTED` until the poll worker confirms).
+- **Availability & resilience** = `status` parks a plane; `timeout_ms`/`max_retry_count`/`retry_policy_json` are the per-target knobs.
 
 ### `provisioning_desired_state` (the reconcile baseline) · `desired_status`: `ACTIVE|SUSPENDED|RESTRICTED|TERMINATED|NOT_PRESENT`
 ```json
@@ -239,9 +271,18 @@ voice→VOIP). `DEFAULT_NMS` is the catch-all the POC seeds point at.
 { "desired_state_id":"pds_3","operator_code":"WIK","subscription_id":"sub_9","customer_id":"cust_12","homepass_id":"hp_7","service_ref":"svc_inet","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_9:svc_inet","desired_status":"SUSPENDED","desired_profile":{},"source_module":"Ilm","source_ref":"acct_status_sync","effective_from":"2026-06-18T00:00:00Z" }
 { "desired_state_id":"pds_4","operator_code":"WIK","subscription_id":"sub_7","customer_id":"cust_8","homepass_id":null,"service_ref":"svc_inet","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_7:svc_inet","desired_status":"NOT_PRESENT","desired_profile":{},"source_module":"Subscription","source_ref":"term_55","effective_from":"2026-06-15T00:00:00Z" }
 ```
-**Reading:** one row per (subscriber, service, plane). pds_1/2 = a triple-play sub provisioned across
-two planes. pds_3 = suspended (reconcile expects the plane to report SUSPENDED). pds_4 = terminated, so
-the subscriber should be **absent** — a present subscriber is now drift.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pds_1** | BSS wants sub_123's **internet** service **ACTIVE** on the GPON plane at the 100M/vlan-101 profile — the baseline reconcile checks the network against. |
+| **pds_2** | The **same subscription's voice** service, wanted **ACTIVE** on the VOIP plane (`desired_profile.callerId=true`) — same `source_ref=subop_991`, i.e. the other half of one triple-play activation. |
+| **pds_3** | BSS wants sub_9's internet **SUSPENDED** (`desired_status=SUSPENDED`, set by the `Ilm` account-status sync) — reconcile expects the plane to report SUSPENDED. |
+| **pds_4** | BSS wants sub_7 **gone** (`desired_status=NOT_PRESENT`, `homepass_id=null`, from a termination) — the subscriber should be **absent**, so a present subscriber here is drift. |
+
+**The columns that did that work:**
+- **One baseline per** = (`subscription_id`, `service_ref`, `target_code`) keyed by `subscriber_key`; `desired_status` + `desired_profile` are what the network should match.
+- **Provenance** = `source_module`/`source_ref` record who set the baseline (Subscription activation vs Ilm status sync vs termination).
 
 ### `provisioning_command` (the dispatch ledger) · `action`: `ACTIVATE|MODIFY|DEACTIVATE|SUSPEND|RESUME` · `status`: `PENDING→SENT→CONFIRMED|ACCEPTED|FAILED|MISMATCH` · `execution_mode`: `SYNC|ASYNC_ACCEPTED`
 ```json
@@ -267,11 +308,19 @@ stateDiagram-v2
     FAILED --> [*]
 ```
 
-**Reading:** `broadcast_id=bcast_1` groups the two commands from one triple-play ACTIVATE (internet
-confirmed sync — `confirmed_at` set; voice accepted async — `accepted_at` set, `confirmed_at` still
-null until the poll worker resolves it). pcmd_3 exhausted retries (`attempts:3`, `FAILED`, `last_error`
-recorded, no `external_ref`). `correlation_id` threads a command back to the originating flow; the
-command is the audit of *what was sent to which plane and how it went*.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pcmd_1** | An ACTIVATE of internet on the GPON plane that the vendor confirmed **inline** (`execution_mode=SYNC`, `status=CONFIRMED`, `confirmed_at` set) — done in one attempt. |
+| **pcmd_2** | The voice half of the **same broadcast** (`broadcast_id=bcast_1`): the SIP vendor accepted it **async** (`execution_mode=ASYNC_ACCEPTED`, `status=ACCEPTED`, `accepted_at` set, `confirmed_at` still null) — waiting for the poll worker to confirm. |
+| **pcmd_3** | An ACTIVATE that the OLT **rejected**: after retrying (`attempts=3`) it ended `FAILED` with `last_error="OLT rejected: profile unknown"` and no `external_ref`. |
+| **pcmd_4** | A SUSPEND on the GPON plane, confirmed inline (`SYNC`, `CONFIRMED`) in one attempt. |
+
+**The columns that did that work:**
+- **Grouping** = `broadcast_id` groups the commands from one multi-plane action (pcmd_1 + pcmd_2 = one triple-play ACTIVATE).
+- **Sync vs async outcome** = `execution_mode` + `status`; `confirmed_at` (sync) vs `accepted_at` then poll (async).
+- **Failure & trace** = `attempts`/`last_error` record an exhausted retry; `correlation_id` threads back to the originating flow. The row is the audit of *what was sent to which plane and how it went*.
 
 ### `provisioning_command_attempt` (per-try audit) · `status`: `SUCCESS|FAILED_RETRYABLE|FAILED_FINAL|TIMEOUT`
 > (`created_at` uses the DB default; omitted by convention along with the audit timestamps.)
@@ -281,9 +330,18 @@ command is the audit of *what was sent to which plane and how it went*.
 { "attempt_id":"pcma_3","operator_code":"WIK","command_id":"pcmd_3","attempt_no":3,"adapter_class":"…\\HuaweiNceGponAdapter","status":"FAILED_FINAL","response_payload":{"err":"profile unknown"},"vendor_status_code":"422","duration_ms":1300,"error_code":"PROFILE_UNKNOWN" }
 { "attempt_id":"pcma_4","operator_code":"WIK","command_id":"pcmd_2","attempt_no":1,"adapter_class":"…\\SipVoiceAdapter","status":"TIMEOUT","response_payload":null,"vendor_status_code":null,"duration_ms":15000,"error_code":"VENDOR_TIMEOUT" }
 ```
-**Reading:** pcmd_3 has two attempts (`attempt_no` 1 retryable → 3 final) — this ledger explains *why* a
-command failed and which adapter/vendor code returned it. `duration_ms` flags the slow TIMEOUT (15 s vs
-~0.4 s success). Invaluable for vendor-integration debugging.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pcma_1** | pcmd_1's single try **succeeded** (`status=SUCCESS`, `vendor_status_code=OK`) in **420 ms** — fast and clean. |
+| **pcma_2** | pcmd_3's **first** try was a **retryable** failure (`attempt_no=1`, `status=FAILED_RETRYABLE`, vendor 503 "busy", `error_code=ADAPTER_REJECTED`). |
+| **pcma_3** | pcmd_3's **third** try **finally gave up** (`attempt_no=3`, `status=FAILED_FINAL`, vendor 422, `error_code=PROFILE_UNKNOWN`) — this is why the command ended FAILED. |
+| **pcma_4** | pcmd_2's try **timed out** (`status=TIMEOUT`, `error_code=VENDOR_TIMEOUT`) after a full **15000 ms** — no vendor response at all. |
+
+**The columns that did that work:**
+- **Per-try outcome** = `attempt_no` + `status`; `error_code`/`vendor_status_code` say *why* and *who* rejected it.
+- **Timing** = `duration_ms` flags the slow TIMEOUT (15 s) vs a ~0.4 s success — invaluable for vendor-integration debugging.
 
 ### `provisioning_observed_state` (last poll — mirror of what the plane reports)
 ```json
@@ -292,10 +350,18 @@ command failed and which adapter/vendor code returned it. `duration_ms` flags th
 { "observed_state_id":"pos_3","operator_code":"WIK","target_code":"SIP_VOICE_KE","subscriber_key":"sub_123:svc_voice","observed_status":"ACTIVE","observed_profile":{"callerId":true},"source_run_id":"prr_1","collected_at":"2026-06-21T01:00:00Z" }
 { "observed_state_id":"pos_4","operator_code":"WIK","target_code":"HUAWEI_NCE_GPON_KE","subscriber_key":"sub_7:svc_inet","observed_status":null,"observed_profile":null,"source_run_id":"prr_1","collected_at":"2026-06-21T01:00:00Z" }
 ```
-**Reading:** one row per (plane, subscriber), upserted each run (`source_run_id`/`collected_at` show
-which pass wrote it). pos_1/pos_3 match their desired rows (clean). **pos_2 vs pds_3 = drift** (network
-says ACTIVE, BSS wants SUSPENDED). pos_4 reports `null` (subscriber absent) which *matches* pds_4's
-`NOT_PRESENT` — absence is the correct observation there.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pos_1** | The GPON plane reports sub_123's internet as **ACTIVE** at 100M — **matches** its desired row (pds_1), so it's clean. |
+| **pos_2** | The GPON plane reports sub_9's internet as **ACTIVE** — but pds_3 wants it **SUSPENDED**, so this row **is drift**. |
+| **pos_3** | The VOIP plane reports sub_123's voice as **ACTIVE** with caller-ID — **matches** pds_2, clean. |
+| **pos_4** | The GPON plane reports **nothing** for sub_7 (`observed_status=null`) — which **matches** pds_4's `NOT_PRESENT`, so absence is the *correct* observation here. |
+
+**The columns that did that work:**
+- **One mirror row per** = (`target_code`, `subscriber_key`), upserted each run; `source_run_id`/`collected_at` show which pass wrote it.
+- **Drift** = comparing `observed_status`/`observed_profile` against the matching desired row; a `null` observation means absent, which only counts as drift if the desired row wanted the subscriber present.
 
 ### `provisioning_reconciliation_run` (one pass) · `scope_type`: `FULL_TARGET|REGION|SUBSCRIPTION|SERVICE_CLASS` · `status`: `RUNNING|COMPLETED|FAILED|PARTIAL`
 ```json
@@ -304,10 +370,18 @@ says ACTIVE, BSS wants SUSPENDED). pos_4 reports `null` (subscriber absent) whic
 { "run_id":"prr_3","operator_code":"WIK","target_code":"HUAWEI_NCE_GPON_KE","scope_type":"SUBSCRIPTION","scope_value":"sub_9","status":"COMPLETED","desired_count":1,"observed_count":1,"mismatch_count":1,"started_at":"2026-06-20T12:00:00Z","completed_at":"2026-06-20T12:00:05Z" }
 { "run_id":"prr_4","operator_code":"WIK","target_code":"SIP_VOICE_KE","scope_type":"FULL_TARGET","scope_value":null,"status":"FAILED","desired_count":30,"observed_count":0,"mismatch_count":0,"started_at":"2026-06-21T01:00:00Z","completed_at":"2026-06-21T01:00:30Z" }
 ```
-**Reading:** prr_1 is the hourly full sweep of the GPON plane (120 desired = 120 observed, 1 mismatch).
-prr_2 (`target_code=null`) is an all-targets pass still `RUNNING`. prr_3 is a **scoped** rerun of just
-`sub_9` (after a fix). prr_4 `FAILED` — the SIP plane was unreachable, so `observed_count=0` and no
-mismatches are opened (a failed fetch is not treated as drift).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **prr_1** | A **full sweep** of the GPON plane that **COMPLETED**: 120 desired = 120 observed, with **1 mismatch** found (`mismatch_count=1`). |
+| **prr_2** | An **all-targets** pass (`target_code=null`) still **RUNNING** — counts are all zero because it hasn't finished. |
+| **prr_3** | A **scoped** rerun of just `sub_9` (`scope_type=SUBSCRIPTION`, `scope_value=sub_9`), e.g. after a fix — COMPLETED with 1 mismatch. |
+| **prr_4** | A full sweep of the SIP plane that **FAILED** — the plane was unreachable (`observed_count=0`), so **no mismatches were opened** (a failed fetch isn't treated as drift). |
+
+**The columns that did that work:**
+- **Scope** = `scope_type` + `scope_value` (FULL_TARGET vs a single SUBSCRIPTION; `target_code=null` = all planes).
+- **Result** = `status` plus the `desired_count`/`observed_count`/`mismatch_count` tallies; a `FAILED` run with `observed_count=0` opens nothing.
 
 ### `provisioning_reconciliation_item` (one mismatch) · `status`: `OPEN|RESOLVED|IGNORED` (UI surfaces `IN_REVIEW` once a force-sync is raised) · `resolution`: `FORCE_SYNCED|MANUAL|MATCHED_SINCE`
 ```json
@@ -329,10 +403,18 @@ stateDiagram-v2
     IGNORED --> [*]
 ```
 
-**Reading:** pri_1 is the live drift (`OPEN`, no resolution yet). pri_2 was corrected by a force-sync
-(`FORCE_SYNCED`, `resolved_by=u_noc2`). pri_3 a NOC decided to leave (`IGNORED`/`MANUAL`). pri_4 shows
-auto-close: a later run found desired==observed, so the prior item is resolved `MATCHED_SINCE` with no
-human (`resolved_by=null`).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pri_1** | **Live drift**, still `OPEN`: BSS wants SUSPENDED but the network shows ACTIVE (`diff` records both), no resolution yet. |
+| **pri_2** | A drift that was **fixed by a force-sync**: `status=RESOLVED`, `resolution=FORCE_SYNCED`, signed off by `resolved_by=u_noc2`. |
+| **pri_3** | A drift (observed `null`) that a **NOC chose to leave**: `status=IGNORED`, `resolution=MANUAL`, by `resolved_by=u_noc1`. |
+| **pri_4** | An **auto-close**: a later run found desired==observed (`diff=null`), so the item resolved `MATCHED_SINCE` with **no human** (`resolved_by=null`). |
+
+**The columns that did that work:**
+- **What drifted** = `desired_status` vs `observed_status`, captured in `diff`.
+- **How it closed** = `status` + `resolution` (`FORCE_SYNCED` = pushed a fix, `MANUAL` = NOC decided, `MATCHED_SINCE` = self-healed); `resolved_by`=null marks the automatic close.
 
 ### `provisioning_force_sync_request` · `sync_direction`: `BSS_TO_NETWORK|NETWORK_TO_BSS|MARK_IGNORE` · `status`: `PENDING_APPROVAL|APPROVED|RUNNING|COMPLETED|FAILED|CANCELLED`
 ```json
@@ -356,9 +438,18 @@ stateDiagram-v2
     FAILED --> [*]
 ```
 
-**Reading:** `BSS_TO_NETWORK` re-pushes desired (the common case). `NETWORK_TO_BSS` would update BSS to
-match the network; `MARK_IGNORE` accepts the diff. pfs_2 shows the **SoD** trail (`requested_by` ≠
-`approved_by`) + the corrective `command_id`. `approval_request_id` links the EM-CFG-04 decision.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pfs_1** | A request to **re-push BSS's desired** to the network (`sync_direction=BSS_TO_NETWORK`, `requested_action=REAPPLY_PROFILE`) for pri_1's drift — still **PENDING_APPROVAL** (`approval_request_id=appr_77`), no approver or command yet. |
+| **pfs_2** | A completed BSS→network fix: **COMPLETED**, with the **separation-of-duties trail** (`requested_by_user_id=u_noc1` ≠ `approved_by_user_id=u_noc2`) and the corrective `command_id=pcmd_88` it produced. |
+| **pfs_3** | A **NETWORK_TO_BSS** request (update BSS to match the network, "network is source of truth here"), already **APPROVED** but not yet run (`command_id=null`). |
+| **pfs_4** | A **MARK_IGNORE** request (accept the diff rather than fix it), **CANCELLED** — withdrawn as "expected during migration" (not tied to a specific item, `source_item_id=null`). |
+
+**The columns that did that work:**
+- **Which way to sync** = `sync_direction` (`BSS_TO_NETWORK` re-pushes desired; `NETWORK_TO_BSS` updates BSS; `MARK_IGNORE` accepts the diff).
+- **Approval & SoD** = `status` + `approval_request_id` (links the EM-CFG-04 decision); `requested_by_user_id` ≠ `approved_by_user_id` enforces separation of duties; `command_id` is the corrective command once it runs.
 
 ## 3. Services (worked calls)
 | Service | Responsibility |

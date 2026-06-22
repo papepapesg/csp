@@ -301,15 +301,20 @@ stateDiagram-v2
     TERMINALLY_FAILED --> [*]
 ```
 
-**Reading:** the delivery row is the per-(recipient, channel) attempt ledger — `channel_priority_idx`
-orders the channels a recipient is tried on (per the channel-config try-order / fallback mode). The
-first-ACK (deliv_3 `ACKNOWLEDGED`) suppresses the other still-pending rows (deliv_2 `SUPPRESSED`).
-`recipient_identity` is normally null (the address is resolved from the user's channel-identity), but a
-**DIRECT** send (deliv_4 — a named approver in no group) carries the explicit `{channel,address}` and the
-dispatcher hands it straight to the adapter with no directory lookup. `failure_reason` codes
-(`BOUNCE|ADAPTER_NOT_REGISTERED|NO_BINDING_FOR_CHANNEL|IDENTITY_UNRESOLVABLE|…`) explain a `FAILED`/
-`TERMINALLY_FAILED` row; `next_retry_at` drives the retry sweep. The `(notification_id, recipient_user_id,
-channel)` tuple is unique.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **deliv_1** | For sn_1, sup_01's **first-choice channel** (`channel_priority_idx=0`, IN_APP_PUSH) was **DISPATCHED** (`provider_message_id=push-1`), not yet acked. |
+| **deliv_2** | For sn_1, sup_02's EMAIL (a lower-priority channel, idx 1) was **SUPPRESSED** with **0 attempts** — never tried because the notification's need was met elsewhere. |
+| **deliv_3** | For sn_2, sup_01's SLACK delivery was **ACKNOWLEDGED** (`acknowledged_at` set) — this is the ACK that resolved sn_2. |
+| **deliv_4** | A **DIRECT** send (notification sn_dir) to a named approver in no group: `recipient_identity={channel:EMAIL,address:director@wik.example}` is carried explicitly and handed straight to the adapter — **DISPATCHED**. |
+
+**The columns that did that work:**
+- **Channel order** = `channel_priority_idx` orders the channels a recipient is tried on (per channel-config try-order / fallback mode).
+- **First-ACK suppression** = an `ACKNOWLEDGED` row (deliv_3) suppresses the other still-pending rows (deliv_2 → `SUPPRESSED`).
+- **Address resolution** = `recipient_identity` is normally null (resolved from the user's channel-identity); a DIRECT send carries an explicit `{channel,address}` so the dispatcher skips the directory lookup.
+- **Retries** = `failure_reason` codes explain a `FAILED`/`TERMINALLY_FAILED` row; `next_retry_at` drives the retry sweep. The `(notification_id, recipient_user_id, channel)` tuple is unique.
 
 ## 3. Services
 | Service | Responsibility |
