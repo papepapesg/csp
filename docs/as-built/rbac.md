@@ -230,10 +230,16 @@ immediately loses access to that region.
 { "permission_code":"customer.read","module_code":"Ilm","action_group":"customer","risk_level":"LOW","description":"Read customer records","scope_required":false,"status":"ACTIVE" }
 { "permission_code":"rbac.manage","module_code":"Rbac","action_group":"admin","risk_level":"CRITICAL","description":"Manage roles, permissions and scopes","scope_required":false,"status":"ACTIVE" }
 ```
-**Reading:** descriptive metadata **about** a permission, never a grant. `scope_required=true` flags the
-permissions whose routes should carry a `scope:` gate (workorder.assign is region-scoped); `risk_level`
-drives BO confirmation UX (a CRITICAL action prompts a re-auth/confirm). Upserted via
-`PUT /api/rbac/permissions/{code}/meta`.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **workorder.assign** | A `MEDIUM`-risk WorkOrder permission ("Assign a work order to a technician") that **is region-scoped** — `scope_required=true`, so its routes should carry a `scope:` gate; ACTIVE. |
+| **invoice.manage** | A `HIGH`-risk Billing permission ("Manage invoices/credit notes"), **not** scope-required, ACTIVE. |
+| **customer.read** | A `LOW`-risk Ilm permission ("Read customer records"), not scope-required, ACTIVE. |
+| **rbac.manage** | A `CRITICAL`-risk Rbac permission ("Manage roles, permissions and scopes") — its risk drives a re-auth/confirm prompt in the back office; ACTIVE. |
+
+**The columns that did the work:** metadata **about** a permission, never a grant — `scope_required` flags which routes need a `scope:` gate, `risk_level` drives BO confirmation UX (CRITICAL prompts re-auth). Upserted via `PUT /api/rbac/permissions/{code}/meta`.
 
 ### `rbac_frontend_action` — ⭐ **THE UI ACTIONS CATALOG** · `action_type`: `MENU|SCREEN|BUTTON|TAB|FIELD`
 ```json
@@ -242,12 +248,16 @@ drives BO confirmation UX (a CRITICAL action prompts a re-auth/confirm). Upserte
 { "frontend_action_id":"fea_3","app_code":"FE-APP-01","action_code":"backoffice.billing","action_type":"MENU","display_name":"Billing","required_permission_code":"invoice.read","feature_flag":null,"status":"ACTIVE" }
 { "frontend_action_id":"fea_4","app_code":"FE-APP-02","action_code":"selfcare.usage.tab","action_type":"TAB","display_name":"Usage","required_permission_code":null,"feature_flag":"usage_v2","status":"ACTIVE" }
 ```
-**Reading:** **this is where UI actions live** — one row per renderable element (a `MENU` item, a `SCREEN`, a
-`BUTTON`, a `TAB`, a `FIELD`), keyed by `action_code`, scoped to a frontend `app_code` (FE-APP-01 back-office,
-FE-APP-02 self-care). `required_permission_code` is the permission that *gates visibility* (null = always
-visible); `feature_flag` hides it behind a rollout flag (fea_4 needs `usage_v2`). **Visibility ≠ security:**
-the API still enforces the permission server-side — this only controls what the SPA renders. Managed via
-`GET/POST /api/rbac/frontend-actions`.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **fea_1** | A back-office (`app_code=FE-APP-01`) **MENU** item "Work Orders" whose visibility is gated by `required_permission_code=workorder.read`; ACTIVE, no feature flag. |
+| **fea_2** | A back-office **BUTTON** "Assign technician" gated by `workorder.assign`; ACTIVE. |
+| **fea_3** | A back-office **MENU** "Billing" gated by `invoice.read`; ACTIVE. |
+| **fea_4** | A self-care (`FE-APP-02`) **TAB** "Usage" with **no permission gate** (`required_permission_code=null` = always visible) but hidden behind the `usage_v2` feature flag. |
+
+**The columns that did the work:** one row per renderable element (`action_type`), keyed by `action_code`, scoped to a frontend `app_code` (FE-APP-01 back-office, FE-APP-02 self-care); `required_permission_code` gates visibility (null = always visible) and `feature_flag` hides it behind a rollout. **Visibility ≠ security:** the API still enforces the permission server-side — this only controls what the SPA renders. Managed via `GET/POST /api/rbac/frontend-actions`.
 
 ### `rbac_role_frontend_action` — role → UI action visibility matrix (precomputed)
 ```json
@@ -256,10 +266,16 @@ the API still enforces the permission server-side — this only controls what th
 { "role_action_id":"rfa_3","role_code":"CUSTOMER_CARE_AGENT","frontend_action_id":"fea_2","visible":false } // care agent: button hidden
 { "role_action_id":"rfa_4","role_code":"BILLING_LEAD","frontend_action_id":"fea_3","visible":true }   // sees Billing menu
 ```
-**Reading:** the **precomputed** role→action matrix (an admin-tunable cache/override of “which roles see
-which UI actions”). The live `GET …/navigation` endpoint derives visibility from each action's
-`required_permission_code` vs the user's effective permissions; this table lets an operator pin/override
-visibility per role without re-deriving. `visible:false` explicitly hides an action for a role.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **rfa_1** | `DISPATCHER` **sees** the `fea_1` action (Work Orders menu) — `visible=true`. |
+| **rfa_2** | `DISPATCHER` **sees** `fea_2` (the Assign-technician button). |
+| **rfa_3** | `CUSTOMER_CARE_AGENT` has `fea_2` **explicitly hidden** (`visible=false`) — the Assign button is pinned off for care agents. |
+| **rfa_4** | `BILLING_LEAD` **sees** `fea_3` (Billing menu). |
+
+**The columns that did the work:** a `role_code`+`frontend_action_id`+`visible` triple — this is the **precomputed** role→action matrix, an admin-tunable override of the live `GET …/navigation` derivation (which otherwise infers visibility from each action's `required_permission_code` vs the user's permissions). `visible=false` explicitly hides an action for a role.
 
 ### `rbac_user_scope_assignment` — **WHERE access applies** · `scope_type`: `GLOBAL|OPERATOR|FRANCHISE|TECH_REGION|CONTRACTOR|TEAM|CHANNEL`
 ```json
@@ -268,11 +284,16 @@ visibility per role without re-deriving. `visible:false` explicitly hides an act
 { "scope_assignment_id":"usa_3","operator_code":"WIK","auth_user_id":"u_3","scope_type":"GLOBAL","scope_value":"*","scope_label":null,"effective_from":null,"effective_to":null,"active":true,"created_by_user_id":"admin_1" }
 { "scope_assignment_id":"usa_4","operator_code":"WIK","auth_user_id":"u_1","scope_type":"TECH_REGION","scope_value":"KE-MSA-NYALI","scope_label":"Nyali","effective_from":"2026-06-01T00:00:00Z","effective_to":"2026-06-15T00:00:00Z","active":false,"created_by_user_id":"admin_2" }
 ```
-**Reading:** the **data-scope** axis (orthogonal to permissions — permission says *what*, scope says *where*).
-`withinScope(user, type, value)` is true if the user holds **GLOBAL**, an **OPERATOR** scope matching the
-tenant, or an **exact** type+value. u_1 is scoped to Karen only (usa_4 to Nyali is revoked — `active:false`
-with an `effective_to`). u_2 sees all of WIK; u_3 is platform-wide. SUPER_ADMIN bypasses. `auth_user_id` is
-the user **`uid`** (unlike the spatie morph key).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **usa_1** | User `u_1` is scoped to the **Karen tech region** (`scope_type=TECH_REGION`, `scope_value=KE-NRB-KAREN`) — `active=true`, no end date (`effective_to=null`). |
+| **usa_2** | User `u_2` is scoped to the **whole WIK operator** (`scope_type=OPERATOR`, `scope_value=WIK`), active. |
+| **usa_3** | User `u_3` has **platform-wide** scope (`scope_type=GLOBAL`, `scope_value=*`), active. |
+| **usa_4** | User `u_1` once had the **Nyali** region too, but it's **revoked** — `active=false` with an `effective_to` (2026-06-15) in the past. |
+
+**The columns that did the work:** this is the **data-scope** axis (permission says *what*, scope says *where*). `withinScope(user, type, value)` is true if the user holds GLOBAL, an OPERATOR scope matching the tenant, or an exact `scope_type`+`scope_value`; `active`/`effective_to` decide whether a row still counts. `auth_user_id` is the user **`uid`** (unlike the spatie morph key). SUPER_ADMIN bypasses.
 
 ### `rbac_change_audit` (immutable) · `change_type`: `ROLE_CREATED|ROLE_PERMISSIONS_SYNCED|PERMISSION_CREATED|USER_ROLE_ASSIGNED|USER_SCOPE_{ASSIGNED,REVOKED}`
 ```json
@@ -281,10 +302,16 @@ the user **`uid`** (unlike the spatie morph key).
 { "audit_id":"rba_3","operator_code":"WIK","change_type":"USER_SCOPE_REVOKED","target_type":"USER_ROLE","target_id":"u_1","actor_user_id":"admin_2","before_json":{"scopeValue":"KE-MSA-NYALI"},"after_json":{"active":false},"reason_code":"TRANSFER" }
 { "audit_id":"rba_4","operator_code":"WIK","change_type":"USER_ROLE_ASSIGNED","target_type":"USER_ROLE","target_id":"u_2","actor_user_id":"admin_1","before_json":null,"after_json":{"role":"BILLING_LEAD"},"reason_code":null }
 ```
-**Reading:** every grant/revoke/role-permission change writes an append-only row — who (`actor_user_id`),
-what (`change_type` on `target_type`/`target_id`), before/after (`before_json`/`after_json`), optional
-`reason_code`. rba_2 captures a `role_has_permissions` change (what DISPATCHER can do). RBAC changes are
-themselves fully traceable; this table is never updated, only inserted.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **rba_1** | `admin_1` **assigned a scope** to user `u_1` (`change_type=USER_SCOPE_ASSIGNED`) — `after_json` shows TECH_REGION/KE-NRB-KAREN, `before_json=null` (new), reason `ONBOARDING`. |
+| **rba_2** | `admin_1` **changed what DISPATCHER can do** (`ROLE_PERMISSIONS_SYNCED` on `target_id=DISPATCHER`) — `before_json`/`after_json` show `workorder.assign` was added. |
+| **rba_3** | `admin_2` **revoked** user `u_1`'s Nyali scope (`USER_SCOPE_REVOKED`) — `after_json` flips `active` to false, reason `TRANSFER`. |
+| **rba_4** | `admin_1` **assigned the BILLING_LEAD role** to `u_2` (`USER_ROLE_ASSIGNED`) — `after_json.role=BILLING_LEAD`, `before_json=null`. |
+
+**The columns that did the work:** every grant/revoke/role-permission change writes an append-only row — who (`actor_user_id`), what (`change_type` on `target_type`/`target_id`), the diff (`before_json`/`after_json`), and an optional `reason_code`. This table is never updated, only inserted.
 
 ## 3. Services, models & middleware
 | Component | Responsibility |
