@@ -13,57 +13,147 @@
 
 ## 📖 Scenarios (service + Foundation involvement)
 
+> **The one big idea:** ILM is the system of record for *who the customer is and what state their account
+> is in*. Two patterns recur: (1) **catalogs as data** — flags, sub-statuses, and KYC authority are rows
+> an operator edits, not code; and (2) those rows carry *effect flags* that quietly steer **other**
+> modules (dunning, provisioning, notification).
+
 ### 1. Create a customer and run two-step KYC
-`POST /api/customers` → `CustomerService::create` (emits `CustomerCreated`). KYC docs uploaded via the
-**Foundation/Files** store. `recordKycDecision(customer, level, 'APPROVED')` — level authority is config
-(`kyc_approval_role`); two approvals flip `kyc_status` `PENDING → L1_APPROVED → APPROVED` and emit
-`CustomerKycApproved`. *Cross-module: Fulfillment's `ResumeOrderOnKycApproved` resumes a parked order.*
+
+**The story in plain English:** A new customer signs up. Before they can be activated, their identity
+documents must be checked and approved — and not by just one person. Two approvers at two levels must
+sign off, moving the customer from PENDING up to fully APPROVED. Only then can a parked order proceed.
+
+**Who does what:**
+1. `POST /api/customers` → `CustomerService::create` (emits `CustomerCreated`). KYC docs uploaded via the Foundation/Files store.
+2. `recordKycDecision(customer, level, 'APPROVED')` — who may approve each level is config (`kyc_approval_role`).
+3. Two approvals flip `kyc_status` `PENDING → L1_APPROVED → APPROVED` and emit `CustomerKycApproved`.
+4. Cross-module: Fulfillment's `ResumeOrderOnKycApproved` resumes the parked order.
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> L1_APPROVED: level-1 approver signs
+    L1_APPROVED --> APPROVED: level-2 approver signs
+    PENDING --> REJECTED: rejected
+    L1_APPROVED --> REJECTED: rejected
+    APPROVED --> [*]
+    REJECTED --> [*]
+```
 *Proven by `CustomerApiTest`.*
 
 ### 2. Sub-status change driven by the catalog (approval-gated)
-`PATCH /api/customer-accounts/acc_1 {sub_status:'hold'}` → `AccountService::update`: the
-`customer_sub_status_catalog` validates the code, **derives** `main_status` (clone), and because
-`requires_approval=true` it rejects without an `approval_reference` (R-ILM-S-2). With one it commits +
-writes `account_status_history` + emits `CustomerAccountStatusChanged`. *Proven by `AccountFlagTest`.*
+
+**The story in plain English:** An agent wants to put an account "on hold". They don't type a free-form
+status — they pick a code from a catalog. The catalog row says what the coarse status becomes (hold →
+INACTIVE) and whether the change needs approval. "Hold" needs approval, so the change is rejected unless
+an approval reference is supplied.
+
+**Who does what:** `PATCH /api/customer-accounts/acc_1 {sub_status:'hold'}` → `AccountService::update`:
+the `customer_sub_status_catalog` validates the code, **derives** `main_status` (clone), and because
+`requires_approval=true` it rejects without an `approval_reference` (R-ILM-S-2). With one it commits,
+writes `account_status_history`, and emits `CustomerAccountStatusChanged`. *Proven by `AccountFlagTest`.*
 
 ### 3. Raise an NPD flag → attention banner + faster dunning
-`PUT /api/customer-accounts/acc_3/flags/NPD` → `setFlag`: catalog-gated; sets `attention_banner` and emits
-`CustomerAccountFlagSet`.
-Because the catalog marks NPD `affects_dunning=true`, BIL-04's next scan calls
-`hasDunningAccelerantFlag` → **waives the grace window** (R-ILM-F-3). *Cross-module read.* *Proven by
-`AccountFlagTest`, `DunningTest`.*
+
+**The story in plain English:** Risk flags a customer as a non-performing debtor (NPD). The flag puts an
+attention banner on the account, and — because the catalog says this flag affects dunning — the next
+debt-chasing scan in Billing skips the usual grace period and escalates faster.
+
+**Who does what:** `PUT /api/customer-accounts/acc_3/flags/NPD` → `setFlag`: catalog-gated; sets
+`attention_banner` and emits `CustomerAccountFlagSet`. Because the catalog marks NPD
+`affects_dunning=true`, BIL-04's next scan calls `hasDunningAccelerantFlag` → **waives the grace window**
+(R-ILM-F-3). *Cross-module read.* *Proven by `AccountFlagTest`, `DunningTest`.*
 
 ### 4. FRAUD_SUSPECTED flag blocks activation
-A `FRAUD_SUSPECTED` flag (`affects_provisioning=true`) → Fulfillment's `TriggerActivationHandler` calls
-`hasProvisioningBlockingFlag` → refuses to activate (R-ILM-F-4) until cleared. *Proven by
-`FulfillmentJourneyTest::test_fraud_suspected_flag_blocks_activation`.*
+
+**The story in plain English:** An account is flagged as possible fraud. Because that flag is marked as
+affecting provisioning, Fulfillment refuses to activate the service until the flag is cleared.
+
+**Who does what:** A `FRAUD_SUSPECTED` flag (`affects_provisioning=true`) → Fulfillment's
+`TriggerActivationHandler` calls `hasProvisioningBlockingFlag` → refuses to activate (R-ILM-F-4) until
+cleared. *Proven by `FulfillmentJourneyTest::test_fraud_suspected_flag_blocks_activation`.*
 
 ### 5. Account status change cascades to the network + the customer
-A provisioning-affecting status change emits `CustomerAccountStatusChanged{affectsProvisioning,
-customerVisible}` to the **outbox** → Provisioning's `SyncProvisioningOnAccountStatusChanged`
-re-broadcasts the network, and Notification's `AccountStatusNotificationBridge` notifies the customer.
-*Foundation: one event, two reactions.* *Proven by `ReconciliationTest`, `Not01PipelineTest`.*
+
+**The story in plain English:** When an account's status changes in a way that affects service, one
+event fans out to two places: Provisioning re-syncs the network, and Notification tells the customer.
+
+**Who does what:** A provisioning-affecting status change emits
+`CustomerAccountStatusChanged{affectsProvisioning, customerVisible}` to the **outbox** → Provisioning's
+`SyncProvisioningOnAccountStatusChanged` re-broadcasts the network, and Notification's
+`AccountStatusNotificationBridge` notifies the customer. *Foundation: one event, two reactions.*
+
+```mermaid
+sequenceDiagram
+    participant AS as AccountService
+    participant OB as outbox
+    participant PV as Provisioning
+    participant NO as Notification
+    AS->>OB: CustomerAccountStatusChanged
+    OB->>PV: SyncProvisioningOnAccountStatusChanged
+    OB->>NO: AccountStatusNotificationBridge
+    PV-->>PV: re-broadcast network
+    NO-->>NO: notify customer
+```
+*Proven by `ReconciliationTest`, `Not01PipelineTest`.*
 
 ### 6. CVM evaluate → segment → activity (idempotent)
-`POST /api/cvm/customers/CUS-1/evaluate {signals}` → `CvmEvaluationService`: writes a
-`cvm_customer_signal_profile`, computes churn score, assigns a `cvm_segment_membership` (e.g.
+
+**The story in plain English:** CVM (customer value management) watches signals about a customer, scores
+their churn risk, drops them into a segment (e.g. "high retention risk"), and opens a follow-up task for
+an agent. The same triggering event always produces the same task — no duplicates.
+
+**Who does what:** `POST /api/cvm/customers/CUS-1/evaluate {signals}` → `CvmEvaluationService`: writes a
+`cvm_customer_signal_profile`, computes a churn score, assigns a `cvm_segment_membership` (e.g.
 `RETENTION_HIGH_RISK`), and opens a `cvm_activity` — **idempotent by source event** (same event → same
 activity). Emits `CvmCustomerEvaluated`/`CvmActivityCreated`. *Proven by `CvmTest`.*
 
 ### 7. Retention offer over threshold → EM-CFG-04 → accept → SIP-03
-`CvmOfferService::propose` (25% discount): `rules.cvm.offer` says over threshold → `requireApproval`
-→ offer `PENDING_APPROVAL` (an EM-CFG-04 request). `accept()` returns **409** while pending. Approval →
-`ResumeCvmOfferOnApproval` → `applyApprovalOutcome` releases it `PROPOSED`; `accept` then creates a
-Catalog `DiscountAssignment` (SIP-03) and records a `cvm_outcome`. *Proven by `CvmTest`.*
+
+**The story in plain English:** To keep a churn-risk customer, an agent proposes a 25% retention
+discount. Because it's over a threshold, the offer needs approval first — trying to accept it before
+approval is bounced. Once approved, the offer becomes acceptable; accepting it creates a real discount
+assignment in Catalog and records the outcome.
+
+**Who does what:**
+1. `CvmOfferService::propose` (25% discount): `rules.cvm.offer` says over threshold → `requireApproval` → offer `PENDING_APPROVAL` (an EM-CFG-04 request).
+2. `accept()` returns **409** while pending.
+3. Approval → `ResumeCvmOfferOnApproval` → `applyApprovalOutcome` releases it `PROPOSED`.
+4. `accept` then creates a Catalog `DiscountAssignment` (SIP-03) and records a `cvm_outcome`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT
+    DRAFT --> PENDING_APPROVAL: over threshold
+    DRAFT --> PROPOSED: under threshold
+    PENDING_APPROVAL --> PROPOSED: approved
+    PENDING_APPROVAL --> REJECTED: rejected
+    PROPOSED --> ACCEPTED: customer accepts
+    ACCEPTED --> APPLIED: DiscountAssignment created
+    PROPOSED --> EXPIRED: expires_at passed
+    APPLIED --> [*]
+```
+*Proven by `CvmTest`.*
 
 ### 8. routingContext — the shared fact set
-`AccountService::routingContext(accountId)` returns a plain map (operator, serviceClass, accountStatus,
-subStatus, customerType, vip, flags…) so **any** module can feed a complete fact set into its rules
-engine without reading ILM tables directly. *Shows: the cross-module decision-context pattern.*
+
+**The story in plain English:** Other modules constantly need to know "what kind of customer/account is
+this?" to make decisions. Rather than every module reaching into ILM's tables, ILM hands out one tidy
+fact map they can drop straight into their rules engine.
+
+**Who does what:** `AccountService::routingContext(accountId)` returns a plain map (operator,
+serviceClass, accountStatus, subStatus, customerType, vip, flags…) so **any** module can feed a complete
+fact set into its rules engine without reading ILM tables directly. *Shows: the cross-module
+decision-context pattern.*
 
 ### (bonus) 9. KYC rejected → the order is cancelled
-`recordKycDecision(..,'REJECTED')` emits `CustomerKycRejected` → Fulfillment `CancelOrderOnKycRejected`
-cancels + compensates the parked order. *Proven by `FulfillmentJourneyTest`.*
+
+**The story in plain English:** If KYC is rejected, the parked order can't go ahead — Fulfillment
+cancels and unwinds it.
+
+**Who does what:** `recordKycDecision(..,'REJECTED')` emits `CustomerKycRejected` → Fulfillment
+`CancelOrderOnKycRejected` cancels + compensates the parked order. *Proven by `FulfillmentJourneyTest`.*
 
 ## 2. Data model — ≥4 **complete** sample rows + readings
 > **Completeness:** each row lists **every domain column** (nullables shown as `null`). The surrogate
@@ -160,6 +250,24 @@ worklist — a high-risk dunning signal opens a `PAYMENT_RECOVERY` activity (cva
 `UPSELL_OFFER` (cva_2). Each activity is **idempotent by `source_event_ref`** (same event → same row);
 `priority`/`due_at`/`assigned_*` route the worklist, and `decided_at`/`closed_at` close it out. The
 legacy `type` column survives nullable alongside the new `activity_type`.
+
+**Activity status lifecycle** (the `CvmActivity` model vocabulary; the DB default `'OFFERED'` is
+overwritten on the first write):
+
+```mermaid
+stateDiagram-v2
+    [*] --> OPEN
+    OPEN --> IN_PROGRESS: agent picks it up
+    IN_PROGRESS --> WAITING_CUSTOMER: awaiting reply
+    WAITING_CUSTOMER --> COMPLETED: resolved
+    IN_PROGRESS --> COMPLETED: resolved
+    OPEN --> CANCELLED: dropped
+    OPEN --> EXPIRED: expires_at passed
+    WAITING_CUSTOMER --> EXPIRED: expires_at passed
+    COMPLETED --> [*]
+    CANCELLED --> [*]
+    EXPIRED --> [*]
+```
 
 ## 3. Services
 | Service | Responsibility |

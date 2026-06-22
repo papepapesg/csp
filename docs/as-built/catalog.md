@@ -73,38 +73,156 @@ stateDiagram-v2
 *Proven by `PackageLaunchTest`.*
 
 ### 2. Tax on a 5,000 KES internet package
-Billing calls `TaxComputeService::compute({taxableKind:'PACKAGE', customerCategory:'RES', baseAmount:5000})`.
-It evaluates **`rules.tax-applicability`** (`Foundation/Rules`) → a `tax_group`; iterates its `tax_rule`
-rows by `order_within_group`, computing each per `base_method` (`BASE`/`BASE_PLUS_PRIOR` cascade);
-`NONE` ⇒ exempt. Returns `{subtotal, taxTotal, taxLines}`. *Proven by `TaxComputeTest`.*
+
+**The story in plain English:** When Billing prices an internet line, it asks Catalog "what tax goes on
+this?" Catalog picks the right tax group for the product, runs that group's rules in order, and hands
+back the subtotal and the tax. (The full mechanics, with worked numbers, are in the `tax_group`/
+`tax_rule` section of the data model below.)
+
+**Who does what:** Billing calls
+`TaxComputeService::compute({taxableKind:'PACKAGE', customerCategory:'RES', baseAmount:5000})`. It
+evaluates **`rules.tax-applicability`** (Foundation/Rules) → a `tax_group`; iterates its `tax_rule` rows
+by `order_within_group`, computing each per `base_method` (`BASE`/`BASE_PLUS_PRIOR` cascade); a `NONE`
+applicability ⇒ exempt. Returns `{subtotal, taxTotal, taxLines}`. *Proven by `TaxComputeTest`.*
+*(See the tax cascade worked example below for the full numbers.)*
 
 ### 3. Grant a discount (EM-CFG-04 if high-value)
-`DiscountAssignmentService::create` blocks a duplicate active grant (R-SIP-DA-05), then asks EM-CFG-04
-if approval is needed (R-SIP-DA-07/11). High value → `discount_assignment.status=PENDING_APPROVAL`
-(`DiscountAssignmentApprovalRequired`); approval → `ACTIVATED`. *Proven by `DiscountAssignmentTest`.*
+
+**The story in plain English:** An agent gives a customer a discount. The system first refuses if the
+customer already has the same discount live (no double-granting). Then, if the discount is high-value
+(or long-running, or manually granted), it can't just take effect — it needs a separate approval. Until
+that approval lands the grant sits pending; once approved it goes live.
+
+**Who does what:**
+1. `DiscountAssignmentService::create` blocks a duplicate active grant (R-SIP-DA-05).
+2. It asks EM-CFG-04 whether approval is needed (R-SIP-DA-07/11).
+3. High value → `discount_assignment.status=PENDING_APPROVAL` (emits `DiscountAssignmentApprovalRequired`).
+4. Approval → status `ACTIVATED`.
+
+**Sample — a campaign grant awaiting approval:**
+```json
+{ "assignment_id":"dasg_2","discount_code":"WELCOME_500","scope_type":"CAMPAIGN_COHORT","status":"PENDING_APPROVAL","approval_request_id":"appr_44","assignment_mode":"CAMPAIGN" }
+```
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT
+    DRAFT --> PENDING_APPROVAL: high-value → needs approval
+    DRAFT --> ACTIVE: low-value → straight to live
+    PENDING_APPROVAL --> ACTIVE: approved
+    PENDING_APPROVAL --> REJECTED: rejected
+    ACTIVE --> SUSPENDED: paused
+    SUSPENDED --> ACTIVE: resumed
+    ACTIVE --> EXPIRED: valid_to passed
+    ACTIVE --> CANCELLED: revoked
+    EXPIRED --> [*]
+    CANCELLED --> [*]
+    REJECTED --> [*]
+```
+*Proven by `DiscountAssignmentTest`.*
 
 ### 4. Resolve effective discount(s) at billing time (stacking)
-`DiscountComputeService::compute(operator, baseAmount, context)` finds the applicable assignments, applies
-stacking + priority (DIRECT beats CAMPAIGN on a tie), and returns the effective discount. *Proven by
-`DiscountComputeTest`.*
+
+**The story in plain English:** At billing time a customer might have several discounts that could
+apply. The system decides which ones actually combine ("stack") and in what order, then returns the net
+effect. A direct (manually granted) discount beats a campaign one when they're otherwise tied.
+
+**Who does what:** `DiscountComputeService::compute(operator, baseAmount, context)` finds the applicable
+assignments, applies stacking + priority (DIRECT beats CAMPAIGN on a tie), and returns the effective
+discount. *Proven by `DiscountComputeTest`.*
+
+**Worked example — base price KES 1,000, two candidate discounts:**
+
+| Discount | type | value | stackable | applied on | discount | running total |
+|----------|------|------:|-----------|-----------:|---------:|--------------:|
+| STAFF_50 (DIRECT, prio 10) | PERCENT | 50% | no | 1000.00 | 500.00 | 500.00 |
+| WELCOME_500 (CAMPAIGN, prio 100) | FIXED | 500 | yes | — | skipped (non-stackable winner already applied) | 500.00 |
+
+(Here the non-stackable DIRECT discount wins by priority, so the campaign one is not added. If the
+winning discount were `stackable`, the next stackable one would apply to the reduced amount.)
 
 ### 5. Bundle launch (maker-checker)
-`BundleService` walks a `commercial_bundle` `DRAFT → READY_FOR_REVIEW → APPROVED → ACTIVE` with launch
-checks; approval gated. *Proven by `BundleAndCampaignTest`.*
+
+**The story in plain English:** A marketer builds a commercial bundle (a package wrapped for a purpose,
+e.g. an acquisition offer). Like a package launch, it can't go live by itself — it walks a review-and-
+approval lifecycle before it becomes ACTIVE and sellable.
+
+**Who does what:** `BundleService` walks a `commercial_bundle` `DRAFT → READY_FOR_REVIEW → APPROVED →
+ACTIVE` with launch checks; approval gated. *Proven by `BundleAndCampaignTest`.*
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT
+    DRAFT --> READY_FOR_REVIEW: launch checks pass
+    READY_FOR_REVIEW --> APPROVED: approver signs off
+    READY_FOR_REVIEW --> REJECTED: rejected
+    APPROVED --> ACTIVE: launched
+    ACTIVE --> SUSPENDED: paused
+    SUSPENDED --> ACTIVE: resumed
+    ACTIVE --> RETIRED: retire_date reached
+    RETIRED --> [*]
+    REJECTED --> [*]
+```
 
 ### 6. Voice rating (longest-prefix match)
-`VoiceTariffService` rates a call by matching the dialled number against `voice_destination_prefix`
-(longest prefix wins) → its `voice_destination_zone` rate. `UsageRatingService` does the same for data/
-SMS tariffs. *Proven by `VoiceTariffTest`, `UsageRatingTest`.*
+
+**The story in plain English:** To price a phone call, the system looks at the number dialled and finds
+the most specific matching prefix in its prefix table. The longest matching prefix wins, which points to
+a destination zone, and the zone's rate is what the call is charged at.
+
+**Who does what:** `VoiceTariffService` rates a call by matching the dialled number against
+`voice_destination_prefix` (longest prefix wins via `match_priority`) → its `voice_destination_zone`
+rate. `UsageRatingService` does the same for data/SMS tariffs. *Proven by `VoiceTariffTest`,
+`UsageRatingTest`.*
+
+**Worked example — dialling `+447700900123`:**
+
+| Candidate prefix | matches? | length | zone |
+|------------------|----------|-------:|------|
+| `+2547` | no | 5 | (LOCAL) |
+| `+44` | yes | 3 | `INTL_UK` |
+
+→ longest *matching* prefix is `+44` → zone `INTL_UK` → its rate applies.
+
+```mermaid
+flowchart LR
+    D["Dialled +447700900123"] --> M{"longest matching prefix"}
+    M -->|"+44"| Z["zone INTL_UK"]
+    Z --> R["apply zone rate"]
+```
 
 ### 7. HomePass becomes sellable (approval-gated transition)
-`HomePassTopologyService` transitions a `homepass` `UNDER_CONSTRUCTION → SELLABLE`; an EM-CFG-04 gate
-(RLM-CFG-01 H-5) → `ApplyHomePassTransitionOnApproval` applies it → `HomePassReachedSellable`
-(Fulfillment can now take orders for it). *Proven by `ConfigCatalogTest`.*
+
+**The story in plain English:** A "homepass" is a physical premises the network can reach. While it's
+still being built it can't be sold. Moving it to "sellable" is gated by an approval; once approved, the
+system flips it and announces it so Fulfillment can start taking orders for that address.
+
+**Who does what:** `HomePassTopologyService` transitions a `homepass` `UNDER_CONSTRUCTION → SELLABLE`;
+an EM-CFG-04 gate (RLM-CFG-01 H-5) → `ApplyHomePassTransitionOnApproval` applies it → emits
+`HomePassReachedSellable` (Fulfillment can now take orders for it). *Proven by `ConfigCatalogTest`.*
+
+```mermaid
+sequenceDiagram
+    actor B as Builder
+    participant H as HomePassTopologyService
+    participant A as Approvals (EM-CFG-04)
+    participant F as Fulfillment
+    B->>H: request SELLABLE transition
+    H->>A: gate approval
+    A-->>H: ApplyHomePassTransitionOnApproval
+    H->>H: status → SELLABLE
+    H-->>F: HomePassReachedSellable
+```
 
 ### 8. Wallet catalog feeds Billing
-`WalletCatalogService` defines `wallet_type` rows (`allow_negative`, `auto_debit`); Billing creates
-prepaid `wallet`s of those types and routes usage by `wallet_type_code`. *Cross-module config handoff.*
+
+**The story in plain English:** Catalog defines the *kinds* of prepaid wallet that exist (main wallet,
+voice wallet, loyalty points) and their behaviour. Billing then creates actual wallets of those kinds
+for customers and routes usage to the right one by its code.
+
+**Who does what:** `WalletCatalogService` defines `wallet_type` rows (`allow_negative`, `auto_debit`);
+Billing creates prepaid `wallet`s of those types and routes usage by `wallet_type_code`.
+*Cross-module config handoff.*
 
 ### (bonus) 9. Any catalog change evicts stale read-models
 `CatalogCacheInvalidator` (listener) + Billing's `EvictPlmCatalogCache` drop cached snapshots on
@@ -131,6 +249,28 @@ catalog lifecycle events (`Foundation/Cache`).
 keeps existing subs but takes no new orders (`retired_at` stamped). A price change = a new
 `package_version` (history preserved; the prior one goes `SUPERSEDED` with `effective_until` set).
 `target_franchises`/`target_tech_regions` scope where it may be sold.
+
+**`package` status lifecycle** (the launch flow that drives `DRAFT → ACTIVE` is Scenario 1):
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT
+    DRAFT --> ACTIVE: launch approved
+    ACTIVE --> INACTIVE: withdrawn from sale
+    ACTIVE --> END_OF_LIFE: retired
+    INACTIVE --> END_OF_LIFE: retired
+    END_OF_LIFE --> [*]
+```
+
+**`package_version` status lifecycle** (a price change supersedes the old version):
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> ACTIVE: launch activates it
+    ACTIVE --> SUPERSEDED: a newer priced version takes over
+    SUPERSEDED --> [*]
+```
 
 ### `service` (`consumption_model`: `FLAT|USAGE`)
 ```json
