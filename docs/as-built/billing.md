@@ -323,12 +323,20 @@ from a 2500.00/mo plan to a 3000.00/mo plan:
 { "id":"bev_3","operator_code":"WIK","code":"DEPOSIT_REFUND","description":"Refund of installation deposit","category_code":"REFUND","service_refs":null,"currency":"KES","applicability":"ANY","amount_sign_policy":"NEGATIVE_ONLY","pay_first_required":false,"trigger_type":"LIFECYCLE_EVENT","trigger_intent_code":null,"trigger_event_type":"SubscriptionTerminated","trigger_filter_drl":null,"trigger_schedule":null,"state_callback":null,"eligibility_franchise_refs":null,"eligibility_package_refs":null,"eligibility_segment_refs":null,"display_order":100,"status":"ACTIVE","notes":null,"created_by":"u_admin","updated_by":null,"retired_at":null }
 { "id":"bev_4","operator_code":"WIK","code":"GOODWILL_CREDIT","description":"Discretionary goodwill credit","category_code":"CREDIT","service_refs":null,"currency":"KES","applicability":"POSTPAID_ONLY","amount_sign_policy":"NEGATIVE_ONLY","pay_first_required":false,"trigger_type":"ADMIN_ACTION","trigger_intent_code":null,"trigger_event_type":null,"trigger_filter_drl":null,"trigger_schedule":null,"state_callback":null,"eligibility_franchise_refs":null,"eligibility_package_refs":null,"eligibility_segment_refs":null,"display_order":200,"status":"DRAFT","notes":"awaiting finance sign-off","created_by":"u_admin","updated_by":null,"retired_at":null }
 ```
-**Reading:** the catalog **governs what BIL-01 may charge**. bev_1 is pay-first with a `state_callback`
-(reconnection) triggered by an `EXTERNAL_PAYMENT`. bev_2 fires off a `SAGA_INTENT` (`trigger_intent_code`)
-and is franchise-scoped. bev_3 is `NEGATIVE_ONLY` (a refund — a positive amount is rejected) wired to a
-lifecycle `trigger_event_type`. bev_4 is `DRAFT`/`POSTPAID_ONLY` (not yet chargeable). An intent whose
-type doesn't resolve to an `ACTIVE` event is rejected; `currency` is derived from the `service_refs` and
-immutable.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **bev_1** | A reconnection fee: **pay-first** (`pay_first_required=true`), fired by an `EXTERNAL_PAYMENT`, with a `state_callback` that reconnects the sub to ACTIVE. Live (`status=ACTIVE`). |
+| **bev_2** | An installation fee fired by a `SAGA_INTENT` (`trigger_intent_code=INSTALL_FEE_INTENT`) and limited to one franchise (`eligibility_franchise_refs=[fr_nrb]`). |
+| **bev_3** | A deposit refund — **negative only** (`amount_sign_policy=NEGATIVE_ONLY`, a positive amount is rejected), fired by a lifecycle event (`trigger_event_type=SubscriptionTerminated`). |
+| **bev_4** | A goodwill credit that's **not chargeable yet** (`status=DRAFT`) and only for postpaid (`applicability=POSTPAID_ONLY`). |
+
+**The columns that did the work:**
+- **Chargeable or not** = `status` (only `ACTIVE`; an intent that doesn't resolve to an ACTIVE event is rejected) + `applicability` (prepaid/postpaid/any).
+- **What fires it** = `trigger_type` (+ `trigger_intent_code`/`trigger_event_type`).
+- **Sign + pay-first** = `amount_sign_policy` + `pay_first_required` (+ `state_callback` for the resulting sub transition).
+- **Who's eligible** = `eligibility_*`; `currency` is derived from `service_refs` and immutable.
 
 ### `dunning_program` (`billing_mode`: `POSTPAID|PREPAID|PREPAYMENT`) — versioned catalog
 > PK is the ULID `id`; uniqueness is `(code, version)`. `level_definitions` is the ordered escalation
@@ -351,12 +359,20 @@ immutable.
 { "dunning_id":"dun_3","operator_code":"WIK","account_id":"acc_3","subscription_id":"sub_5","billing_mode":"PREPAID","triggering_event_type":"CyclePaymentMissed","current_level":0,"entered_level_at":null,"entered_dunning_at":"2026-06-01T00:00:00Z","outstanding_debt_amount":0.00,"outstanding_debt_currency":"KES","status":"CLEARED","last_scanned_at":"2026-07-01T01:00:00Z","next_evaluation_at":null,"review_due_at":null,"last_workflow_failure_code":null,"dunning_program_ref":"wik_prepaid_standard","dunning_program_version":1,"applied_restriction_codes":[],"triggering_event_ref":"cycle_2026_06_sub_5","last_workflow_failure_at":null,"workflow_failure_attempts":0,"cleared_at":"2026-07-01T01:00:00Z","archived_at":null }
 { "dunning_id":"dun_4","operator_code":"WIK","account_id":"acc_4","subscription_id":"sub_7","billing_mode":"POSTPAID","triggering_event_type":"InvoiceOverdue","current_level":4,"entered_level_at":"2026-07-12T00:00:00Z","entered_dunning_at":"2026-06-10T00:00:00Z","outstanding_debt_amount":30000.00,"outstanding_debt_currency":"KES","status":"PENDING_TERMINATION_REVIEW","last_scanned_at":"2026-07-16T01:00:00Z","next_evaluation_at":null,"review_due_at":"2026-07-19T00:00:00Z","last_workflow_failure_code":"FULFILLMENT_TIMEOUT","dunning_program_ref":"wik_postpaid_standard","dunning_program_version":1,"applied_restriction_codes":["OUTGOING_VOICE_BARRED"],"triggering_event_ref":"inv_77","last_workflow_failure_at":"2026-07-15T00:00:00Z","workflow_failure_attempts":2,"cleared_at":null,"archived_at":null }
 ```
-**Reading:** the program is **versioned** and **pinned** on the state at entry (R-BIL-04-C-1,
-`dunning_program_ref`+`dunning_program_version`) — editing the policy (publishing v2, dprg_3) never
-disturbs in-flight episodes. dun_1 is at WARNING; dun_2 reached SUSPENDED with a restriction applied;
-dun_3 recovered (`CLEARED`, level 0, `cleared_at` set); dun_4 hit terminate but is parked for the
-mandatory review window (`review_due_at`) and is backing off after a workflow failure
-(`workflow_failure_attempts=2`). `next_evaluation_at` is the E-1/E-2 scan cadence.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **dun_1** | An account just into dunning at the WARNING step (`current_level=1`, `status=ACTIVE`), owing KES 5000, pinned to program `wik_postpaid_standard` v1. |
+| **dun_2** | Escalated to SUSPENDED (`current_level=3`) with a restriction applied (`applied_restriction_codes=[OUTGOING_VOICE_BARRED]`), owing KES 12000. |
+| **dun_3** | A prepaid account that **paid up and recovered** (`status=CLEARED`, `current_level=0`, `cleared_at` set, debt 0). |
+| **dun_4** | Reached the terminate level (`current_level=4`) but is **parked for mandatory review** (`status=PENDING_TERMINATION_REVIEW`, `review_due_at` set) and backing off after a workflow failure (`workflow_failure_attempts=2`). |
+
+**The columns that did the work:**
+- **Where in the ladder** = `current_level` + `status`; cleared/recovered shows in `cleared_at`/`status`.
+- **Pinned policy** = `dunning_program_ref`+`dunning_program_version` (R-BIL-04-C-1) — publishing a new program version (e.g. dprg_3) never disturbs in-flight episodes.
+- **Restrictions applied** = `applied_restriction_codes`; **review hold** = `review_due_at`.
+- **Scan cadence + backoff** = `next_evaluation_at` + `workflow_failure_attempts`.
 
 **Status lifecycle (`dunning_state`):**
 
@@ -396,11 +412,20 @@ termination *review* ~day 28; with an NPD flag the grace is waived and each pass
 { "adjustment_id":"adj_3","operator_code":"WIK","customer_id":"cust_2","account_id":"acc_5","subscription_id":null,"parent_invoice_id":null,"target_wallet_ref":null,"billing_mode":"POSTPAID","direction":"CREDIT","scope":"AMOUNT","line_ref":null,"service_category_code":"GOODWILL","amount":1000.00,"currency":"KES","reason_code":"GOODWILL","justification":"retention gesture","status":"PROPOSED","required_approvals":1,"approval_rule_id":"rule_adj_std","proposed_by":"u_csr1","note_invoice_id":null,"limit_overridden":false,"failure_reason":null,"applied_at":null }
 { "adjustment_id":"adj_4","operator_code":"WIK","customer_id":"cust_1","account_id":"acc_1","subscription_id":"sub_123","parent_invoice_id":"inv_2","target_wallet_ref":null,"billing_mode":"POSTPAID","direction":"CREDIT","scope":"FULL","line_ref":null,"service_category_code":null,"amount":1500.00,"currency":"KES","reason_code":"DISPUTE","justification":"customer dispute rejected","status":"REJECTED","required_approvals":2,"approval_rule_id":"rule_adj_high","proposed_by":"u_csr2","note_invoice_id":null,"limit_overridden":false,"failure_reason":null,"applied_at":null }
 ```
-**Reading:** scope drives the amount source — `FULL`=parent total, `LINE`=a specific line (`line_ref`,
-capped), `AMOUNT`=free-form (needs `service_category_code`). adj_1 is applied (a `CREDIT_NOTE` `inv_3`
-was issued → `note_invoice_id`). adj_2 needs 2 approvals (`required_approvals=2`, multi-step). A
-`reason_code` is always mandatory; its `direction` must justify the note direction. `target_wallet_ref`
-directs a PREPAID note at a specific wallet; `limit_overridden` records a `/override-limit` exercise.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **adj_1** | A KES 5000 credit for an outage, **applied** (`status=APPLIED`) — a credit note inv_3 was issued (`note_invoice_id=inv_3`), needing 1 approval. |
+| **adj_2** | A KES 300 debit to fix an under-billed voice **line** (`scope=LINE`, `line_ref=il_4`), **waiting on 2 sign-offs** (`status=PENDING_APPROVAL`, `required_approvals=2`). |
+| **adj_3** | A KES 1000 goodwill credit still just **proposed** (`status=PROPOSED`, `scope=AMOUNT` → free-form, `service_category_code=GOODWILL`) — not yet in the approval queue. |
+| **adj_4** | A KES 1500 dispute credit that was **turned down** (`status=REJECTED`). |
+
+**The columns that did the work:**
+- **Where the amount comes from** = `scope` (`FULL`=parent total, `LINE`=a capped `line_ref`, `AMOUNT`=free-form needing `service_category_code`).
+- **How many approvals** = `required_approvals` (distinct approvers, not the proposer).
+- **The audit basics** = `reason_code` (mandatory) + `direction` (must match the note direction); the issued note is `note_invoice_id`.
+- **Prepaid target / override** = `target_wallet_ref` directs a note at a wallet; `limit_overridden` records a `/override-limit`.
 
 **Worked example — how many approvals each request needs.** `rules.billing.adjustment-approval` returns
 a `required_approvals` count; the request only applies once that many *distinct* approvers (not the
@@ -428,10 +453,20 @@ adj_4 was turned down. The diagram in Scenario 6 shows these transitions.)
 { "id":"wtx_1","wallet_id":"wal_1","direction":"CREDIT","reason":"TOPUP","amount":1000.00,"balance_after":1200.00,"reference":"MPESA-QGR9aa" }
 { "id":"wtx_2","wallet_id":"wal_1","direction":"DEBIT","reason":"CYCLE_CHARGE","amount":300.00,"balance_after":900.00,"reference":"cycle_2026_06_sub_2" }
 ```
-**Reading:** a prepaid sub may carry several typed wallets (MAIN, VOICE) routed by `wallet_code`; cycle
-close debits the matching wallet. wal_2 empty → a voice cycle would freeze (Scenario 2). wal_3 is
-`CLOSED` (its `expires_at` passed; balance swept by `sophix:wallet:expire`). `wallet_transaction` is the
-per-move ledger — each row records `direction`/`reason`/`balance_after` for audit.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **wal_1** | A live main money wallet for sub_2 holding KES 1200 (`wallet_code=MAIN_WALLET`, `status=ACTIVE`); cycle close debits this one. |
+| **wal_2** | A live but **empty** voice wallet (`wallet_code=VOICE_WALLET`, `balance=0`) — a voice cycle charge would freeze it (Scenario 2). |
+| **wal_3** | A **closed** wallet (`status=CLOSED`) — its `expires_at` passed and the balance was swept. |
+| **wtx_1** | A ledger move: a KES 1000 top-up credit into wal_1 (`direction=CREDIT`, `reason=TOPUP`, `balance_after=1200`). |
+| **wtx_2** | A ledger move: a KES 300 cycle-charge debit from wal_1 (`direction=DEBIT`, `reason=CYCLE_CHARGE`, `balance_after=900`). |
+
+**The columns that did the work:**
+- **Which wallet gets charged** = `wallet_code` (a sub can carry several typed wallets).
+- **Usable or not** = `status` + `balance` (empty → freeze; `expires_at` passed → CLOSED/swept).
+- **The audit of every move** = `wallet_transaction` rows: `direction`/`reason`/`balance_after`.
 
 **Wallet status lifecycle:**
 
@@ -457,10 +492,20 @@ stateDiagram-v2
 // account_credit_balance (PK account_id)
 { "account_id":"acc_1","operator_code":"WIK","currency":"KES","balance":1000.00 }
 ```
-**Reading:** the prepaid **pro forma** projects next cycle (Day-25); regenerating supersedes the prior
-one and records `superseded_by` (the chain), keyed by `idempotency_cycle_key`. `rated_event.billed=false`
-(rat_1) = unbilled usage the next cycle close will sweep; rat_2 is settled (`billed=true`,
-`invoice_id=inv_2`). `account_credit_balance` (one row per account) is auto-drawn on the next invoice.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pf_1** | The **current** prepaid pro forma projecting next cycle for sub_2 (`status=ACTIVE`, `superseded_by=null`), keyed by `idempotency_cycle_key`. |
+| **pf_0** | The **earlier** pro forma it replaced (`status=SUPERSEDED`, `superseded_by=pf_1`) — the chain is kept. |
+| **rat_1** | A rated voice event **not yet billed** (`billed=false`, `invoice_id=null`) — the next cycle close will sweep it. |
+| **rat_2** | A rated event already **settled** on inv_2 (`billed=true`, `invoice_id=inv_2`). |
+| **account_credit_balance** | One credit-balance row for acc_1 holding KES 1000 — auto-drawn on the next invoice. |
+
+**The columns that did the work:**
+- **Current vs replaced pro forma** = `status` + `superseded_by` (the supersede chain), deduped by `idempotency_cycle_key`.
+- **Billed yet?** = `rated_event.billed` + `invoice_id` (false = swept at next close).
+- **Spare credit** = `account_credit_balance.balance` (one row per account).
 
 ## 3. Services (worked calls)
 | Service | Responsibility |

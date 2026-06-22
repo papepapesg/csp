@@ -168,10 +168,19 @@ cancels and unwinds it.
 { "customer_id":"cust_3","operator_code":"WIK","type":"COM","tax_identifier":"P051234567X","name":"Acme Ltd","identification_type_1":"BUSINESS_REG","identification_number_1":"BRS-2020-771","identification_type_2":"KRA_PIN","identification_number_2":"P051234567X","date_of_birth":null,"business_reg_date":"2020-02-01","primary_msisdn":"+254733000333","email":"ops@acme.co.ke","preferred_language":"en","kyc_status":"L1_APPROVED" }
 { "customer_id":"cust_4","operator_code":"WIK","type":"RES","tax_identifier":null,"name":"Fraudster","identification_type_1":"PASSPORT","identification_number_1":"X1234567","identification_type_2":null,"identification_number_2":null,"date_of_birth":"1979-01-01","business_reg_date":null,"primary_msisdn":"+254744000444","email":null,"preferred_language":"en","kyc_status":"REJECTED" }
 ```
-**Reading:** `kyc_status` gates fulfillment activation — only `APPROVED` proceeds; `L1_APPROVED` is
-mid-chain (needs L2); `REJECTED` cancels the order. `type` (RES/COM) is a segment proxy used in routing
-and selects which identity fields apply (`date_of_birth` for RES, `business_reg_date` for COM).
-`tax_identifier` is what Billing's tax invoice reads; `primary_msisdn` is the required contact key.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **cust_1** | A residential customer (`type=RES`) **cleared to be activated** (`kyc_status=APPROVED`), with a tax ID, a national ID, and a contact MSISDN. |
+| **cust_2** | A residential customer whose KYC is **still pending** (`kyc_status=PENDING`) — fulfillment can't proceed yet. |
+| **cust_3** | A business customer (`type=COM`) at the **mid-chain** KYC step (`kyc_status=L1_APPROVED`, still needs L2), identified by business reg + KRA PIN. |
+| **cust_4** | A customer whose KYC was **rejected** (`kyc_status=REJECTED`) — the order is cancelled. |
+
+**The columns that did the work:**
+- **Can fulfillment activate** = `kyc_status` (only `APPROVED` proceeds; `L1_APPROVED` needs L2; `REJECTED` cancels).
+- **RES vs COM** = `type` — a segment proxy used in routing; it also picks which identity fields apply (`date_of_birth` for RES, `business_reg_date` for COM).
+- **Billing + contact keys** = `tax_identifier` (read by the tax invoice) + `primary_msisdn` (required contact).
 
 ### `customer_account` (`status`: `ACTIVE|INACTIVE`)
 ```json
@@ -180,12 +189,19 @@ and selects which identity fields apply (`date_of_birth` for RES, `business_reg_
 { "account_id":"acc_3","account_number":"WIK-100003","payment_account_number":null,"customer_id":"cust_3","operator_code":"WIK","homepass_id":"hp_3","service_address":"7 Nyali Rd","status":"INACTIVE","sub_status":"hold","sub_status_reason":"docs pending","sub_status_changed_at":"2026-06-10T00:00:00Z","service_class_1":"SILVER","service_class_2":null,"service_class_3":null,"attention_banner":"On hold pending docs","subscription_id":null,"start_bill_date":null,"install_date":null,"disconnect_date":null,"account_manager_id":null,"franchise_code":"fr_msa" }
 { "account_id":"acc_4","account_number":"WIK-100004","payment_account_number":"PAY-100004","customer_id":"cust_4","operator_code":"WIK","homepass_id":null,"service_address":"99 Karen Rd","status":"INACTIVE","sub_status":"churned","sub_status_reason":"non-payment","sub_status_changed_at":"2026-05-20T00:00:00Z","service_class_1":null,"service_class_2":null,"service_class_3":null,"attention_banner":null,"subscription_id":"sub_7","start_bill_date":"2026-04-01","install_date":"2026-03-28","disconnect_date":"2026-05-20","account_manager_id":null,"franchise_code":"fr_nrb" }
 ```
-**Reading:** the **main** `status` is a 2-value enum, **derived** from the sub-status catalog (`hold`/
-`churned` clone to INACTIVE). `sub_status` carries the operator nuance (vip, hold, churned) with a
-`sub_status_reason` and `sub_status_changed_at` stamp. The `attention_banner` is set by an
-attention-surfacing flag and cleared when the last one is cleared. `account_number`/
-`payment_account_number` are the operational + gateway-callback keys; `subscription_id` is the 1:1 link
-to SUB-LM-01. A customer may hold several accounts.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **acc_1** | A live GOLD account (`status=ACTIVE`, `sub_status=active`) linked 1:1 to sub_123 (`subscription_id`), with its operational and gateway-callback keys (`account_number`/`payment_account_number`). |
+| **acc_2** | A second live account **for the same customer** cust_1, flagged VIP (`sub_status=vip`, with a `sub_status_reason`) — a customer may hold several accounts. |
+| **acc_3** | An account **on hold** (`sub_status=hold` → `status=INACTIVE`) with a customer-facing `attention_banner` and no subscription yet (`subscription_id=null`). |
+| **acc_4** | A churned account (`sub_status=churned` → `status=INACTIVE`) with its `disconnect_date` stamped. |
+
+**The columns that did the work:**
+- **The 2-value main status** = `status`, **derived** from `sub_status` (e.g. `hold`/`churned` clone to INACTIVE — never trusted from the caller).
+- **Operator nuance** = `sub_status` (+ `sub_status_reason`/`sub_status_changed_at`); the `attention_banner` is set by an attention-surfacing flag.
+- **The keys + link** = `account_number`/`payment_account_number` (operational + gateway) and `subscription_id` (1:1 to SUB-LM-01).
 
 ### `customer_account_flag_catalog` (composite PK `operator_code`+`flag_code` · `value_kind`: `BOOLEAN|SCORE_0_100|TIER|COUNT` · `evaluator`: `MANUAL|DROOLS|EVENT_DRIVEN`)
 > `affects_dunning`/`affects_provisioning`/`customer_visible` added by the flag-catalog-effect-columns
@@ -203,12 +219,20 @@ to SUB-LM-01. A customer may hold several accounts.
 { "id":"caf_3","operator_code":"WIK","account_id":"acc_1","flag_code":"LOYALTY_TIER","bool_value":null,"score_value":null,"text_value":"GOLD","state":"ACTIVE","source":"loyalty.tier-changed","set_by":"system","set_at":"2026-04-01T00:00:00Z" }
 { "id":"caf_4","operator_code":"WIK","account_id":"acc_2","flag_code":"CHURN_RISK","bool_value":null,"score_value":72,"text_value":null,"state":"CLEARED","source":"DROOLS","set_by":"system","set_at":"2026-03-01T00:00:00Z" }
 ```
-**Reading:** the **catalog** declares each flag's effects: `affects_dunning` (BIL-04 escalates faster),
-`affects_provisioning` (FUL-03 blocks activation), `customer_visible` (shown to the customer),
-`surfaces_attention` (drives the banner). `evaluator` says who may set it (MANUAL = BO only). The
-**instance** carries the typed value in the column matching the catalog `value_kind` —
-`bool_value` (NPD/FRAUD), `score_value` (CHURN_RISK), `text_value` (LOYALTY_TIER) — and an
-ACTIVE/CLEARED `state` keyed unique per `(account_id, flag_code)`.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **caf_1** | acc_3 is flagged a Non-Performing Debtor (`flag_code=NPD`, `bool_value=true`, `state=ACTIVE`), set by the rules engine (`source=DROOLS`). |
+| **caf_2** | acc_4 is flagged Fraud Suspected (`bool_value=true`, `state=ACTIVE`), set **by hand** (`source=MANUAL`, `set_by=u_risk1`). |
+| **caf_3** | acc_1 carries a loyalty tier of `GOLD` — a **text** value (`text_value=GOLD`, the column matching `value_kind=TIER`), set by a loyalty event. |
+| **caf_4** | acc_2 had a churn-risk **score** of 72 (`score_value=72`), now `state=CLEARED`. |
+
+**The columns that did the work:**
+- **What the flag does** = the catalog effect columns: `affects_dunning` (BIL-04 escalates faster), `affects_provisioning` (FUL-03 blocks activation), `customer_visible`, `surfaces_attention` (drives the banner).
+- **Who may set it** = `evaluator` (MANUAL = back-office only).
+- **The instance's typed value** = whichever column matches the catalog `value_kind` — `bool_value` (NPD/FRAUD), `score_value` (CHURN_RISK), `text_value` (LOYALTY_TIER).
+- **Live or not** = `state` (ACTIVE/CLEARED), unique per `(account_id, flag_code)`.
 
 ### `customer_sub_status_catalog` (composite PK `operator_code`+`sub_status_code`)
 > `requires_approval`/`approval_roles_jsonb`/`affects_provisioning`/`customer_visible` added by the
@@ -219,11 +243,20 @@ ACTIVE/CLEARED `state` keyed unique per `(account_id, flag_code)`.
 { "operator_code":"WIK","sub_status_code":"hold","main_status":"INACTIVE","requires_approval":true,"approval_roles_jsonb":["BACKOFFICE_SUPERVISOR"],"affects_provisioning":true,"customer_visible":false,"display_name":"On Hold","active":true }
 { "operator_code":"WIK","sub_status_code":"churned","main_status":"INACTIVE","requires_approval":true,"approval_roles_jsonb":["BACKOFFICE_SUPERVISOR"],"affects_provisioning":true,"customer_visible":true,"display_name":"Churned","active":true }
 ```
-**Reading:** this is the account **state machine as data**. A sub-status **clones** its `main_status`
-(so the 2-value main status is derived, never trusted from the caller). `requires_approval` forces an
-approval reference (and `approval_roles_jsonb` names which roles may sign it); `affects_provisioning`
-makes the change emit `CustomerAccountStatusChanged` for FUL-03. An operator adds a state by adding a
-row — no code.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **active** | The "Active" sub-status maps to main status `ACTIVE` (`main_status`), needs no approval, and is customer-visible. |
+| **vip** | "VIP" also clones to `ACTIVE` but **needs approval** (`requires_approval=true`) from an Account Manager or Region Head (`approval_roles_jsonb`). |
+| **hold** | "On Hold" clones to `INACTIVE`, needs a Back-Office Supervisor's approval, and **affects provisioning** (`affects_provisioning=true`). |
+| **churned** | "Churned" clones to `INACTIVE`, needs approval, affects provisioning, and is shown to the customer (`customer_visible=true`). |
+
+**The columns that did the work:**
+- **The derived main status** = `main_status` — a sub-status **clones** it, so the 2-value main status is never trusted from the caller.
+- **Approval gate** = `requires_approval` + `approval_roles_jsonb` (which roles may sign).
+- **Provisioning impact** = `affects_provisioning` (the change emits `CustomerAccountStatusChanged` for FUL-03).
+- An operator adds a state by **adding a row** — no code.
 
 ### `cvm_offer_instance` (`offer_type`: `RETENTION_DISCOUNT|UPGRADE_OFFER|WINBACK_PACKAGE|GOODWILL_CREDIT|PAYMENT_REMINDER` · `status`: `DRAFT|PENDING_APPROVAL|PROPOSED|ACCEPTED|REJECTED|EXPIRED|APPLIED|FAILED`)
 ```json
@@ -244,12 +277,24 @@ row — no code.
 { "activity_id":"cva_3","operator_code":"WIK","account_id":"acc_2","activity_type":"RETENTION_CALL","customer_id":"CUS-1","subscription_id":"sub_126","type":"RETENTION","trigger_reason":"CHURN_RISK","source_event_ref":"CvmCustomerEvaluated:CUS-1:2026-05","offer_code":"RET_25","offer_details":{"percent":25},"status":"COMPLETED","channel":"OUTBOUND_CALL","assigned_to":null,"assigned_to_user_id":"u_ret1","assigned_team_id":"team_ret","priority":"CRITICAL","due_at":"2026-05-20T17:00:00Z","outcome_reason":"customer accepted","expires_at":"2026-05-31T00:00:00Z","decided_at":"2026-05-19T10:00:00Z","closed_at":"2026-05-19T10:05:00Z" }
 { "activity_id":"cva_4","operator_code":"WIK","account_id":"acc_4","activity_type":"WINBACK","customer_id":"CUS-9","subscription_id":"sub_50","type":"WINBACK","trigger_reason":"CHURNED","source_event_ref":"CvmCustomerEvaluated:CUS-9:2026-04","offer_code":"WINBACK","offer_details":null,"status":"EXPIRED","channel":"EMAIL","assigned_to":null,"assigned_to_user_id":null,"assigned_team_id":null,"priority":"LOW","due_at":null,"outcome_reason":"no response","expires_at":"2026-05-01T00:00:00Z","decided_at":null,"closed_at":"2026-05-01T00:00:00Z" }
 ```
-**Reading:** cvo_1 (10%, under threshold) applied straight through; cvo_2 (25%) is parked on EM-CFG-04
-(`approval_request_id` set, `status=PROPOSED` after the approval released it). Activities are the CVM
-worklist — a high-risk dunning signal opens a `PAYMENT_RECOVERY` activity (cva_1); a healthy account an
-`UPSELL_OFFER` (cva_2). Each activity is **idempotent by `source_event_ref`** (same event → same row);
-`priority`/`due_at`/`assigned_*` route the worklist, and `decided_at`/`closed_at` close it out. The
-legacy `type` column survives nullable alongside the new `activity_type`.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **cvo_1** | A 10% retention discount that **applied straight through** (`status=APPLIED`, `approval_request_id=null` — under threshold). |
+| **cvo_2** | A 25% offer that needed approval: it carries an `approval_request_id=appr_9` and sits `status=PROPOSED` after the approval released it. |
+| **cvo_3** | An upgrade offer still being prepared (`status=DRAFT`), tied to campaign `Q3_UPSELL`. |
+| **cvo_4** | A winback offer that **lapsed unused** (`status=EXPIRED`, its `expires_at` passed). |
+| **cva_1** | A high-priority payment-recovery task opened by a dunning signal (`activity_type=PAYMENT_RECOVERY`, `trigger_reason=NON_PAYMENT`, `status=OPEN`), assigned to an agent with a `due_at`. |
+| **cva_2** | An upsell task for a healthy account (`activity_type=UPSELL_OFFER`), in progress over SMS. |
+| **cva_3** | A retention call that **completed** (`status=COMPLETED`) — the customer accepted (`outcome_reason`), with `decided_at`/`closed_at` stamped. |
+| **cva_4** | A winback task that **expired** with no response (`status=EXPIRED`, `outcome_reason="no response"`). |
+
+**The columns that did the work:**
+- **Did the offer need approval** = `approval_request_id` (set ⇒ EM-CFG-04 gate) + `status`.
+- **Why a task exists** = `activity_type`/`trigger_reason`; each activity is **idempotent by `source_event_ref`** (same event → same row).
+- **Worklist routing + closure** = `priority`/`due_at`/`assigned_*` route it; `decided_at`/`closed_at` close it out.
+- The legacy `type` column survives nullable alongside the new `activity_type`.
 
 **Activity status lifecycle** (the `CvmActivity` model vocabulary; the DB default `'OFFERED'` is
 overwritten on the first write):
