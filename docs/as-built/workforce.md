@@ -131,12 +131,18 @@ employees, picking one whose skills fit.
 { "contractor_id":"ctr_1","operator_code":"WIK","code":"INHOUSE","name":"WIK In-House Field","type":"INTERNAL","skills":null,"status":"ACTIVE" }
 { "contractor_id":"ctr_0","operator_code":"WIK","code":"OLDCO","name":"OldCo (retired)","type":"EXTERNAL","skills":null,"status":"RETIRED" }
 ```
-**Reading:** a contractor is who a job gets dispatched to.
-- `type` splits OUTSOURCED (`EXTERNAL`) from in-house (`INTERNAL`).
-- `status` retires one without deleting it.
-- `code` is the operator-unique short handle (the pair `(operator,code)` is unique).
-- The real per-(contractor, region, skill) certification lives in `contractor_region_skill`; the `skills`
-  JSON here is only a coarse summary.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **ctr_9** | An **outsourced** contractor "FiberCo" (`type=EXTERNAL`, `code=FIBERCO`), **live** (`status=ACTIVE`), summarised as doing fiber installs + diagnostics (`skills`). |
+| **ctr_4** | An outsourced contractor "CoastNet" (`code=COASTNET`), **live**, summarised for coax installs. |
+| **ctr_1** | The operator's **in-house** field crew (`type=INTERNAL`, `code=INHOUSE`), live, with no skills summary (`skills=null`). |
+| **ctr_0** | A **retired** outsourced contractor "OldCo" (`status=RETIRED`) — kept on record, not deleted. |
+
+**The columns that did the work:**
+- A contractor is who a job gets dispatched to; `type` splits outsourced (`EXTERNAL`) from in-house (`INTERNAL`), `status` retires one without deleting it, and `code` is the operator-unique short handle (`(operator,code)` is unique).
+- The real per-(contractor, region, skill) certification lives in `contractor_region_skill`; the `skills` JSON here is only a coarse summary.
 
 ### `contractor_team` · `status`: `ACTIVE|…` · & `staff_member` · `role`: `TECHNICIAN|TEAM_LEAD|SUPERVISOR`
 ```json
@@ -145,11 +151,17 @@ employees, picking one whose skills fit.
 { "staff_id":"stf_9","operator_code":"WIK","contractor_id":"ctr_4","team_id":"team_2","name":"Juma Otieno","role":"TEAM_LEAD","msisdn":"+254700000009","skills":["coax-install"],"status":"ACTIVE" }
 { "staff_id":"stf_3","operator_code":"WIK","contractor_id":"ctr_9","team_id":null,"name":"Wanjiru Kamau","role":"TECHNICIAN","msisdn":null,"skills":["fiber-install"],"status":"ACTIVE" }
 ```
-**Reading:** a `contractor_team` (`team_id`) is a crew that belongs to a contractor; a `staff_member`
-(`staff_id`) is a single named technician.
-- A staff member with **no `contractor_id`** is **in-house** (stf_7) — the second tier the matcher falls
-  back to when no outsourced contractor has capacity.
-- A staff member with a `contractor_id`/`team_id` is that crew's tech.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **team_2** | A crew "Nyali Crew A" (`team_id=team_2`, `code=NYALI-A`) belonging to contractor `ctr_4`, **active**, skilled in coax installs (`skills`). |
+| **stf_7** | An **in-house** technician Asha Mwangi (`staff_id=stf_7`, `contractor_id=null`, `team_id=null`, `role=TECHNICIAN`) skilled in diagnostics — the fallback tier when no outsourced contractor has capacity. |
+| **stf_9** | A **team lead** Juma Otieno (`role=TEAM_LEAD`) on contractor `ctr_4`'s crew `team_2`, skilled in coax installs. |
+| **stf_3** | A technician Wanjiru Kamau on contractor `ctr_9`, no team (`team_id=null`), skilled in fiber installs, with no phone on file (`msisdn=null`). |
+
+**The columns that did the work:**
+- A `contractor_team` (`team_id`) is a crew owned by a contractor; a `staff_member` (`staff_id`) is one named technician — in-house when `contractor_id` is null, otherwise that crew's tech.
 - `skills` drives skill matching; `role` ranks people within a team.
 
 ### `contractor_availability_slot` · `day_of_week`: `MONDAY..SUNDAY|ALL_WEEK` · `service_scope`: `INSTALL|SUPPORT|MAINTENANCE|RECOVERY|AUDIT`
@@ -159,12 +171,18 @@ employees, picking one whose skills fit.
 { "slot_id":"slot_3","operator_code":"WIK","contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","service_scope":"INSTALL","day_of_week":"ALL_WEEK","hour_start":"00:00:00","hour_end":"23:59:00","timezone":"Africa/Nairobi","max_concurrent":2,"emergency_only":true,"active":true,"effective_from":"2026-03-01","effective_to":null }
 { "slot_id":"slot_4","operator_code":"WIK","contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","service_scope":"SUPPORT","day_of_week":"SUNDAY","hour_start":"08:00:00","hour_end":"12:00:00","timezone":"Africa/Nairobi","max_concurrent":1,"emergency_only":false,"active":false,"effective_from":"2026-01-01","effective_to":"2026-05-31" }
 ```
-**Reading:** a slot is a bookable window defined by region + service scope + a day/hour range (in
-`timezone`) + **`max_concurrent`** (the capacity number — how many jobs the window holds at once).
-- slot_3 is emergency-only (`emergency_only:true`), so it matches URGENT WOs only.
-- slot_4 is not bookable: it is `active:false` and its `effective_to` date has already lapsed.
-- To match a slot, the matcher needs region + skill + scope + a free place in `max_concurrent`, all inside
-  the slot's effective window.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **slot_1** | Contractor `ctr_9` is bookable for **installs** in Karen **all week** 08:00–17:00 (`service_scope=INSTALL`, `day_of_week=ALL_WEEK`), holding **5** jobs at once (`max_concurrent=5`), live since 2026-01-01 (`active=true`, `effective_to=null`). |
+| **slot_2** | The same contractor's **support** window in Karen, **Mondays** 09:00–13:00, capacity **3**, with no effective-date bounds (`effective_from`/`effective_to` null). |
+| **slot_3** | Contractor `ctr_4`'s install window in Nyali, all week, but **emergency-only** (`emergency_only=true`) so it matches **URGENT WOs only**, capacity **2**. |
+| **slot_4** | Contractor `ctr_4`'s Sunday support window that is **not bookable**: `active=false` and its `effective_to` (2026-05-31) has already lapsed. |
+
+**The columns that did the work:**
+- A slot is a bookable window = region (`tech_region_id`) + `service_scope` + a day/hour range (in `timezone`) + `max_concurrent` (how many jobs the window holds at once).
+- To match a slot the matcher needs region + skill + scope + a free place in `max_concurrent`, all inside the slot's effective window.
 
 ### `contractor_slot_commitment` · `status`: `ACTIVE|CONSUMED|RELEASED|EXPIRED`
 ```json
@@ -173,16 +191,18 @@ employees, picking one whose skills fit.
 { "commitment_id":"sc_3","operator_code":"WIK","slot_id":"slot_2","contractor_id":"ctr_9","wo_id":"wo_5","committed_for_datetime":"2026-06-21T11:00:00Z","qty":1,"status":"RELEASED","consumed_at":null,"released_at":"2026-06-21T11:45:00Z","expired_at":null }
 { "commitment_id":"sc_4","operator_code":"WIK","slot_id":"slot_1","contractor_id":"ctr_9","wo_id":"wo_7","committed_for_datetime":"2026-06-22T14:00:00Z","qty":1,"status":"EXPIRED","consumed_at":null,"released_at":null,"expired_at":"2026-06-22T15:00:00Z" }
 ```
-**Reading:** each row is one work order's **hold** on a slot, taking `qty` places out of the slot's
-`max_concurrent`. The `status` walks a short lifecycle:
-- `ACTIVE` — the hold is live and **counts against capacity**.
-- `CONSUMED` — the WO finalized, the place is **used up** (`consumed_at` stamped).
-- `RELEASED` — the WO was cancelled, the place is **freed** (`released_at` stamped).
-- `EXPIRED` — the hold was never actioned and got **swept** (`expired_at` stamped).
+**Read each row as a sentence — *this data means this:***
 
-Only `ACTIVE` rows still count. So with `slot_1` at `max_concurrent:5`, having one ACTIVE (sc_1) + one
-CONSUMED (sc_2) + one EXPIRED (sc_4) leaves room for new bookings — only sc_1 occupies a place. The
-matching `*_at` timestamp records which terminal transition fired.
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **sc_1** | Work order `wo_1` holds **1** place on `slot_1` (`qty=1`), and the hold is **live** (`status=ACTIVE`) — so it **counts against capacity**. |
+| **sc_2** | `wo_2`'s hold on `slot_1` was **used up** when the WO finalized (`status=CONSUMED`, `consumed_at` stamped) — no longer occupies a place. |
+| **sc_3** | `wo_5`'s hold on `slot_2` was **freed** when the WO was cancelled (`status=RELEASED`, `released_at` stamped). |
+| **sc_4** | `wo_7`'s hold on `slot_1` was never actioned and got **swept** (`status=EXPIRED`, `expired_at` stamped). |
+
+**The columns that did the work:**
+- Each row is one work order's hold on a slot, taking `qty` places out of the slot's `max_concurrent`.
+- Only `ACTIVE` rows still count, so on `slot_1` (capacity 5) the ACTIVE `sc_1` is the only one occupying a place — the CONSUMED/EXPIRED rows leave room for new bookings. The matching `*_at` timestamp records which terminal transition fired.
 
 ```mermaid
 stateDiagram-v2

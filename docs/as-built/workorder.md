@@ -189,18 +189,21 @@ stateDiagram-v2
     CANCELLED --> [*]
 ```
 
-**Reading:**
-- `type`/`kind` pick the flow and the skills needed; `required_skills` is what auto-assign filters on.
-- `source_type`/`source_ref` record where the job came from (a fulfillment order, a ticket, a subscription
-  op, or a field-audit task) — this is the back-link the other module resumes on once the work is done.
-- `priority` sets the SLA window at create time (`sla_due_at`: URGENT = 4h … LOW = 168h); `first_response_at`
-  records the SLA first-touch.
-- `assigned_*` / `started_at` / `finalized_at` are the timestamps that track the lifecycle above;
-  `current_phase` is the flow cursor for SUPPORT and SHIFTING jobs.
-- `wo_5` is an **escalation child**: `master_wo_id` points at its parent, `link_type=PARENT_CHILD`, and
-  `escalation_candidate=true` — it is a QCS work order spawned off `wo_2`.
-- `warranty_until` links a finalized install to its warranty window; `findings` captures close-out evidence
-  (here, the ONT serial).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **wo_1** | A NORMAL FTTH install (`type=INSTALLATION`, `job_type_code=FTTH_INSTALL`) raised by a fulfillment order (`source_type=FULFILLMENT`, `source_ref=order_1`), **done** (`status=COMPLETED`), worked by contractor `ctr_9`'s tech `tech_3`, closed with `resolution_code=INSTALL_OK`, the ONT serial in `findings`, and a warranty running to `warranty_until`. |
+| **wo_2** | An **URGENT** no-signal support call (`type=SUPPORT`, `job_type_code=NO_SIGNAL`, `priority=URGENT`) from a ticket (`source_type=TICKET`, `source_ref=tkt_9`), **in progress** (`status=IN_PROGRESS`, `current_phase=SITE_VISIT`), assigned to in-house `staff_7`, reason "no signal at ONT". |
+| **wo_3** | A NORMAL shifting job (`type=SHIFTING`) from a subscription op (`source_ref=subop_77`), **assigned to a team** not a person (`team_id=team_2`, `assigned_technician_id=null`, `status=ASSIGNED`, `current_phase=PHASE_1`) in the Nyali region. |
+| **wo_4** | A LOW-priority field audit (`type=FIELD_AUDIT`, `source_type=FIELD_AUDIT`, `source_ref=fat_1`) still **unassigned and waiting** (`status=PENDING`); it has only a customer, no account/subscription/homepass. |
+| **wo_5** | A **cancelled escalation child** (`status=CANCELLED`, `final_reason=CANCELLED_BY_DESK`): a HIGH-priority QCS support WO spawned off `wo_2` (`master_wo_id=wo_2`, `link_type=PARENT_CHILD`, `escalation_candidate=true`). |
+
+**The columns that did the work:**
+- `type`/`kind` pick the flow and skills; `required_skills` is what auto-assign filters on; `current_phase` is the flow cursor for SUPPORT and SHIFTING jobs.
+- `source_type`/`source_ref` record where the job came from — the back-link the other module resumes on once work is done.
+- `priority` sets the SLA window at create time (`sla_due_at`: URGENT = 4h … LOW = 168h); `first_response_at` records the SLA first-touch.
+- `assigned_*` / `started_at` / `finalized_at` track the lifecycle above; `warranty_until` links a finalized install to its warranty window; `findings` captures close-out evidence.
 
 ### `wo_job_type_catalog` (operator job-type config) · `kind`: `SUPPORT|SHIFTING|INSTALLATION` · `network_type`: `GPON|HFC|…`
 ```json
@@ -209,11 +212,17 @@ stateDiagram-v2
 { "id":"jtc_3","operator_code":"WIK","job_type_code":"NO_SIGNAL","kind":"SUPPORT","display_name":"No Signal Diagnostics","description":"loss-of-service fault","network_type":null,"requires_site_visit":true,"warranty_days":30 }
 { "id":"jtc_4","operator_code":"WIK","job_type_code":"RPT","kind":"SUPPORT","display_name":"Remote Password/Profile Tweak","description":"desk-only fix","network_type":null,"requires_site_visit":false,"warranty_days":30 }
 ```
-**Reading:**
-- The **job-type catalog** is per-operator config.
-- `requires_site_visit` drives the site-visit-decision gateway (`jtc_4` is desk-only — no visit).
-- `warranty_days` feeds the warranty linkage.
-- The `job_type_code` drives skill-matching for auto-assign.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **jtc_1** | The operator's FTTH install job-type (`job_type_code=FTTH_INSTALL`, `kind=INSTALLATION`) on a GPON network (`network_type=GPON`), **needs a site visit** (`requires_site_visit=true`) and carries a 90-day warranty (`warranty_days=90`). |
+| **jtc_2** | The HFC install job-type (`kind=INSTALLATION`, `network_type=HFC`), also a site-visit job with a 90-day warranty; no description set (`description=null`). |
+| **jtc_3** | The no-signal support job-type (`job_type_code=NO_SIGNAL`, `kind=SUPPORT`), a site-visit job with a 30-day warranty, network-agnostic (`network_type=null`). |
+| **jtc_4** | A **desk-only** support fix (`job_type_code=RPT`, `kind=SUPPORT`, `requires_site_visit=false`) — no technician dispatched — 30-day warranty. |
+
+**The columns that did the work:**
+- The job-type catalog is per-operator config; `requires_site_visit` drives the site-visit-decision gateway, `warranty_days` feeds the warranty linkage, and `job_type_code` drives skill-matching for auto-assign.
 
 *(The earlier `required_skills` / `sla_hours` sample columns were a doc shorthand and don't exist on this
 table — required skills live on `work_order.required_skills`, and the SLA is computed from `priority`.)*
@@ -225,14 +234,18 @@ table — required skills live on `work_order.required_skills`, and the SLA is c
 { "id":"finr_3","operator_code":"WIK","kind":"SUPPORT","job_type_code":null,"required_note_kinds":["findings","solution","final_reason_set"],"required_attachment_categories":null,"min_attachments_per_category":null }
 { "id":"finr_4","operator_code":"WIK","kind":"SHIFTING","job_type_code":null,"required_note_kinds":["findings","bindings_captured"],"required_attachment_categories":["new_premises_photo"],"min_attachments_per_category":{"new_premises_photo":2} }
 ```
-**Reading:**
-- This is the per-`(operator, kind, job_type_code)` checklist that the 2-step finalize enforces at the
-  second-confirm step.
-- A row lists the required structured-note kinds plus the required attachment categories and their minimum
-  counts.
-- `job_type_code=null` (`finr_2` / `finr_3` / `finr_4`) is the default for that kind; a job-type-specific
-  row (`finr_1`) overrides the default — e.g. FTTH must capture the ONT serial and a speedtest before it
-  can complete.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **finr_1** | The **FTTH-specific** install checklist (`kind=INSTALLATION`, `job_type_code=FTTH_INSTALL`): must capture `findings` + `ont_serial` notes and at least one `ont_photo` and one `speedtest` attachment (`min_attachments_per_category`). |
+| **finr_2** | The **default** install checklist (`job_type_code=null`): just a `findings` note and one `site_photo`. |
+| **finr_3** | The **default** support checklist (`kind=SUPPORT`, `job_type_code=null`): three notes (`findings`, `solution`, `final_reason_set`) and **no** attachments required (`required_attachment_categories=null`). |
+| **finr_4** | The **default** shifting checklist (`kind=SHIFTING`): `findings` + `bindings_captured` notes and **two** `new_premises_photo` attachments (`min_attachments_per_category=2`). |
+
+**The columns that did the work:**
+- This is the per-`(operator, kind, job_type_code)` checklist the 2-step finalize enforces at the second-confirm step: required note kinds plus required attachment categories and their minimum counts.
+- `job_type_code=null` is the default for that kind; a job-type-specific row (`finr_1`) overrides the default.
 
 ### `field_audit_task` · `audit_type`: `EQUIPMENT|NETWORK|KYC` · `task_type`: `CUSTOMER_PREMISES|FIELD_SITE|POST_SWAP|INVESTIGATION` · `status`: `CREATED|ASSIGNED|IN_PROGRESS|SUBMITTED|DISCREPANCY_OPEN|CLOSED|CANCELLED`
 ```json
@@ -241,13 +254,18 @@ table — required skills live on `work_order.required_skills`, and the SLA is c
 { "audit_task_id":"fat_3","operator_code":"WIK","campaign_id":"fac_2","audit_type":"NETWORK","task_type":"FIELD_SITE","customer_id":null,"account_id":null,"subscription_id":null,"homepass_id":null,"wo_id":null,"assigned_to_user_id":"staff_7","assigned_team_id":"team_2","status":"CLOSED","source_event_ref":"evt_bb1","due_at":"2026-06-20T17:00:00Z","submitted_at":"2026-06-19T12:00:00Z","closed_at":"2026-06-19T16:00:00Z" }
 { "audit_task_id":"fat_4","operator_code":"WIK","campaign_id":null,"audit_type":"KYC","task_type":"CUSTOMER_PREMISES","customer_id":"cust_62","account_id":"acct_62","subscription_id":null,"homepass_id":"hp_12","wo_id":null,"assigned_to_user_id":"staff_9","assigned_team_id":null,"status":"ASSIGNED","source_event_ref":"evt_cc1","due_at":"2026-06-27T17:00:00Z","submitted_at":null,"closed_at":null }
 ```
-**Reading:**
-- One capability, driven by `audit_type`: counting equipment, checking network plant, or re-verifying KYC.
-- A task moves `CREATED → ASSIGNED → IN_PROGRESS → SUBMITTED → (DISCREPANCY_OPEN | CLOSED)`.
-- `wo_id` set (`fat_2`) means it is WO-backed — a technician is dispatched; otherwise it is a desk/mobile
-  task.
-- `campaign_id` ties the task to its campaign (`fat_4` is an ad-hoc KYC task with no campaign).
-- `source_event_ref` is the idempotency key on the event that originated the task.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **fat_1** | An equipment count at a customer premises (`audit_type=EQUIPMENT`, `task_type=CUSTOMER_PREMISES`) under campaign `fac_1`, freshly **created and unassigned** (`status=CREATED`, no `assigned_to_user_id`, no `wo_id`). |
+| **fat_2** | A post-swap equipment check (`task_type=POST_SWAP`) **with a discrepancy open** (`status=DISCREPANCY_OPEN`); it is WO-backed (`wo_id=wo_4`), assigned to `tech_3`, already submitted (`submitted_at` set). |
+| **fat_3** | A network field-site audit (`audit_type=NETWORK`, `task_type=FIELD_SITE`) under campaign `fac_2`, **closed** (`status=CLOSED`, `closed_at` set), assigned to `staff_7`/`team_2`, with no customer/account/subscription. |
+| **fat_4** | An **ad-hoc** KYC re-verification (`audit_type=KYC`, `campaign_id=null`) at a customer premises, **assigned and pending** (`status=ASSIGNED`, `assigned_to_user_id=staff_9`), not yet a WO. |
+
+**The columns that did the work:**
+- One capability driven by `audit_type` (count equipment, check network plant, re-verify KYC); a task moves `CREATED → ASSIGNED → IN_PROGRESS → SUBMITTED → (DISCREPANCY_OPEN | CLOSED)`.
+- `wo_id` set means WO-backed (a technician dispatched); `campaign_id` ties the task to its campaign; `source_event_ref` is the idempotency key on the originating event.
 
 ### `field_audit_discrepancy` · `discrepancy_type`: `MISSING|WRONG_SERIAL|FOUND_EXTRA|DAMAGED|WRONG_LOCATION|NOT_ACCESSIBLE` · `severity`: `LOW|MEDIUM|HIGH|CRITICAL` · `route_action`: `CREATE_TICKET|CREATE_RMA_RECOVERY|REQUEST_OSR_CORRECTION|REQUEST_WRITE_OFF|NO_ACTION` · `status`: `OPEN|ROUTED|PENDING_APPROVAL|ACTION_CREATED|RESOLVED|REJECTED|CLOSED`
 ```json
@@ -256,16 +274,18 @@ table — required skills live on `work_order.required_skills`, and the SLA is c
 { "discrepancy_id":"fad_3","operator_code":"WIK","audit_task_id":"fat_2","expected_item_id":"fae_3","observation_id":"fao_3","discrepancy_type":"DAMAGED","severity":"MEDIUM","status":"ACTION_CREATED","route_action":"CREATE_TICKET","routed_ref_type":"TICKET","routed_ref_id":"tkt_44","approval_request_id":null,"resolved_at":null }
 { "discrepancy_id":"fad_4","operator_code":"WIK","audit_task_id":"fat_3","expected_item_id":null,"observation_id":"fao_9","discrepancy_type":"FOUND_EXTRA","severity":"LOW","status":"RESOLVED","route_action":"NO_ACTION","routed_ref_type":null,"routed_ref_id":null,"approval_request_id":null,"resolved_at":"2026-06-19T16:00:00Z" }
 ```
-**Reading:**
-- When what was observed doesn't match what was expected, a typed discrepancy is raised, linked to its
-  `expected_item_id` and `observation_id`. `rules.field_audit.*` then sets its `severity` and `route_action`.
-- **Risky** routes (`REQUEST_OSR_CORRECTION` / `REQUEST_WRITE_OFF`) go `PENDING_APPROVAL` under EM-CFG-04,
-  with `approval_request_id` set (this is `fad_2`).
-- **Safe** routes go straight through; `routed_ref_type` / `routed_ref_id` then point at the TICKET or RMA
-  that was created (this is `fad_1` / `fad_3`).
-- `NO_ACTION` self-resolves, stamping `resolved_at` (this is `fad_4`).
-- Field audit never mutates OSR itself — it emits the routed action for the owning module to carry out.
-- `fad_4` is a `FOUND_EXTRA` with no expected item: an unexpected unit found on site.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **fad_1** | A HIGH-severity **missing** unit (`discrepancy_type=MISSING`, `severity=HIGH`) on task `fat_2`, routed to an RMA recovery (`route_action=CREATE_RMA_RECOVERY`) which already created `rma_5` (`routed_ref_type=OSR_RMA`, `status=ACTION_CREATED`). |
+| **fad_2** | A MEDIUM **wrong-serial** finding routed to an OSR correction (`route_action=REQUEST_OSR_CORRECTION`) — a **risky** route, so it is **waiting for approval** (`status=PENDING_APPROVAL`, `approval_request_id=appr_3`), with no routed ref yet. |
+| **fad_3** | A MEDIUM **damaged** unit routed to a ticket (`route_action=CREATE_TICKET`) which created `tkt_44` (`routed_ref_type=TICKET`, `status=ACTION_CREATED`). |
+| **fad_4** | A LOW **found-extra** unit (`discrepancy_type=FOUND_EXTRA`, `expected_item_id=null`) on task `fat_3` needing **no action** (`route_action=NO_ACTION`), self-resolved (`status=RESOLVED`, `resolved_at` stamped). |
+
+**The columns that did the work:**
+- When what was observed doesn't match what was expected, a typed discrepancy is raised, linked to its `expected_item_id` and `observation_id`; `rules.field_audit.*` sets `severity` and `route_action`.
+- Risky routes (`REQUEST_OSR_CORRECTION` / `REQUEST_WRITE_OFF`) go `PENDING_APPROVAL` under EM-CFG-04 with `approval_request_id` set; safe routes go straight through and fill `routed_ref_type` / `routed_ref_id`; `NO_ACTION` self-resolves. Field audit never mutates OSR itself — it emits the routed action for the owning module to carry out.
 
 ## 3. Services
 | Service | Responsibility |

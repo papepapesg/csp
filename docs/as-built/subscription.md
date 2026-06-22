@@ -192,12 +192,20 @@ stateDiagram-v2
 { "subscription_id":"sub_125","customer_id":"cust_51","account_id":"acc_2","operator_code":"WIK","homepass_id":"hp_7","previous_homepass_id":null,"package_ref":"pkg_inet","package_version_id":"pv_2","previous_package_ref":null,"previous_package_version_id":null,"status_code":"SUSPENDED","billing_mode":"PREPAID","currency":"KES","cycle_model":"CALENDAR","cycle_anchor_day":null,"cycle_period_days":30,"cycle_frequency_months":1,"active_restrictions":[],"current_transition_type":null,"current_transition_reason_code":"NON_PAYMENT","last_failure":null,"activated_at":"2026-03-01T08:00:00Z","suspended_at":"2026-06-10T00:00:00Z","resumed_at":null,"terminated_at":null,"last_status_changed_at":"2026-06-10T00:00:00Z","start_date":"2026-03-01","end_date":null,"created_by":"u_sales3","updated_by":"system","retired_at":null,"current_cycle_start":"2026-06-01","current_cycle_end":"2026-07-01","last_cycle_closed_window_end":"2026-06-01","next_cycle_charge_invoice_id":null }
 { "subscription_id":"sub_126","customer_id":"cust_52","account_id":"acc_3","operator_code":"WIK","homepass_id":"hp_9","previous_homepass_id":"hp_8","package_ref":"pkg_triple","package_version_id":"pv_1","previous_package_ref":null,"previous_package_version_id":null,"status_code":"RESTRICTED","billing_mode":"POSTPAID","currency":"KES","cycle_model":"ANNIVERSARY","cycle_anchor_day":15,"cycle_period_days":30,"cycle_frequency_months":1,"active_restrictions":["OUTGOING_VOICE_BARRED"],"current_transition_type":null,"current_transition_reason_code":null,"last_failure":{"code":"FULFILLMENT_TIMEOUT","at":"2026-05-02T11:00:00Z"},"activated_at":"2026-04-01T08:00:00Z","suspended_at":null,"resumed_at":null,"terminated_at":null,"last_status_changed_at":"2026-06-01T10:00:00Z","start_date":"2026-04-01","end_date":null,"created_by":"u_sales1","updated_by":"system","retired_at":null,"current_cycle_start":"2026-06-15","current_cycle_end":"2026-07-15","last_cycle_closed_window_end":"2026-06-15","next_cycle_charge_invoice_id":null }
 ```
-**Reading:** sub_123 is live & billable (POSTPAID → cycle close raises an invoice; a PREPAID one debits a
-wallet and freezes on shortfall). sub_124 is **mid-pause** (transient → blocks a second op; cancel
-reverts to ACTIVE — `current_transition_type=PAUSE`). sub_125 was suspended for non-payment (BIL-04,
-`suspended_at` set). sub_126 keeps service but bars outgoing voice (`active_restrictions`) and carries a
-`last_failure` from an earlier op. The main status is derived; `cycle_period_days`/`cycle_model`/
-`cycle_anchor_day` drive proration + the `current_cycle_*` window the close worker reads.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **sub_123** | A live, billable subscription (`status_code=ACTIVE`, `billing_mode=POSTPAID` → cycle close raises an invoice). No job in flight (`current_transition_type=null`). |
+| **sub_124** | **Mid-pause**: a PAUSE job is running (`status_code=PENDING_PAUSE`, `current_transition_type=PAUSE`) — it blocks any second job, and cancelling reverts it to ACTIVE. |
+| **sub_125** | A **prepaid** sub suspended for non-payment (`status_code=SUSPENDED`, `current_transition_reason_code=NON_PAYMENT`, `suspended_at` set). |
+| **sub_126** | Still served but with **outgoing voice barred** (`status_code=RESTRICTED`, `active_restrictions=[OUTGOING_VOICE_BARRED]`), and it carries a `last_failure` from an earlier op. |
+
+**The columns that did the work:**
+- **Live / billable** = `status_code` (only `ACTIVE` bills) + `billing_mode` (POSTPAID invoices; PREPAID debits a wallet and freezes on shortfall).
+- **A job in flight** = `current_transition_type` (a transient `PENDING_*` blocks a second op; cancel reverts).
+- **Why suspended / what's barred** = `current_transition_reason_code` / `active_restrictions`.
+- **Cycle timing** = `cycle_period_days`/`cycle_model`/`cycle_anchor_day` drive proration + the `current_cycle_*` window the close worker reads.
 
 ### `subscription_operation` (per-command ledger)
 **Enum legend — `operation_kind`:** `ACTIVATE|PAUSE|RESUME|TERMINATE|UPGRADE|DOWNGRADE|RELOCATION|
@@ -235,11 +243,20 @@ stateDiagram-v2
 { "operation_id":"op_3","operator_code":"WIK","subscription_id":"sub_125","operation_kind":"SUSPEND_NP","bpmn_process_key":"sub-suspend-np","bpmn_process_instance_id":"pi_6600","initiating_actor_user_id":null,"initiating_actor_role":"SYSTEM","idempotency_key":"suspendnp-sub_125-1","idempotency_request_hash":"77be…01","correlation_id":"corr_dun_2","prior_subscription_status":"ACTIVE","current_state":"COMPLETED","final_state":"COMPLETED","failure_reason_code":null,"failure_reason_detail":null,"cancel_reason_code":null,"cancel_actor_user_id":null,"input":{"dunningLevel":3},"started_at":"2026-06-10T00:00:00Z","completed_at":"2026-06-10T00:00:02Z","duration_ms":2000 }
 { "operation_id":"op_4","operator_code":"WIK","subscription_id":"sub_126","operation_kind":"RESTRICT","bpmn_process_key":"sub-restrict","bpmn_process_instance_id":null,"initiating_actor_user_id":"u_csr1","initiating_actor_role":"CSR","idempotency_key":"restrict-sub_126-1","idempotency_request_hash":"c4d2…9a","correlation_id":"corr_126","prior_subscription_status":"ACTIVE","current_state":"COMPLETED","final_state":"COMPLETED","failure_reason_code":null,"failure_reason_detail":null,"cancel_reason_code":null,"cancel_actor_user_id":null,"input":{"code":"OUTGOING_VOICE_BARRED"},"started_at":"2026-06-01T10:00:00Z","completed_at":"2026-06-01T10:00:01Z","duration_ms":1000 }
 ```
-**Reading:** op_1 is **in-flight** (`final_state=null`, `current_state=VALIDATING`) — it blocks any other
-non-RESTRICT op on sub_124 and is the compensation source (`prior_subscription_status=ACTIVE`). op_2
-completed an activation. op_3 is a system-driven non-payment suspension (no `initiating_actor_user_id`).
-op_4 is a RESTRICT — it could have run concurrently with another op (non-exclusive). The
-`idempotency_key`/`idempotency_request_hash` make a retry return the same row.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **op_1** | A PAUSE job **still running** on sub_124 (`final_state=null`, `current_state=VALIDATING`) — it blocks any other non-RESTRICT op, and if cancelled it rolls the sub back to `prior_subscription_status=ACTIVE`. |
+| **op_2** | A finished activation (`final_state=COMPLETED`), started by a salesperson (`initiating_actor_role=SALES`). |
+| **op_3** | A **system-driven** non-payment suspension (`operation_kind=SUSPEND_NP`, `initiating_actor_user_id=null`, role SYSTEM), now COMPLETED. |
+| **op_4** | A RESTRICT that completed — being non-exclusive, it could have run alongside another job. |
+
+**The columns that did the work:**
+- **In-flight or done** = `final_state` (`null` = still running, the single-in-flight key; else COMPLETED/FAILED/CANCELLED); `current_state` is the fine-grained narration.
+- **Who started it** = `initiating_actor_user_id`/`initiating_actor_role` (null user = SYSTEM).
+- **Rollback target** = `prior_subscription_status` on cancel.
+- **Retry safety** = `idempotency_key`/`idempotency_request_hash` make a duplicate return the same row.
 
 ### Config tables (no-code knobs)
 **`subscription_operation_config`** (composite PK `operator_code`+`operation_kind`) and
@@ -251,12 +268,19 @@ op_4 is a RESTRICT — it could have run concurrently with another op (non-exclu
 { "subscription_pause_config":{ "operator_code":"WIK","customer_self_service_enabled":true,"scheduled_pause_enabled":true,"max_future_scheduled_resume_days":90,"min_pause_hours":24,"customer_notification_enabled":true,"updated_by":"u_admin" } }
 { "subscription_restriction":{ "restriction_id":"srest_voice","operator_code":"WIK","restriction_code":"OUTGOING_VOICE_BARRED","name":"Outgoing voice barred","fulfillment_action":"AAA_RESTRICT_OUTGOING_VOICE","customer_self_service_eligible":false,"admin_only":true,"is_active":true } }
 ```
-**Reading:** `subscription_operation_config` enables/disables a kind per operator or points it at a
-**custom BPMN** (PAUSE → `sub-pause-wik`) and sets the per-call timeouts/`feature_flags` — pure config.
-`MIGRATION` disabled → `trigger` rejects it. `subscription_pause_config` sets the voluntary-pause policy
-(self-service switch, scheduled-pause window, minimum duration, notify). `subscription_restriction`
-catalogs each bar with the `fulfillment_action` FUL-04 broadcasts and who may apply it
-(`customer_self_service_eligible`/`admin_only`).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **operation_config · MIGRATION** | This operator has migrations **turned off** (`enabled=false`) — so `trigger` rejects a MIGRATION outright. |
+| **operation_config · PAUSE** | Pause is on (`enabled=true`) and runs a **custom workflow** (`default_bpmn_process_key=sub-pause-wik`), with a 120s timeout and a `requireFee` feature flag — pure config. |
+| **pause_config** | The voluntary-pause policy: customers may self-serve (`customer_self_service_enabled=true`), schedule a resume up to 90 days out, pause for at least 24h, and get notified. |
+| **restriction · srest_voice** | The "outgoing voice barred" bar: when applied, FUL-04 broadcasts `fulfillment_action=AAA_RESTRICT_OUTGOING_VOICE`; only an admin may set it (`admin_only=true`, `customer_self_service_eligible=false`). |
+
+**The columns that did the work:**
+- **On/off + which workflow** = `enabled` + `default_bpmn_process_key` (a disabled kind is rejected by `trigger`).
+- **Pause policy knobs** = the `subscription_pause_config` switches (self-service, scheduled window, minimum, notify).
+- **A restriction's effect + who may apply it** = `fulfillment_action` + `customer_self_service_eligible`/`admin_only`.
 
 ## 3. Services
 | Service | Responsibility | Key methods |

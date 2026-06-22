@@ -51,10 +51,17 @@ backlog, SLA-overdue tickets — the at-a-glance health.
 { "hb":{ "service":"workflow-worker","instance_id":"wf-w-1","status":"UP","metrics":{"lastBatch":7,"queueDepth":2},"last_seen_at":"2026-06-20T10:05:00Z" } }
 { "hb":{ "service":"outbox-dispatcher","instance_id":"ob-d-1","status":"DOWN","metrics":null,"last_seen_at":"2026-06-20T09:40:00Z" } }
 ```
-**Reading:** `command=PAUSE` with an `acknowledged_at` persists (the worker re-reads it on restart and
-stays down); `command=null` = run normally; `RESTART` un-acked (`acknowledged_at=null`) = will stop once
-then clear. The heartbeat's `last_seen_at` + `status` (per `instance_id`) is the liveness signal the
-overview reads; a stale `last_seen_at` reads unhealthy.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **workflow-worker (control)** | The NOC told this service to **PAUSE** and it has **already obeyed** (`acknowledged_at` set) — it re-reads this on restart and stays down. |
+| **outbox-dispatcher (control)** | A **RESTART** is requested but **not yet acted on** (`acknowledged_at=null`) — it will stop once then clear the command. |
+| **scheduler (control)** | A **RESUME** was issued and **acknowledged** — the service is back to running normally. |
+| **workflow-worker (hb)** | Instance `wf-w-1` is **healthy** (`status=UP`), last checked in at `last_seen_at`, reporting `metrics` (lastBatch 7, queueDepth 2). |
+| **outbox-dispatcher (hb)** | Instance `ob-d-1` is **down** (`status=DOWN`, `metrics=null`); its `last_seen_at` is old, so the overview reads it as unhealthy. |
+
+**The columns that did the work:** `command` + `acknowledged_at` express a pending vs obeyed control order (`null` command = run normally); `status` + `last_seen_at` (per `instance_id`) are the liveness signal — a stale `last_seen_at` reads unhealthy.
 
 ### `system_log`
 ```json
@@ -63,9 +70,16 @@ overview reads; a stale `last_seen_at` reads unhealthy.
 { "id":"log_3","level":"error","channel":"billing","message":"Tax signer timeout","context":{"invoice":"tax_9"},"correlation_id":"tax_9","logged_at":"2026-06-20T10:06:00Z" }
 { "id":"log_4","level":"info","channel":"billing","message":"Cycle close completed","context":{"closed":340},"correlation_id":null,"logged_at":"2026-06-20T10:10:00Z" }
 ```
-**Reading:** structured logs on the **database** channel, filterable by `level` + free-text `q` (and
-groupable by `channel`/`correlation_id`) — the NOC's searchable operational record. `correlation_id`
-threads a log line into an end-to-end trace.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **log_1** | A `warning` from the `provisioning` channel: "Provisioning rejected by NMS", tied to `sub_1` (`correlation_id`) so it threads into that subscription's trace; `context` names the target (GPON). |
+| **log_2** | A plain `info` line ("Routine heartbeat") with **no channel and no correlation** (`channel=null`, `correlation_id=null`) — noise, not tied to any trace. |
+| **log_3** | An `error` from the `billing` channel: "Tax signer timeout", tied to `tax_9`; `context` names the invoice. |
+| **log_4** | An `info` from the `billing` channel: "Cycle close completed", `context` says 340 closed; no `correlation_id` (a batch summary, not a per-entity trace). |
+
+**The columns that did the work:** `level` + free-text `q` filter the log; `channel` and `correlation_id` group/thread lines (`correlation_id` stitches a line into an end-to-end trace).
 
 ## 3. Services & support
 | Component | Responsibility |

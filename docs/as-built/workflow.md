@@ -133,11 +133,20 @@ rejected. *Proven by `WorkflowEngineTest::test_strict_outputs_rejects_a_handler_
 { "et_1":{ "task_id":"et_1","instance_id":"pi_1","node_id":"activate","topic":"activate","operator_code":"WIK","business_key":"sub_1","variables":{"subscriptionId":"sub_1"},"status":"LOCKED","worker_id":"wf-w-1","locked_until":"2026-06-20T10:01:00Z","retries":3,"error_message":null,"completed_at":null } }
 { "et_2":{ "task_id":"et_2","instance_id":"pi_1","node_id":"billing-intent","topic":"billing-intent","operator_code":"WIK","business_key":"sub_1","variables":null,"status":"CREATED","worker_id":null,"locked_until":null,"retries":3,"error_message":null,"completed_at":null } }
 ```
-**Reading:** an **instance** is one running flow keyed by `business_key` (the subscription/order id),
-spawned from a `definition_id`+`definition_version`; `variables` carries ids/control flags and
-`active_nodes` the nodes currently waiting. An **external task** is a service node waiting to be worked;
-`CREATED` = runnable, `LOCKED` = a worker (`worker_id`) claimed it until `locked_until` — a dead worker's
-lock is reaped by `:tick`, decrementing `retries` (0 → `INCIDENT`). The `topic` routes it to a handler.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pi_1** | A subscription-activation flow for `sub_1` (`business_key`) is **live** (`status=RUNNING`) and parked at the `activate` node (`active_nodes`); it carries `subscriptionId=sub_1` in `variables`. |
+| **pi_2** | An order-capture flow for `order_1` **finished cleanly** (`status=COMPLETED`, `active_nodes=[]`, `ended_at` set, `error_message=null`). |
+| **pi_6** | Another activation flow, for `sub_9`, is a **stuck activation** — it **FAILED** because the NMS rejected provisioning (`status=FAILED`, see `error_message`), still pointing at the `activate` node. |
+| **et_1** | The work ticket for pi_1's `activate` node is **claimed**: worker `wf-w-1` holds it (`status=LOCKED`, `worker_id`) until `locked_until`, with 3 `retries` left; its `topic=activate` routes it to a handler. |
+| **et_2** | pi_1's next ticket (`billing-intent`) is **runnable but unclaimed** (`status=CREATED`, `worker_id=null`) — no worker has picked it up yet. |
+
+**The columns that did the work:**
+- **What flow / what it's about** = `definition_id`+`definition_version` (the flow) and `business_key` (the subscription/order it runs for).
+- **Live, done, or broken** = `status`; `active_nodes` shows where it's parked and `error_message` why it failed.
+- **A ticket's state** = `status` (`CREATED`=runnable, `LOCKED`=claimed by `worker_id` until `locked_until`); a dead worker's lock is reaped by `:tick`, decrementing `retries` (0 → `INCIDENT`).
 
 **Instance lifecycle** — one running flow, from start to finish:
 ```mermaid
@@ -174,10 +183,19 @@ stateDiagram-v2
 { "definition_id":"pdef_3","process_key":"ful-order-capture","version":1,"operator_code":null,"name":"Order Capture","description":null,"graph":{"nodes":[],"edges":[]},"status":"DEPLOYED","created_by":"u_studio","deployed_at":"2026-06-02T00:00:00Z" }
 { "definition_id":"pdef_4","process_key":"sub-pause","version":1,"operator_code":null,"name":"Subscription Pause","description":null,"graph":{"nodes":[],"edges":[]},"status":"DRAFT","created_by":"u_studio","deployed_at":null }
 ```
-**Reading:** flows are **data**. pdef_2 is a **WIK-specific override** of `sub-activate` (an operator can
-fork a flow without code). `operator_code=null` = the platform default. Only `DEPLOYED` definitions start
-instances (a `DRAFT` like pdef_4 is still being authored); a new market = a new definition row. The
-`graph` is the React-Flow node/edge JSON authored in the Studio.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pdef_1** | The **platform-default** `sub-activate` flow (`operator_code=null`), version 1, **live** (`status=DEPLOYED`) — it can start instances. |
+| **pdef_2** | A **WIK-specific override** of the same `sub-activate` flow (`operator_code=WIK`, version 2) — an operator forked the flow without code; also `DEPLOYED`. |
+| **pdef_3** | The platform-default `ful-order-capture` flow (`operator_code=null`), `DEPLOYED`. |
+| **pdef_4** | A `sub-pause` flow that is **still being authored** (`status=DRAFT`, `deployed_at=null`) — it cannot start instances yet. |
+
+**The columns that did the work:**
+- **Whose flow** = `operator_code` (`null` = platform default, `WIK` = operator override of the same `process_key`).
+- **Can it run** = `status` — only `DEPLOYED` definitions start instances.
+- **The flow itself** = `graph`, the React-Flow node/edge JSON authored in the Studio.
 
 ### `workflow_message_subscription` / `workflow_timer` · `status`: `PENDING|FIRED|CANCELLED` / `workflow_user_task` · `status`: `OPEN|CLAIMED|COMPLETED|CANCELLED`
 ```json
@@ -186,10 +204,16 @@ instances (a `DRAFT` like pdef_4 is still being authored); a new market = a new 
 { "timer":{ "id":21,"instance_id":"pi_4","node_id":"grace-window","fire_at":"2026-06-21T00:00:00Z","status":"PENDING" } }
 { "ut":{ "task_id":"ut_1","instance_id":"pi_5","node_id":"manual-review","name":"Manual review","candidate_group":"billing-lead","assignee":null,"variables":{"reason":"high-value"},"status":"OPEN","due_at":"2026-06-22T00:00:00Z","completed_at":null } }
 ```
-**Reading:** these are the **three "wait" mechanisms** a flow can park on. A `message_subscription` is a parked
-catch keyed by `message_name`+`correlation_key` (resumed by `correlateMessage`); a `workflow_timer` fires its
-node on `:tick` when `fire_at` passes; a `user_task` parks for a human — `OPEN` until a member of
-`candidate_group` claims it (sets `assignee`, `CLAIMED`) via the Studio inbox.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **msg #11** | Instance pi_3 is **parked waiting for a message** named `ful-install-finalized` matched on `correlation_key=order_2` — it resumes when that message arrives (`correlateMessage`). |
+| **msg #12** | Instance pi_7 is parked waiting for a `kyc-decision` message matched on `correlation_key=sub_4`. |
+| **timer #21** | Instance pi_4 is **parked on a timer** at node `grace-window`; it's `PENDING` and will fire on `:tick` once `fire_at` (2026-06-21) passes. |
+| **ut_1** | Instance pi_5 is **parked for a human** — a manual review task that is `OPEN` (`assignee=null`), waiting for someone in `candidate_group=billing-lead` to claim it (which sets `assignee` and flips it to `CLAIMED`), due by `due_at`. |
+
+**The columns that did the work:** these are the three "wait" mechanisms a flow can park on — a message catch (keyed by `message_name`+`correlation_key`), a timer (`fire_at`), or a human task (`OPEN` until a `candidate_group` member claims it via the Studio inbox).
 
 ## 3. Engine
 | Component | Responsibility |

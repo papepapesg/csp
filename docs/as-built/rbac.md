@@ -136,9 +136,20 @@ immediately loses access to that region.
 { "id":1,"name":"SUPER_ADMIN","guard_name":"web" }
 { "id":9,"name":"CUSTOMER_CARE_AGENT","guard_name":"web" }
 ```
-**Reading:** flat catalogs of permission codes and role codes (`id, name, guard_name` — the only columns).
-Everything is guard **`web`** (one guard serves both Inertia sessions and Sanctum tokens). These rows grant
-nothing on their own — the grants are the pivots below.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **perm #11** | A permission code named `workorder.read` exists in the catalog, on guard `web`. |
+| **perm #12** | A permission code named `workorder.assign` exists, guard `web`. |
+| **perm #21** | A permission code named `fulfillment.read` exists, guard `web`. |
+| **perm #40** | A permission code named `rbac.manage` exists, guard `web`. |
+| **role #4** | A role code named `DISPATCHER` exists, guard `web`. |
+| **role #2** | A role code named `BILLING_LEAD` exists, guard `web`. |
+| **role #1** | A role code named `SUPER_ADMIN` exists, guard `web`. |
+| **role #9** | A role code named `CUSTOMER_CARE_AGENT` exists, guard `web`. |
+
+**The columns that did the work:** just `id`, `name`, `guard_name` — everything is guard **`web`** (one guard serves both Inertia sessions and Sanctum tokens). These rows grant nothing on their own; the grants are the pivots below.
 
 ### `role_has_permissions` — ⭐ **WHAT A ROLE CAN DO** (set here)
 ```json
@@ -147,11 +158,16 @@ nothing on their own — the grants are the pivots below.
 { "role_id":4, "permission_id":21 }   // DISPATCHER → fulfillment.read
 { "role_id":2, "permission_id":12 }   // BILLING_LEAD does NOT have this (illustrative absence) — only rows that exist are grants
 ```
-**Reading:** **this pivot is the single source of truth for “what a role can do.”** A role can do exactly
-the permissions it has a row for. You **set/change** it by `PUT /api/rbac/roles/{code}/permissions` →
-`Role::syncPermissions()` (replaces the role's rows, audited, with the anti-escalation ceiling), or at
-bootstrap via the `RbacSeeder` role→permission matrix (§7). To answer “can DISPATCHER assign a work order?”
-look for `(role_id:4, permission_id:12)` — present ⇒ yes.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| Row 1 | `role_id=4` (DISPATCHER) **can** `workorder.read` (`permission_id=11`) — the grant exists. |
+| Row 2 | DISPATCHER **can** `workorder.assign` (`permission_id=12`). |
+| Row 3 | DISPATCHER **can** `fulfillment.read` (`permission_id=21`). |
+| Row 4 | `role_id=2` (BILLING_LEAD) paired with `permission_id=12` — shown only to illustrate **absence**: in real data only existing rows are grants, so to deny something you simply have no row for it. |
+
+**The columns that did the work:** a row's mere existence (`role_id` + `permission_id`) **is** the grant — this pivot is the single source of truth for "what a role can do." You set/change it via `PUT /api/rbac/roles/{code}/permissions` → `Role::syncPermissions()` (replaces the role's rows, audited, with the anti-escalation ceiling), or at bootstrap via the `RbacSeeder` matrix (§7).
 
 ### `model_has_roles` — **USER → ROLE** (who has the role)
 ```json
@@ -160,9 +176,16 @@ look for `(role_id:4, permission_id:12)` — present ⇒ yes.
 { "role_id":1, "model_type":"App\\Models\\User", "model_id":1 }    // user #1 is SUPER_ADMIN
 { "role_id":9, "model_type":"App\\Models\\User", "model_id":83 }   // user #83 is a care agent
 ```
-**Reading:** the user→role assignment, written by `User::syncRoles()` (from `assignRoles`). `model_id` is the
-user's **numeric `id`** (the morph key), **not** `uid`. A user's effective permissions = the union of
-`role_has_permissions` across all their `model_has_roles` roles (+ any direct grants below).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| Row 1 | User #57 (`model_id`) **is a DISPATCHER** (`role_id=4`). |
+| Row 2 | The same user #57 **is also a BILLING_LEAD** (`role_id=2`) — users can hold many roles. |
+| Row 3 | User #1 **is SUPER_ADMIN** (`role_id=1`). |
+| Row 4 | User #83 **is a CUSTOMER_CARE_AGENT** (`role_id=9`). |
+
+**The columns that did the work:** `model_id` is the user's **numeric `id`** (the morph key), not `uid`; `model_type` is the morph class. Written by `User::syncRoles()`. A user's effective permissions = the union of `role_has_permissions` across all their roles here (+ any direct grants below).
 
 ### `model_has_permissions` — **USER → PERMISSION directly** (rare escape hatch)
 ```json
@@ -171,8 +194,16 @@ user's **numeric `id`** (the morph key), **not** `uid`. A user's effective permi
 { "permission_id":21, "model_type":"App\\Models\\User", "model_id":83 }
 { "permission_id":12, "model_type":"App\\Models\\User", "model_id":99 }
 ```
-**Reading:** a direct user→permission grant that bypasses roles — used sparingly for exceptions. `getAllPermissions()`
-unions these with the role-derived ones.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| Row 1 | User #1 was granted `rbac.manage` (`permission_id=40`) **directly**, outside any role. |
+| Row 2 | User #57 has a **one-off** `workorder.read` grant (`permission_id=11`) not coming from a role. |
+| Row 3 | User #83 was granted `fulfillment.read` (`permission_id=21`) directly. |
+| Row 4 | User #99 was granted `workorder.assign` (`permission_id=12`) directly. |
+
+**The columns that did the work:** `model_id` (the user) + `permission_id` — a direct grant that **bypasses roles**, used sparingly for exceptions. `getAllPermissions()` unions these with the role-derived ones.
 
 ### `rbac_role_meta` (role display/family/lifecycle — metadata, not a grant)
 ```json
@@ -181,9 +212,16 @@ unions these with the role-derived ones.
 { "role_code":"CVM_MANAGER","operator_code":"WIK","display_name":"CVM Manager","role_family":"COMMERCIAL","description":"Retention & offers","status":"ACTIVE","keycloak_role_name":null }
 { "role_code":"LEGACY_OPS","operator_code":"GLOBAL","display_name":"Legacy Ops","role_family":null,"description":"Decommissioned","status":"RETIRED","keycloak_role_name":null }
 ```
-**Reading:** display/grouping/lifecycle metadata for a role code (the spatie `roles` row is the enforcement
-identity; this annotates it). `status=RETIRED` hides a role from the admin picker; `keycloak_role_name`
-mirrors the role into the IdP when `SOPHIX_AUTH_DRIVER=keycloak`. `operator_code=GLOBAL` = a platform role.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **DISPATCHER** | A **platform** role (`operator_code=GLOBAL`) shown as "Dispatcher", grouped under `role_family=FIELD_OPS`, **ACTIVE**, and mirrored into the IdP as `dispatcher` (`keycloak_role_name`). |
+| **BILLING_LEAD** | A platform role "Billing Lead", family `BILLING`, ACTIVE, mirrored as `billing-lead`. |
+| **CVM_MANAGER** | A **WIK-only** role (`operator_code=WIK`) "CVM Manager", family `COMMERCIAL`, ACTIVE, with **no IdP mirror** (`keycloak_role_name=null`). |
+| **LEGACY_OPS** | A platform role "Legacy Ops" that is **RETIRED** (`status`) with no family — hidden from the admin picker. |
+
+**The columns that did the work:** this is metadata about a role code (the spatie `roles` row is the enforcement identity). `status=RETIRED` hides a role from the picker; `keycloak_role_name` mirrors it into the IdP when `SOPHIX_AUTH_DRIVER=keycloak`; `operator_code=GLOBAL` means a platform role.
 
 ### `rbac_permission_meta` (permission metadata — does NOT grant) · `risk_level`: `LOW|MEDIUM|HIGH|CRITICAL`
 ```json

@@ -110,13 +110,19 @@ deploy.
 { "table_id":"dt_3","rule_set":"rules.cvm.offer","version":2,"operator_code":"WIK","name":"CVM offer approval","description":"High-value discount gate","hit_policy":"FIRST","inputs":["offerType","discountPercent"],"rules":[{"when":[{"var":"discountPercent","op":">=","value":20}],"then":{"requireApproval":true,"approvalPolicy":"CVM_HIGH_VALUE"}}],"default_output":{"requireApproval":false},"status":"DEPLOYED","created_by":"u_studio" }
 { "table_id":"dt_4","rule_set":"rules.field_audit.equipment.discrepancy","version":1,"operator_code":"WIK","name":"Discrepancy routing","description":null,"hit_policy":"COLLECT","inputs":["discrepancyType"],"rules":[{"when":[{"var":"discrepancyType","op":"=","value":"MISSING"}],"then":{"severity":"HIGH","routeAction":"ESCALATE"}}],"default_output":null,"status":"DRAFT","created_by":"u_studio" }
 ```
-**Reading:** each table holds `rules` (a list of `when` conditions → `then` outcome) for a **rule
-package** (`rule_set`), evaluated under `hit_policy` (`FIRST` = first match wins, `COLLECT` = gather all)
-with a `default_output` when nothing matches. dt_1's `taxGroup:NONE` for data usage makes it
-**tax-exempt** (an outcome that inverts behaviour); dt_3 says discounts ≥ 20% need approval. Tables are
-operator-scoped + versioned, so a WIK table (`operator_code:WIK`) overrides the default
-(`operator_code:null`); only `DEPLOYED` tables evaluate (dt_4 is still `DRAFT`). Evaluate returns the
-matching outcome (or `default_output`, else the registered code fallback if no table).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **dt_1** | WIK's `tax-applicability` table (`operator_code=WIK`), **live** (`status=DEPLOYED`): it picks a `taxGroup` from `inputs` — a residential package → `KE_INTERNET`, voice usage → `KE_VOICE`, **data usage → `NONE` (tax-exempt)** — and `FIRST` match wins. |
+| **dt_2** | The **platform-default** version of the same table (`operator_code=null`), `DEPLOYED` but simpler: a package → `KE_INTERNET`, otherwise the `default_output` of `NONE`. WIK's dt_1 overrides this one. |
+| **dt_3** | WIK's `cvm.offer` gate, `DEPLOYED`: any offer with `discountPercent >= 20` returns `requireApproval=true`; everything else falls through to `default_output` (`requireApproval=false`). |
+| **dt_4** | WIK's field-audit discrepancy router — still `DRAFT`, so it **does not evaluate yet**. It uses `COLLECT` (gather all matches) and would route a `MISSING` discrepancy to `severity=HIGH`/`ESCALATE`. |
+
+**The columns that did the work:**
+- **Which package, whose version** = `rule_set` (the rule package) + `operator_code` (`WIK` overrides `null` default) + `version`.
+- **Live or not** = `status` — only `DEPLOYED` tables evaluate.
+- **How matches are picked** = `hit_policy` (`FIRST`=first match wins, `COLLECT`=gather all), falling back to `default_output` when nothing matches.
 
 **Table lifecycle** — a table only evaluates once `DEPLOYED`:
 ```mermaid

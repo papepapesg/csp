@@ -245,11 +245,22 @@ catalog lifecycle events (`Foundation/Cache`).
 { "id":"pv_1","package_id":"pkg_triple","price":5000.00,"currency":"KES","target_franchises":["fr_nrb"],"target_tech_regions":null,"effective_from":"2026-01-01T00:00:00Z","effective_until":null,"status":"ACTIVE" }
 { "id":"pv_old","package_id":"pkg_old","price":2500.00,"currency":"KES","target_franchises":null,"target_tech_regions":null,"effective_from":"2025-01-01T00:00:00Z","effective_until":"2026-05-01T00:00:00Z","status":"SUPERSEDED" }
 ```
-**Reading:** the **package** is priced via its **version** (`pv_1.price`), not its components.
-`current_version_id` points at the live priced version. `DRAFT` isn't sellable; `INACTIVE`/`END_OF_LIFE`
-keeps existing subs but takes no new orders (`retired_at` stamped). A price change = a new
-`package_version` (history preserved; the prior one goes `SUPERSEDED` with `effective_until` set).
-`target_franchises`/`target_tech_regions` scope where it may be sold.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pkg_triple** | A live, sellable bundle "Triple Play" (`status=ACTIVE`) priced by its version `pv_1` (`current_version_id`), and only sold in Nairobi/Karen (`target_franchises`/`target_tech_regions`). |
+| **pkg_inet** | A live "Internet 100M" sold everywhere (`target_franchises`/`target_tech_regions=null` = no restriction), priced by version `pv_2`. |
+| **pkg_promo** | A Black Friday package still being built — **not sellable** (`status=DRAFT`, `current_version_id=null` = no priced version yet). |
+| **pkg_old** | A retired "Internet 50M": withdrawn from sale (`status=INACTIVE`, `retired_at` stamped) — existing subs keep it, no new orders. |
+| **pv_1** | The live priced version of pkg_triple: KES 5000.00 (`price`), in effect since Jan 2026 with no end (`effective_until=null`, `status=ACTIVE`). |
+| **pv_old** | An old priced version that was replaced: `status=SUPERSEDED`, `effective_until` set — kept so old invoices still recompute. |
+
+**The columns that did the work:**
+- **The price** lives on the **version** (`pv_1.price`), not the package; `current_version_id` points at the live one.
+- **Sellable or not** = `status` (only `ACTIVE` takes new orders; `retired_at` stamps the withdrawal).
+- **A price change** = a brand-new `package_version` row; the old one goes `SUPERSEDED` (history preserved).
+- **Where it may be sold** = `target_franchises`/`target_tech_regions`.
 
 **`package` status lifecycle** (the launch flow that drives `DRAFT → ACTIVE` is Scenario 1):
 
@@ -280,11 +291,19 @@ stateDiagram-v2
 { "id":"svc_voice","operator_code":"WIK","name":"Voice","code":"VOICE","description":"Fixed voice","service_class_id":"scls_voice","service_group":"VOICE","is_addressable":false,"equipment_requirement_ref":null,"consumption_model":"USAGE","revenue_category":"VOICE","network_profile_shape":null,"provisioner_key":"sip","default_wallet_ref":"VOICE_WALLET","default_tax_group_ref":"KE_VOICE","status":"ACTIVE","retired_at":null }
 { "id":"svc_data","operator_code":"WIK","name":"Mobile Data","code":"DATA","description":"Metered data","service_class_id":"scls_data","service_group":"DATA","is_addressable":false,"equipment_requirement_ref":null,"consumption_model":"USAGE","revenue_category":"DATA","network_profile_shape":null,"provisioner_key":null,"default_wallet_ref":"DATA_WALLET","default_tax_group_ref":null,"status":"ACTIVE","retired_at":null }
 ```
-**Reading:** `consumption_model` splits **FLAT** (billed as the package fee) vs **USAGE** (metered →
-rated events → its own charge, routed to `default_wallet_ref`). `network_profile_shape` +
-`provisioner_key` are exactly what Provisioning puts in a command's `desired_profile`; `is_addressable`
-marks the services that get provisioned. `revenue_category` is how Billing groups usage and how voice
-lands on its own invoice. Every service belongs to a `service_class_id` (the coarse class).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **svc_inet** | Internet: a flat-fee service (`consumption_model=FLAT`, billed as the package price). It gets provisioned (`is_addressable=true`) with profile `{speed:100M, vlan:101}` (`network_profile_shape`) via the `gpon_inet` plane (`provisioner_key`). |
+| **svc_tv** | IPTV: also flat-fee and provisioned (`is_addressable=true`), with bouquet `PREMIUM` over the `iptv` plane. |
+| **svc_voice** | Voice: **metered** (`consumption_model=USAGE`) — usage is rated and lands its own charge, routed to `VOICE_WALLET` (`default_wallet_ref`), and grouped under `revenue_category=VOICE` (its own invoice). |
+| **svc_data** | Mobile Data: metered too, routed to `DATA_WALLET`, **not provisioned** (`is_addressable=false`, `provisioner_key=null`). |
+
+**The columns that did the work:**
+- **Flat vs metered** = `consumption_model` (FLAT = the package fee; USAGE = rated events → own charge).
+- **Does it get provisioned** = `is_addressable`; the profile sent to Provisioning = `network_profile_shape` + `provisioner_key`.
+- **How Billing groups it** = `revenue_category` (this is how voice lands on its own invoice); every service rolls up to a `service_class_id`.
 
 ### `discount` table is `discount_catalog` (`discount_type`: `PERCENT|FIXED` · `applies_to`: `INVOICE|PACKAGE|SERVICE`)
 ```json
@@ -382,11 +401,20 @@ flowchart LR
     V --> T["Total tax 39.20<br/>Gross 139.20"]
 ```
 
-**Reading:** `rules.tax-applicability` picks the **group** for each line (internet → `KE_INTERNET`, voice
-→ `KE_VOICE`); `TaxComputeService` then walks the group's `order_within_group` rule list, and for each
-rule charges `rate` on `BASE` (original price) or `BASE_PLUS_PRIOR` (price + tax-so-far), rounding each
-step by `rounding_mode`/`rounding_scale`. A group whose applicability resolves to `NONE` ⇒ the line is
-exempt. Rules are never deleted — they're closed with `effective_until` so old invoices still recompute.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **txg_inet** | The internet tax group: run exactly one rule, `WIK_INTERNET_VAT` (`order_within_group`). |
+| **txg_voice** | The voice tax group: run two rules **in this order** — `WIK_EXCISE` then `WIK_VOICE_VAT` (`order_within_group`) — so they stack. |
+| **txr_ivat** | Internet VAT: charge 16% (`rate`) on the **original price** (`base_method=BASE`). |
+| **txr_exc** | Voice excise: charge 20% on the **original price** (`base_method=BASE`) — runs first. |
+| **txr_vvat** | Voice VAT: charge 16% on the **price plus the excise already added** (`base_method=BASE_PLUS_PRIOR`) — this is why VAT comes out at 19.20, not 16.00. |
+
+**The columns that did the work:**
+- **Which rules run, in what order** = the group's `order_within_group` rule-code list (`rules.tax-applicability` picks the group per line).
+- **What each rule is charged on** = `base_method` (`BASE` = original price; `BASE_PLUS_PRIOR` = price + tax-so-far).
+- **Rounding** = `rounding_mode`/`rounding_scale` each step; a group resolving to `NONE` ⇒ exempt; rules are closed with `effective_until` (never deleted) so old invoices still recompute.
 
 ### `voice_tariff` (legacy simple catalog · `destination`: `ONNET|OFFNET|INTERNATIONAL`) and the PLM-CFG-07 `voice_destination_zone` / `voice_destination_prefix` (longest-prefix model)
 ```json
@@ -399,10 +427,20 @@ exempt. Rules are never deleted — they're closed with `effective_until` so old
 { "prefix_id":"vdp_254","operator_code":"WIK","prefix":"+2547","zone_id":"vdz_local","match_priority":10,"status":"ACTIVE","effective_from":"2026-01-01T00:00:00Z","effective_to":null,"notes":null }
 { "prefix_id":"vdp_44","operator_code":"WIK","prefix":"+44","zone_id":"vdz_uk","match_priority":5,"status":"ACTIVE","effective_from":"2026-01-01T00:00:00Z","effective_to":null,"notes":"UK fixed+mobile" }
 ```
-**Reading:** voice rating does **longest-prefix** match (`+447…` matches `+44` → INTL_UK zone, its rate
-applies). The legacy `voice_tariff` is the simple ONNET/OFFNET/INTL catalog (`rate_per_min`/`setup_fee`/
-`min_charge_seconds`); the PLM-CFG-07 model splits it into `voice_destination_zone` (the priced bucket)
-and `voice_destination_prefix` (the dial-string→zone map ranked by `match_priority`).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **vtar_local** | Legacy simple tariff: an on-net local call costs KES 2.00/min (`rate_per_min`), no setup fee, no minimum. |
+| **vtar_intl** | Legacy simple tariff: an international UK call costs KES 15.00/min with a KES 1.00 setup fee and a 30s minimum (`setup_fee`/`min_charge_seconds`). |
+| **vdz_local** | The new model's **priced bucket** for Kenya Mobile — a chargeable national zone (`zone_type=NATIONAL`, `default_charge_policy=CHARGEABLE`). |
+| **vdz_uk** | The priced bucket for the UK — a chargeable international zone. |
+| **vdp_254** | A dial-string → zone mapping: numbers starting `+2547` belong to the LOCAL zone (`zone_id=vdz_local`), ranked by `match_priority=10`. |
+| **vdp_44** | Numbers starting `+44` belong to the UK zone (`zone_id=vdz_uk`); a call to `+447…` matches this prefix → INTL_UK zone, its rate applies. |
+
+**The columns that did the work:**
+- **Which zone a number lands in** = longest matching `prefix` wins (`match_priority` breaks ties); the prefix points at a `zone_id`.
+- **What a call costs** = the zone (the priced bucket) vs the legacy flat `voice_tariff` (`rate_per_min`/`setup_fee`/`min_charge_seconds`). PLM-CFG-07 split the old single catalog into `voice_destination_zone` + `voice_destination_prefix`.
 
 ### `wallet_type` (catalog consumed by Billing) & `homepass` (the premises — **full width**)
 > `homepass.status` is **not** a hardcoded enum — it is a code from the `homepass_status_code` catalog
@@ -421,14 +459,23 @@ and `voice_destination_prefix` (the dial-string→zone map ranked by `match_prio
 { "id":"hp_3","operator_code":"WIK","code":"HP-MSA-0007","address":"7 Nyali Rd","country":"KE","region":"Mombasa","region_l1":"Mombasa","region_l2":null,"city":"Mombasa","area":"Nyali","sub_area_1":null,"sub_area_2":null,"road_name":"Nyali Rd","building_number":"7","building_name":"Palm Court","apartment_number":"3B","floor":"3","building_num_floors":6,"building_num_apartments":24,"property_type":"MIXED","owner_occupied":false,"outlets":4,"active_termination_points":2,"latitude":-4.0100000,"longitude":39.7000000,"altitude":15.00,"map_code":"MSA-NYL-07","map_link":null,"google_place_id":"ChIJ_nyali_007","not_serviceable_reason":null,"perm_date":"2025-09-01","survey_date":"2025-08-20","roe_signed_date":"2025-09-05","roe_document_link":"files://roe/hp_3.pdf","legacy_status_code":"OLD_RFS","directions":null,"comments":"HFC plant","tech_region_id":"KE-MSA-NYALI","technology":"HFC","status":"RFS","has_been_active":true,"has_been_sellable":true,"network_nodes":["CM-12","DN-3"],"network_path":{"captureMode":"MANUAL","nodes":[{"type":"MODEM","code":"CM-12","role":"LEAF","port":1}]},"service_management_endpoints":{"DATA":{"nodeCode":"DN-3","port":2}},"services_supported":["DATA","VOICE"],"geo_lat":-4.0100000,"geo_lng":39.7000000,"geo_footprint":null,"geo_source":"CGIS_2026Q1","geo_imported_at":"2026-02-01T00:00:00Z" }
 { "id":"hp_4","operator_code":"WIK","code":"HP-NRB-0099","address":"99 Karen Rd","country":"KE","region":"Nairobi","region_l1":"Nairobi","region_l2":null,"city":"Nairobi","area":"Karen","sub_area_1":null,"sub_area_2":null,"road_name":"Karen Rd","building_number":"99","building_name":null,"apartment_number":null,"floor":null,"building_num_floors":1,"building_num_apartments":1,"property_type":"RES","owner_occupied":true,"outlets":1,"active_termination_points":0,"latitude":-1.3200000,"longitude":36.7100000,"altitude":1675.00,"map_code":null,"map_link":null,"google_place_id":null,"not_serviceable_reason":"decommissioned","perm_date":null,"survey_date":null,"roe_signed_date":null,"roe_document_link":null,"legacy_status_code":null,"directions":null,"comments":null,"tech_region_id":"KE-NRB-KAREN","technology":"GPON","status":"RETIRED","has_been_active":true,"has_been_sellable":true,"network_nodes":["ONT-3"],"network_path":null,"service_management_endpoints":null,"services_supported":["DATA"],"geo_lat":-1.3200000,"geo_lng":36.7100000,"geo_footprint":null,"geo_source":null,"geo_imported_at":null }
 ```
-**Reading:** the wallet **catalog** defines prepaid wallet behaviour Billing instantiates (`unit`
-currency vs points, `allow_negative`, `auto_debit`). For homepass, only a status whose `is_sellable`
-flag is set can take an order (hp_2's `WAI` = waiting/under construction; hp_4's `RETIRED` =
-decommissioned); `technology` picks the provisioning plane (GPON→OLT vs HFC→CMTS, see `provisioning.md`);
-`network_path`/`services_supported` are the derived topology reads; the structured address tuple
-(`country`…`apartment_number`) is the deployment-wide uniqueness key; `has_been_sellable` is the latch
-that fires `HomePassReachedSellable` only once. `geo_*` are the imported CGIS coordinates (superseding the
-deprecated `latitude`/`longitude`).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **wtyp_main** | The main money wallet kind: holds currency (`unit=currency`, KES), can't go negative, debits automatically each cycle (`allow_negative=false`, `auto_debit=true`). |
+| **wtyp_voice** | The voice money wallet kind: same currency behaviour, auto-debited. |
+| **wtyp_pts** | Loyalty points: counted in points, not money (`unit=points`), and never auto-debited (`auto_debit=false`). |
+| **hp_1** | A premises in Karen that's **ready to sell and live** (`status=RFS`, GPON), with full topology (`network_path`/`services_supported`) and CGIS coordinates (`geo_*`). |
+| **hp_2** | A premises still under construction — **can't take an order** (`status=WAI` = waiting), no topology yet, never been sellable (`has_been_sellable=false`). |
+| **hp_3** | A ready Mombasa premises on **HFC** (`technology=HFC` → the CMTS plane, vs GPON→OLT). |
+| **hp_4** | A decommissioned premises (`status=RETIRED`, `not_serviceable_reason=decommissioned`) — no orders. |
+
+**The columns that did the work:**
+- **Can it take an order** = the `status` code's `is_sellable` flag (RFS yes; WAI/RETIRED no).
+- **Which provisioning plane** = `technology` (GPON→OLT, HFC→CMTS — see `provisioning.md`).
+- **The wallet kind's behaviour** = `unit`/`allow_negative`/`auto_debit` (Billing instantiates real wallets from these).
+- **Uniqueness / one-time latch** = the structured address tuple (`country`…`apartment_number`) is the deployment-wide key; `has_been_sellable` latches `HomePassReachedSellable` to fire once; `geo_*` (CGIS) supersede the deprecated `latitude`/`longitude`.
 
 ### `commercial_bundle` (`status`: `DRAFT|READY_FOR_REVIEW|APPROVED|ACTIVE|SUSPENDED|RETIRED|REJECTED|CANCELLED` · `bundle_type`: `ACQUISITION|RETENTION|MIGRATION|BUSINESS|STAFF|GENERAL`)
 ```json
@@ -437,10 +484,19 @@ deprecated `latitude`/`longitude`).
 { "bundle_id":"bun_staff","operator_code":"WIK","bundle_code":"STAFF_PLAN","display_name":"Staff Plan","description":"Internal staff bundle","status":"ACTIVE","bundle_type":"STAFF","currency_code":"KES","launch_date":"2026-02-01","retire_date":null,"created_by_user_id":"u_hr1" }
 { "bundle_id":"bun_oldbiz","operator_code":"WIK","bundle_code":"OLD_BIZ","display_name":"Old Business","description":"Retired SME bundle","status":"RETIRED","bundle_type":"BUSINESS","currency_code":"KES","launch_date":"2024-01-01","retire_date":"2026-03-01","created_by_user_id":"u_mkt1" }
 ```
-**Reading:** a bundle wraps a package for a purpose; its status is a launch lifecycle (with
-review/approval) and `launch_date`/`retire_date` bound its sale window. `bundle_type` is the commercial
-purpose. (The package and channel links live in child tables — `commercial_bundle` holds the bundle
-header.)
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **bun_triple** | A live acquisition bundle "Triple Saver" (`status=ACTIVE`, `bundle_type=ACQUISITION`), on sale since Jan 2026 with no retire date (`launch_date`/`retire_date`). |
+| **bun_win** | A retention "Winback" bundle still in the launch pipeline — **not live yet** (`status=READY_FOR_REVIEW`, `launch_date=null`). |
+| **bun_staff** | A live internal staff bundle (`bundle_type=STAFF`, `status=ACTIVE`). |
+| **bun_oldbiz** | A retired SME bundle (`status=RETIRED`, `retire_date=2026-03-01` passed) — off sale. |
+
+**The columns that did the work:**
+- **Live or not** = `status` (a launch lifecycle with review/approval; only `ACTIVE` sells).
+- **Sale window** = `launch_date`/`retire_date`; **commercial purpose** = `bundle_type`.
+- (Package and channel links live in child tables — `commercial_bundle` is just the header.)
 
 ## 3. Services
 | Service | Responsibility |

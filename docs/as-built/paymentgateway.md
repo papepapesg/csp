@@ -130,14 +130,19 @@ stateDiagram-v2
     note right of RECEIVED: a re-post emits DUPLICATE only, no new row
 ```
 
-**Reading:** `(provider, external_ref)` is the **dedup key** (a DB unique constraint) — a re-posted
-callback never inserts a second row; the existing record is returned and only a `GatewayCallbackDuplicate`
-event fires, so money is never double-credited (no persisted `DUPLICATE` row results from a retry).
-`PROCESSED` is the only status that applied the payment (and so the only one that fills `payment_id` +
-`resolved_account_id`); pgcb_2 could not be matched to an account (`REJECTED`, `ACCOUNT_NOT_FOUND`) and
-pgcb_3 is a declined card (`REJECTED`, the apply threw — `reject_reason` is the exception message); pgcb_4
-is a freshly landed bank transfer still `RECEIVED` (handler not yet run). The full provider body is kept
-in `raw` for audit.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pgcb_1** | An M-Pesa payment of **KES 5000** landed and **succeeded**: it was matched to account **acct_50** and applied as payment **pay_91** (`status=PROCESSED`, so both `resolved_account_id` and `payment_id` are filled). |
+| **pgcb_2** | A **KES 2500** Visa charge arrived but **couldn't find an account** (`account_ref=UNKNOWN`, `resolved_account_id=null`), so it was **REJECTED** with `reject_reason=ACCOUNT_NOT_FOUND` and no payment was created. |
+| **pgcb_3** | Another Visa charge for **KES 2500** was **REJECTED** because the **card declined** — the apply step threw and `reject_reason` holds the exception message (`"card declined"`); no `payment_id`. |
+| **pgcb_4** | A **KES 12000** bank transfer **just landed** and is still **RECEIVED** — the handler hasn't run yet, so it has no `payment_id` and no `reject_reason`. |
+
+**The columns that did that work:**
+- **Dedup** = `(provider, external_ref)` is a DB unique constraint, so a re-post never inserts a second row; the existing record is returned and only a `GatewayCallbackDuplicate` event fires (money is never double-credited — no persisted `DUPLICATE` row).
+- **Applied or not** = only `status=PROCESSED` fills `payment_id` + `resolved_account_id`; `reject_reason` explains a `REJECTED` row.
+- **Audit** = the full provider body is kept verbatim in `raw`.
 
 ## 3. Services
 | Service | Responsibility |

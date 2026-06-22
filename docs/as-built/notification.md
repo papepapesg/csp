@@ -136,11 +136,19 @@ The orchestrator processes a `source_event_id` once (Redis/cache) — a re-dispa
 { "id":"nrr_3","operator_code":"WIK","event_type":"DunningStageAdvanced","channel":"SMS","template_purpose_code":"DUNNING_NOTICE","priority":1,"urgency":"URGENT","category":"TRANSACTIONAL","conditions":{"stage":">=2"},"enabled":true,"needs_pdf":false }
 { "id":"nrr_4","operator_code":"WIK","event_type":"PromoBlast","channel":"SMS","template_purpose_code":"PROMO_GENERIC","priority":1,"urgency":"NORMAL","category":"MARKETING","conditions":null,"enabled":false,"needs_pdf":false }
 ```
-**Reading:** routing is **pure config** — an (operator, event) maps to ordered (channel, template
-purpose, category) rows. Adding a channel = a row, not code. `priority` orders the channels tried;
-`category` drives the regulatory filter (TRANSACTIONAL ignores marketing opt-out, so nrr_4's MARKETING
-row obeys opt-out); `urgency=URGENT` bypasses the customer time-window; `conditions` gates a rule on the
-payload; `enabled=false` (nrr_4) lets an admin pause a rule (O-6); `needs_pdf` triggers PDF rendering.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **nrr_1** | When an invoice is issued, send the postpaid invoice template by **EMAIL first** (`priority=1`) and **render a PDF** (`needs_pdf=true`); it's transactional, so it ignores marketing opt-out. |
+| **nrr_2** | The **second** channel for the same event: an **SMS** (`priority=2`), same template, no PDF — the fallback/companion to the email. |
+| **nrr_3** | A dunning notice goes by **SMS** at **URGENT** urgency (so it bypasses the customer's quiet-hours window), but only fires when `conditions={"stage":">=2"}` matches the payload. |
+| **nrr_4** | A promo blast (SMS, **MARKETING**) that is **paused** (`enabled=false`) — and being marketing, it would obey opt-out when on. |
+
+**The columns that did that work:**
+- **Ordering** = `priority` orders the channels tried for an event; adding a channel is just another row, not code.
+- **Regulatory filter** = `category` (TRANSACTIONAL ignores marketing opt-out, MARKETING obeys it); `urgency=URGENT` bypasses the customer time-window.
+- **Gates** = `conditions` gates a rule on the payload; `enabled=false` pauses a rule (O-6); `needs_pdf` triggers PDF rendering.
 
 ### `notification_log` · `final_status`: `DISPATCHED|PARTIALLY_DISPATCHED|SUPPRESSED|ESCALATED|UNDELIVERABLE` & `notification_delivery_attempt` · `status`: `SENT|FAILED|PENDING_RETRY|ESCALATED`
 ```json
@@ -166,10 +174,30 @@ stateDiagram-v2
     [*] --> UNDELIVERABLE: "no channel succeeded"
 ```
 
-**Reading:** the log is the **audit aggregate** (one row per notification event); the attempt rows are
-per-channel. nl_2 partially dispatched (att_2 EMAIL hard-bounced, att_3 SMS sent). nl_4 is a manual
-resend (`manual_resend_by`/`original_notification_id` point back to nl_2). The `final_status` is
-recomputed from the latest attempt per channel; `dispatch_context` carries what a retry needs.
+**Read each row as a sentence — *this data means this:***
+
+The log (one aggregate row per notification event):
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **nl_1** | An invoice notification to cust_1 that **fully succeeded** (`channels_attempted=[EMAIL,SMS]`, `final_status=DISPATCHED`). |
+| **nl_2** | An invoice notification to cust_2 that **only partly got through** (`final_status=PARTIALLY_DISPATCHED`) — one of its two channels failed. |
+| **nl_3** | A promo to cust_M that was **never sent** (`channels_attempted=[]`, `final_status=SUPPRESSED`) — preference/regulatory filtering dropped it. |
+| **nl_4** | A **manual resend** of nl_2: `manual_resend_by=agent_7` and `original_notification_id=nl_2` point back, and this time EMAIL alone went out and **DISPATCHED**. |
+
+The attempts (one row per channel try):
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **att_1** | nl_1's EMAIL attempt **SENT** on try 1 (`external_reference=m-1`). |
+| **att_2** | nl_2's EMAIL attempt **hard-bounced** (`status=FAILED`, `failure_category=PERMANENT_RECIPIENT`); `dispatch_context.retryable=false` means no retry — this is why nl_2 is only partial. |
+| **att_3** | nl_2's SMS attempt **SENT** — the channel that did get through. |
+| **att_4** | nl_1's SMS attempt hit a transient gateway 503 (`status=PENDING_RETRY`, `failure_category=TRANSIENT`), so it's scheduled to retry at `next_attempt_at`. |
+
+**The columns that did that work:**
+- **Aggregate vs detail** = the log's `final_status` is recomputed from the latest attempt per channel; `channels_attempted` lists which were tried.
+- **Resend trail** = `manual_resend_by` + `original_notification_id` link a resend to its original.
+- **Retry data** = `failure_category`/`dispatch_context` decide if an attempt retries; `next_attempt_at` schedules it.
 
 ### `template` (format-decomposed, versioned) · `status`: `ACTIVE|DRAFT|ARCHIVED|DISABLED` & `customer_notification_preference` · `email_status`: `VALID|SOFT_BOUNCED|INVALID`
 ```json
@@ -184,11 +212,29 @@ recomputed from the latest attempt per channel; `dispatch_context` carries what 
 { "id":"cnp_3","customer_id":"cust_2","operator_code":"WIK","email_opt_in":false,"sms_opt_in":true,"locale":"en","preferred_time_window_start":null,"preferred_time_window_end":null,"email_status":"VALID" }
 { "id":"cnp_4","customer_id":"cust_3","operator_code":"WIK","email_opt_in":false,"sms_opt_in":false,"locale":"en","preferred_time_window_start":null,"preferred_time_window_end":null,"email_status":"INVALID" }
 ```
-**Reading:** templates are **decomposed by format** (subject/HTML/text/SMS/PDF) + locale + version, so
-EMAIL needs all its parts present at an `ACTIVE` version to render; `engine_type` picks the render
-engine. Customer prefs gate the MARKETING channels (`email_opt_in`/`sms_opt_in` — transactional sends
-regardless), pick the `locale`, bound the send to the time window, and `email_status` lets a bounced
-address be skipped.
+**Read each row as a sentence — *this data means this:***
+
+Templates (decomposed by format + locale + version):
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **tpl_1** | The English **email subject** part of the dunning notice, **ACTIVE** v1 (Handlebars), with a `{name}` placeholder. |
+| **tpl_2** | The English **SMS text** part of the same dunning notice, **ACTIVE** v1 — a different format of the same purpose. |
+| **tpl_3** | A Swahili **EMAIL_HTML** invoice template still in **DRAFT** at v2 (`engine_type=HTML_TO_PDF`), so it can't be picked to render yet. |
+| **tpl_4** | An English **PDF** invoice template that is **ARCHIVED** (retired, no longer rendered). |
+
+Customer preferences:
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **cnp_1** | cust_M takes **email but not SMS** (`sms_opt_in=false`) and only within a **08:00–20:00** quiet-hours window; their email address is `VALID`. |
+| **cnp_2** | cust_1 is opted into **both** channels, prefers **Swahili** (`locale=sw`), but their email **soft-bounced** (`email_status=SOFT_BOUNCED`) so email may be skipped. |
+| **cnp_3** | cust_2 takes **SMS only** (email opt-out); email address still `VALID`. |
+| **cnp_4** | cust_3 has **opted out of everything** and their email is `INVALID` — only transactional sends would reach them at all. |
+
+**The columns that did that work:**
+- **Rendering** = a format needs all its parts present at an `ACTIVE` `version` to render; `engine_type` picks the render engine.
+- **Preference gating** = `email_opt_in`/`sms_opt_in` gate the MARKETING channels (transactional sends regardless); `locale` picks the language; the time-window bounds the send; `email_status` lets a bounced address be skipped.
 
 ### ICN: `staff_notification` (`status`: `PROCESSING|DISPATCHED|ACKNOWLEDGED|EXPIRED`) & `staff_group_membership`
 ```json
@@ -216,11 +262,21 @@ stateDiagram-v2
     EXPIRED --> [*]
 ```
 
-**Reading:** an ICN notification fans to a **candidate group**'s members; first-ACK → `ACKNOWLEDGED`
-(others suppressed — sn_2, `acknowledged_by=sup_01`); no members → `EXPIRED(NO_RECIPIENTS)` (sn_3,
-`expected_recipients:0`). `idempotency_key` makes a re-dispatch a no-op; `source_business_key` threads
-back to the originating EM-CFG-04/flow. The group membership is the recipient model (distinct from the
-customer pipeline).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **sn_1** | A high-urgency approval fanned to the **kenya-l1-kyc** group (`expected_recipients=4`); it's **DISPATCHED** and **nobody has ACKed yet** (`acknowledged_by=null`), with a 24h ack window (`expires_at`). |
+| **sn_2** | A KYC approval to the same group that **someone acted on**: `status=ACKNOWLEDGED`, `acknowledged_by=sup_01` at `acknowledged_at` — so peers are no longer needed. |
+| **sn_3** | A refund approval to **finance** that **expired immediately** because there was **no one to send to** (`expected_recipients=0`, `status=EXPIRED`, `expiry_reason=NO_RECIPIENTS`). |
+| **sn_4** | A low-urgency "WO stuck" alert to **noc-team** still **PROCESSING** (not yet fanned out); note `idempotency_key=null` here. |
+
+The group membership (the recipient roster) maps **group_code → user_id**: kenya-l1-kyc has sup_01 and sup_02, finance has fin_01, noc-team has noc_01.
+
+**The columns that did that work:**
+- **Fan-out target** = `candidate_group` + the membership rows; first member to act flips `status` to `ACKNOWLEDGED` (recorded by `acknowledged_by`), suppressing the rest.
+- **No-recipient expiry** = `expected_recipients=0` drives `EXPIRED` with `expiry_reason=NO_RECIPIENTS`.
+- **Idempotency / provenance** = `idempotency_key` makes a re-dispatch a no-op; `source_business_key` threads back to the originating module/flow.
 
 ### ICN: `staff_notification_delivery` (one row per recipient × channel) · `status`: `PENDING|DISPATCHED|ACKNOWLEDGED|FAILED|TERMINALLY_FAILED|SUPPRESSED`
 ```json

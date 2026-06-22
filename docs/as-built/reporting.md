@@ -96,9 +96,16 @@ Add a `MetricMap` case (+ the emitting event) and the projector counts it — no
 { "operator_code":"WIK","metric_date":"2026-06-20","metric_key":"payments_amount","value":248000 }
 { "operator_code":"WIK","metric_date":"2026-06-20","metric_key":"invoices_generated","value":340 }
 ```
-**Reading:** one row per (operator, day, metric). Values are **upserted/incremented** under a lock as
-events arrive. The dashboards select metric subsets; the keys come from `MetricMap` (the event→metric
-contract). `inbox_events` (Foundation) guarantees each event counts once.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| Row 1 | On 2026-06-20, WIK **activated 12 subscriptions** (`metric_key=subscriptions_activated`, `value=12`). |
+| Row 2 | The same day, WIK **terminated 2 subscriptions** (`subscriptions_terminated`, `value=2`). |
+| Row 3 | The same day, WIK **took KES 248,000 in payments** (`payments_amount`, `value=248000`). |
+| Row 4 | The same day, WIK **generated 340 invoices** (`invoices_generated`, `value=340`). |
+
+**The columns that did the work:** one row per `(operator_code, metric_date, metric_key)`; `value` is **upserted/incremented** under a lock as events arrive. The keys come from `MetricMap` (the event→metric contract), and `inbox_events` (Foundation) guarantees each event counts once.
 
 ## 3. Services & projector
 | Component | Responsibility |

@@ -189,12 +189,20 @@ calls the signer; if it fails it backs off and retries, eventually giving up.
 { "invoice_id":"inv_3","legal_invoice_number":"CN-WIK-2026-000007","account_id":"acc_1","customer_snapshot":{"name":"Jane Mwangi","taxId":"A012345678Z"},"customer_id":"cust_1","subscription_id":"sub_123","operator_code":"WIK","type":"CREDIT_NOTE","grouping_dimension":"SINGLE","grouping_key_values":null,"currency":"KES","billing_mode":"POSTPAID","status":"PAID","original_invoice_id":"inv_1","issue_date":"2026-07-01T00:00:00Z","due_date":null,"subtotal_amount":800.00,"tax_amount_total":0.00,"tax_summary":null,"total_amount":800.00,"amount_paid":0.00,"amount_due":0.00 }
 { "invoice_id":"inv_4","legal_invoice_number":"TAX-WIK-2026-000045","account_id":"acc_2","customer_snapshot":{"name":"Acme Ltd","taxId":"P051234567X"},"customer_id":"cust_3","subscription_id":"sub_9","operator_code":"WIK","type":"TAX","grouping_dimension":"SINGLE","grouping_key_values":null,"currency":"KES","billing_mode":"POSTPAID","status":"PAID","original_invoice_id":"inv_2","issue_date":"2026-06-30T00:00:00Z","due_date":null,"subtotal_amount":4310.34,"tax_amount_total":689.66,"tax_summary":{"VAT16":689.66},"total_amount":5000.00,"amount_paid":5000.00,"amount_due":0.00 }
 ```
-**Reading:** inv_1 is owed (`OPEN`, due-dated → becomes dunnable past due). inv_2 is settled (`PAID`,
-`amount_due=0`). inv_3 is a **credit note** linked to inv_1 via `original_invoice_id` (so inv_1 can't be
-bulk-reversed — it has linked notes); notes write `tax_amount_total=0` (inclusive treatment, §10). inv_4
-is a **TAX** invoice — immutable, never adjusted (adjust the commercial one instead). `customer_snapshot`
-freezes the bill-to identity; `grouping_dimension=WALLET` is what split internet (inv_1) from voice
-(inv_2).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **inv_1** | A KES 5000 internet bill that's **still owed** (`status=OPEN`, `amount_due=5000`, due 15 Jul → becomes dunnable once past due). |
+| **inv_2** | A KES 1500 voice bill, **fully paid** (`status=PAID`, `amount_due=0`). It's a separate document from inv_1 because `grouping_dimension=WALLET` split internet from voice. |
+| **inv_3** | A **credit note** against inv_1 (`type=CREDIT_NOTE`, `original_invoice_id=inv_1`) — so inv_1 can't be bulk-reversed; the note carries `tax_amount_total=0` (inclusive treatment, §10). |
+| **inv_4** | A **TAX invoice** (`type=TAX`) — immutable, never adjusted (you adjust the commercial invoice instead). |
+
+**The columns that did the work:**
+- **Owed vs settled** = `status` + `amount_due`.
+- **Note vs original** = `type` + `original_invoice_id` (a note links back; the original is locked).
+- **Why two documents** = `grouping_dimension`/`grouping_key_values` (WALLET put internet and voice on separate invoices).
+- **Frozen bill-to identity** = `customer_snapshot`.
 
 **Status lifecycle.** An invoice starts `OPEN`, takes payments, and lands `PAID` when fully settled (a
 fully-applied credit note also rests `PAID` with `amount_due=0`):
@@ -233,10 +241,19 @@ invoice header sums to `subtotal_amount=4310.34`, `tax_amount_total=689.66`, `to
 { "id":"il_3","invoice_id":"inv_1","line_type":"DETAIL","parent_summary_line_id":"il_1","service_category_code":"TV","package_ref":"pkg_triple","wallet_type_code":null,"description":"IPTV Premium","service_ref":"svc_tv","quantity":1.00,"unit_price":1200.00,"subtotal":1200.00,"tax_amount":192.00,"tax_breakdown":{"VAT16":192.00},"sort_order":2 }
 { "id":"il_4","invoice_id":"inv_2","line_type":"DETAIL","parent_summary_line_id":null,"service_category_code":"VOICE","package_ref":null,"wallet_type_code":"VOICE_WALLET","description":"Voice usage","service_ref":"svc_voice","quantity":150.00,"unit_price":2.00,"subtotal":300.00,"tax_amount":48.00,"tax_breakdown":{"EXC20":50.00,"VAT16":48.00},"sort_order":1 }
 ```
-**Reading:** il_1 is the customer-facing **SUMMARY** (package), il_2/il_3 its **DETAIL** breakdown
-(Internet+TV priced as the package, linked via `parent_summary_line_id`). il_4 is voice usage on a
-*different* invoice (WALLET grouping put voice on its own document, routed to `VOICE_WALLET`).
-`sort_order` fixes presentation; `tax_breakdown` carries the per-line components.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **il_1** | The customer-facing **summary** line on inv_1: "Triple Play monthly" priced as the whole package (`line_type=SUMMARY`, `parent_summary_line_id=null`). |
+| **il_2** | A **detail** line under il_1 (`line_type=DETAIL`, `parent_summary_line_id=il_1`): the Internet 100M component, KES 3000 ex-tax. |
+| **il_3** | The other detail line under il_1: the IPTV Premium component, KES 1200 ex-tax. |
+| **il_4** | Voice usage on a **different** invoice (inv_2): 150 min × KES 2, routed to `VOICE_WALLET` (`wallet_type_code`) — WALLET grouping put voice on its own document. |
+
+**The columns that did the work:**
+- **Summary vs detail** = `line_type` + `parent_summary_line_id` (details hang off their summary).
+- **Which invoice / wallet** = `invoice_id` + `wallet_type_code`.
+- **Per-line tax components** = `tax_breakdown`; **presentation order** = `sort_order`.
 
 ### `payment_ledger` · `method`: `MPESA|VISA|BANK_TRANSFER|OFFLINE` · `status`: `RECEIVED|APPLIED|PARTIALLY_APPLIED|REVERSED`
 > `customer_id`/`payment_reference`/`reversal_of_payment_id`/`reversal_reason_code`/`reversed_by` added
@@ -248,11 +265,19 @@ invoice header sums to `subtotal_amount=4310.34`, `tax_amount_total=689.66`, `to
 { "payment_id":"pay_3","account_id":"acc_2","customer_id":"cust_3","operator_code":"WIK","method":"OFFLINE","gateway_ref":null,"payment_reference":"cash-rcpt-9","currency":"KES","paid_amount":1500.00,"unallocated_amount":0.00,"status":"APPLIED","reversal_of_payment_id":null,"reversal_reason_code":null,"reversed_by":null,"received_at":"2026-07-04T09:00:00Z" }
 { "payment_id":"pay_4","account_id":"acc_1","customer_id":"cust_1","operator_code":"WIK","method":"VISA","gateway_ref":"VISA-9931","payment_reference":"VISA-9931","currency":"KES","paid_amount":5000.00,"unallocated_amount":0.00,"status":"REVERSED","reversal_of_payment_id":"pay_1","reversal_reason_code":"CHARGEBACK","reversed_by":"u_fin1","received_at":"2026-07-05T11:00:00Z" }
 ```
-**Reading:** every payment carries a **dedup reference** (`payment_reference`, gateway ref or
-Idempotency-Key) so a retried callback never double-applies. pay_2 overpaid (6000 > invoice) → the
-`unallocated_amount` surplus posts to `account_credit_balance`. pay_3 is cash (OFFLINE, reference = the
-receipt). pay_4 was reversed (chargeback) and points back at the original via `reversal_of_payment_id`
-with `reversed_by` for the SoD trail.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pay_1** | A KES 5000 M-Pesa payment **fully applied** (`status=APPLIED`, `unallocated_amount=0`), deduped by `payment_reference=QGR7Xk`. |
+| **pay_2** | A KES 6000 M-Pesa payment that **overpaid** — KES 1000 left over (`unallocated_amount=1000`, `status=PARTIALLY_APPLIED`) posts to `account_credit_balance`. |
+| **pay_3** | A KES 1500 **cash** payment (`method=OFFLINE`, no gateway ref; the receipt number is the `payment_reference`). |
+| **pay_4** | A VISA payment that was **reversed** as a chargeback (`status=REVERSED`, `reversal_of_payment_id=pay_1`, `reversed_by=u_fin1` for the audit trail). |
+
+**The columns that did the work:**
+- **No double-apply** = `payment_reference` (gateway ref or Idempotency-Key) — a retried callback dedups.
+- **Overpayment** = `unallocated_amount` (surplus → `account_credit_balance`).
+- **Reversal trail** = `reversal_of_payment_id` + `reversal_reason_code` + `reversed_by` (separation-of-duties).
 
 ### `billing_intent` · `intent_type`: `PRORATION|PAUSE_FEE|RECONNECTION_FEE|DEPOSIT_REFUND|…` · `status`: `PENDING|CHARGED|CONFIRMED|WAIVED|REFUNDED` · `settlement_channel`: `INVOICE|WALLET|CREDIT|NONE`
 > `settlement_channel` added by the settlement-channel migration; `state_callback` (JSON) by the
@@ -264,10 +289,19 @@ with `reversed_by` for the SoD trail.
 { "intent_id":"bint_3","operator_code":"WIK","subscription_id":"sub_2","account_id":"acc_2","operation_id":"op_term_3","intent_type":"DEPOSIT_REFUND","amount":-2500.00,"currency":"KES","pay_first":false,"status":"CONFIRMED","settlement_channel":"CREDIT","state_callback":null,"invoice_id":null,"confirmed_at":"2026-06-18T09:00:00Z" }
 { "intent_id":"bint_4","operator_code":"WIK","subscription_id":"sub_3","account_id":"acc_3","operation_id":"op_pause_4","intent_type":"PAUSE_FEE","amount":0.00,"currency":"KES","pay_first":false,"status":"CONFIRMED","settlement_channel":"NONE","state_callback":null,"invoice_id":null,"confirmed_at":"2026-06-19T09:00:00Z" }
 ```
-**Reading:** bint_2 is **pay-first** (`PENDING` until `inv_9` is paid; then its `state_callback` flips the
-sub ACTIVE). bint_3 is a **negative** amount (credit) → posts to account credit (`CREDIT` channel, no
-invoice). bint_4 is a zero/skip (the event applied but nothing to charge → `NONE`). Each intent ties back
-to the Subscription `operation_id` that raised it.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **bint_1** | A mid-cycle proration charge of KES 350, already settled on invoice inv_7 (`status=CONFIRMED`, `settlement_channel=INVOICE`). |
+| **bint_2** | A **pay-first** reconnection fee: it stays `PENDING` until inv_9 is paid (`pay_first=true`), then its `state_callback` flips the sub ACTIVE. |
+| **bint_3** | A **negative** amount (KES -2500 deposit refund) posted as account credit (`settlement_channel=CREDIT`, no invoice). |
+| **bint_4** | A zero pause fee — the event fired but there was **nothing to charge** (`amount=0`, `settlement_channel=NONE`). |
+
+**The columns that did the work:**
+- **Charge now vs wait for payment** = `pay_first` (pay-first stays `PENDING`; `state_callback` carries the resulting sub transition).
+- **Where it settles** = `settlement_channel` (INVOICE / WALLET / CREDIT / NONE); a negative `amount` is a credit.
+- **What raised it** = `operation_id` (the Subscription operation behind every intent).
 
 **Worked example — bint_1's PRORATION amount.** When a customer upgrades mid-cycle, the charge is only
 for the *remaining* days at the price *difference*. Suppose a 30-day cycle, upgraded with 21 days left,

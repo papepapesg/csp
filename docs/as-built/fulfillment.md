@@ -155,18 +155,20 @@ order).
 { "order_id":"order_4","operator_code":"WIK","customer_id":"cust_53","account_id":"acct_53","homepass_id":"hp_4","package_ref":"pkg_triple","package_version_id":"pkgv_3","billing_mode":"PREPAID","status":"AWAITING_PAYMENT","current_step":"PAYMENT","subscription_id":null,"work_order_id":null,"payment_ref":null,"created_by":"u_desk2","completed_at":null,"process_instance_id":"pi_4" }
 { "order_id":"order_5","operator_code":"WIK","customer_id":"cust_54","account_id":"acct_54","homepass_id":"hp_5","package_ref":"pkg_inet","package_version_id":null,"billing_mode":"POSTPAID","status":"CANCELLED","current_step":"KYC","subscription_id":"sub_5","work_order_id":"wo_5","payment_ref":null,"created_by":"u_desk1","completed_at":null,"process_instance_id":"pi_5" }
 ```
-**Reading:** the `status` tells you **where the journey is parked**, and `current_step` is the live
-cursor. In plain terms, reading the samples row by row:
-- **order_1** is live and done — its subscription is ACTIVE and `completed_at` is stamped.
-- **order_2** is waiting for the technician (`AWAITING_INSTALL`).
-- **order_3** cleared install but is held on the identity check (`AWAITING_KYC`).
-- **order_4** hasn't paid its deposit yet, so it has **no** `subscription_id` or `work_order_id` — the
-  deposit gate sits *before* anything is created.
-- **order_5** was cancelled, so its WO and subscription were compensated (undone).
+**Read each row as a sentence — *this data means this:***
 
-The order **stores the artifacts it created** (`subscription_id`, `work_order_id`) precisely so a cancel
-can undo them later. It also holds `process_instance_id` (the workflow driving it), `package_version_id`
-(the exact catalog version it was sold at), and `billing_mode`.
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **order_1** | A POSTPAID triple-play order (`billing_mode=POSTPAID`, `package_ref=pkg_triple`) that is **finished and live** (`status=COMPLETED`, `completed_at` stamped) — it created subscription `sub_1` and install `wo_1`. |
+| **order_2** | A POSTPAID internet order **waiting for the technician** (`status=AWAITING_INSTALL`, `current_step=INSTALL`); subscription `sub_2` and `wo_2` already exist, but it hasn't paid yet (`payment_ref=null`). |
+| **order_3** | A POSTPAID internet order **held on the identity check** (`status=AWAITING_KYC`, `current_step=KYC`); it has its subscription `sub_3` and `wo_3` but isn't done. |
+| **order_4** | A PREPAID triple-play order **stuck at the deposit gate** (`billing_mode=PREPAID`, `status=AWAITING_PAYMENT`, `current_step=PAYMENT`) — so it has **no** `subscription_id` and **no** `work_order_id` yet (nothing is created before the deposit is paid). |
+| **order_5** | A **cancelled** order (`status=CANCELLED`) whose subscription `sub_5` and `wo_5` were compensated (undone); it never got a `package_version_id`. |
+
+**The columns that did the work:**
+- `status` says **where the journey is parked**; `current_step` is the live cursor.
+- `subscription_id` / `work_order_id` are the **artifacts the order created** — stored precisely so a cancel can undo them later.
+- `process_instance_id` is the workflow driving it; `package_version_id` is the exact catalog version sold; `billing_mode` decides whether a deposit gate applies.
 
 **The order's lifecycle** — each status is a parking spot waiting on one thing:
 ```mermaid
@@ -192,10 +194,18 @@ stateDiagram-v2
 { "id":"st_3","order_id":"order_1","step":"INSTALL","status":"DONE","result":{"workOrderId":"wo_1"},"completed_at":"2026-06-20T10:30:00Z" }
 { "id":"st_4","order_id":"order_1","step":"KYC","status":"DONE","result":{"kycStatus":"APPROVED"},"completed_at":"2026-06-20T10:55:00Z" }
 ```
-**Reading:** every journey step appends a row carrying its `result` and `completed_at` — an audit trail of
-*what the workflow did, what it produced, and when*. This lets you reconstruct an order's whole history
-without ever opening the workflow engine. Each step row itself is simple: it starts `PENDING`, then ends
-either `DONE` or `FAILED`.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **st_1** | Order `order_1`'s `CAPTURE` step **finished cleanly** (`status=DONE`) at 09:00, producing no payload (`result=null`). |
+| **st_2** | Its `SUBSCRIPTION` step **succeeded** and produced subscription `sub_1` (`result.subscriptionId=sub_1`). |
+| **st_3** | Its `INSTALL` step **succeeded** and produced work order `wo_1` (`result.workOrderId=wo_1`). |
+| **st_4** | Its `KYC` step **succeeded** with the identity check approved (`result.kycStatus=APPROVED`). |
+
+**The columns that did the work:**
+- Every journey step appends a row carrying its `result` and `completed_at` — an audit trail of *what the workflow did, what it produced, and when*, so an order's whole history reconstructs without opening the workflow engine.
+- Each step row starts `PENDING`, then ends `DONE` or `FAILED`.
 
 ```mermaid
 stateDiagram-v2

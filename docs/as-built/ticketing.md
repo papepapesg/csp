@@ -121,11 +121,19 @@ stateDiagram-v2
     OPEN --> CANCELLED
 ```
 
-**Reading:** `status` is the resolution lifecycle; `sla_due_at`/`first_response_due_at` are stamped at
-create from the matching `sla_policy` (URGENT TECHNICAL = 4h here). tck_3 was resolved by its linked WO
-(`work_order_id=wo_2`) and `reopened_count` shows it bounced once; tck_4 is `requires_review` (a
-supervisor gate). `asr_type` tags the ASR-01..04 specialisation; a past-due `OPEN` ticket is what the
-NOC SLA-overdue view surfaces.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **tck_1** | A brand-new **URGENT** "no signal" technical ticket: it's **OPEN**, nobody's picked it up yet (`assignee_id=null`, `first_response_at=null`), and its clocks are already ticking (`sla_due_at`/`first_response_due_at` stamped at create). |
+| **tck_2** | A **billing** info-request, now **IN_PROGRESS** with **agent_3** working it; the agent has already responded once (`first_response_at` is filled, before `first_response_due_at`), so the response SLA was met. |
+| **tck_3** | A technical ticket that's **RESOLVED**: it was fixed via a linked field job (`work_order_id=wo_2`, `resolution_code=FIXED_ON_SITE`, note "Replaced ONT"), and it had **bounced once** before (`reopened_count=1`). |
+| **tck_4** | A **complaint** that's already **CLOSED** (`resolved_at` then `closed_at`), but flagged for a supervisor gate (`requires_review=true`, `resolution_code=APOLOGY_ISSUED`). |
+
+**The columns that did that work:**
+- **Where it is** = `status` (the resolution lifecycle), plus `assignee_id` and the `*_at` timestamps showing who has it and what's happened.
+- **SLA clocks** = `sla_due_at`/`first_response_due_at` stamped at create from the matching `sla_policy`; `first_response_at` records when the response clock was actually met. A past-due `OPEN` ticket is what the NOC SLA-overdue view surfaces.
+- **Specialisation** = `asr_type` tags the ASR-01..04 family; `requires_review` is the supervisor gate; `reopened_count` counts re-opens.
 
 ### `ticket_category_catalog` (operator category config) & `sla_policy` (response-hours matrix)
 ```json
@@ -140,14 +148,29 @@ NOC SLA-overdue view surfaces.
 { "operator_code":"WIK","category":null,"priority":"HIGH","response_hours":4 }
 { "operator_code":null,"category":null,"priority":"NORMAL","response_hours":24 }
 ```
-**Reading:** the **category catalog** is operator config — default priority/queue/ASR type, whether it
-may spawn a WO (`wo_allowed` gates TCK-3) and of which `default_wo_kind`, and whether a finalized WO
-parks the ticket in `UNDER_REVIEW` (`review_required`, e.g. INSTALL_INCOMPLETE); `active=false` retires a
-category (the row shown as `active:false` here is illustrative). `type_code` is the operator type family
-(`TECHNICAL_SUPPORT`, `BILLING_COMPLAINT`, …) — distinct from `default_asr_type`. The **SLA policy**
-resolves `response_hours` by **most-specific match** (category+priority > priority-only > the all-`null`
-operator default; the WIK seed ships the priority-only defaults URGENT=4/HIGH=8/NORMAL=24/LOW=72);
-editing rows tunes SLAs with no code.
+**Read each row as a sentence — *this data means this:***
+
+The **category catalog** (operator config — picking a category pre-fills a new ticket's defaults):
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **NO_INTERNET** | A "no internet" technical category: new tickets default to **HIGH** priority in the **TECH_SUPPORT_L1** queue, **may raise a field WO** (`wo_allowed=true`, `default_wo_kind=SUPPORT`), and a finalized WO does **not** need review (`review_required=false`). It's live (`active=true`). |
+| **BILLING_DISPUTE** | A billing-complaint category, **NORMAL**/BILLING_QUEUE, that **can't spawn a WO** (`wo_allowed=false`) — billing disputes stay desk-side. |
+| **INSTALL_INCOMPLETE** | An install follow-up, **HIGH**/TECH_SUPPORT_L1, that **may raise a WO** and **does require review** afterwards (`review_required=true`), so a finalized WO parks the ticket in `UNDER_REVIEW`. |
+| **GENERAL_INQUIRY** | A **retired** category (`active=false`) — it no longer appears as a choice; shown here only to illustrate the flag. |
+
+The **SLA policy** (resolves `response_hours` by most-specific match):
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **NO_INTERNET + URGENT** | The most specific rule: an urgent no-internet ticket must get a first response within **1 hour**. |
+| **BILLING_DISPUTE + NORMAL** | A normal billing dispute gets **8 hours**. |
+| **(any) + HIGH** | A priority-only fallback: any HIGH ticket with no category match gets **4 hours**. |
+| **(any) + (any)** | The all-`null` operator default — anything else gets **24 hours**. |
+
+**The columns that did that work:**
+- **Catalog defaults** = `default_priority`/`default_queue`/`default_asr_type` pre-fill a ticket; `wo_allowed` (+ `default_wo_kind`) gates TCK-3; `review_required` decides the `UNDER_REVIEW` park; `type_code` is the operator type family (distinct from `default_asr_type`); `active=false` retires a category.
+- **SLA match order** = category+priority > priority-only > the all-`null` default; editing rows tunes SLAs with no code.
 
 ### `ticket_comment` / `ticket_timeline` (append-only)
 ```json
@@ -162,10 +185,29 @@ editing rows tunes SLAs with no code.
 { "id":"tl_3","ticket_id":"tck_3","event_type":"WorkOrderCreatedFromTicket","from_status":"ASSIGNED","to_status":"WAITING_WORK_ORDER","actor_id":"agent_7","meta":{"workOrderId":"wo_2"} }
 { "id":"tl_4","ticket_id":"tck_3","event_type":"LINKED_WORK_ORDER_FINALIZED","from_status":"WAITING_WORK_ORDER","to_status":"RESOLVED","actor_id":null,"meta":{"workOrderId":"wo_2","finalReason":"FIXED_ON_SITE"} }
 ```
-**Reading:** the timeline is the immutable history (created → assigned → WO linked → resolved), each row
-carrying the `from_status`/`to_status` transition + actor + `meta`; comments are the conversation, gated
-by `visibility` (INTERNAL vs CUSTOMER_VISIBLE) and the legacy `internal` flag. This is the audit a
-supervisor reads.
+**Read each row as a sentence — *this data means this:***
+
+Comments (the conversation):
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **tc_1** | An **internal-only** note on tck_1 from agent_7 — "Dispatching tech." (`visibility=INTERNAL`, `internal=true`), so the customer never sees it. |
+| **tc_2** | A **customer-visible** reply on tck_1 — "A technician is on the way." (`visibility=CUSTOMER_VISIBLE`). |
+| **tc_3** | The **customer themself** (cust_2) asking "Any update?" on tck_2 — customer-visible. |
+| **tc_4** | An internal note on tck_3 — "ONT swapped on site." |
+
+Timeline (the immutable status history):
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **tl_1** | tck_1 was **CREATED** by agent_7 (`from_status=null → to_status=OPEN`). |
+| **tl_2** | tck_1 was **ASSIGNED** by sup_1 (`OPEN → ASSIGNED`), with `meta` recording the new assignee (agent_7). |
+| **tl_3** | tck_3 raised a field WO (`ASSIGNED → WAITING_WORK_ORDER`), `meta` linking `workOrderId=wo_2`. |
+| **tl_4** | tck_3's linked WO finalized (`WAITING_WORK_ORDER → RESOLVED`) — a **system** action (`actor_id=null`), `meta` carrying the `finalReason=FIXED_ON_SITE`. |
+
+**The columns that did that work:**
+- **Conversation gating** = `visibility` (INTERNAL vs CUSTOMER_VISIBLE) and the legacy `internal` flag decide who sees a comment.
+- **Audit trail** = each timeline row carries the `from_status`/`to_status` transition + `actor_id` + `meta`; this is the history a supervisor reads.
 
 ### `ticket_link` (multi-entity links — TCK-2) · `entity_type`: `SUBSCRIPTION|INVOICE|WORK_ORDER|TICKET|CUSTOMER|…` · `relation`: `RELATED|DUPLICATE_OF|CAUSED_BY|CREATED_FROM_TICKET|…`
 ```json
@@ -174,11 +216,19 @@ supervisor reads.
 { "link_id":"tlnk_3","ticket_id":"tck_2","entity_type":"INVOICE","entity_ref":"inv_56","relation":"RELATED","linked_by":"agent_3" }
 { "link_id":"tlnk_4","ticket_id":"tck_4","entity_type":"TICKET","entity_ref":"tck_2","relation":"DUPLICATE_OF","linked_by":"sup_2" }
 ```
-**Reading:** a ticket must reference at least one business entity (TCK-2) — either a column on `ticket`
-(customer/account/subscription/work_order) or a `ticket_link` row, or be an explicit internal category.
-Raising a WO inserts a `CREATED_FROM_TICKET` link (tlnk_1) as the auditable join. The
-`(ticket_id, entity_type, entity_ref, relation)` tuple is unique (links are idempotent via
-`updateOrInsert`).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **tlnk_1** | tck_3 is linked to **work order wo_2** with relation `CREATED_FROM_TICKET` — the auditable join inserted when the ticket raised that WO. |
+| **tlnk_2** | tck_1 is linked to **subscription sub_1** as merely `RELATED` (the affected service). |
+| **tlnk_3** | tck_2 is linked to **invoice inv_56** as `RELATED` (the invoice being queried). |
+| **tlnk_4** | tck_4 is marked a `DUPLICATE_OF` **ticket tck_2** — a ticket-to-ticket link. |
+
+**The columns that did that work:**
+- **What it points at** = `entity_type` + `entity_ref`; **how** = `relation`.
+- **The TCK-2 rule** = a ticket must reference at least one business entity — either a column on `ticket` (customer/account/subscription/work_order) or a `ticket_link` row, or be an explicit internal category.
+- **Idempotent** = the `(ticket_id, entity_type, entity_ref, relation)` tuple is unique (via `updateOrInsert`).
 
 ### `ticket_attachment` (file references — TCK-9) · `visibility`: `INTERNAL|CUSTOMER_VISIBLE`
 ```json
@@ -187,11 +237,21 @@ Raising a WO inserts a `CREATED_FROM_TICKET` link (tlnk_1) as the auditable join
 { "attachment_id":"tatt_3","ticket_id":"tck_2","file_id":"file_79","file_name":"invoice-scan.png","content_type":"image/png","size_bytes":20480,"visibility":"INTERNAL","uploaded_by":"cust_2" }
 { "attachment_id":"tatt_4","ticket_id":"tck_4","file_id":"file_80","file_name":"complaint.txt","content_type":null,"size_bytes":null,"visibility":"INTERNAL","uploaded_by":"sup_2" }
 ```
-**Reading:** TCK only keeps a **reference** — the binary lives in `FOUNDATION_FILE_STORAGE` (`file_object`).
-`addAttachment` resolves the `file_id` against that store (404 if missing) and takes the authoritative
-`file_name`/`content_type`/`size_bytes` from it rather than trusting the caller (TCK-9: object keys carry
-no PII). `visibility` gates whether self-care can see the file. A gap-free human `ticket_number` is minted
-by the per-(operator, fiscal_year) `ticket_number_sequence` counter at create.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **tatt_1** | An **internal** JPEG ("modem.jpg", 48211 bytes) on tck_1, uploaded by agent_7 — only staff can see it (`visibility=INTERNAL`). |
+| **tatt_2** | A **customer-visible** PDF site report on tck_3 (`visibility=CUSTOMER_VISIBLE`), so self-care can open it. |
+| **tatt_3** | A PNG invoice scan on tck_2 uploaded by the **customer** (cust_2), kept INTERNAL. |
+| **tatt_4** | A text file on tck_4 where the store gave back **no `content_type`/`size_bytes`** (both `null`) — those are taken from the file store, not the caller. |
+
+**The columns that did that work:**
+- **Reference only** = TCK keeps a `file_id`; the binary lives in `FOUNDATION_FILE_STORAGE` (`file_object`). `addAttachment` resolves `file_id` there (404 if missing) and copies the authoritative `file_name`/`content_type`/`size_bytes` from the store rather than trusting the caller (TCK-9: object keys carry no PII).
+- **Who can see it** = `visibility` gates whether self-care can open the file.
+
+> A gap-free human `ticket_number` is minted by the per-(operator, fiscal_year) `ticket_number_sequence`
+> counter at create.
 
 ## 3. Services
 | Service | Responsibility |
