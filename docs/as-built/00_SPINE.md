@@ -49,7 +49,7 @@ sequenceDiagram
     actor Agent
     participant API as "API + middleware"
     participant Op as OperationFramework
-    participant Box as "outbox + dispatch"
+    participant OB as "outbox + dispatch"
     participant Wkr as "workflow worker"
     participant Prov as Provisioning
     participant Down as "Billing / Reporting / Notification"
@@ -57,10 +57,10 @@ sequenceDiagram
     API->>Op: permission + scope + idempotency OK
     Note over Op: ONE DB transaction
     Op->>Op: write subscription_operation (INITIATED)
-    Op->>Box: publish SubscriptionOperationStarted
+    Op->>OB: publish SubscriptionOperationStarted
     Op-->>Agent: 202 Accepted (operation id)
-    Box->>Down: OutboxEventPublished (async, deduped by inbox)
-    Box->>Wkr: start sub-activate process
+    OB->>Down: OutboxEventPublished (async, deduped by inbox)
+    OB->>Wkr: start sub-activate process
     Wkr->>Wkr: Validate then BillingIntent (may park on payment)
     Wkr->>Prov: Activate then broadcast() to the network
     Note over Wkr,Down: SubscriptionActivated → Billing anchors cycle,<br/>Reporting counts, Notification welcomes

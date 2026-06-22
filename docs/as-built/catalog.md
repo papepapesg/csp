@@ -68,7 +68,8 @@ stateDiagram-v2
     APPROVED --> SCHEDULED: future launch date
     APPROVED --> ACTIVE: launch now
     SCHEDULED --> ACTIVE: date reached
-    ACTIVE --> END_OF_SALE --> END_OF_LIFE
+    ACTIVE --> END_OF_SALE
+    END_OF_SALE --> END_OF_LIFE
 ```
 *Proven by `PackageLaunchTest`.*
 
