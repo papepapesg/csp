@@ -81,7 +81,7 @@ the engines → config → the revenue core → execution → edges. Each line s
 > in a little table — *illustrate via the data*, not a dense paragraph re-defining columns. A short
 > "the columns that did the work" list can follow. Exemplar: `catalog.md` `discount_assignment`.
 
-> **DOCX output:** `node docs/as-built/build-docx.sh.js <file.md …>` renders every mermaid block to a PNG
+> **DOCX output:** `node docs/as-built/build-docx.cjs <file.md …>` renders every mermaid block to a PNG
 > and produces `docs/as-built/docx/<file>.docx` with the diagrams embedded as images (needs `pandoc` +
 > `@mermaid-js/mermaid-cli`). Run with no args to build all docs.
 
