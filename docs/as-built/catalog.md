@@ -303,12 +303,22 @@ lands on its own invoice. Every service belongs to a `service_class_id` (the coa
 { "assignment_id":"dasg_3","operator_code":"WIK","discount_code":"STAFF_50","scope":"SUBSCRIPTION","scope_ref":"sub_123","campaign_code":null,"active":true,"redemptions":1,"discount_id":"disc_staff","scope_type":"SUBSCRIPTION","scope_ref_id":"sub_123","customer_id":"cust_50","account_id":"acc_1","subscription_id":"sub_123","package_ref":"pkg_triple","campaign_id":null,"franchise_id":null,"reason_code":"STAFF_BENEFIT","source_channel":"BACKOFFICE","valid_from":"2026-01-01","valid_to":null,"status":"ACTIVE","assignment_priority":10,"stacking_group_code":null,"approval_request_id":null,"metadata_json":null,"created_by_user_id":"u_hr1","activated_at":"2026-01-01T00:00:00Z","cancelled_at":null,"assignment_mode":"DIRECT" }
 { "assignment_id":"dasg_4","operator_code":"WIK","discount_code":"LAUNCH_10","scope":"ALL","scope_ref":null,"campaign_code":null,"active":false,"redemptions":12,"discount_id":"disc_old","scope_type":"FRANCHISE","scope_ref_id":"fr_nrb","customer_id":null,"account_id":null,"subscription_id":null,"package_ref":null,"campaign_id":null,"franchise_id":"fr_nrb","reason_code":"LAUNCH","source_channel":"BATCH","valid_from":"2025-01-01","valid_to":"2026-01-01","status":"EXPIRED","assignment_priority":100,"stacking_group_code":null,"approval_request_id":null,"metadata_json":null,"created_by_user_id":"u_mkt1","activated_at":"2025-01-01T00:00:00Z","cancelled_at":null,"assignment_mode":"CAMPAIGN" }
 ```
-**Reading:** the **discount** is the rule (`value` 0.25 = 25%, or KES 500); the **assignment** is a grant
-to a typed scope (`scope_type`+`scope_ref_id`, with the convenience FK columns `customer_id`/
-`subscription_id`/`franchise_id`/`campaign_id` filled per scope). `stackable`+`stacking_group_code`+
-`assignment_priority` decide combination/order. dasg_1 is a manual (`DIRECT`) customer grant, live now;
-dasg_2 is a campaign grant awaiting EM-CFG-04 (`status=PENDING_APPROVAL`, `approval_request_id` set);
-dasg_4 has expired (`valid_to` passed, `status=EXPIRED`). *(Delta: grants reach the invoice via Billing's
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **dasg_1** | Customer **cust_1** gets **25% off** (the `RET_25` rule). A person granted it by hand (`assignment_mode=DIRECT`, `source_channel=BACKOFFICE`) for retention, and it's **live right now** (`status=ACTIVE`, `valid_to=null` = no end date). |
+| **dasg_2** | A whole **campaign cohort** (`camp_q3`, ~5000 people) is offered **KES 500 off**. **Nothing is applied yet** — it's **waiting for a manager to approve** (`status=PENDING_APPROVAL`, `approval_request_id=appr_44`). It would only run **Jul–Sep 2026** (`valid_from`/`valid_to`). |
+| **dasg_3** | One **subscription** (`sub_123`) gets `STAFF_50`. **Live**, already used once (`redemptions=1`), and it **wins ties** when combining (lowest `assignment_priority=10`). |
+| **dasg_4** | A franchise-wide launch discount that is now **dead**: its `valid_to` (2026-01-01) is in the past, so `status=EXPIRED`. It applies to **nothing** anymore. |
+
+**The columns that did that work:**
+- **Who it applies to** = `scope_type` + `scope_ref_id` (CUSTOMER→cust_1, CAMPAIGN_COHORT→camp_q3, SUBSCRIPTION→sub_123, FRANCHISE→fr_nrb). The matching FK is also filled for convenience (`customer_id`/`subscription_id`/`franchise_id`/`campaign_id`).
+- **Live or not** = `status` (+ `valid_from`/`valid_to` dates). Only `ACTIVE` and in-window grants apply.
+- **How two live grants combine** = the discount's `stackable` flag (on `discount_catalog`) + the assignment's `stacking_group_code`, and `assignment_priority` orders them (**lower wins** — dasg_3's 10 beats dasg_1's 50).
+- **The `scope`/`scope_ref`/`active` columns are LEGACY** (kept in sync; new code reads `scope_type`/`status`).
+
+*(Delta: grants reach the invoice via Billing's
 adjustment/credit path, not an auto cycle-close line — see `billing.md` §10.)*
 
 ### `tax_group` & `tax_rule` — how tax is stacked on a price

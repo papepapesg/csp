@@ -60,8 +60,21 @@ lifecycle/approval/cross-module flow is involved.>
 { "<id>":"r3", "<status_col>":"C", "<enum2>":"X" }   // the transient/edge
 { "<id>":"r4", "<status_col>":"A", "<enum2>":"Z" }   // another enum2 branch
 ```
-**Reading:** contrast the rows — *r1 is <…>; r2 differs because `<status_col>=B` ⇒ <…>; r3 is
-transient ⇒ <…>; r4 shows `<enum2>=Z` ⇒ <…>.* Spell out what each enum value triggers.
+**Read each row as a sentence — *this data means this*** (the reading must ILLUSTRATE VIA THE DATA, not
+restate column definitions; point at a row and say what it means in plain English — "if you see this
+row, it means SO"). Use a little table:
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **r1** | <plain-English meaning: who/what, in what state, what happens — naming the columns that make it so> |
+| **r2** | <…differs because `<status_col>=B`, so…> |
+| **r3** | <the transient/edge case in plain words> |
+| **r4** | <the `<enum2>=Z` branch in plain words> |
+
+> Then, if useful, **one short list** of *the columns that did the work* (which column decides who it
+> applies to / its state / how it combines) — but lead with the per-row sentences, not a prose paragraph.
+> Worked exemplar: `catalog.md` `discount_assignment` ("dasg_1 = customer cust_1 gets 25% off, live now…").
+> **Never** name a column in a reading that isn't in the rows (the all-columns rule guarantees it's there).
 
 ## 3. Services & responsibilities
 | Service | Responsibility | Key methods |

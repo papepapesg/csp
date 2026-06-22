@@ -75,6 +75,15 @@ the engines → config → the revenue core → execution → edges. Each line s
 > an approval / cross-module flow, `flowchart` for a branchy decision. (Mermaid renders as a diagram on
 > GitHub and in most Markdown viewers.) The **worked exemplars** are `catalog.md` scenario 1 (package
 > launch + approval) and its `tax_group`/`tax_rule` section (the tax cascade with numbers).
+>
+> **Data-model readings = read the rows, don't lecture.** After the sample rows, translate **each row
+> into a plain-English sentence** ("**dasg_1** = customer cust_1 gets 25% off, granted by hand, live now")
+> in a little table — *illustrate via the data*, not a dense paragraph re-defining columns. A short
+> "the columns that did the work" list can follow. Exemplar: `catalog.md` `discount_assignment`.
+
+> **DOCX output:** `node docs/as-built/build-docx.sh.js <file.md …>` renders every mermaid block to a PNG
+> and produces `docs/as-built/docx/<file>.docx` with the diagrams embedded as images (needs `pandoc` +
+> `@mermaid-js/mermaid-cli`). Run with no args to build all docs.
 
 ## How to write a module's as-built doc (the recipe)
 Read these six code sources **in order**; each maps to a section of `_TEMPLATE.md`:
