@@ -14,45 +14,145 @@
 
 ## 📖 Scenarios (service + Foundation involvement)
 
-### 1. Pause an active subscription
-`POST /api/subscriptions/sub_123/pause {reason_code:'CUSTOMER_TRAVEL'}` → `OperationFramework::trigger
-('PAUSE')`: single-in-flight check, write `subscription_operation` (`INITIATED`), start `sub-pause`.
-Workflow: `EnterPendingStatusHandler` flips `PENDING_PAUSE`; `PauseHandler` commits `SUSPENDED` (with a
-pause reason — pause is a SUSPENDED rest state, not a separate one) + `subscription_pause_history`. Emits
-`SubscriptionPaused`. *Status: ACTIVE→PENDING_PAUSE→SUSPENDED.*
+> **The one big idea:** every lifecycle change to a subscription (pause, activate, upgrade, terminate…)
+> is run as an **operation** — a tracked, retry-safe job. The `subscription` row holds the *current
+> state*; the `subscription_operation` row is the *receipt* for one change-in-progress. A subscription
+> may have only **one** such job running at a time (except restrictions, which are special).
 
-### 2. Concurrency — second op rejected (409)
-An `upgrade` while the pause runs (`final_state IS NULL`) → `trigger` throws `conflict(WAIT_FOR_OPERATION)`
-→ **409**. (A `RESTRICT` op would be allowed — non-exclusive, R-SUB-WF-FW-2.)
+### 1. Pause an active subscription
+
+**The story in plain English:** A customer is travelling and wants to pause their service for a while.
+A call-centre agent hits Pause. The system doesn't flip the subscription off instantly — it first marks
+it "pause in progress", does the work, then settles it into a paused (suspended) rest state. Pausing is
+not its own status; a paused subscription simply sits in **SUSPENDED** with a pause reason attached.
+
+**Who does what:**
+1. `POST /api/subscriptions/sub_123/pause {reason_code:'CUSTOMER_TRAVEL'}` → `OperationFramework::trigger('PAUSE')`.
+2. `trigger` checks no other job is running, writes a `subscription_operation` row (`INITIATED`), and starts the `sub-pause` workflow.
+3. `EnterPendingStatusHandler` flips the master to the transient `PENDING_PAUSE`.
+4. `PauseHandler` commits `SUSPENDED` (with the pause reason) and writes `subscription_pause_history`. Emits `SubscriptionPaused`.
+
+**Sample — the subscription as it moves:**
+
+| Moment | `status_code` | `current_transition_type` | meaning |
+|--------|---------------|---------------------------|---------|
+| before | `ACTIVE` | `null` | live, billable |
+| during | `PENDING_PAUSE` | `PAUSE` | job in flight, blocks other jobs |
+| after | `SUSPENDED` | `null` | paused (rest state) |
+
+```mermaid
+stateDiagram-v2
+    [*] --> ACTIVE
+    ACTIVE --> PENDING_PAUSE: pause requested
+    PENDING_PAUSE --> SUSPENDED: PauseHandler commits
+    PENDING_PAUSE --> ACTIVE: operation cancelled
+    SUSPENDED --> [*]
+```
+*Proven by `SubscriptionApiTest`.*
+
+### 2. Concurrency — a second job is rejected (409)
+
+**The story in plain English:** While the pause above is still running, someone tries to upgrade the
+same subscription. The system refuses — only one change job may run at a time, so the upgrade is bounced
+with a "wait for the other operation to finish" error. (A *restriction* would be the exception: it is
+allowed to run alongside another job.)
+
+**Who does what:** An `upgrade` while the pause is still in flight (`final_state IS NULL`) →
+`trigger` throws `conflict(WAIT_FOR_OPERATION)` → HTTP **409**. A `RESTRICT` op would be allowed
+because it is non-exclusive (R-SUB-WF-FW-2).
 
 ### 3. Idempotent retry
-Same `Idempotency-Key` → `trigger` returns the **original** operation — no second workflow.
 
-### 4. Activate (full workflow, pay-first park)
-`…/activate` → `trigger('ACTIVATE')` → `sub-activate`: `ValidateActivationHandler` →
-`BillingIntentHandler` (if an activation fee is **pay-first**, parks `AWAITING_PAYMENT` on a
-`ful-payment-received` catch until `InvoicePaid`) → `ActivateHandler` (`transitionStatus(ACTIVE)` +
-`SubscriptionActivated`) → `FulfillmentCallHandler` (Provisioning broadcast). *Foundation: workflow +
-outbox + pay-first parking.* *Proven by `SubscriptionApiTest`.*
+**The story in plain English:** The agent's browser times out and the pause request is sent twice with
+the same idempotency key. The system does not start a second pause — it just hands back the first one.
+
+**Who does what:** Same `Idempotency-Key` → `trigger` returns the **original** `subscription_operation`
+row, and no second workflow is started.
+
+### 4. Activate a new subscription (full workflow, pay-first park)
+
+**The story in plain English:** A new customer's subscription is created but not yet live. To activate
+it the system validates everything, and if there is an activation fee that must be paid up front, it
+**pauses and waits** for the money to land before switching the service on. Once paid (or if no fee), it
+flips the subscription ACTIVE and tells the network to provision it.
+
+**Who does what:**
+1. `…/activate` → `trigger('ACTIVATE')` → `sub-activate` workflow.
+2. `ValidateActivationHandler` checks preconditions.
+3. `BillingIntentHandler` — if an activation fee is **pay-first**, parks the operation in `AWAITING_PAYMENT` on a `ful-payment-received` catch until `InvoicePaid` arrives.
+4. `ActivateHandler` runs `transitionStatus(ACTIVE)` and emits `SubscriptionActivated`.
+5. `FulfillmentCallHandler` broadcasts to Provisioning.
+
+```mermaid
+sequenceDiagram
+    actor S as Sales
+    participant OF as OperationFramework
+    participant V as ValidateActivationHandler
+    participant B as BillingIntentHandler
+    participant A as ActivateHandler
+    participant P as Provisioning
+    S->>OF: activate
+    OF->>V: validate
+    V->>B: raise fee intent
+    B-->>B: pay-first → park AWAITING_PAYMENT
+    Note over B: waits for InvoicePaid
+    B->>A: payment confirmed
+    A->>A: transitionStatus ACTIVE
+    A->>P: FulfillmentCallHandler broadcast
+```
+*Foundation: workflow + outbox + pay-first parking.* *Proven by `SubscriptionApiTest`.*
 
 ### 5. Upgrade (mid-cycle MACD)
-`…/upgrade {package_ref}` → `sub-upgrade`: `ValidatePackageChangeHandler` → `BillingIntentHandler`
-(mid-cycle **proration** via the BillingIntent path) → `ChangePackageHandler` (swaps `package_ref`/
-`package_version_id`) → `SubscriptionUpgraded`.
+
+**The story in plain English:** A customer on a basic plan upgrades to a bigger one halfway through the
+month. The system works out the part-month price difference (proration), swaps the package on the
+subscription, and records the change.
+
+**Who does what:** `…/upgrade {package_ref}` → `sub-upgrade`: `ValidatePackageChangeHandler` →
+`BillingIntentHandler` (mid-cycle **proration** via the BillingIntent path) → `ChangePackageHandler`
+(swaps `package_ref`/`package_version_id`) → `SubscriptionUpgraded`.
 
 ### 6. Terminate
-`…/terminate` → `sub-terminate`: `EquipmentPickupHandler` (OSR) → `TerminateHandler`
-(`transitionStatus(TERMINATED)` + `SubscriptionTerminated`, which Billing/Reporting consume).
+
+**The story in plain English:** A customer leaves. The system arranges to pick up the equipment, then
+switches the subscription to TERMINATED and tells Billing and Reporting it has ended.
+
+**Who does what:** `…/terminate` → `sub-terminate`: `EquipmentPickupHandler` (raises an OSR pickup) →
+`TerminateHandler` (`transitionStatus(TERMINATED)` + `SubscriptionTerminated`, which Billing/Reporting consume).
 
 ### 7. Add a restriction (non-exclusive)
-`POST …/{id}/restrictions {code:'OUTGOING_VOICE_BARRED'}` → `RestrictionService` (the one op that does
-**not** change `status_code`): writes a `subscription_restriction`, broadcasts to Provisioning,
-`SubscriptionRestrictionAdded`. Runs even with another op in flight (R-SUB-WF-FW-2).
 
-### 8. Cancel an in-flight op → compensation
-`POST /api/subscription-operations/{op}/cancel` → `OperationFramework::cancel`: cancels the running
-`process_instance` and, if the master sits in a transient `PENDING_*`, **reverts** it to
-`prior_subscription_status` (R-SUB-WF-FW-3). Emits `SubscriptionOperationCancelled`.
+**The story in plain English:** A customer is over their limit, so the operator bars outgoing voice
+without cutting off the whole service. This is a partial restriction — the subscription stays in
+whatever status it was; only the bar is added. Because it doesn't change status, it can run even while
+another job is in flight.
+
+**Who does what:** `POST …/{id}/restrictions {code:'OUTGOING_VOICE_BARRED'}` → `RestrictionService`
+(the one op that does **not** change `status_code`): writes a `subscription_restriction`, broadcasts to
+Provisioning, emits `SubscriptionRestrictionAdded`. Runs even with another op in flight (R-SUB-WF-FW-2).
+
+### 8. Cancel an in-flight job → compensation
+
+**The story in plain English:** A change job is stuck or was started by mistake, so an operator cancels
+it. The system stops the running workflow and, if the subscription was sitting in a temporary
+"PENDING_…" state, **rolls it back** to whatever status it had before the job started.
+
+**Who does what:** `POST /api/subscription-operations/{op}/cancel` → `OperationFramework::cancel`:
+cancels the running `process_instance` and, if the master sits in a transient `PENDING_*`, **reverts**
+it to `prior_subscription_status` (R-SUB-WF-FW-3). Emits `SubscriptionOperationCancelled`.
+
+```mermaid
+sequenceDiagram
+    actor O as Operator
+    participant OF as OperationFramework
+    participant W as process_instance
+    participant SS as SubscriptionService
+    O->>OF: cancel op
+    OF->>W: cancel running workflow
+    OF->>SS: master in PENDING_* ?
+    SS-->>OF: yes → revert to prior_subscription_status
+    OF-->>O: SubscriptionOperationCancelled
+```
 
 ## 2. Data model — ≥4 **complete** sample rows + readings
 > **Completeness:** each row lists **every domain column** (nullables shown as `null`). The surrogate
@@ -67,6 +167,25 @@ MIGRATION,TERMINATION}` (= an operation is mid-flight; cancel reverts to `prior`
 `ACTIVE` is billable. `billing_mode` = `POSTPAID`(invoice)|`PREPAID`(wallet); `cycle_model` =
 `CALENDAR`|`ANNIVERSARY`. (`current_cycle_*`/`last_cycle_closed_window_end`/`next_cycle_charge_invoice_id`
 added by the cycle-window migration.)
+
+**Status lifecycle.** Each rest state is reached *through* a transient `PENDING_*` state while the job
+runs; cancelling a job in a `PENDING_*` state rolls back to where it was. (Transient states collapsed
+below for readability.)
+
+```mermaid
+stateDiagram-v2
+    [*] --> CREATED
+    CREATED --> PENDING_ACTIVATION: activate started
+    PENDING_ACTIVATION --> ACTIVE: activated
+    ACTIVE --> SUSPENDED: pause or suspend-NP
+    SUSPENDED --> ACTIVE: resume
+    ACTIVE --> RESTRICTED: service barred
+    RESTRICTED --> ACTIVE: restriction lifted
+    ACTIVE --> TERMINATED: terminate
+    SUSPENDED --> TERMINATED: terminate
+    TERMINATED --> RETIRED: archived
+    RETIRED --> [*]
+```
 ```json
 { "subscription_id":"sub_123","customer_id":"cust_50","account_id":"acc_1","operator_code":"WIK","homepass_id":"hp_1","previous_homepass_id":null,"package_ref":"pkg_triple","package_version_id":"pv_1","previous_package_ref":null,"previous_package_version_id":null,"status_code":"ACTIVE","billing_mode":"POSTPAID","currency":"KES","cycle_model":"ANNIVERSARY","cycle_anchor_day":1,"cycle_period_days":30,"cycle_frequency_months":1,"active_restrictions":[],"current_transition_type":null,"current_transition_reason_code":null,"last_failure":null,"activated_at":"2026-01-01T08:00:00Z","suspended_at":null,"resumed_at":null,"terminated_at":null,"last_status_changed_at":"2026-01-01T08:00:00Z","start_date":"2026-01-01","end_date":null,"created_by":"u_sales1","updated_by":"system","retired_at":null,"current_cycle_start":"2026-06-01","current_cycle_end":"2026-07-01","last_cycle_closed_window_end":"2026-06-01","next_cycle_charge_invoice_id":null }
 { "subscription_id":"sub_124","customer_id":"cust_50","account_id":"acc_1","operator_code":"WIK","homepass_id":"hp_1","previous_homepass_id":null,"package_ref":"pkg_inet","package_version_id":"pv_2","previous_package_ref":null,"previous_package_version_id":null,"status_code":"PENDING_PAUSE","billing_mode":"POSTPAID","currency":"KES","cycle_model":"CALENDAR","cycle_anchor_day":1,"cycle_period_days":30,"cycle_frequency_months":1,"active_restrictions":[],"current_transition_type":"PAUSE","current_transition_reason_code":"CUSTOMER_TRAVEL","last_failure":null,"activated_at":"2026-02-01T08:00:00Z","suspended_at":null,"resumed_at":null,"terminated_at":null,"last_status_changed_at":"2026-06-20T09:00:00Z","start_date":"2026-02-01","end_date":null,"created_by":"u_sales1","updated_by":"u_csr2","retired_at":null,"current_cycle_start":"2026-06-01","current_cycle_end":"2026-07-01","last_cycle_closed_window_end":"2026-06-01","next_cycle_charge_invoice_id":null }
@@ -89,6 +208,27 @@ AWAITING_USER_TASK|COMMITTING_FINAL_STATE|EMITTING_EVENT|REVERTING|COMPLETED|FAI
 `PENDING`/`RUNNING` survive `@deprecated`). **`final_state`:** `NULL`=in-flight (the single-in-flight key)
 else the resulting `status_code`, or `FAILED|CANCELLED`. (`cancel_actor_user_id` added by the operation-config migration alongside the partial
 in-flight unique indexes.)
+
+**Operation `current_state` lifecycle** — the narration of one change job. While `final_state` is
+`NULL` the job is in flight (this is the single-in-flight key); it ends in `COMPLETED`, `FAILED`, or
+`CANCELLED`. (Optional parking/reverting steps shown; not every job hits every state.)
+
+```mermaid
+stateDiagram-v2
+    [*] --> INITIATED
+    INITIATED --> VALIDATING
+    VALIDATING --> PENDING_STATE_FLIP
+    PENDING_STATE_FLIP --> BILLING_CALL
+    BILLING_CALL --> AWAITING_PAYMENT: pay-first
+    AWAITING_PAYMENT --> FULFILLMENT_CALL: paid
+    BILLING_CALL --> FULFILLMENT_CALL: no fee
+    FULFILLMENT_CALL --> COMMITTING_FINAL_STATE
+    COMMITTING_FINAL_STATE --> COMPLETED
+    VALIDATING --> FAILED
+    VALIDATING --> REVERTING: cancelled
+    REVERTING --> CANCELLED
+    COMPLETED --> [*]
+```
 ```json
 { "operation_id":"op_1","operator_code":"WIK","subscription_id":"sub_124","operation_kind":"PAUSE","bpmn_process_key":"sub-pause","bpmn_process_instance_id":"pi_5501","initiating_actor_user_id":"u_csr2","initiating_actor_role":"CSR","idempotency_key":"pause-sub_124-1","idempotency_request_hash":"9f2c…ab","correlation_id":"corr_124","prior_subscription_status":"ACTIVE","current_state":"VALIDATING","final_state":null,"failure_reason_code":null,"failure_reason_detail":null,"cancel_reason_code":null,"cancel_actor_user_id":null,"input":{"reasonCode":"CUSTOMER_TRAVEL"},"started_at":"2026-06-20T09:00:00Z","completed_at":null,"duration_ms":null }
 { "operation_id":"op_2","operator_code":"WIK","subscription_id":"sub_123","operation_kind":"ACTIVATE","bpmn_process_key":"sub-activate","bpmn_process_instance_id":"pi_4400","initiating_actor_user_id":"u_sales1","initiating_actor_role":"SALES","idempotency_key":"activate-sub_123-1","idempotency_request_hash":"1a0e…77","correlation_id":"corr_123","prior_subscription_status":"PENDING_ACTIVATION","current_state":"COMPLETED","final_state":"COMPLETED","failure_reason_code":null,"failure_reason_detail":null,"cancel_reason_code":null,"cancel_actor_user_id":null,"input":{"packageRef":"pkg_triple"},"started_at":"2026-01-01T07:59:00Z","completed_at":"2026-01-01T08:00:00Z","duration_ms":60000 }

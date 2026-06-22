@@ -13,44 +13,162 @@
 
 ## 📖 Scenarios (service + Foundation involvement)
 
+> **What a "work order" is:** a single job a field technician (or a desk agent) has to carry out — install
+> a customer, fix a fault, relocate a service, inspect equipment. Each work order moves through a fixed set
+> of statuses from the moment it is created until it is finished or cancelled:
+>
+> ```mermaid
+> stateDiagram-v2
+>     [*] --> PENDING: created
+>     PENDING --> ASSIGNED: a technician is picked
+>     ASSIGNED --> IN_PROGRESS: technician starts work
+>     IN_PROGRESS --> FINALIZATION_PENDING: work done awaiting checklist
+>     FINALIZATION_PENDING --> COMPLETED: checklist satisfied
+>     PENDING --> CANCELLED: called off
+>     ASSIGNED --> CANCELLED: called off
+>     IN_PROGRESS --> CANCELLED: called off
+>     COMPLETED --> [*]
+>     CANCELLED --> [*]
+> ```
+
 ### 1. Create + auto-assign an install WO (scope-gated)
-`POST /api/work-orders {type:INSTALLATION, tech_region_id:'KE-NRB-KAREN'}` passes
-`permission:workorder.assign` **and** `scope:TECH_REGION,tech_region_id` (`Rbac/EnforceScope` — a
-Karen-scoped dispatcher can't create a Mombasa WO). WO `PENDING`, SLA due-time stamped from priority.
-`autoAssign` asks Workforce for a contractor with region+skill+**spare capacity** and atomically commits
-a slot → `ASSIGNED`. *Proven by `WorkOrderApiTest`, `WorkOrderAutoAssignTest`.*
+
+**The story:** A new customer has ordered an internet install. A dispatcher creates a job for it, and the
+system tries to immediately hand that job to a technician who works the right area, has the right skills,
+and has a free slot in their day. If it finds one, the job is booked to them automatically.
+
+**Who does what:**
+1. `POST /api/work-orders {type:INSTALLATION, tech_region_id:'KE-NRB-KAREN'}` must pass
+   `permission:workorder.assign` **and** `scope:TECH_REGION,tech_region_id` (`Rbac/EnforceScope`). A
+   dispatcher scoped to Karen cannot create a Mombasa work order.
+2. The work order is created as `PENDING`, and its SLA due-time is stamped from its `priority`.
+3. `autoAssign` asks Workforce for a contractor in the right region, with the right skill, and **spare
+   capacity**, then atomically commits one of their slots → the work order moves to `ASSIGNED`.
+
+*Proven by `WorkOrderApiTest`, `WorkOrderAutoAssignTest`.*
 
 ### 2. Auto-assign falls back to in-house staff
-If no OUTSOURCED contractor has capacity, `autoAssign` matches an in-house `StaffMember` on skills.
-*Shows: the dispatch strategy + Workforce dependency.* *Proven by `WorkOrderAutoAssignTest`.*
+
+**The story:** Sometimes every outside contractor in that area is already fully booked. Rather than leave
+the job stuck, the system looks at the operator's own employees and gives the job to a qualified one of
+them instead.
+
+**Who does what:**
+- If no OUTSOURCED contractor has capacity, `autoAssign` matches an in-house `StaffMember` on skills. This
+  is the second leg of the dispatch strategy and shows the Workforce dependency.
+
+*Proven by `WorkOrderAutoAssignTest`.*
 
 ### 3. Support flow — resolve or escalate
-`startSupportFlow` runs `osr`/support process steps: `SiteVisitDecisionHandler` →
-`ResolutionGateHandler` (resolved? → `FinalizeSupportHandler`; else `MarkEscalationHandler` spawns a QCS
-WO). *Foundation: workflow toolbox.* *Proven by `WorkOrderSupportFlowTest`.*
+
+**The story:** A customer reports a fault. A technician visits, and either fixes it on the spot or decides
+the problem is bigger than a normal visit can solve. If it is fixed, the job closes. If it is not, the
+system opens a fresh quality-control job to chase the deeper problem.
+
+**Who does what:**
+- `startSupportFlow` runs the support process steps: `SiteVisitDecisionHandler` → `ResolutionGateHandler`.
+- If resolved → `FinalizeSupportHandler` closes it out.
+- If not resolved → `MarkEscalationHandler` spawns a QCS (quality-control) work order as a child of the
+  original.
+
+This is built on the Foundation workflow toolbox. *Proven by `WorkOrderSupportFlowTest`.*
 
 ### 4. Shifting flow — phased relocation
-`startShiftingFlow` walks phases via `MarkPhaseHandler`/`CaptureBindingsHandler`/`FinalizeShiftingHandler`
-(`PHASE_TRANSITIONED`, `SHIFTING_COMPLETED`). *Proven by `WorkOrderShiftingFlowTest`.*
+
+**The story:** A customer is moving their service to a new premises. That cannot happen in one step — it
+runs through several phases (e.g. de-install, re-install, reconnect). The system walks the job through each
+phase and records what was bound where.
+
+**Who does what:**
+- `startShiftingFlow` walks the phases via `MarkPhaseHandler` / `CaptureBindingsHandler` /
+  `FinalizeShiftingHandler`, emitting `PHASE_TRANSITIONED` as it advances and `SHIFTING_COMPLETED` at the
+  end.
+
+*Proven by `WorkOrderShiftingFlowTest`.*
 
 ### 5. Field audit — clean observation closes the task
-`POST …/field-audit-tasks/{id}/observations` with the expected serial → `FieldAuditCampaignService`
-finds no discrepancy → task `CLOSED`, `FieldAuditTaskClosed`. *Proven by `FieldAuditCampaignTest`.*
+
+**The story:** As part of an audit, a technician is sent to check a customer's equipment against what the
+records say should be there. They scan the device, the serial matches the expected one, nothing is wrong,
+and the audit task simply closes.
+
+**Who does what:**
+- `POST …/field-audit-tasks/{id}/observations` with the expected serial → `FieldAuditCampaignService` finds
+  no discrepancy → the task moves to `CLOSED` and emits `FieldAuditTaskClosed`.
+
+*Proven by `FieldAuditCampaignTest`.*
 
 ### 6. Field audit — missing unit → HIGH → RMA recovery
-`presenceStatus:MISSING` → discrepancy `MISSING`; `rules.field_audit.equipment.discrepancy` rates it
-`HIGH` + routes `CREATE_RMA_RECOVERY` → an OSR RMA request is emitted. *Foundation: rules.* *Proven by
-`FieldAuditCampaignTest`.*
+
+**The story:** The technician goes to check a device and it is simply not there. That is a serious problem,
+so the system flags it as high-severity and kicks off a recovery request to get the missing hardware
+accounted for.
+
+**Who does what:**
+- `presenceStatus:MISSING` → a `MISSING` discrepancy is raised.
+- `rules.field_audit.equipment.discrepancy` (Foundation rules) rates it `HIGH` and routes it
+  `CREATE_RMA_RECOVERY`.
+- An OSR RMA request is emitted for the owning module to act on. This is a **safe** route, so it goes
+  straight through with no approval.
+
+*Proven by `FieldAuditCampaignTest`.*
 
 ### 7. Field audit — wrong serial → EM-CFG-04 → OSR correction
-Wrong serial → `WRONG_SERIAL` routed `REQUEST_OSR_CORRECTION` (**risky**) → EM-CFG-04 request →
-discrepancy `PENDING_APPROVAL`; approval → the OSR correction is emitted. *Proven by
-`FieldAuditCampaignTest::test_wrong_serial_requires_em_cfg_04_approval_before_osr_correction`.*
+
+**The story:** The technician finds a device, but its serial number does not match the one on record. The
+fix is to correct the equipment record — but because changing equipment records is risky, the system will
+not do it on one person's say-so. It parks the change until a *second, different* person approves it; only
+then is the correction sent out.
+
+**Who does what:**
+1. A wrong serial → a `WRONG_SERIAL` discrepancy routed `REQUEST_OSR_CORRECTION` (a **risky** route).
+2. An EM-CFG-04 approval request is raised → the discrepancy goes `PENDING_APPROVAL`.
+3. A different approver signs off → the OSR correction is emitted.
+
+**Sample — the parked discrepancy (`fad_2`) waiting on approval:**
+```json
+{ "discrepancy_id":"fad_2","discrepancy_type":"WRONG_SERIAL","severity":"MEDIUM","status":"PENDING_APPROVAL","route_action":"REQUEST_OSR_CORRECTION","approval_request_id":"appr_3" }
+```
+
+How a submitted observation is rated and routed — safe routes go straight, risky ones wait for a second
+person:
+
+```mermaid
+sequenceDiagram
+    actor T as Technician
+    participant FA as FieldAuditCampaignService
+    participant R as Rules
+    participant A as Approvals (EM-CFG-04)
+    actor AP as A different approver
+    participant OSR as OSR
+    T->>FA: submit observation
+    FA->>R: rate severity + route
+    R-->>FA: severity + route_action
+    alt safe route CREATE_RMA_RECOVERY
+        FA->>OSR: emit routed action straight away
+    else risky route REQUEST_OSR_CORRECTION
+        FA->>A: request approval
+        A-->>FA: discrepancy PENDING_APPROVAL
+        AP->>A: approve (different person)
+        A-->>FA: approved
+        FA->>OSR: emit OSR correction
+    end
+```
+
+*Proven by `FieldAuditCampaignTest::test_wrong_serial_requires_em_cfg_04_approval_before_osr_correction`.*
 
 ### 8. A WO-backed audit creates its work order
-A task created with `createWorkOrder=true` emits `FieldAuditWorkOrderRequested` → `CreateFieldAuditWorkOrder`
-(listener) builds a `FIELD_AUDIT` WO, links `wo_id`, moves the task `ASSIGNED`. *Foundation: outbox
-listener.* *Proven by `FieldAuditCampaignTest`.*
+
+**The story:** Some audit tasks need a technician physically dispatched, not just a desk check. When such a
+task is set up, the system automatically creates a real field work order for it and links the two together
+so the dispatch can happen.
+
+**Who does what:**
+- A task created with `createWorkOrder=true` emits `FieldAuditWorkOrderRequested`.
+- The `CreateFieldAuditWorkOrder` listener (an outbox listener, Foundation) builds a `FIELD_AUDIT` work
+  order, links it back via `wo_id`, and moves the task to `ASSIGNED`.
+
+*Proven by `FieldAuditCampaignTest`.*
 
 ### (bonus) 9. Finalization is gated on a checklist
 `finalize` is rejected unless the `wo_finalization_requirements` items are satisfied (R-WO finalize gate).
@@ -67,13 +185,35 @@ listener.* *Proven by `FieldAuditCampaignTest`.*
 { "work_order_id":"wo_4","operator_code":"WIK","type":"FIELD_AUDIT","kind":"FIELD_AUDIT","job_type_code":null,"current_phase":null,"status":"PENDING","priority":"LOW","account_id":null,"subscription_id":null,"customer_id":"cust_60","homepass_id":null,"tech_region_id":"KE-NRB-KAREN","contractor_id":null,"team_id":null,"assigned_technician_id":null,"source_type":"FIELD_AUDIT","source_ref":"fat_1","master_wo_id":null,"originating_context_type":null,"initial_reason":null,"escalation_candidate":false,"link_type":null,"scheduled_at":null,"sla_due_at":"2026-06-28T08:00:00Z","assigned_at":null,"first_response_at":null,"started_at":null,"finalized_at":null,"warranty_until":null,"resolution_code":null,"final_reason":null,"required_skills":[],"findings":null,"created_by":"u_audit1" }
 { "work_order_id":"wo_5","operator_code":"WIK","type":"SUPPORT","kind":"SUPPORT","job_type_code":"QCS","current_phase":"ESCALATED","status":"CANCELLED","priority":"HIGH","account_id":"acct_53","subscription_id":"sub_4","customer_id":"cust_53","homepass_id":"hp_4","tech_region_id":"KE-NRB-KAREN","contractor_id":"ctr_9","team_id":null,"assigned_technician_id":"tech_3","source_type":"SUBSCRIPTION_OP","source_ref":"subop_88","master_wo_id":"wo_2","originating_context_type":"TICKET","initial_reason":"repeat fault — quality control","escalation_candidate":true,"link_type":"PARENT_CHILD","scheduled_at":null,"sla_due_at":"2026-06-22T00:00:00Z","assigned_at":"2026-06-21T13:00:00Z","first_response_at":null,"started_at":null,"finalized_at":null,"warranty_until":null,"resolution_code":null,"final_reason":"CANCELLED_BY_DESK","required_skills":["diagnostics"],"findings":null,"created_by":"u_desk2" }
 ```
-**Reading:** `type`/`kind` pick the flow + skills (`required_skills` filters auto-assign); `source_type/ref`
-is the **origin** (a fulfillment order, a ticket, a subscription op, a field-audit task) — the back-link
-other modules resume on. `priority` sets the SLA window at create (`sla_due_at`: URGENT=4h … LOW=168h),
-`first_response_at` is the SLA first-touch. `assigned_*`/`started_at`/`finalized_at` track the lifecycle;
-`current_phase` is the flow cursor for SUPPORT/SHIFTING. wo_5 is an escalation child (`master_wo_id`
-+`link_type=PARENT_CHILD`, `escalation_candidate=true`) — a QCS WO spawned off wo_2. `warranty_until`
-links a finalized install to its warranty window; `findings` captures close-out evidence (the ONT serial).
+
+The `status` column moves through this lifecycle:
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> ASSIGNED: technician committed
+    ASSIGNED --> IN_PROGRESS: work started
+    IN_PROGRESS --> FINALIZATION_PENDING: work done
+    FINALIZATION_PENDING --> COMPLETED: checklist passed
+    PENDING --> CANCELLED
+    ASSIGNED --> CANCELLED
+    IN_PROGRESS --> CANCELLED
+    COMPLETED --> [*]
+    CANCELLED --> [*]
+```
+
+**Reading:**
+- `type`/`kind` pick the flow and the skills needed; `required_skills` is what auto-assign filters on.
+- `source_type`/`source_ref` record where the job came from (a fulfillment order, a ticket, a subscription
+  op, or a field-audit task) — this is the back-link the other module resumes on once the work is done.
+- `priority` sets the SLA window at create time (`sla_due_at`: URGENT = 4h … LOW = 168h); `first_response_at`
+  records the SLA first-touch.
+- `assigned_*` / `started_at` / `finalized_at` are the timestamps that track the lifecycle above;
+  `current_phase` is the flow cursor for SUPPORT and SHIFTING jobs.
+- `wo_5` is an **escalation child**: `master_wo_id` points at its parent, `link_type=PARENT_CHILD`, and
+  `escalation_candidate=true` — it is a QCS work order spawned off `wo_2`.
+- `warranty_until` links a finalized install to its warranty window; `findings` captures close-out evidence
+  (here, the ONT serial).
 
 ### `wo_job_type_catalog` (operator job-type config) · `kind`: `SUPPORT|SHIFTING|INSTALLATION` · `network_type`: `GPON|HFC|…`
 ```json
@@ -82,11 +222,14 @@ links a finalized install to its warranty window; `findings` captures close-out 
 { "id":"jtc_3","operator_code":"WIK","job_type_code":"NO_SIGNAL","kind":"SUPPORT","display_name":"No Signal Diagnostics","description":"loss-of-service fault","network_type":null,"requires_site_visit":true,"warranty_days":30 }
 { "id":"jtc_4","operator_code":"WIK","job_type_code":"RPT","kind":"SUPPORT","display_name":"Remote Password/Profile Tweak","description":"desk-only fix","network_type":null,"requires_site_visit":false,"warranty_days":30 }
 ```
-**Reading:** the **job-type catalog** is per-operator config — `requires_site_visit` drives the
-site-visit-decision gateway (jtc_4 is desk-only), `warranty_days` feeds warranty linkage, and the code
-drives skill-matching for auto-assign. *(The earlier `required_skills`/`sla_hours` sample columns were a
-doc shorthand and don't exist on this table — required skills live on `work_order.required_skills`, SLA
-is computed from priority.)*
+**Reading:**
+- The **job-type catalog** is per-operator config.
+- `requires_site_visit` drives the site-visit-decision gateway (`jtc_4` is desk-only — no visit).
+- `warranty_days` feeds the warranty linkage.
+- The `job_type_code` drives skill-matching for auto-assign.
+
+*(The earlier `required_skills` / `sla_hours` sample columns were a doc shorthand and don't exist on this
+table — required skills live on `work_order.required_skills`, and the SLA is computed from `priority`.)*
 
 ### `wo_finalization_requirements` (the close-out checklist) · `kind`: `INSTALLATION|SUPPORT|SHIFTING`
 ```json
@@ -107,11 +250,13 @@ it (e.g. FTTH must capture the ONT serial + a speedtest before it can complete).
 { "audit_task_id":"fat_3","operator_code":"WIK","campaign_id":"fac_2","audit_type":"NETWORK","task_type":"FIELD_SITE","customer_id":null,"account_id":null,"subscription_id":null,"homepass_id":null,"wo_id":null,"assigned_to_user_id":"staff_7","assigned_team_id":"team_2","status":"CLOSED","source_event_ref":"evt_bb1","due_at":"2026-06-20T17:00:00Z","submitted_at":"2026-06-19T12:00:00Z","closed_at":"2026-06-19T16:00:00Z" }
 { "audit_task_id":"fat_4","operator_code":"WIK","campaign_id":null,"audit_type":"KYC","task_type":"CUSTOMER_PREMISES","customer_id":"cust_62","account_id":"acct_62","subscription_id":null,"homepass_id":"hp_12","wo_id":null,"assigned_to_user_id":"staff_9","assigned_team_id":null,"status":"ASSIGNED","source_event_ref":"evt_cc1","due_at":"2026-06-27T17:00:00Z","submitted_at":null,"closed_at":null }
 ```
-**Reading:** one capability, **audit_type-driven** (equipment count, network plant, KYC re-check). A
-task moves `CREATED → ASSIGNED → IN_PROGRESS → SUBMITTED → (DISCREPANCY_OPEN | CLOSED)`. `wo_id` set
-(fat_2) = WO-backed (a tech is dispatched); otherwise it's a desk/mobile task. `campaign_id` ties the
-task to its campaign (fat_4 is an ad-hoc KYC task, no campaign); `source_event_ref` is the idempotency
-key on the originating event.
+**Reading:**
+- One capability, driven by `audit_type`: counting equipment, checking network plant, or re-verifying KYC.
+- A task moves `CREATED → ASSIGNED → IN_PROGRESS → SUBMITTED → (DISCREPANCY_OPEN | CLOSED)`.
+- `wo_id` set (`fat_2`) means it is WO-backed — a technician is dispatched; otherwise it is a desk/mobile
+  task.
+- `campaign_id` ties the task to its campaign (`fat_4` is an ad-hoc KYC task with no campaign).
+- `source_event_ref` is the idempotency key on the event that originated the task.
 
 ### `field_audit_discrepancy` · `discrepancy_type`: `MISSING|WRONG_SERIAL|FOUND_EXTRA|DAMAGED|WRONG_LOCATION|NOT_ACCESSIBLE` · `severity`: `LOW|MEDIUM|HIGH|CRITICAL` · `route_action`: `CREATE_TICKET|CREATE_RMA_RECOVERY|REQUEST_OSR_CORRECTION|REQUEST_WRITE_OFF|NO_ACTION` · `status`: `OPEN|ROUTED|PENDING_APPROVAL|ACTION_CREATED|RESOLVED|REJECTED|CLOSED`
 ```json
@@ -120,12 +265,16 @@ key on the originating event.
 { "discrepancy_id":"fad_3","operator_code":"WIK","audit_task_id":"fat_2","expected_item_id":"fae_3","observation_id":"fao_3","discrepancy_type":"DAMAGED","severity":"MEDIUM","status":"ACTION_CREATED","route_action":"CREATE_TICKET","routed_ref_type":"TICKET","routed_ref_id":"tkt_44","approval_request_id":null,"resolved_at":null }
 { "discrepancy_id":"fad_4","operator_code":"WIK","audit_task_id":"fat_3","expected_item_id":null,"observation_id":"fao_9","discrepancy_type":"FOUND_EXTRA","severity":"LOW","status":"RESOLVED","route_action":"NO_ACTION","routed_ref_type":null,"routed_ref_id":null,"approval_request_id":null,"resolved_at":"2026-06-19T16:00:00Z" }
 ```
-**Reading:** expected-vs-observed raises a typed discrepancy (linked to its `expected_item_id` +
-`observation_id`); `rules.field_audit.*` sets `severity` + `route_action`. **Risky** routes
-(`REQUEST_OSR_CORRECTION`/`REQUEST_WRITE_OFF`) go `PENDING_APPROVAL` (EM-CFG-04, `approval_request_id`
-set); safe ones route straight (`routed_ref_type`/`routed_ref_id` point at the created TICKET/RMA);
-`NO_ACTION` self-resolves (`resolved_at` stamped). FA never mutates OSR itself — it emits the routed
-action for the owning module. fad_4 is a `FOUND_EXTRA` with no expected item (an unexpected unit on site).
+**Reading:**
+- When what was observed doesn't match what was expected, a typed discrepancy is raised, linked to its
+  `expected_item_id` and `observation_id`. `rules.field_audit.*` then sets its `severity` and `route_action`.
+- **Risky** routes (`REQUEST_OSR_CORRECTION` / `REQUEST_WRITE_OFF`) go `PENDING_APPROVAL` under EM-CFG-04,
+  with `approval_request_id` set (this is `fad_2`).
+- **Safe** routes go straight through; `routed_ref_type` / `routed_ref_id` then point at the TICKET or RMA
+  that was created (this is `fad_1` / `fad_3`).
+- `NO_ACTION` self-resolves, stamping `resolved_at` (this is `fad_4`).
+- Field audit never mutates OSR itself — it emits the routed action for the owning module to carry out.
+- `fad_4` is a `FOUND_EXTRA` with no expected item: an unexpected unit found on site.
 
 ## 3. Services
 | Service | Responsibility |

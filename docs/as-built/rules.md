@@ -9,28 +9,85 @@
 - **Does NOT own:** the facts (the caller supplies) or the action (the caller applies). It only decides.
 - **Job:** keep operator-varying policy out of `if`s — branch through a named rules package.
 
+**The big picture in plain English:** a caller asks a named question (a **rule package** like
+`rules.tax-applicability`) and hands over some **facts**. The engine looks up the deployed **decision table**
+for that package and operator, walks its rows top-to-bottom, and returns the outcome of the row whose `when`
+conditions match. If no row matches, it returns the table's `default_output`. If no table is even deployed, a
+registered **code fallback** answers so the caller always gets a deterministic decision. The engine only
+decides — the caller supplies the facts and applies the result.
+
+```mermaid
+flowchart TB
+    A["evaluate(rules.pkg, facts)"] --> B{"deployed table<br/>for pkg + operator?"}
+    B -- yes --> C{"a rule when matches?<br/>hit_policy FIRST/COLLECT"}
+    C -- match --> D["return that rule's then"]
+    C -- "no match" --> E{"default_output set?"}
+    E -- yes --> F["return default_output"]
+    E -- no --> G["code fallback"]
+    B -- no --> G
+    G --> H["return fallback decision"]
+```
+
 ## 📖 Scenarios (service + Foundation involvement)
 
 ### 1. "How much tax applies?" as data
-Catalog `TaxComputeService` calls `RuleEngine::evaluate('rules.tax-applicability', {taxableKind,
-customerCategory})` → a deployed `decision_table`'s rows match the facts → returns the tax group.
-*Proven by consumers' tests + `DecisionTableTest`.*
+
+**The story in plain English:** Billing needs to know which tax group applies to a charge — but the answer
+varies by operator and by what is being sold. Instead of hard-coding it, the caller asks the rules engine,
+which looks up a table and returns the right tax group.
+
+**Who does what:** Catalog `TaxComputeService` calls `RuleEngine::evaluate('rules.tax-applicability',
+{taxableKind, customerCategory})` → a deployed `decision_table`'s rows match the facts → returns the tax
+group. *Proven by consumers' tests + `DecisionTableTest`.*
+
+**Worked example — which row matches** (using deployed table `dt_1`, `rule_set: rules.tax-applicability`,
+`hit_policy: FIRST`):
+
+Given facts `{ "taxableKind":"USAGE", "serviceCategory":"VOICE" }` — the engine walks the rows in order:
+
+| Row | `when` | Matches these facts? |
+|-----|--------|----------------------|
+| 1 | `taxableKind = PACKAGE` AND `customerCategory = RES` | no (`taxableKind` is USAGE) |
+| 2 | `taxableKind = USAGE` AND `serviceCategory = VOICE` | **yes → stop (FIRST)** |
+| 3 | `taxableKind = USAGE` AND `serviceCategory = DATA` | not reached |
+
+Returned `then`: `{ "taxGroup":"KE_VOICE" }`. (Had the facts been `{taxableKind:"USAGE",
+serviceCategory:"DATA"}`, row 3 would have returned `{taxGroup:"NONE"}` — i.e. tax-exempt. Facts matching no
+row fall to `default_output: {taxGroup:"NONE"}`.)
 
 ### 2. Fallback when no table is deployed
-`rules.billing.adjustment-approval` with no table → the registered fallback derives `stepsRequired` from
-`adjustment_limits_config`. *Foundation: deterministic answer out-of-the-box.* *Proven by `AdjustmentTest`.*
+
+**The story in plain English:** Someone asks a question for which no operator has authored a table yet. Rather
+than fail, the engine runs a built-in code rule so the caller still gets a sensible, deterministic answer.
+
+**Who does what:** `rules.billing.adjustment-approval` with no table → the registered fallback derives
+`stepsRequired` from `adjustment_limits_config`. *Foundation: deterministic answer out-of-the-box.* *Proven by
+`AdjustmentTest`.*
 
 ### 3. Author a table in the Studio
 `POST /api/rules/decision-tables` (rows of conditions→outcome) → `POST /api/rules/{ruleSet}/evaluate`
 tests it against sample facts before consumers use it.
 
 ### 4. Operator override
-A WIK-scoped table for a package overrides the platform default for that operator. *Shows: per-operator
-policy without code.*
+
+**The story in plain English:** A specific operator wants a different policy than the platform default. They
+author their own table for the same package; for that operator it wins, while everyone else keeps the default.
+
+**Who does what:** A WIK-scoped table (`operator_code:WIK`) for a package overrides the platform default
+(`operator_code:null`) for that operator. *Shows: per-operator policy without code.*
 
 ### 5. CVM offer threshold
-`rules.cvm.offer({offerType, discountPercent})` → `{requireApproval, approvalPolicy}` drives EM-CFG-04.
-*Proven by `CvmTest`.*
+
+**The story in plain English:** A retention offer should need a manager's approval once the discount gets
+large. The rule package decides the threshold so it can be tuned without code.
+
+**Who does what:** `rules.cvm.offer({offerType, discountPercent})` → `{requireApproval, approvalPolicy}` drives
+EM-CFG-04.
+
+**Worked example** (deployed table `dt_3`, `rule_set: rules.cvm.offer`, `hit_policy: FIRST`): facts
+`{ "offerType":"WINBACK", "discountPercent":25 }` → row 1 `when discountPercent >= 20` matches → returns
+`{ "requireApproval":true, "approvalPolicy":"CVM_HIGH_VALUE" }`. A 10% offer matches no row → `default_output:
+{ "requireApproval":false }`. *Proven by `CvmTest`.*
 
 ### 6. Field-audit discrepancy routing
 `rules.field_audit.equipment.discrepancy({discrepancyType})` → `{severity, routeAction}`. *Proven by
@@ -60,6 +117,16 @@ with a `default_output` when nothing matches. dt_1's `taxGroup:NONE` for data us
 operator-scoped + versioned, so a WIK table (`operator_code:WIK`) overrides the default
 (`operator_code:null`); only `DEPLOYED` tables evaluate (dt_4 is still `DRAFT`). Evaluate returns the
 matching outcome (or `default_output`, else the registered code fallback if no table).
+
+**Table lifecycle** — a table only evaluates once `DEPLOYED`:
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT: authored in Studio
+    DRAFT --> DEPLOYED: deploy (now evaluates)
+    DEPLOYED --> RETIRED: superseded
+    DEPLOYED --> DRAFT: edit again
+    RETIRED --> [*]
+```
 
 ## 3. Engine
 | Component | Responsibility |

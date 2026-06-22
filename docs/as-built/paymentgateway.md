@@ -14,22 +14,75 @@
 ## 📖 Scenarios (service + Foundation involvement)
 
 ### 1. M-Pesa STK success lands
-`POST /api/payment-gateway/mpesa/callbacks` → `GatewayCallbackService::handle`: records a
-`payment_gateway_callback` (`RECEIVED`), resolves the account (ILM `payment_account_number`), calls
-Billing **`PaymentService::receiveAndApply`** which allocates it, then marks the callback `PROCESSED`
-and emits **`GatewayCallbackProcessed`** (topic `paymentgateway.callback`). *Proven by
-`GatewayCallbackTest::test_mpesa_callback_resolves_account_and_applies_payment`.*
+
+**The story in plain English:** A customer pays with M-Pesa. The phone network calls back into our
+system to say "this much money arrived from this number". We write the notification down, figure out
+which billing account it belongs to, hand the money to Billing to apply, and then stamp the notification
+as done. The whole point is to do this safely and only once.
+
+**Who does what:**
+1. The provider calls `POST /api/payment-gateway/mpesa/callbacks`.
+2. `GatewayCallbackService::handle` records a `payment_gateway_callback` row (`RECEIVED`).
+3. It resolves the billing account from the ILM `payment_account_number`.
+4. It calls Billing **`PaymentService::receiveAndApply`**, which allocates the money.
+5. The callback flips to `PROCESSED` and emits **`GatewayCallbackProcessed`** (topic
+   `paymentgateway.callback`).
+
+**Sample — the callback once applied:**
+```json
+{ "callback_id":"pgcb_1","provider":"MPESA","external_ref":"QGR7Xk12","account_ref":"254700000001","resolved_account_id":"acct_50","amount":5000.00,"status":"PROCESSED","payment_id":"pay_91","reject_reason":null }
+```
+
+```mermaid
+sequenceDiagram
+    participant PR as Provider rail
+    participant G as GatewayCallbackService
+    participant B as Billing PaymentService
+    PR->>G: "POST mpesa callback"
+    G->>G: "record callback RECEIVED"
+    G->>G: "resolve billing account"
+    G->>B: "receiveAndApply money"
+    B-->>G: "allocated"
+    G->>G: "callback PROCESSED"
+    G-->>PR: "GatewayCallbackProcessed"
+```
+*Proven by `GatewayCallbackTest::test_mpesa_callback_resolves_account_and_applies_payment`.*
 
 ### 2. Retried callback is ignored (dedup)
-The provider re-posts the same `(provider, external_ref)` → dedup hit → the **existing** callback is
-returned (no new row), only a `GatewayCallbackDuplicate` audit event fires; `receiveAndApply` is **not**
-called again. *Foundation: idempotent ingress — never double-credit.* *Proven by
+
+**The story in plain English:** Providers love to re-send the same notification. If we acted on it twice
+we would credit the customer twice. So the same payment reference is only ever acted on once — a repeat
+is recognised and quietly ignored.
+
+**Who does what:** the provider re-posts the same `(provider, external_ref)` → the dedup key hits → the
+**existing** callback row is returned (no new row), only a `GatewayCallbackDuplicate` audit event fires,
+and `receiveAndApply` is **not** called again. *Proven by
 `GatewayCallbackTest::test_duplicate_callback_is_deduped`.*
 
 ### 3. Prepaid vs postpaid routing (Billing-owned)
-`receiveAndApply` routes by billing mode — a POSTPAID account's payment is applied to invoices, a PREPAID
-subscription's money is a wallet top-up (BIL-05). The gateway just hands the money over; it owns no
-ledger. *Proven by `GatewayCallbackTest::test_prepaid_callback_tops_up_the_wallet_not_an_invoice`.*
+
+**The story in plain English:** Where the money lands depends on how the customer is billed. A postpaid
+customer's money pays down their invoices; a prepaid customer's money tops up their wallet. The gateway
+does not decide this — it just hands the money to Billing, which routes it.
+
+**Who does what:** `receiveAndApply` routes by billing mode — a POSTPAID account's payment is applied to
+invoices, a PREPAID subscription's money is a wallet top-up (BIL-05). The gateway owns no ledger.
+
+```mermaid
+sequenceDiagram
+    participant G as GatewayCallbackService
+    participant B as Billing PaymentService
+    participant I as Invoices
+    participant W as Wallet
+    G->>B: "receiveAndApply money"
+    alt "POSTPAID account"
+        B->>I: "apply to open invoices"
+    else "PREPAID subscription"
+        B->>W: "top up wallet"
+    end
+    B-->>G: "applied"
+```
+*Proven by `GatewayCallbackTest::test_prepaid_callback_tops_up_the_wallet_not_an_invoice`.*
 
 ### 4. Card PSP callback
 `POST /api/payment-gateway/visa/callbacks` → same path, different provider parsing (adapter/config).
@@ -38,7 +91,12 @@ ledger. *Proven by `GatewayCallbackTest::test_prepaid_callback_tops_up_the_walle
 A bank feed posts a transfer → recorded + applied (method `BANK_TRANSFER`).
 
 ### 6. Account cannot be resolved → REJECTED
-A callback whose `account_ref` resolves to no billing account → callback `REJECTED`
+
+**The story in plain English:** Money arrives but we cannot tell whose account it belongs to. We do not
+apply it to anyone — we mark the notification rejected and keep the raw details so a human can sort it
+out.
+
+**Who does what:** a callback whose `account_ref` resolves to no billing account → callback `REJECTED`
 (`reject_reason=ACCOUNT_NOT_FOUND`), `GatewayCallbackRejected` emitted, no money applied. *Proven by
 `GatewayCallbackTest::test_unresolvable_account_is_rejected`.*
 
@@ -60,6 +118,18 @@ If `receiveAndApply` throws, the callback is recorded `REJECTED` with the except
 { "callback_id":"pgcb_3","operator_code":"WIK","provider":"VISA","external_ref":"ch_99","account_ref":"254700000003","resolved_account_id":null,"amount":2500.00,"currency":"KES","raw":{"id":"ch_99","status":"declined"},"status":"REJECTED","payment_id":null,"reject_reason":"card declined","received_at":"2026-06-20T10:00:00Z" }
 { "callback_id":"pgcb_4","operator_code":"WIK","provider":"BANK_TRANSFER","external_ref":"bt_7781","account_ref":"PAYBILL-22","resolved_account_id":null,"amount":12000.00,"currency":"KES","raw":{"ref":"bt_7781"},"status":"RECEIVED","payment_id":null,"reject_reason":null,"received_at":"2026-06-21T08:00:00Z" }
 ```
+The status a callback can hold (a fresh row is `RECEIVED`; applying it makes it `PROCESSED`; a failure
+to resolve or apply makes it `REJECTED`; `DUPLICATE` is only ever an event, never a saved retry row):
+```mermaid
+stateDiagram-v2
+    [*] --> RECEIVED: "row written"
+    RECEIVED --> PROCESSED: "account resolved and money applied"
+    RECEIVED --> REJECTED: "no account or apply throws"
+    PROCESSED --> [*]
+    REJECTED --> [*]
+    note right of RECEIVED: "a re-post emits DUPLICATE only, no new row"
+```
+
 **Reading:** `(provider, external_ref)` is the **dedup key** (a DB unique constraint) — a re-posted
 callback never inserts a second row; the existing record is returned and only a `GatewayCallbackDuplicate`
 event fires, so money is never double-credited (no persisted `DUPLICATE` row results from a retry).

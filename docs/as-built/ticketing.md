@@ -12,30 +12,73 @@
 ## 📖 Scenarios (service + Foundation involvement)
 
 ### 1. Create a ticket (SLA stamped from policy)
-`POST /api/tickets {category:'NO_INTERNET', subcategory:'NO_SIGNAL', subscription_id}` →
-`TicketService::create`: ticket `OPEN`,
-SLA due-time stamped from the matching `sla_policy`. Emits `TicketCreated`. *Proven by `TicketApiTest`.*
+
+**The story in plain English:** A customer reports a fault. We open a ticket and immediately put a clock
+on it — a deadline to respond and a deadline to resolve — taken from the operator's SLA rules for that
+kind of problem. From that moment the ticket is being timed.
+
+**Who does what:** `POST /api/tickets {category:'NO_INTERNET', subcategory:'NO_SIGNAL', subscription_id}`
+→ `TicketService::create` opens the ticket `OPEN` and stamps the SLA due-times from the matching
+`sla_policy`. Emits `TicketCreated`.
+
+**Sample — a freshly created ticket:**
+```json
+{ "ticket_id":"tck_1","ticket_number":"TKT-2026-000101","category":"TECHNICAL","subcategory":"NO_SIGNAL","priority":"URGENT","status":"OPEN","queue":"noc-l1","sla_due_at":"2026-06-20T16:00:00Z","first_response_due_at":"2026-06-20T13:00:00Z","assignee_id":null }
+```
+*Proven by `TicketApiTest`.*
 
 ### 2. Escalate to a truck roll → linked WO
-`POST …/{id}/work-orders` creates a WO-01 support WO linked back (`source_type=TICKET`), writes a
-`ticket_link` (`relation=CREATED_FROM_TICKET`), and moves the ticket to `WAITING_WORK_ORDER`. Gated by the
-category's `wo_allowed` (TCK-3). Emits `TicketWorkOrderCreated`. *Cross-module: WorkOrder.* *Proven by
-`TicketApiTest::test_technical_ticket_raises_work_order`.*
+
+**The story in plain English:** Some problems cannot be fixed from a desk — they need a technician to
+visit. The agent raises a work order from the ticket, the two are linked, and the ticket goes into a
+"waiting on the field crew" holding state.
+
+**Who does what:** `POST …/{id}/work-orders` creates a WO-01 support WO linked back
+(`source_type=TICKET`), writes a `ticket_link` (`relation=CREATED_FROM_TICKET`), and moves the ticket to
+`WAITING_WORK_ORDER`. Gated by the category's `wo_allowed` (TCK-3). Emits `TicketWorkOrderCreated`.
+*Cross-module: WorkOrder.* *Proven by `TicketApiTest::test_technical_ticket_raises_work_order`.*
 
 ### 3. WO finalized → auto-resolve (event-driven)
-`WorkOrderFinalized` (outbox) → `ResolveTicketOnWorkOrderFinalized` → `onWorkOrderFinalized` moves the
-linked ticket out of `WAITING_WORK_ORDER` to `RESOLVED` (or, if the category's `review_required` is set, to
-`UNDER_REVIEW`). A `WorkOrderCancelled` instead sends it back to `ASSIGNED`/`WAITING_INTERNAL` with
-`requires_review`. *Foundation: outbox listener.* *Proven by
-`TicketApiTest::test_finalizing_the_work_order_resolves_the_ticket`.*
+
+**The story in plain English:** The technician finishes the job. We do not make an agent re-open the
+ticket to close it — the work order finishing automatically resolves the waiting ticket. If the category
+needs a supervisor's eye, it parks in review instead; if the work was cancelled, the ticket goes back
+into the work queue.
+
+**Who does what:** `WorkOrderFinalized` (outbox) → `ResolveTicketOnWorkOrderFinalized` →
+`onWorkOrderFinalized` moves the linked ticket out of `WAITING_WORK_ORDER` to `RESOLVED` (or, if the
+category's `review_required` is set, to `UNDER_REVIEW`). A `WorkOrderCancelled` instead sends it back to
+`ASSIGNED`/`WAITING_INTERNAL` with `requires_review`. *Foundation: outbox listener.*
+
+```mermaid
+sequenceDiagram
+    participant WO as WorkOrder
+    participant OB as Outbox
+    participant L as ResolveTicketOnWorkOrderFinalized
+    participant T as Ticket
+    WO->>OB: "WorkOrderFinalized"
+    OB->>L: "deliver event"
+    L->>T: "onWorkOrderFinalized"
+    alt "review_required set"
+        T->>T: "WAITING_WORK_ORDER to UNDER_REVIEW"
+    else "normal"
+        T->>T: "WAITING_WORK_ORDER to RESOLVED"
+    end
+```
+*Proven by `TicketApiTest::test_finalizing_the_work_order_resolves_the_ticket`.*
 
 ### 4. Conversation on the timeline
 `POST …/{id}/comments` appends a `ticket_comment` + a `ticket_timeline` row (append-only audit).
 
 ### 5. ASR — a typed service request (idempotent)
-`POST /api/asr` (idempotent) → `AsrService::create` validates an `asr_type`, applies `rules.asr.routing`
-(queue + priority + auto-actions), and creates an ASR-typed ticket; a `TECHNICAL_TROUBLE` whose routing
-sets `autoCreateWorkOrder` auto-raises a support WO. *Proven by
+
+**The story in plain English:** Some intake comes in as a structured "service request" rather than a free
+ticket. We validate its type, run the operator's routing rules to pick a queue and priority, and create a
+ticket from it. Certain technical-trouble requests automatically spin up a field work order.
+
+**Who does what:** `POST /api/asr` (idempotent) → `AsrService::create` validates an `asr_type`, applies
+`rules.asr.routing` (queue + priority + auto-actions), and creates an ASR-typed ticket; a
+`TECHNICAL_TROUBLE` whose routing sets `autoCreateWorkOrder` auto-raises a support WO. *Proven by
 `AsrTest::test_technical_trouble_routes_to_noc_and_raises_work_order`.*
 
 ### 6. SLA breach surfaces on the NOC
@@ -60,6 +103,24 @@ The `ticket_category_catalog` fixes the SLA matrix + default priority — an ope
 { "ticket_id":"tck_3","ticket_number":"TKT-2026-000103","operator_code":"WIK","category":"TECHNICAL","asr_type":"TECHNICAL_TROUBLE","subcategory":"NO_SIGNAL","priority":"HIGH","status":"RESOLVED","customer_id":"cust_3","account_id":"acct_3","subscription_id":"sub_3","subject":"Intermittent drops","description":null,"queue":"noc-l1","assignee_id":"agent_7","sla_due_at":"2026-06-19T16:00:00Z","first_response_due_at":"2026-06-19T13:00:00Z","first_response_at":"2026-06-19T12:30:00Z","work_order_id":"wo_2","resolution_code":"FIXED_ON_SITE","reopened_count":1,"requires_review":false,"resolution_note":"Replaced ONT","opened_by":"agent_7","resolved_at":"2026-06-19T15:00:00Z","closed_at":null,"cancelled_at":null }
 { "ticket_id":"tck_4","ticket_number":"TKT-2026-000104","operator_code":"WIK","category":"COMPLAINT","asr_type":"COMPLAINT","subcategory":null,"priority":"LOW","status":"CLOSED","customer_id":"cust_4","account_id":"acct_4","subscription_id":null,"subject":"Rude agent","description":null,"queue":"complaints","assignee_id":"sup_2","sla_due_at":"2026-06-18T16:00:00Z","first_response_due_at":"2026-06-18T13:00:00Z","first_response_at":"2026-06-18T12:00:00Z","work_order_id":null,"resolution_code":"APOLOGY_ISSUED","reopened_count":0,"requires_review":true,"resolution_note":"Escalated, apology sent","opened_by":"agent_1","resolved_at":"2026-06-18T14:00:00Z","closed_at":"2026-06-19T09:00:00Z","cancelled_at":null }
 ```
+The ticket's own lifecycle (the holding state `WAITING_WORK_ORDER` is where a ticket sits while a linked
+field job runs; `WAITING_CUSTOMER`/`WAITING_INTERNAL` are other holds):
+```mermaid
+stateDiagram-v2
+    [*] --> OPEN
+    OPEN --> TRIAGED
+    TRIAGED --> ASSIGNED
+    ASSIGNED --> IN_PROGRESS
+    IN_PROGRESS --> WAITING_WORK_ORDER: "raise a field WO"
+    WAITING_WORK_ORDER --> RESOLVED: "WO finalized"
+    WAITING_WORK_ORDER --> UNDER_REVIEW: "WO finalized and review_required"
+    IN_PROGRESS --> RESOLVED
+    UNDER_REVIEW --> RESOLVED
+    RESOLVED --> CLOSED
+    RESOLVED --> OPEN: "reopen"
+    OPEN --> CANCELLED
+```
+
 **Reading:** `status` is the resolution lifecycle; `sla_due_at`/`first_response_due_at` are stamped at
 create from the matching `sla_policy` (URGENT TECHNICAL = 4h here). tck_3 was resolved by its linked WO
 (`work_order_id=wo_2`) and `reopened_count` shows it bounced once; tck_4 is `requires_review` (a

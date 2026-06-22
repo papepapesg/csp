@@ -14,15 +14,61 @@
 ## 📖 Scenarios (service + Foundation involvement)
 
 ### 1. Customer-visible account suspension → notify
-ILM `CustomerAccountStatusChanged{customerVisible:true}` → `AccountStatusNotificationBridge` →
-`NotificationOrchestrator::ingest`: **route** (rule → EMAIL+SMS, purpose `ACCOUNT_STATUS_CHANGE`) →
-**preference** filter → **regulatory** filter → **render** templates → **dispatch** → write
-`notification_log` (`DISPATCHED`). *Proven by `Not01PipelineTest`.*
+
+**The story in plain English:** Something happens to a customer's account that they should hear about —
+say it gets suspended. We turn that one event into the right messages on the right channels. Along the way
+we check the customer's preferences and the regulatory rules, render the templates, send them, and write
+down exactly what we did.
+
+**Who does what:** ILM `CustomerAccountStatusChanged{customerVisible:true}` →
+`AccountStatusNotificationBridge` → `NotificationOrchestrator::ingest` runs the NOT-01 pipeline:
+1. **route** — a `notification_routing_rule` maps the event to channels (EMAIL+SMS) and purpose
+   `ACCOUNT_STATUS_CHANGE`.
+2. **preference** filter — drop channels the customer opted out of (marketing only).
+3. **regulatory** filter — apply category rules (transactional ignores opt-out).
+4. **render** — fill the templates for each surviving channel.
+5. **dispatch** — send via the channel adapters.
+6. **audit** — write `notification_log` (`DISPATCHED`).
+
+**Sample — the audit row written at the end:**
+```json
+{ "id":"nl_1","customer_id":"cust_1","event_type":"InvoiceIssued","source_event_id":"evt_900","channels_attempted":["EMAIL","SMS"],"final_status":"DISPATCHED","dispatched_at":"2026-06-20T09:00:02Z" }
+```
+
+```mermaid
+flowchart LR
+    EVT["domain event"] --> R["route"]
+    R --> P["preference filter"]
+    P --> REG["regulatory filter"]
+    REG --> RND["render templates"]
+    RND --> D["dispatch"]
+    D --> A["audit notification_log"]
+```
+*Proven by `Not01PipelineTest`.*
 
 ### 2. An approval awaits a back-office group (ICN)
-Any EM-CFG-04 `ApprovalRequested`/`ApprovalStageAdvanced` → `NotifyApproversOnApprovalRequested` → for a
-**ROLE** stage `StaffNotificationService::dispatch(template:'approval-needed', candidateGroup:<approver
-role>)` → the group's members get EMAIL/SLACK/IN_APP_PUSH per their prefs. *Proven by `Icn01Test`.*
+
+**The story in plain English:** An approval is waiting and a whole back-office team can act on it. We tell
+the entire team at once, each person on whatever channel they prefer. The first to acknowledge takes it;
+the rest are stood down.
+
+**Who does what:** any EM-CFG-04 `ApprovalRequested`/`ApprovalStageAdvanced` →
+`NotifyApproversOnApprovalRequested` → for a **ROLE** stage
+`StaffNotificationService::dispatch(template:'approval-needed', candidateGroup:<approver role>)` → the
+group's members get EMAIL/SLACK/IN_APP_PUSH per their prefs.
+
+```mermaid
+sequenceDiagram
+    participant A as Approvals EM-CFG-04
+    participant S as StaffNotificationService
+    participant G as Group members
+    A->>S: "ApprovalRequested for a ROLE stage"
+    S->>G: "fan out to every member"
+    Note over G: "each member tried on their channels"
+    G-->>S: "first member ACKs"
+    S->>G: "suppress the rest"
+```
+*Proven by `Icn01Test`.*
 
 ### (bonus) 2b. A named approver who's in no group (direct send)
 A **USER** stage (e.g. an invited *director*) has no candidate group, so the bridge calls
@@ -52,8 +98,27 @@ EMAIL hard-bounces → `BounceService` marks it; the orchestrator's per-channel 
 next channel → `notification_log` `PARTIALLY_DISPATCHED`. *Proven by `Not01PipelineTest`.*
 
 ### 8. ICN first-ack suppresses the rest
-A staff notification fanned to 4 supervisors; the first to ACK → `AckService` suppresses the other
-pending deliveries → notification `ACKNOWLEDGED`. *Proven by `Icn01Test`.*
+
+**The story in plain English:** A staff alert went to four supervisors. We do not want four people doing
+the same job. The moment one of them acknowledges, the others' still-pending messages are cancelled and
+the notification is marked done.
+
+**Who does what:** a staff notification fanned to 4 supervisors; the first to ACK → `AckService`
+suppresses the other pending deliveries → notification `ACKNOWLEDGED`.
+
+```mermaid
+sequenceDiagram
+    participant S as StaffNotificationService
+    participant D1 as Supervisor 1
+    participant D2 as Supervisor 2
+    participant AK as AckService
+    S->>D1: "deliver"
+    S->>D2: "deliver"
+    D1->>AK: "ACK first"
+    AK->>D2: "suppress pending delivery"
+    AK->>S: "notification ACKNOWLEDGED"
+```
+*Proven by `Icn01Test`.*
 
 ### (bonus) 9. Idempotency by source event
 The orchestrator processes a `source_event_id` once (Redis/cache) — a re-dispatch is a no-op.
@@ -90,6 +155,17 @@ payload; `enabled=false` (nrr_4) lets an admin pause a rule (O-6); `needs_pdf` t
 { "id":"att_3","notification_id":"nl_2","operator_code":"WIK","channel":"SMS","template_id":"tpl_inv_sms","recipient":"+254700000002","attempt_number":1,"status":"SENT","failure_category":null,"failure_detail":null,"channel_response":{"dlr":"ok"},"external_reference":"dlr-77","dispatch_context":null,"attempted_at":"2026-06-20T09:01:01Z","next_attempt_at":null }
 { "id":"att_4","notification_id":"nl_1","operator_code":"WIK","channel":"SMS","template_id":"tpl_inv_sms","recipient":"+254700000001","attempt_number":2,"status":"PENDING_RETRY","failure_category":"TRANSIENT","failure_detail":"gateway 503","channel_response":{"code":"503"},"external_reference":null,"dispatch_context":{"retryable":true},"attempted_at":"2026-06-20T09:00:05Z","next_attempt_at":"2026-06-20T09:05:00Z" }
 ```
+The `final_status` the log settles on, recomputed from the per-channel attempts (all good → `DISPATCHED`;
+some channels failed → `PARTIALLY_DISPATCHED`; preference/regulatory dropped it → `SUPPRESSED`):
+```mermaid
+stateDiagram-v2
+    [*] --> DISPATCHED: "all channels sent"
+    [*] --> PARTIALLY_DISPATCHED: "some channels failed"
+    [*] --> SUPPRESSED: "filtered before send"
+    [*] --> ESCALATED: "retry escalation"
+    [*] --> UNDELIVERABLE: "no channel succeeded"
+```
+
 **Reading:** the log is the **audit aggregate** (one row per notification event); the attempt rows are
 per-channel. nl_2 partially dispatched (att_2 EMAIL hard-bounced, att_3 SMS sent). nl_4 is a manual
 resend (`manual_resend_by`/`original_notification_id` point back to nl_2). The `final_status` is
@@ -127,6 +203,19 @@ address be skipped.
 { "id":3,"operator_code":"WIK","group_code":"finance","user_id":"fin_01" }
 { "id":4,"operator_code":"WIK","group_code":"noc-team","user_id":"noc_01" }
 ```
+The staff notification's own lifecycle (it starts `PROCESSING`, gets `DISPATCHED` to the group, ends
+`ACKNOWLEDGED` when someone acts, or `EXPIRED` if nobody does / there were no recipients):
+```mermaid
+stateDiagram-v2
+    [*] --> PROCESSING
+    PROCESSING --> DISPATCHED: "fanned to group"
+    DISPATCHED --> ACKNOWLEDGED: "a member ACKs"
+    DISPATCHED --> EXPIRED: "ack window passes"
+    PROCESSING --> EXPIRED: "no recipients"
+    ACKNOWLEDGED --> [*]
+    EXPIRED --> [*]
+```
+
 **Reading:** an ICN notification fans to a **candidate group**'s members; first-ACK → `ACKNOWLEDGED`
 (others suppressed — sn_2, `acknowledged_by=sup_01`); no members → `EXPIRED(NO_RECIPIENTS)` (sn_3,
 `expected_recipients:0`). `idempotency_key` makes a re-dispatch a no-op; `source_business_key` threads
@@ -140,6 +229,22 @@ customer pipeline).
 { "delivery_id":"deliv_3","notification_id":"sn_2","operator_code":"WIK","recipient_user_id":"sup_01","recipient_identity":null,"channel":"SLACK","channel_priority_idx":0,"status":"ACKNOWLEDGED","attempts":1,"last_attempt_at":"2026-06-20T10:00:00Z","provider_message_id":"slack-77","provider_response":{"ts":"123.45"},"failure_reason":null,"acknowledged_at":"2026-06-20T10:05:00Z","next_retry_at":null }
 { "delivery_id":"deliv_4","notification_id":"sn_dir","operator_code":"WIK","recipient_user_id":"director_9","recipient_identity":{"channel":"EMAIL","address":"director@wik.example"},"channel":"EMAIL","channel_priority_idx":0,"status":"DISPATCHED","attempts":1,"last_attempt_at":"2026-06-20T11:00:00Z","provider_message_id":"m-dir","provider_response":{"ok":true},"failure_reason":null,"acknowledged_at":null,"next_retry_at":null }
 ```
+The status a single delivery row moves through (it starts `PENDING`; if a peer ACKs first it ends
+`SUPPRESSED`; retries that never succeed end `TERMINALLY_FAILED`):
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> DISPATCHED: "sent to adapter"
+    DISPATCHED --> ACKNOWLEDGED: "this recipient ACKs"
+    PENDING --> SUPPRESSED: "a peer ACKed first"
+    DISPATCHED --> FAILED: "send error"
+    FAILED --> DISPATCHED: "retry"
+    FAILED --> TERMINALLY_FAILED: "retries exhausted"
+    ACKNOWLEDGED --> [*]
+    SUPPRESSED --> [*]
+    TERMINALLY_FAILED --> [*]
+```
+
 **Reading:** the delivery row is the per-(recipient, channel) attempt ledger — `channel_priority_idx`
 orders the channels a recipient is tried on (per the channel-config try-order / fallback mode). The
 first-ACK (deliv_3 `ACKNOWLEDGED`) suppresses the other still-pending rows (deliv_2 `SUPPRESSED`).

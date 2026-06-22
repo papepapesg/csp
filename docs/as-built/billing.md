@@ -17,58 +17,161 @@
 
 ## 📖 Scenarios (service + Foundation involvement)
 
+> **The one big idea:** Billing turns each subscription's monthly *cycle* into money. For a **postpaid**
+> sub it raises an **invoice** to be paid later; for a **prepaid** sub it debits a **wallet** now. Money
+> never moves silently — every charge, payment, credit, and dunning step is a row you can audit.
+
 ### 1. Postpaid triple-play cycle closes → two invoices
-`sophix:billing:cycle-close` (**Foundation/Console** schedule, 30 min) → `CycleCloseService::closeCycle`
-→ `ChargeComputeService::cycleCharges` (package fee + VOICE usage). `InvoiceService::generateFromCharges`
-reads `grouping_dimension=WALLET` → writes **two** `invoice` rows (Internet/TV + Voice), each
-tax-decomposed via Catalog `TaxComputeService`; emits `InvoiceGenerated` (**outbox**). Anchor advances;
-`rated_event.billed=true` linked to the voice invoice. *Proven by `CycleCloseTest`.*
 
-### 2. Prepaid cycle, wallet short → freeze + enter dunning (cross-module via outbox)
-Same close, PREPAID: `WalletService::settleFromWallets` finds the balance short → `closeCycle` does
-**not** advance; emits `CyclePaymentMissed`. `DunningEventBridge` (listener on `OutboxEventPublished`)
-→ `DunningService` enters the account at level 1 (`SubscriptionEnteredDunning`). *Foundation: outbox →
-listener.* *Proven by `CycleCloseTest`, `DunningTest`.*
+**The story in plain English:** A customer on a Triple Play (internet + TV + voice) reaches the end of
+their billing month. A scheduled job "closes" the cycle: it adds up the package fee plus any voice
+usage, works out the tax, and produces invoices. Because internet/TV and voice are routed to different
+wallets, the customer gets **two** invoices — one for internet+TV, one for voice.
 
-### 3. M-Pesa payment lands → allocate → confirm intent (cross-module chain)
-PaymentGateway emits `PaymentReceived` → `PaymentService` writes a `payment_ledger` row, allocates to
-open invoices (`payment_invoice_allocation`), marks the invoice `PAID`, emits `InvoicePaid`. Subscription's
-`ConfirmBillingIntentOnPayment` then confirms a pay-first `billing_intent` and **correlates a workflow
-message** (`Foundation/Workflow`) to resume a parked operation. *Proven by `PaymentApplicationTest`.*
+**Who does what:**
+1. `sophix:billing:cycle-close` (Foundation/Console schedule, every 30 min) → `CycleCloseService::closeCycle`.
+2. `ChargeComputeService::cycleCharges` computes the package fee + VOICE usage.
+3. `InvoiceService::generateFromCharges` reads `grouping_dimension=WALLET` → writes **two** `invoice` rows, each tax-decomposed via Catalog `TaxComputeService`.
+4. Emits `InvoiceGenerated` (via the **outbox**); the cycle anchor advances; the voice `rated_event` rows are stamped `billed=true` and linked to the voice invoice.
+
+**Sample — one close, two invoices:**
+
+| Invoice | grouping_key | contents | subtotal | tax | total |
+|---------|--------------|----------|---------:|----:|------:|
+| inv_1 | `MAIN` | Internet 100M + IPTV Premium | 4310.34 | 689.66 | 5000.00 |
+| inv_2 | `VOICE` | 150 min voice usage | 1293.10 | 206.90 | 1500.00 |
+
+```mermaid
+sequenceDiagram
+    participant Sch as cycle-close schedule
+    participant CC as CycleCloseService
+    participant CO as ChargeComputeService
+    participant IS as InvoiceService
+    participant TX as TaxComputeService
+    Sch->>CC: closeCycle
+    CC->>CO: cycleCharges fee + usage
+    CO->>IS: generateFromCharges
+    IS->>TX: decompose tax per line
+    IS-->>CC: two invoices MAIN + VOICE
+    CC-->>Sch: InvoiceGenerated outbox, anchor advances
+```
+*Proven by `CycleCloseTest`.*
+
+### 2. Prepaid cycle, wallet short → freeze + enter dunning
+
+**The story in plain English:** A prepaid customer's wallet doesn't have enough for this month. The
+system tries to take the money from the wallet, can't, so it **does not advance** the billing cycle
+(it freezes) and starts the dunning (debt-chasing) process at level 1.
+
+**Who does what:**
+1. Same close, PREPAID: `WalletService::settleFromWallets` finds the balance short.
+2. `closeCycle` does **not** advance the anchor; emits `CyclePaymentMissed`.
+3. `DunningEventBridge` (a listener on `OutboxEventPublished`) → `DunningService` enters the account at level 1, emitting `SubscriptionEnteredDunning`.
+
+*Foundation: outbox → listener.* *Proven by `CycleCloseTest`, `DunningTest`.*
+
+### 3. M-Pesa payment lands → allocate → confirm intent
+
+**The story in plain English:** A customer pays via M-Pesa. The payment arrives as an event. Billing
+records it, applies it to the open invoices, and marks them paid. If that payment was the thing a parked
+subscription job was waiting for (e.g. a pay-first activation), confirming it wakes that job back up.
+
+**Who does what:**
+1. PaymentGateway emits `PaymentReceived` → `PaymentService` writes a `payment_ledger` row.
+2. It allocates to open invoices (`payment_invoice_allocation`), marks the invoice `PAID`, emits `InvoicePaid`.
+3. Subscription's `ConfirmBillingIntentOnPayment` confirms a pay-first `billing_intent` and **correlates a workflow message** (Foundation/Workflow) to resume the parked operation.
+
+```mermaid
+sequenceDiagram
+    participant PG as PaymentGateway
+    participant PS as PaymentService
+    participant INV as invoice
+    participant SUB as Subscription
+    PG->>PS: PaymentReceived
+    PS->>PS: write payment_ledger row
+    PS->>INV: allocate → mark PAID
+    PS-->>SUB: InvoicePaid
+    SUB->>SUB: confirm billing_intent, resume parked op
+```
+*Proven by `PaymentApplicationTest`.*
 
 ### 4. Overpayment → account credit → auto-draw next invoice
-A payment exceeds the invoice → `PaymentService` posts the surplus to `account_credit_balance` (emits
-`OverpaymentPendingReview`/`CreditBalanceAdjusted`). Next `InvoiceGenerated` → `ApplyCreditBalanceOnInvoice`
-(listener) auto-draws the credit. *Foundation: event-driven credit application.*
+
+**The story in plain English:** A customer pays more than they owe. The extra isn't lost — it's parked
+as an account credit balance, and the next invoice automatically draws it down.
+
+**Who does what:** A payment exceeds the invoice → `PaymentService` posts the surplus to
+`account_credit_balance` (emits `OverpaymentPendingReview`/`CreditBalanceAdjusted`). The next
+`InvoiceGenerated` → `ApplyCreditBalanceOnInvoice` (listener) auto-draws the credit.
+*Foundation: event-driven credit application.*
 
 ### 5. Paid reconnection fee flips the subscription ACTIVE (state_callback)
-A `RECONNECTION_FEE_AFTER_DUNNING` `billable_event` has `state_callback{targetStatus:ACTIVE}`.
-`BillingIntentService::emit` raises it pay-first (`billing_intent.status=PENDING`); on `InvoicePaid`,
-`confirm()` reads the pinned callback → `SubscriptionService::transitionStatus(ACTIVE)`. *Proven by
-`BillableEventCatalogTest::test_paid_state_callback_transitions_the_subscription`.*
 
-### 6. Credit-note adjustment → propose → approve → apply (approvals + rules)
-`AdjustmentService::propose` (reason mandatory) asks `rules.billing.adjustment-approval`
-(**Foundation/Rules**) for `stepsRequired`; >0 ⇒ `adjustment_request.status=PENDING_APPROVAL`. Approvers
-sign steps (SoD); when met → `approveAndApply` issues a `CREDIT_NOTE` invoice (GEN-01) and applies it
-(CN-01). *Proven by `AdjustmentTest`.*
+**The story in plain English:** A suspended customer pays a reconnection fee to get back online. The fee
+charge carries a built-in instruction: "once this is paid, switch the subscription back to ACTIVE." When
+the payment lands, Billing reads that instruction and flips the subscription on.
+
+**Who does what:** A `RECONNECTION_FEE_AFTER_DUNNING` `billable_event` has `state_callback{targetStatus:ACTIVE}`.
+`BillingIntentService::emit` raises it pay-first (`billing_intent.status=PENDING`); on `InvoicePaid`,
+`confirm()` reads the pinned callback → `SubscriptionService::transitionStatus(ACTIVE)`.
+*Proven by `BillableEventCatalogTest::test_paid_state_callback_transitions_the_subscription`.*
+
+### 6. Credit-note adjustment → propose → approve → apply
+
+**The story in plain English:** An agent wants to credit a customer (say, for an outage). They *propose*
+the credit with a reason. Depending on the amount, the system may require one or more approvers to sign
+off (and the proposer can't approve their own). Once enough people sign, Billing issues a credit note
+and applies it.
+
+**Who does what:**
+1. `AdjustmentService::propose` (reason mandatory) asks `rules.billing.adjustment-approval` (Foundation/Rules) how many `stepsRequired`.
+2. If >0 ⇒ `adjustment_request.status=PENDING_APPROVAL`.
+3. Approvers sign steps (separation of duties); when the count is met → `approveAndApply` issues a `CREDIT_NOTE` invoice (GEN-01) and applies it (CN-01).
+
+```mermaid
+stateDiagram-v2
+    [*] --> PROPOSED
+    PROPOSED --> PENDING_APPROVAL: stepsRequired > 0
+    PROPOSED --> APPLIED: stepsRequired = 0
+    PENDING_APPROVAL --> APPROVED: all steps signed
+    PENDING_APPROVAL --> REJECTED: an approver rejects
+    APPROVED --> APPLIED: credit note issued
+    APPLIED --> [*]
+    REJECTED --> [*]
+```
+*Proven by `AdjustmentTest`.*
 
 ### 7. Dunning escalates faster on an NPD flag, then suspends
-`sophix:billing:dunning-run` → `DunningService::assessAccount`: an ILM `affects_dunning` flag
-(`AccountService::hasDunningAccelerantFlag`) **waives the grace window** → advance a level now; the
-level action fires `RESTRICTION_ADD`/`SUSPEND_NP` via Subscription `OperationFramework`. *Cross-module
-read + workflow.* *Proven by `DunningTest`.*
+
+**The story in plain English:** A customer in debt also has a "non-performing debtor" flag from ILM.
+Normally dunning waits a grace period between escalation levels; with this flag, the wait is **waived**
+and the customer is escalated immediately. The new level can add a restriction or suspend the service.
+
+**Who does what:** `sophix:billing:dunning-run` → `DunningService::assessAccount`: an ILM
+`affects_dunning` flag (`AccountService::hasDunningAccelerantFlag`) **waives the grace window** → advance
+a level now; the level action fires `RESTRICTION_ADD`/`SUSPEND_NP` via Subscription `OperationFramework`.
+*Cross-module read + workflow.* *Proven by `DunningTest`.*
 
 ### 8. Cycle generation fails → retry queue → give up
-`closeCycle` throws (snapshot/tax/BIL01 unavailable) → `GenerationFailureService::enqueue` writes a
-`generation_failure_queue` row (`PENDING_RETRY`, backoff). `sophix:billing:generation-retry` (15 min)
-re-invokes the generator; persistent failure → `GAVE_UP_AUTO` for human review. *Proven by
-`BulkReversalAndFailureQueueTest`.*
+
+**The story in plain English:** Closing a cycle can fail (e.g. the tax service is down). Instead of
+losing the work, the failure goes into a retry queue with a backoff. A scheduled job retries it; if it
+keeps failing, it's marked "gave up" so a human can look.
+
+**Who does what:** `closeCycle` throws (snapshot/tax/BIL01 unavailable) → `GenerationFailureService::enqueue`
+writes a `generation_failure_queue` row (`PENDING_RETRY`, backoff). `sophix:billing:generation-retry`
+(every 15 min) re-invokes the generator; persistent failure → `GAVE_UP_AUTO` for human review.
+*Proven by `BulkReversalAndFailureQueueTest`.*
 
 ### (bonus) 9. Tax invoice signed asynchronously
-A payment moment → `TaxEventBridge` → `TaxInvoiceGenerator` issues a `tax_invoice` (inclusive
-decomposition), then `sophix:billing:tax-sign-scan` calls the signer; failure → `tax-retry-scan` backoff →
-`TaxInvoiceSigningGaveUp`. *Proven by `Tax01Test`.*
+
+**The story in plain English:** When a payment moment happens, a fiscal **tax invoice** is produced and
+must be digitally signed by the tax authority's system. Signing happens asynchronously: a scanner job
+calls the signer; if it fails it backs off and retries, eventually giving up.
+
+**Who does what:** A payment moment → `TaxEventBridge` → `TaxInvoiceGenerator` issues a `tax_invoice`
+(inclusive decomposition), then `sophix:billing:tax-sign-scan` calls the signer; failure →
+`tax-retry-scan` backoff → `TaxInvoiceSigningGaveUp`. *Proven by `Tax01Test`.*
 
 ## 2. Data model — ≥4 **complete** sample rows + readings
 > **Completeness:** each row lists **every domain column** (nullables shown as `null`). The surrogate
@@ -92,6 +195,34 @@ bulk-reversed — it has linked notes); notes write `tax_amount_total=0` (inclus
 is a **TAX** invoice — immutable, never adjusted (adjust the commercial one instead). `customer_snapshot`
 freezes the bill-to identity; `grouping_dimension=WALLET` is what split internet (inv_1) from voice
 (inv_2).
+
+**Status lifecycle.** An invoice starts `OPEN`, takes payments, and lands `PAID` when fully settled (a
+fully-applied credit note also rests `PAID` with `amount_due=0`):
+
+```mermaid
+stateDiagram-v2
+    [*] --> OPEN
+    OPEN --> PARTIALLY_PAID: part payment
+    PARTIALLY_PAID --> PAID: balance cleared
+    OPEN --> PAID: paid in full
+    OPEN --> OVERDUE: due_date passed
+    OVERDUE --> PAID: paid late
+    OPEN --> VOID: cancelled
+    PAID --> [*]
+    VOID --> [*]
+```
+
+**Worked example — how inv_1's totals are built** (the figures are inclusive of 16% VAT, so the
+displayed `total_amount` already contains the tax; Billing decomposes it back into subtotal + tax):
+
+| Line | gross (total) | subtotal = gross ÷ 1.16 | tax = gross − subtotal |
+|------|--------------:|------------------------:|-----------------------:|
+| Internet 100M | 3480.00 | 3000.00 | 480.00 |
+| IPTV Premium | 1392.00 | 1200.00 | 192.00 |
+| **inv_1 totals** | **5000.00** | rounds to **4310.34** | **689.66** |
+
+(The line subtotals shown in `invoice_line` — 3000.00 / 1200.00 — are the catalog ex-tax prices; the
+invoice header sums to `subtotal_amount=4310.34`, `tax_amount_total=689.66`, `total_amount=5000.00`.)
 
 ### `invoice_line` · `line_type`: `SUMMARY|DETAIL`
 > All of `line_type`/`parent_summary_line_id`/`service_category_code`/`package_ref`/`wallet_type_code`/
@@ -138,6 +269,19 @@ sub ACTIVE). bint_3 is a **negative** amount (credit) → posts to account credi
 invoice). bint_4 is a zero/skip (the event applied but nothing to charge → `NONE`). Each intent ties back
 to the Subscription `operation_id` that raised it.
 
+**Worked example — bint_1's PRORATION amount.** When a customer upgrades mid-cycle, the charge is only
+for the *remaining* days at the price *difference*. Suppose a 30-day cycle, upgraded with 21 days left,
+from a 2500.00/mo plan to a 3000.00/mo plan:
+
+| Input | value |
+|-------|------:|
+| cycle length | 30 days |
+| days remaining | 21 days |
+| monthly price difference | 3000.00 − 2500.00 = 500.00 |
+| proration = diff × (remaining ÷ cycle) | 500.00 × (21 ÷ 30) = **350.00** |
+
+→ `bint_1.amount = 350.00`, settled on the next invoice (`settlement_channel=INVOICE`).
+
 ### `billable_event` · `amount_sign_policy`: `POSITIVE_ONLY|NEGATIVE_ONLY|SIGNED` · `trigger_type`: `SAGA_INTENT|LIFECYCLE_EVENT|ADMIN_ACTION|CUSTOMER_PURCHASE|EXTERNAL_PAYMENT|SCHEDULED` · `applicability`: `PREPAID_ONLY|POSTPAID_ONLY|ANY` · `status`: `DRAFT|ACTIVE|RETIRED`
 ```json
 { "id":"bev_1","operator_code":"WIK","code":"RECONNECTION_FEE_AFTER_DUNNING","description":"Reconnection fee after dunning","category_code":"FEE","service_refs":["svc_inet"],"currency":"KES","applicability":"ANY","amount_sign_policy":"POSITIVE_ONLY","pay_first_required":true,"trigger_type":"EXTERNAL_PAYMENT","trigger_intent_code":null,"trigger_event_type":null,"trigger_filter_drl":null,"trigger_schedule":null,"state_callback":{"transitionCode":"RECONNECT_AFTER_FEE","targetStatus":"ACTIVE"},"eligibility_franchise_refs":null,"eligibility_package_refs":null,"eligibility_segment_refs":null,"display_order":100,"status":"ACTIVE","notes":null,"created_by":"u_admin","updated_by":"u_admin","retired_at":null }
@@ -180,6 +324,36 @@ dun_3 recovered (`CLEARED`, level 0, `cleared_at` set); dun_4 hit terminate but 
 mandatory review window (`review_due_at`) and is backing off after a workflow failure
 (`workflow_failure_attempts=2`). `next_evaluation_at` is the E-1/E-2 scan cadence.
 
+**Status lifecycle (`dunning_state`):**
+
+```mermaid
+stateDiagram-v2
+    [*] --> ACTIVE: debt detected
+    ACTIVE --> CLEARED: debt paid
+    ACTIVE --> SUSPENDED_BY_PAUSE: subscription paused
+    SUSPENDED_BY_PAUSE --> ACTIVE: resumed
+    ACTIVE --> PENDING_TERMINATION_REVIEW: reached terminate level
+    PENDING_TERMINATION_REVIEW --> CLEARED: paid before review
+    PENDING_TERMINATION_REVIEW --> RECOVERY_FAILED: review not actioned
+    CLEARED --> ARCHIVED
+    RECOVERY_FAILED --> ARCHIVED
+    ARCHIVED --> [*]
+```
+
+**Worked escalation — program `wik_postpaid_standard` v1** (dun_1's pinned program). Each level waits
+its `grace_period_days` before the next pass advances; an ILM `affects_dunning` flag waives that wait
+(Scenario 7), collapsing the timeline:
+
+| Level | name | grace_period_days | action_workflow_intent |
+|------:|------|------------------:|------------------------|
+| 1 | WARNING | 7 | `WARNING_ONLY` |
+| 2 | RESTRICTED | 7 | `RESTRICTION_ADD` |
+| 3 | SUSPENDED | 14 | `SUSPEND_NP` |
+| 4 | TERMINATED | — | `TERMINATION` |
+
+So a normal postpaid debtor is warned on day 0, restricted ~day 7, suspended ~day 14, and reaches the
+termination *review* ~day 28; with an NPD flag the grace is waived and each pass advances immediately.
+
 ### `adjustment_request` · `direction`: `CREDIT|DEBIT` · `scope`: `FULL|LINE|AMOUNT` · `status`: `PROPOSED|PENDING_APPROVAL|APPROVED|APPLIED|REJECTED|APPLICATION_FAILED|CANCELLED_BY_PROPOSER`
 > `required_approvals`/`approval_rule_id` added by the required-approvals migration.
 ```json
@@ -193,6 +367,20 @@ capped), `AMOUNT`=free-form (needs `service_category_code`). adj_1 is applied (a
 was issued → `note_invoice_id`). adj_2 needs 2 approvals (`required_approvals=2`, multi-step). A
 `reason_code` is always mandatory; its `direction` must justify the note direction. `target_wallet_ref`
 directs a PREPAID note at a specific wallet; `limit_overridden` records a `/override-limit` exercise.
+
+**Worked example — how many approvals each request needs.** `rules.billing.adjustment-approval` returns
+a `required_approvals` count; the request only applies once that many *distinct* approvers (not the
+proposer) have signed:
+
+| Request | amount | rule | required_approvals | signed so far | status |
+|---------|-------:|------|-------------------:|--------------:|--------|
+| adj_1 | 5000.00 | `rule_adj_std` | 1 | 1 | `APPLIED` |
+| adj_2 | 300.00 | `rule_adj_debit` | 2 | 0 | `PENDING_APPROVAL` |
+| adj_3 | 1000.00 | `rule_adj_std` | 1 | 0 | `PROPOSED` |
+| adj_4 | 1500.00 | `rule_adj_high` | 2 | — | `REJECTED` |
+
+(adj_3 is still `PROPOSED` — it hasn't entered the approval queue yet; adj_2 is waiting on 2 sign-offs;
+adj_4 was turned down. The diagram in Scenario 6 shows these transitions.)
 
 ### `wallet` (`status`: `ACTIVE|FROZEN|CLOSED`) & `wallet_transaction` (PREPAID)
 > The multiwallet migration added `wallet_code`/`customer_id` and re-keyed uniqueness to
@@ -210,6 +398,18 @@ directs a PREPAID note at a specific wallet; `limit_overridden` records a `/over
 close debits the matching wallet. wal_2 empty → a voice cycle would freeze (Scenario 2). wal_3 is
 `CLOSED` (its `expires_at` passed; balance swept by `sophix:wallet:expire`). `wallet_transaction` is the
 per-move ledger — each row records `direction`/`reason`/`balance_after` for audit.
+
+**Wallet status lifecycle:**
+
+```mermaid
+stateDiagram-v2
+    [*] --> ACTIVE
+    ACTIVE --> FROZEN: cycle shortfall freezes it
+    FROZEN --> ACTIVE: top-up clears shortfall
+    ACTIVE --> CLOSED: expires_at passed, swept
+    FROZEN --> CLOSED: expired while frozen
+    CLOSED --> [*]
+```
 
 ### `pro_forma` (`status`: `ACTIVE|SUPERSEDED`), `rated_event`, `account_credit_balance`
 > `rated_event.invoice_id` (the POSTPAID settlement ref) added by the link-rated-events migration.

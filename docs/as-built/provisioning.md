@@ -34,23 +34,63 @@ vendor system); **adapter_config** binds that plane to a **ProvisioningAdapter**
 addresses the subscriber by **subscriber_key** and pushes **desired_profile**. Swap `adapter_class` →
 the same command drives a different vendor, **no platform change**.
 
+**The same path as a picture** — read it left to right as *what → where → which → how → network*:
+```mermaid
+flowchart LR
+    SVC["service svc_inet<br/>what to provision"] --> CHAIN["node chain at HomePass hp_1<br/>ONT to OLT to HEADEND"]
+    CHAIN --> TGT["target plane HUAWEI_NCE_GPON_KE<br/>which vendor system"]
+    TGT --> ADP["adapter HuaweiNceGponAdapter<br/>how, via adapter_config"]
+    ADP --> NET["the OLT / NMS<br/>the live network"]
+```
+
 ## 📖 Scenarios (service + Foundation involvement)
 
 ### 1. Activate internet on a sync GPON OLT
-`ActivateServiceHandler` (a Subscription workflow step, **Foundation/Workflow**) →
-`ProvisioningService::broadcast('sub_123','ACTIVATE',[…])`. broadcast writes a `provisioning_command`
-(`PENDING`) and `dispatch()` resolves the Huawei adapter via `ProvisioningAdapterRegistry::forCommand`
-→ `adapter.dispatch` confirms inline → command `CONFIRMED`, `external_ref` stored, a
-`provisioning_command_attempt` (`SUCCESS`) logged, `recordDesiredState()` writes the baseline. Emits
-`ProvisioningCommandConfirmed` to the **outbox**. Handler returns `provisioned:true`; the subscription
-flow commits ACTIVE. *(AdapterRoutingTest: a GPON command resolves the GPON adapter.)*
+
+**The story in plain English:** A customer's subscription goes live, so we have to tell the network. We
+write down the command we are about to send, pick the right vendor adapter for that OLT, send it, and the
+OLT confirms straight away. We record that it worked and remember the desired state so we can later check
+the network still matches.
+
+**Who does what:**
+1. `ActivateServiceHandler` (a Subscription workflow step, **Foundation/Workflow**) calls
+   `ProvisioningService::broadcast('sub_123','ACTIVATE',[…])`.
+2. `broadcast` writes a `provisioning_command` (`PENDING`).
+3. `dispatch()` resolves the Huawei adapter via `ProvisioningAdapterRegistry::forCommand`.
+4. `adapter.dispatch` confirms inline → command `CONFIRMED`, `external_ref` stored, a
+   `provisioning_command_attempt` (`SUCCESS`) logged.
+5. `recordDesiredState()` writes the reconcile baseline; emits `ProvisioningCommandConfirmed` to the
+   **outbox**. Handler returns `provisioned:true`; the subscription flow commits ACTIVE.
+
+```mermaid
+sequenceDiagram
+    participant H as ActivateServiceHandler
+    participant P as ProvisioningService
+    participant R as AdapterRegistry
+    participant AD as HuaweiNceGponAdapter
+    H->>P: "broadcast ACTIVATE sub_123"
+    P->>P: "write command PENDING"
+    P->>R: "forCommand"
+    R-->>P: "the GPON adapter"
+    P->>AD: "dispatch"
+    AD-->>P: "confirmed, external_ref"
+    P->>P: "command CONFIRMED, record desired state"
+    P-->>H: "provisioned true"
+```
+*(AdapterRoutingTest: a GPON command resolves the GPON adapter.)*
 
 ### 2. Activate on an async OLT (accept → poll → confirm)
-Same broadcast, but `adapter_config.execution_mode_default=ASYNC_ACCEPTED`. `adapter.dispatch` returns
-**accepted** → command `ACCEPTED` (`external_ref` set), and the flow's `ActivateServiceHandler` sees
-not-yet-confirmed. The scheduled worker `sophix:provisioning:poll-async` (a **Foundation/Console**
-scheduled command, every 5 min) calls `adapter.pollStatus` → `CONFIRMED`. The parked workflow advances
-on the next tick. *Shows: async vendors + the poll worker resolving terminal state.*
+
+**The story in plain English:** Some vendors do not answer immediately — they just say "got it, working
+on it". The command sits in an *accepted* state and the subscription flow waits. A small worker checks
+back every few minutes until the vendor reports it is really done.
+
+**Who does what:** same broadcast, but `adapter_config.execution_mode_default=ASYNC_ACCEPTED`.
+`adapter.dispatch` returns **accepted** → command `ACCEPTED` (`external_ref` set), and the flow's
+`ActivateServiceHandler` sees not-yet-confirmed. The scheduled worker `sophix:provisioning:poll-async` (a
+**Foundation/Console** scheduled command, every 5 min) calls `adapter.pollStatus` → `CONFIRMED`. The
+parked workflow advances on the next tick. *Shows: async vendors + the poll worker resolving terminal
+state.*
 
 ### 3. Speed change (MODIFY) mid-cycle
 A subscription upgrade flow broadcasts `action:MODIFY` with `desired_state.speedProfile:'200M'`.

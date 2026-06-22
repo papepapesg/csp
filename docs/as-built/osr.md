@@ -15,52 +15,157 @@
 ## 📖 Scenarios (service + Foundation involvement)
 
 ### 1. Buy stock (EM-CFG-04 gated) → receive it
-`ProcurementService::create` → PO `DRAFT`. `approve` opens a **PURCHASE_ORDER** EM-CFG-04 request
-(**Foundation/Approvals**): with a policy → `PENDING_APPROVAL`; a **different** approver decides via
-`…/approvals/{req}/decide` (SoD). `receive` posts a `GOODS_RECEIPT` `stock_movement` (+qty) and
-registers each serial as an `equipment_instance` (`IN_MAIN_WAREHOUSE`). *Proven by `ProcurementAuditTest`.*
+
+**The story in plain English:** A buyer raises a purchase order to restock equipment. Because real money
+is involved, a big order can't be approved by the same person who raised it — a **second person** has to
+sign off. Once the goods arrive, the system records the new stock and gives every serialised unit its own
+identity card.
+
+**Who does what:**
+1. `ProcurementService::create` makes a `purchase_order` in status `DRAFT`.
+2. `approve` opens a **PURCHASE_ORDER** EM-CFG-04 approval request (`Foundation/Approvals`). With a policy
+   it parks the PO at `PENDING_APPROVAL`; otherwise it auto-approves to `APPROVED`.
+3. A **different** approver decides via `…/approvals/{req}/decide` (separation of duties) → PO `APPROVED`
+   or `REJECTED`.
+4. `receive` posts a `GOODS_RECEIPT` `stock_movement` (+qty) and registers each serial as an
+   `equipment_instance` in state `IN_MAIN_WAREHOUSE`.
+
+**Sample — a PO parked waiting on a second approver:**
+```json
+{ "po_id":"po_2","status":"PENDING_APPROVAL","supplier":"Casa","total_value":900000,"approval_request_id":"appr_70","created_by":"u_proc1" }
+```
+*Proven by `ProcurementAuditTest`.*
 
 ### 2. Reserve stock for an install WO → consume / release (event-driven)
-`StockService::reserve(wo_id, sku, location, qty)` writes a `stock_reservation` (`ACTIVE`). On
-`WorkOrderFinalized` → `ConsumeReservationOnWoLifecycle` (**listener on the outbox**) flips it
-`CONSUMED`; on `WorkOrderCancelled` → `RELEASED`. Unconsumed holds past `expires_at` are swept `EXPIRED`
-by the `sophix:stock:expire-reservations` command (registered for periodic invocation; the module's own
-schedule wiring is currently disabled). *Foundation: outbox listener + sweep command.* *Proven by
-`StockReservationTest`.*
+
+**The story in plain English:** Before a technician's job, the system sets aside the cable and parts that
+job will need, so two jobs can't both promise the same stock. When the job finishes the parts are used
+up; if the job is cancelled they go back on the shelf; and if a hold is forgotten about, it eventually
+times out and is released automatically.
+
+**Who does what:**
+1. `StockService::reserve(wo_id, sku, location, qty)` writes a `stock_reservation` in status `ACTIVE`
+   (this raises the location's `qty_reserved`).
+2. On `WorkOrderFinalized` the `ConsumeReservationOnWoLifecycle` listener (running on the outbox) flips
+   the reservation to `CONSUMED`; on `WorkOrderCancelled` it flips to `RELEASED`.
+3. A hold left un-actioned past `expires_at` is swept to `EXPIRED` by the
+   `sophix:stock:expire-reservations` command (registered for periodic invocation; the module's own
+   schedule wiring is currently disabled).
+
+*Foundation: outbox listener + sweep command.* *Proven by `StockReservationTest`.*
 
 ### 3. A damaged write-off needs approval
-`POST /api/stock-movements` reason `WRITE_OFF` (`stock_reason_code.requires_approval=true`) →
-`StockService::submit` holds it as an EM-CFG-04 request (auto-approves only if no policy). A `RECEIPT`
-reason posts immediately. *Shows: config-driven approval per reason code.* *Proven by `StockRulesTest`.*
+
+**The story in plain English:** Throwing away damaged stock loses the company money, so it needs a
+sign-off first. Plain stock receipts don't — they just post straight away. Whether a given reason needs
+approval is a setting, not hard-coded.
+
+**Who does what:**
+1. `POST /api/stock-movements` with reason `WRITE_OFF` — its `stock_reason_code` has
+   `requires_approval=true`, so `StockService::submit` holds it as an EM-CFG-04 approval request
+   (auto-approving only when there is no policy).
+2. A movement with a `RECEIPT` reason (`requires_approval=false`) posts immediately, no approval.
+
+*Shows: config-driven approval per reason code.* *Proven by `StockRulesTest`.*
 
 ### 4. Inventory count → reconcile (idempotent)
-`InventoryAuditService::open(location)` → `count(session, lines)` records system vs counted →
-`reconcile` posts **one** `INVENTORY_AUDIT_ADJUSTMENT` movement for the variance; a second reconcile is
-a no-op (R-OSR-05-09). *Shows: idempotent correction.* *Proven by `ProcurementAuditTest`.*
+
+**The story in plain English:** Staff physically count what's on a shelf and compare it to what the
+system thinks is there. If the numbers differ, the system makes **one** correcting adjustment to bring
+them in line. Running the correction a second time does nothing — the books are already right.
+
+**Who does what:**
+1. `InventoryAuditService::open(location)` starts a count session.
+2. `count(session, lines)` records system quantity vs counted quantity per SKU.
+3. `reconcile` posts **one** `INVENTORY_AUDIT_ADJUSTMENT` `stock_movement` for the variance; a second
+   `reconcile` is a no-op (R-OSR-05-09).
+
+*Shows: idempotent correction.* *Proven by `ProcurementAuditTest`.*
 
 ### 5. Instance lifecycle: warehouse → van → field
-`EquipmentInstanceService::transition` walks the state machine: `IN_MAIN_WAREHOUSE` → (issue to van)
-`IN_CONTRACTOR_STOCK` → (install) `IN_FIELD_ACTIVE` bound to a customer/subscription; each step emits
-`EquipmentInstanceStateChanged`. *Shows: the serialized state machine + events.*
+
+**The story in plain English:** A serialised device (an ONT or set-top box) is tracked individually as it
+moves: it starts in the warehouse, gets loaded onto a technician's van, and ends up installed at a
+customer's home. Every move is logged so you always know where each unit is.
+
+**Who does what:**
+1. `EquipmentInstanceService::transition` walks the state machine: `IN_MAIN_WAREHOUSE` → (issue to van)
+   `IN_CONTRACTOR_STOCK` → (install) `IN_FIELD_ACTIVE`, now bound to a `customer_id`/`subscription_id`.
+2. Each step emits an `EquipmentInstanceStateChanged` event.
+
+*Shows: the serialized state machine + events.* (See the `equipment_instance` state diagram in §2.)
 
 ### 6. HFC swap (recovered) → completed, charged
-`SwapRequestService` starts the `osr-swap` workflow: `ValidateSwapEligibilityHandler` →
-`ReserveSlotHandler` → `CreateSwapWorkOrderHandler` (→ WorkOrder) → field visit recovers the unit →
-`RecoverSourceHandler` (`SOURCE_RECOVERED`) → `CompleteSwapHandler`: swap `COMPLETED`; if `chargeable`
-(out-of-warranty/upgrade) it raises the SKU deposit as a BIL-01 intent. *Foundation: workflow + Billing
-call.* *Proven by `SwapRequestTest`.*
+
+**The story in plain English:** A customer's box is faulty, so a technician visits to swap it for a new
+one and brings the old one back. The whole visit is driven by a step-by-step workflow. If the swap is an
+upgrade or the old box was out of warranty, the customer gets a charge; if it was a normal in-warranty
+fault, it's free.
+
+**Who does what:**
+1. `SwapRequestService` starts the `osr-swap` workflow.
+2. `ValidateSwapEligibilityHandler` checks the swap is allowed → `ReserveSlotHandler` books a field slot
+   → `CreateSwapWorkOrderHandler` creates the WorkOrder.
+3. The technician visits and recovers the old unit → `RecoverSourceHandler` marks the swap
+   `SOURCE_RECOVERED`.
+4. `CompleteSwapHandler` finishes the swap → status `COMPLETED`. If the swap is `chargeable`
+   (out-of-warranty / upgrade) it raises the SKU deposit as a **BIL-01** billing intent.
+
+```mermaid
+sequenceDiagram
+    participant S as SwapRequestService
+    participant V as ValidateSwapEligibilityHandler
+    participant R as ReserveSlotHandler
+    participant W as CreateSwapWorkOrderHandler
+    participant F as Field visit
+    participant Rec as RecoverSourceHandler
+    participant C as CompleteSwapHandler
+    participant B as Billing (BIL-01)
+    S->>V: start osr-swap
+    V->>R: eligible
+    R->>W: slot reserved
+    W->>F: WorkOrder created
+    F->>Rec: old unit recovered
+    Rec->>C: swap SOURCE_RECOVERED
+    C-->>S: swap COMPLETED
+    C->>B: if chargeable raise deposit intent
+```
+*Foundation: workflow + Billing call.* *Proven by `SwapRequestTest`.*
 
 ### 7. EQR — customer refuses return → deposit forfeited
-On the field visit `recovered=false` → `CompleteWithoutRecoveryHandler`: swap
-`COMPLETED_WITHOUT_RECOVERY`, the unit stays `IN_FIELD_ACTIVE`, and the **deposit is forfeited** — it
-resolves the SKU `deposit_amount` and raises a `DEPOSIT_FORFEITURE` BIL-01 intent. Emits
-`EquipmentSwapCompleted{depositForfeited:true}`. *Proven by `SwapRequestTest::test_eqr_…`.*
+
+**The story in plain English:** Sometimes a customer won't hand back the old equipment. The swap is then
+recorded as "completed but nothing recovered", the old box stays where it is, and the customer loses the
+deposit they paid on it — the system bills the forfeited deposit.
+
+**Who does what:**
+1. On the field visit `recovered=false` → `CompleteWithoutRecoveryHandler` runs.
+2. The swap goes to status `COMPLETED_WITHOUT_RECOVERY`; the unit stays `IN_FIELD_ACTIVE`.
+3. The **deposit is forfeited** — it resolves the SKU `deposit_amount` and raises a `DEPOSIT_FORFEITURE`
+   BIL-01 intent, emitting `EquipmentSwapCompleted{depositForfeited:true}`.
+
+**Sample — the forfeiture swap (no target installed, deposit billed):**
+```json
+{ "swap_id":"swp_3","status":"COMPLETED_WITHOUT_RECOVERY","chargeable":true,"charge_code":"DEPOSIT_FORFEITURE","charge_amount":3000,"target_instance_id":null,"flow_payload":{"recovered":false} }
+```
+*Proven by `SwapRequestTest::test_eqr_…`.*
 
 ### 8. A movement can never drive on-hand negative
-`StockService::move` rejects up front when a debit would push `stock_balance.quantity` below 0
-(R-OSR-SC-8) → `DomainException`. *Shows: a hard stock invariant.* *Proven by `StockRulesTest`.*
+
+**The story in plain English:** You can never take more stock out than you actually have. If a withdrawal
+would push the on-hand count below zero, the system refuses it outright.
+
+**Who does what:**
+1. `StockService::move` rejects up front when a debit would push `stock_balance.quantity` below 0
+   (R-OSR-SC-8), throwing a `DomainException`.
+
+*Shows: a hard stock invariant.* *Proven by `StockRulesTest`.*
 
 ### (bonus) 9. Defective recovered unit → vendor RMA
+
+**The story in plain English:** When a faulty unit comes back, the system notes it down so it can later
+be shipped to the vendor in a batch.
+
 A swap completed with `defectConfirmed` records a `vendor_rma_stub` row with `batch_ref='PENDING_BATCH'`
 for the v1.0 batch handoff (a real vendor-RMA integration is a connector).
 
@@ -88,12 +193,28 @@ out-of-warranty swap charges; `ownership_semantics` says whether the device is r
 { "instance_id":"eqi_3","operator_code":"WIK","sku_id":"WIK-STB-4K","serial":"SN-100","mac_address":null,"state":"IN_FIELD_ACTIVE","location_id":null,"customer_id":"cust_1","subscription_id":"sub_1","active":true }
 { "instance_id":"eqi_4","operator_code":"WIK","sku_id":"WIK-ONT-OLD","serial":"SN-900","mac_address":"AC:DE:48:00:09:00","state":"IN_FIELD_DEFECTIVE","location_id":null,"customer_id":"cust_2","subscription_id":"sub_9","active":true }
 ```
-**Reading:** the state is *where the unit physically is + its condition*. eqi_1 is sellable warehouse
-stock; eqi_2 is on a contractor van; eqi_3 is installed at a customer (bound to a subscription, no
-`location_id` — it's in the field); eqi_4 is defective in the field (a swap candidate). A swap moves a
-source instance through `RESERVED_FOR_WO → RECOVERED_BY_CONTRACTOR` (or stays in field on EQR). `active`
-flips false only once the instance reaches the terminal `RETIRED` state (the transition that emits the
-`EquipmentInstanceDecommissioned` event).
+**Reading:** the `state` tells you *where the unit physically is, plus its condition*. In the rows above:
+- **eqi_1** — sellable warehouse stock (`IN_MAIN_WAREHOUSE`).
+- **eqi_2** — loaded on a contractor van (`IN_CONTRACTOR_STOCK`).
+- **eqi_3** — installed at a customer (`IN_FIELD_ACTIVE`, bound to a subscription, no `location_id`
+  because it's now in the field).
+- **eqi_4** — defective in the field (`IN_FIELD_DEFECTIVE`, a swap candidate).
+
+A swap moves the source instance through `RESERVED_FOR_WO → RECOVERED_BY_CONTRACTOR` (or it stays in the
+field on an EQR refusal). `active` only flips to false once the instance reaches the terminal `RETIRED`
+state — the transition that emits `EquipmentInstanceDecommissioned`.
+
+The realistic life of one unit (warehouse → van → field → recover → retire, with the defective branch):
+```mermaid
+stateDiagram-v2
+    [*] --> IN_MAIN_WAREHOUSE
+    IN_MAIN_WAREHOUSE --> IN_CONTRACTOR_STOCK: issue to van
+    IN_CONTRACTOR_STOCK --> IN_FIELD_ACTIVE: install
+    IN_FIELD_ACTIVE --> IN_FIELD_DEFECTIVE: develops fault
+    IN_FIELD_DEFECTIVE --> RECOVERED_BY_CONTRACTOR: picked up on swap
+    RECOVERED_BY_CONTRACTOR --> RETIRED: decommission
+    RETIRED --> [*]
+```
 
 ### `stock_location` (`type`: `WAREHOUSE|CONTRACTOR_VAN`)
 ```json

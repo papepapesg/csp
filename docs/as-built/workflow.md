@@ -11,39 +11,114 @@
 - **Job:** run config-defined, multi-step, retry-safe processes. *new flow = compose registered topics;
   new step = register one handler.*
 
+**The big picture in plain English:** think of a flow as a recipe drawn as boxes and arrows. The engine
+keeps the recipe (a `process_definition`), starts a copy of it for each subscription or order (a
+`process_instance`), and for every "do something" box it drops a ticket on a queue (a
+`workflow_external_task`). A background **worker** picks tickets off the queue, runs the matching handler,
+and tells the engine to move to the next box. When a box needs to **wait** — for a message, a timer, or a
+human — the flow parks until that wait is satisfied, then resumes exactly where it left off.
+
 ## 📖 Scenarios (service + Foundation involvement)
 
 ### 1. Author → validate → deploy a flow (no code for the flow)
-`POST /api/workflow/definitions` a node graph → `…/validate` (the graph validator checks every `topic`
-is registered, inputs are wired, no dangling nodes) → `…/deploy`. *Proven by `WorkflowEngineTest`.*
 
-### 2. Start an instance
-`WorkflowEngine::start('sub-activate', businessKey, vars)` → a `process_instance` + a `workflow_external_task`
-per service node (`CREATED`).
+**The story in plain English:** An author draws a flow in the Studio — boxes (steps) joined by arrows. Before
+it can run, the system checks the drawing makes sense: every step points at a real handler, every input is
+wired, nothing dangles. Only then can the flow be deployed and used.
 
-### 3. Worker drains a task
+**Who does what:**
+1. `POST /api/workflow/definitions` saves the node graph as a `process_definition` (`status DRAFT`).
+2. `POST …/validate` runs the **graph validator** — every node `topic` must be registered in `TaskRegistry`,
+   inputs must be wired, no dangling nodes or bad edges.
+3. `POST …/deploy` flips the definition to `DEPLOYED` — now it can start instances.
+
+*Proven by `WorkflowEngineTest`.*
+
+### 2. Start → external task → worker drains it → completes
+
+**The story in plain English:** Something kicks off a flow (say, a new subscription). The engine creates a
+running instance and, for the first "do something" step, drops a ticket on a work queue. A background worker
+grabs the ticket, runs the real step, and reports back — and the engine advances the flow to the next step.
+
+**Who does what:**
+1. `WorkflowEngine::start('sub-activate', businessKey, vars)` creates a `process_instance` (`RUNNING`) plus a
+   `workflow_external_task` (`CREATED`) for each service node it reaches.
+2. The worker command `sophix:workflow:work` **fetch-and-locks** a `CREATED` task by `topic` (status → `LOCKED`,
+   stamps `worker_id` + `locked_until`).
+3. It runs the `TaskHandler` for that topic, then `completeExternalTask` marks the task `COMPLETED` and
+   advances to the next node (which may create the next `CREATED` task).
+
+**Sample — a task as the worker drains it:**
+```json
+{ "task_id":"et_1","instance_id":"pi_1","node_id":"activate","topic":"activate","status":"LOCKED","worker_id":"wf-w-1","locked_until":"2026-06-20T10:01:00Z","retries":3 }
+```
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant E as WorkflowEngine
+    participant Q as "external task queue"
+    participant W as "worker (sophix:workflow:work)"
+    participant H as TaskHandler
+    Caller->>E: start sub-activate
+    E->>Q: create task CREATED
+    W->>Q: fetch-and-lock CREATED
+    Q-->>W: task LOCKED
+    W->>H: run handler for topic
+    H-->>W: result
+    W->>E: completeExternalTask
+    E->>Q: next node create task CREATED
+```
+
+### 3. Worker drains a task (the lock detail)
 `sophix:workflow:work` fetch-and-locks `CREATED` tasks by topic, runs the handler,
-`completeExternalTask` advances to the next node.
+`completeExternalTask` advances to the next node. (See scenario 2 for the full loop.)
 
 ### 4. Exclusive gateway branches on a variable
-A gateway routes on `{kycApproved: true}` vs default — the engine evaluates the condition against
-instance variables. *Proven by `WorkflowEngineTest::test_exclusive_gateway_branches_on_variables`.*
+
+**The story in plain English:** A flow reaches a fork in the road. Which way it goes depends on a value it is
+carrying — for example, "was KYC approved?". The engine reads that value and picks the matching arrow.
+
+**Who does what:** A gateway routes on `{kycApproved: true}` vs default — the engine evaluates the condition
+against the instance `variables`. *Proven by `WorkflowEngineTest::test_exclusive_gateway_branches_on_variables`.*
 
 ### 5. Input mapping wires an upstream output into a downstream input
-A node's declared output (`{provisioningRef}`) is mapped into a later node's input. *Proven by
-`WorkflowEngineTest::test_input_mapping_wires_an_upstream_output_into_a_downstream_input`.*
+
+**The story in plain English:** An early step produces a value (say a provisioning reference). A later step
+needs it. Input mapping is the wire that carries that output forward into the later step's input.
+
+**Who does what:** A node's declared output (`{provisioningRef}`) is mapped into a later node's input. *Proven
+by `WorkflowEngineTest::test_input_mapping_wires_an_upstream_output_into_a_downstream_input`.*
 
 ### 6. Message catch parks → correlate resumes
-A `messageCatch` node creates a `message_subscription`; the flow parks until
-`correlateMessage('ful-install-finalized', businessKey, vars)` (e.g. from a `WorkOrderFinalized`
-listener) resumes it.
+
+**The story in plain English:** A flow reaches a step that says "wait until the install is finished." It pauses
+there. Later, when the install really finishes elsewhere, a message arrives with the matching key and the flow
+wakes up and carries on.
+
+**Who does what:**
+1. A `messageCatch` node creates a `workflow_message_subscription` keyed by `message_name` + `correlation_key`;
+   the instance parks (`SUSPENDED`).
+2. `correlateMessage('ful-install-finalized', businessKey, vars)` — e.g. from a `WorkOrderFinalized` listener —
+   matches the subscription and resumes the flow (`RUNNING`).
+
+**Sample — the parked subscription:**
+```json
+{ "id":11,"instance_id":"pi_3","node_id":"await-install","message_name":"ful-install-finalized","correlation_key":"order_2" }
+```
 
 ### 7. Timer fires
-A timer node creates a `workflow_timer`; `sophix:workflow:tick` fires due timers + reaps dead locks.
+A timer node creates a `workflow_timer`; `sophix:workflow:tick` fires due timers (when `fire_at` passes) and
+reaps dead locks.
 
 ### 8. Strict outputs rejects an undeclared key
-With `SOPHIX_WORKFLOW_STRICT_OUTPUTS`, a handler returning a key it didn't declare is rejected. *Proven
-by `WorkflowEngineTest::test_strict_outputs_rejects_a_handler_that_returns_undeclared_keys`.*
+
+**The story in plain English:** A step is only allowed to hand back the values it promised. If a handler tries
+to sneak in an extra value it never declared, the engine refuses it — keeping the data flowing through the flow
+honest and predictable.
+
+**Who does what:** With `SOPHIX_WORKFLOW_STRICT_OUTPUTS`, a handler returning a key it didn't declare is
+rejected. *Proven by `WorkflowEngineTest::test_strict_outputs_rejects_a_handler_that_returns_undeclared_keys`.*
 
 ### (bonus) 9. Reconcile on end
 `ProcessInstanceEnded` lets a module close its ledger (e.g. Subscription `SyncOperationFromProcess`).
@@ -64,6 +139,34 @@ spawned from a `definition_id`+`definition_version`; `variables` carries ids/con
 `CREATED` = runnable, `LOCKED` = a worker (`worker_id`) claimed it until `locked_until` — a dead worker's
 lock is reaped by `:tick`, decrementing `retries` (0 → `INCIDENT`). The `topic` routes it to a handler.
 
+**Instance lifecycle** — one running flow, from start to finish:
+```mermaid
+stateDiagram-v2
+    [*] --> RUNNING: start
+    RUNNING --> SUSPENDED: waits on message/timer/human
+    SUSPENDED --> RUNNING: wait satisfied
+    RUNNING --> COMPLETED: last node done
+    RUNNING --> FAILED: step error
+    RUNNING --> CANCELLED: cancelled
+    COMPLETED --> [*]
+    FAILED --> [*]
+    CANCELLED --> [*]
+```
+
+**External-task lifecycle** — one ticket on the queue (note `INCIDENT` when retries run out):
+```mermaid
+stateDiagram-v2
+    [*] --> CREATED: node reached
+    CREATED --> LOCKED: worker fetch-and-lock
+    LOCKED --> COMPLETED: handler ok
+    LOCKED --> CREATED: lock reaped (retries left)
+    LOCKED --> FAILED: handler error
+    FAILED --> CREATED: retry
+    FAILED --> INCIDENT: retries exhausted
+    COMPLETED --> [*]
+    INCIDENT --> [*]
+```
+
 ### `process_definition` (the flow graph, versioned + per-operator override)
 ```json
 { "definition_id":"pdef_1","process_key":"sub-activate","version":1,"operator_code":null,"name":"Subscription Activation","description":"Default activation flow","graph":{"nodes":[],"edges":[]},"status":"DEPLOYED","created_by":"u_studio","deployed_at":"2026-06-01T00:00:00Z" }
@@ -83,10 +186,10 @@ instances (a `DRAFT` like pdef_4 is still being authored); a new market = a new 
 { "timer":{ "id":21,"instance_id":"pi_4","node_id":"grace-window","fire_at":"2026-06-21T00:00:00Z","status":"PENDING" } }
 { "ut":{ "task_id":"ut_1","instance_id":"pi_5","node_id":"manual-review","name":"Manual review","candidate_group":"billing-lead","assignee":null,"variables":{"reason":"high-value"},"status":"OPEN","due_at":"2026-06-22T00:00:00Z","completed_at":null } }
 ```
-**Reading:** a `message_subscription` is a parked catch keyed by `message_name`+`correlation_key`
-(resumed by `correlateMessage`); a `workflow_timer` fires its node on `:tick` when `fire_at` passes; a
-`user_task` parks for a human — `OPEN` until a member of `candidate_group` claims it (sets `assignee`,
-`CLAIMED`) via the Studio inbox. These are the three "wait" mechanisms.
+**Reading:** these are the **three "wait" mechanisms** a flow can park on. A `message_subscription` is a parked
+catch keyed by `message_name`+`correlation_key` (resumed by `correlateMessage`); a `workflow_timer` fires its
+node on `:tick` when `fire_at` passes; a `user_task` parks for a human — `OPEN` until a member of
+`candidate_group` claims it (sets `assignee`, `CLAIMED`) via the Studio inbox.
 
 ## 3. Engine
 | Component | Responsibility |

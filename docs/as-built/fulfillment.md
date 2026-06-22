@@ -16,45 +16,132 @@
 
 ## 📖 Scenarios (service + Foundation involvement)
 
+> **The big picture first.** A fulfillment order is a checklist that turns "a customer wants service"
+> into a working, billed subscription. The order doesn't do the work itself — it asks other modules
+> (Subscription, WorkOrder, KYC, Billing) to do their part, then **waits** ("parks") until each part
+> reports back. The order's `status` always tells you exactly which part it is waiting on. If anything
+> goes wrong, the order can **undo** what it already created (cancel the WorkOrder, end the
+> half-built subscription) — that undo is called *compensation*.
+
+**The whole journey at a glance** — this is scenarios 1, 3 and 5 stitched together end to end:
+
+```mermaid
+sequenceDiagram
+    actor Cust as Customer / Desk
+    participant O as OrderCaptureService
+    participant W as Workflow worker
+    participant Sub as Subscription
+    participant WO as WorkOrder
+    participant KYC as ILM KYC
+    Cust->>O: POST fulfillment-order
+    O-->>Cust: order CAPTURED (HTTP 201)
+    O->>W: start ful-order-capture
+    W->>Sub: CreateSubscriptionHandler
+    W->>WO: CreateInstallWoHandler
+    W-->>W: park AWAITING_INSTALL
+    WO-->>W: WorkOrderFinalized → resume
+    W-->>W: park AWAITING_KYC
+    KYC-->>W: CustomerKycApproved → resume
+    W->>Sub: TriggerActivationHandler → ACTIVATE
+    W-->>Cust: order COMPLETED
+```
+
 ### 1. Happy path — capture to live
-`POST /api/fulfillment-orders {customer_id,account_id,homepass_id,package_ref}` →
-`OrderCaptureService::capture` (order `CAPTURED`, starts `ful-order-capture`, HTTP 201). The
-`sophix:workflow:work` worker drains: `CreateSubscriptionHandler` (→ Subscription, stores
-`subscription_id`) → `CreateInstallWoHandler` (→ WorkOrder, stores `work_order_id`) → parks
-`AWAITING_INSTALL`. *Proven by `FulfillmentJourneyTest`.*
+
+**The story:** A desk agent submits an order for a customer. The system says "got it" and quietly kicks
+off a behind-the-scenes checklist: it creates the subscription, then creates an install work order for a
+technician, then **pauses** to wait for the install to happen.
+
+**Who does what:**
+1. `POST /api/fulfillment-orders {customer_id,account_id,homepass_id,package_ref}` →
+   `OrderCaptureService::capture` (order `CAPTURED`, starts the `ful-order-capture` flow, HTTP 201).
+2. The `sophix:workflow:work` worker drains the flow: `CreateSubscriptionHandler` (→ Subscription, stores
+   `subscription_id`) → `CreateInstallWoHandler` (→ WorkOrder, stores `work_order_id`).
+3. The flow then parks at `AWAITING_INSTALL`, waiting for the technician.
+
+**Sample — the order right after capture, now parked for install:**
+```json
+{ "order_id":"order_2","status":"AWAITING_INSTALL","current_step":"INSTALL","subscription_id":"sub_2","work_order_id":"wo_2","payment_ref":null }
+```
+*Proven by `FulfillmentJourneyTest`.*
 
 ### 2. Deposit required → park AWAITING_PAYMENT → resume
-With `deposit_required:true` and no `payment_ref`, `DepositGateHandler` parks the flow on a
-`ful-payment-received` catch (`AWAITING_PAYMENT`) — **no install WO yet**. `confirmDepositPaid` correlates
-the message → the flow proceeds to create the WO. *Foundation: workflow message catch.* *Proven by
+
+**The story:** Some orders need a deposit paid up front. If the request says a deposit is due and none has
+been paid yet, the order stops **before** building anything — no work order, no waste — and waits for the
+money. Once the deposit lands, it picks up where it left off.
+
+**Who does what:**
+1. With `deposit_required:true` and no `payment_ref`, `DepositGateHandler` parks the flow on a
+   `ful-payment-received` catch → status `AWAITING_PAYMENT`. **No install WO is created yet.**
+2. `confirmDepositPaid` correlates the waiting message → the flow proceeds to create the WO.
+
+*Foundation: workflow message catch.* *Proven by
 `FulfillmentJourneyTest::test_deposit_required_order_parks_awaiting_payment_then_resumes_on_deposit`.*
 
 ### 3. Install finalized (event) resumes automatically
-The tech finalizes the WO → `WorkOrderFinalized` (outbox) → `ResumeOrderOnInstallFinalized` correlates
-`ful-install-finalized` → flow resumes to the KYC gate. *Foundation: outbox listener + message correlation.*
+
+**The story:** While the order is parked waiting for install, the technician out in the field finishes the
+job and closes their work order. That closure automatically wakes the parked order up — nobody at the desk
+has to do anything.
+
+**Who does what:** the tech finalizes the WO → `WorkOrderFinalized` (outbox) →
+`ResumeOrderOnInstallFinalized` correlates the `ful-install-finalized` catch → the flow resumes and moves
+on to the KYC gate. *Foundation: outbox listener + message correlation.*
 
 ### 4. Desk completes the install (manual path)
-`POST …/{id}/complete` → `OrderCaptureService::complete` correlates the same message (the desk
-equivalent of the WO event). *Shows: two ways to resume the same catch.*
+
+**The story:** Sometimes the work-order event isn't the trigger — a desk agent confirms the install
+manually instead. Either way reaches the exact same waiting point and resumes it.
+
+**Who does what:** `POST …/{id}/complete` → `OrderCaptureService::complete` correlates the same
+`ful-install-finalized` message (the desk equivalent of the WO event). *Shows: two ways to resume one catch.*
 
 ### 5. KYC gate parks, then approval resumes
-`KycGateHandler`: customer `PENDING` → park `AWAITING_KYC`. Final KYC approval → `CustomerKycApproved`
-→ `ResumeOrderOnKycApproved` → flow loops back through the gate (now APPROVED) → activation. *Proven by
-`FulfillmentJourneyTest::test_activation_is_gated_on_customer_kyc`.*
+
+**The story:** Before the service can go live, the customer's identity check (KYC) must pass. If it's still
+pending, the order waits at the KYC gate. When compliance approves the customer, the order wakes up, walks
+back through the gate (now passing), and activates the service.
+
+**Who does what:**
+1. `KycGateHandler`: customer is `PENDING` → park at `AWAITING_KYC`.
+2. Final KYC approval → `CustomerKycApproved` → `ResumeOrderOnKycApproved` → the flow loops back through the
+   gate (now `APPROVED`) → activation.
+
+*Proven by `FulfillmentJourneyTest::test_activation_is_gated_on_customer_kyc`.*
 
 ### 6. KYC rejected → cancel + compensate
-KYC `REJECTED` → `CustomerKycRejected` → `CancelOrderOnKycRejected` → `OrderCaptureService::cancel`:
-interrupts the workflow, **cancels the install WO**, **terminates the half-built subscription**. Order
-`CANCELLED`. *Proven by `FulfillmentJourneyTest::test_kyc_rejection_cancels_the_parked_order_and_compensates`.*
+
+**The story:** If the identity check **fails**, the order can't go live — and it has already built a
+subscription and a work order that now need to be torn down. The system cancels the order and cleanly
+undoes everything it created.
+
+**Who does what:** KYC `REJECTED` → `CustomerKycRejected` → `CancelOrderOnKycRejected` →
+`OrderCaptureService::cancel`: interrupts the workflow, **cancels the install WO**, **terminates the
+half-built subscription**. Order → `CANCELLED`.
+
+*Proven by `FulfillmentJourneyTest::test_kyc_rejection_cancels_the_parked_order_and_compensates`.*
 
 ### 7. Fraud flag blocks activation
-`TriggerActivationHandler` checks ILM `hasProvisioningBlockingFlag`; a `FRAUD_SUSPECTED` flag blocks
-activation (R-ILM-F-4) — the order stays un-activated until cleared. *Proven by `FulfillmentJourneyTest`.*
+
+**The story:** Even with everything else green, the system won't switch a customer on if they've been
+flagged as a fraud risk. The order sits un-activated until the flag is cleared.
+
+**Who does what:** `TriggerActivationHandler` checks ILM `hasProvisioningBlockingFlag`; a `FRAUD_SUSPECTED`
+flag blocks activation (R-ILM-F-4) — the order stays un-activated until cleared. *Proven by
+`FulfillmentJourneyTest`.*
 
 ### 8. Cancel mid-flight → compensate
-`POST …/{id}/cancel` at any point → `cancel` interrupts the running `process_instance`, then
+
+**The story:** A desk agent can cancel an order at any point. Whatever has been built so far gets undone in
+reverse order — the work order is cancelled, then the subscription is terminated — so nothing is left
+dangling.
+
+**Who does what:** `POST …/{id}/cancel` → `cancel` interrupts the running `process_instance`, then
 `compensate()` cancels a cancellable WO and terminates a non-terminated subscription (reverse creation
-order). *Proven by `FulfillmentJourneyTest::test_cancelling_an_order_compensates_its_install_wo_and_subscription`.*
+order).
+
+*Proven by `FulfillmentJourneyTest::test_cancelling_an_order_compensates_its_install_wo_and_subscription`.*
 
 ## 2. Data model — ≥4 **complete** sample rows + readings
 > **Completeness:** each row lists **every domain column** (nullables shown as `null`). The string
@@ -68,13 +155,35 @@ order). *Proven by `FulfillmentJourneyTest::test_cancelling_an_order_compensates
 { "order_id":"order_4","operator_code":"WIK","customer_id":"cust_53","account_id":"acct_53","homepass_id":"hp_4","package_ref":"pkg_triple","package_version_id":"pkgv_3","billing_mode":"PREPAID","status":"AWAITING_PAYMENT","current_step":"PAYMENT","subscription_id":null,"work_order_id":null,"payment_ref":null,"created_by":"u_desk2","completed_at":null,"process_instance_id":"pi_4" }
 { "order_id":"order_5","operator_code":"WIK","customer_id":"cust_54","account_id":"acct_54","homepass_id":"hp_5","package_ref":"pkg_inet","package_version_id":null,"billing_mode":"POSTPAID","status":"CANCELLED","current_step":"KYC","subscription_id":"sub_5","work_order_id":"wo_5","payment_ref":null,"created_by":"u_desk1","completed_at":null,"process_instance_id":"pi_5" }
 ```
-**Reading:** the status mirrors **where the journey is parked** (`current_step` is the live cursor).
-order_1 is live (sub ACTIVE, `completed_at` stamped). order_2 waits for the tech; order_3 cleared
-install but is held on KYC; order_4 hasn't paid its deposit (no `subscription_id`/`work_order_id` yet —
-the deposit gate is *before* creation). order_5 was cancelled — its WO + sub were compensated. The order
-**stores the artifacts it created** (`subscription_id`,`work_order_id`) so cancel can undo them, and
-holds `process_instance_id` (the driving workflow), `package_version_id` (the pinned catalog version)
-and `billing_mode`.
+**Reading:** the `status` tells you **where the journey is parked**, and `current_step` is the live
+cursor. In plain terms, reading the samples row by row:
+- **order_1** is live and done — its subscription is ACTIVE and `completed_at` is stamped.
+- **order_2** is waiting for the technician (`AWAITING_INSTALL`).
+- **order_3** cleared install but is held on the identity check (`AWAITING_KYC`).
+- **order_4** hasn't paid its deposit yet, so it has **no** `subscription_id` or `work_order_id` — the
+  deposit gate sits *before* anything is created.
+- **order_5** was cancelled, so its WO and subscription were compensated (undone).
+
+The order **stores the artifacts it created** (`subscription_id`, `work_order_id`) precisely so a cancel
+can undo them later. It also holds `process_instance_id` (the workflow driving it), `package_version_id`
+(the exact catalog version it was sold at), and `billing_mode`.
+
+**The order's lifecycle** — each status is a parking spot waiting on one thing:
+```mermaid
+stateDiagram-v2
+    [*] --> CAPTURED
+    CAPTURED --> AWAITING_PAYMENT: deposit required
+    CAPTURED --> AWAITING_INSTALL: no deposit
+    AWAITING_PAYMENT --> AWAITING_INSTALL: deposit paid
+    AWAITING_INSTALL --> AWAITING_KYC: install finalized
+    AWAITING_KYC --> ACTIVATING: KYC approved
+    ACTIVATING --> COMPLETED: service live
+    AWAITING_PAYMENT --> CANCELLED: cancel
+    AWAITING_INSTALL --> CANCELLED: cancel
+    AWAITING_KYC --> CANCELLED: KYC rejected or cancel
+    COMPLETED --> [*]
+    CANCELLED --> [*]
+```
 
 ### `fulfillment_order_step` (append-only ledger) · `step`: `CAPTURE|VALIDATE|SUBSCRIPTION|DEPOSIT|PAYMENT|INSTALL|KYC|ACTIVATION` · `status`: `PENDING|DONE|FAILED`
 ```json
@@ -83,9 +192,19 @@ and `billing_mode`.
 { "id":"st_3","order_id":"order_1","step":"INSTALL","status":"DONE","result":{"workOrderId":"wo_1"},"completed_at":"2026-06-20T10:30:00Z" }
 { "id":"st_4","order_id":"order_1","step":"KYC","status":"DONE","result":{"kycStatus":"APPROVED"},"completed_at":"2026-06-20T10:55:00Z" }
 ```
-**Reading:** each journey step appends a row with its `result` and `completed_at` — the audit trail of
-*what the workflow did, what it produced, and when*. This is how you reconstruct an order's history
-without reading the engine.
+**Reading:** every journey step appends a row carrying its `result` and `completed_at` — an audit trail of
+*what the workflow did, what it produced, and when*. This lets you reconstruct an order's whole history
+without ever opening the workflow engine. Each step row itself is simple: it starts `PENDING`, then ends
+either `DONE` or `FAILED`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> DONE: step succeeded
+    PENDING --> FAILED: step failed
+    DONE --> [*]
+    FAILED --> [*]
+```
 
 ## 3. Services
 | Service | Responsibility |
