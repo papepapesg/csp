@@ -181,10 +181,18 @@ for the v1.0 batch handoff (a real vendor-RMA integration is a connector).
 { "sku_id":"WIK-CABLE-CAT6","operator_code":"WIK","name":"Cat6 Drop Cable (m)","category":"CABLE","is_serialized":false,"ownership_semantics":"CONSUMABLE","deposit_amount":0,"warranty_days":0,"active":true }
 { "sku_id":"WIK-ONT-OLD","operator_code":"WIK","name":"Legacy ONT (retired)","category":"ONT","is_serialized":true,"ownership_semantics":"RETURNABLE","deposit_amount":4000,"warranty_days":90,"active":false }
 ```
-**Reading:** `is_serialized` decides whether each unit is tracked as an `equipment_instance` (ONT/STB)
-or only as bulk `stock_balance` (cable, a `CONSUMABLE`). `deposit_amount` is what an EQR forfeiture or
-out-of-warranty swap charges; `ownership_semantics` says whether the device is returnable/rented
-(deposit-bearing) or consumed. `active:false` = retired SKU (no new stock).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **WIK-ONT-HUAWEI-EG8145V5** | A Huawei ONT, **serialized** (`is_serialized=true`) and **returnable** (`ownership_semantics=RETURNABLE`), carrying a KES 5,000 deposit and a 365-day warranty, **live** (`active=true`). |
+| **WIK-STB-4K** | A 4K STB, serialized and **rented** (`ownership_semantics=RENTED`), KES 3,000 deposit, 365-day warranty, live. |
+| **WIK-CABLE-CAT6** | Drop cable sold by the metre, **non-serialized** and **consumable** (`is_serialized=false`, `ownership_semantics=CONSUMABLE`) — **no deposit, no warranty** (`deposit_amount=0`, `warranty_days=0`). |
+| **WIK-ONT-OLD** | A **retired** legacy ONT (`active=false`) — still returnable with a KES 4,000 deposit, but **no new stock**. |
+
+**The columns that did the work:**
+- `is_serialized` decides whether each unit is tracked as an `equipment_instance` (ONT/STB) or only as bulk `stock_balance` (cable).
+- `deposit_amount` is what an EQR forfeiture or out-of-warranty swap charges; `ownership_semantics` says returnable/rented (deposit-bearing) vs consumed; `active=false` retires a SKU.
 
 ### `equipment_instance` · `state`: `IN_MAIN_WAREHOUSE|IN_CONTRACTOR_STOCK|RESERVED_FOR_WO|IN_FIELD_ACTIVE|IN_FIELD_DEFECTIVE|RECOVERED_BY_CONTRACTOR|RETURNED|FAULTY|RETIRED`
 ```json
@@ -193,12 +201,17 @@ out-of-warranty swap charges; `ownership_semantics` says whether the device is r
 { "instance_id":"eqi_3","operator_code":"WIK","sku_id":"WIK-STB-4K","serial":"SN-100","mac_address":null,"state":"IN_FIELD_ACTIVE","location_id":null,"customer_id":"cust_1","subscription_id":"sub_1","active":true }
 { "instance_id":"eqi_4","operator_code":"WIK","sku_id":"WIK-ONT-OLD","serial":"SN-900","mac_address":"AC:DE:48:00:09:00","state":"IN_FIELD_DEFECTIVE","location_id":null,"customer_id":"cust_2","subscription_id":"sub_9","active":true }
 ```
-**Reading:** the `state` tells you *where the unit physically is, plus its condition*. In the rows above:
-- **eqi_1** — sellable warehouse stock (`IN_MAIN_WAREHOUSE`).
-- **eqi_2** — loaded on a contractor van (`IN_CONTRACTOR_STOCK`).
-- **eqi_3** — installed at a customer (`IN_FIELD_ACTIVE`, bound to a subscription, no `location_id`
-  because it's now in the field).
-- **eqi_4** — defective in the field (`IN_FIELD_DEFECTIVE`, a swap candidate).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **eqi_1** | A Huawei ONT (serial SN-001) sitting as **sellable warehouse stock** (`state=IN_MAIN_WAREHOUSE`, `location_id=WIK-WAREHOUSE-MAIN`), not yet assigned to anyone (`customer_id`/`subscription_id` null). |
+| **eqi_2** | An identical ONT (SN-002) **loaded on contractor `ctr_9`'s van** (`state=IN_CONTRACTOR_STOCK`, `location_id=WIK-VAN-ctr_9`). |
+| **eqi_3** | A 4K STB (SN-100) **installed and live at a customer** (`state=IN_FIELD_ACTIVE`, bound to `cust_1`/`sub_1`), with `location_id=null` because it's now in the field. |
+| **eqi_4** | A legacy ONT (SN-900) **defective in the field** (`state=IN_FIELD_DEFECTIVE`, bound to `cust_2`/`sub_9`) — a swap candidate. |
+
+**The columns that did the work:**
+- `state` tells you *where the unit physically is, plus its condition*; once in the field `location_id` is null and `customer_id`/`subscription_id` carry the binding.
 
 A swap moves the source instance through `RESERVED_FOR_WO → RECOVERED_BY_CONTRACTOR` (or it stays in the
 field on an EQR refusal). `active` only flips to false once the instance reaches the terminal `RETIRED`
@@ -223,9 +236,17 @@ stateDiagram-v2
 { "location_id":"WIK-WAREHOUSE-MSA","operator_code":"WIK","type":"WAREHOUSE","name":"Mombasa Warehouse","contractor_id":null,"active":true }
 { "location_id":"WIK-VAN-ctr_4","operator_code":"WIK","type":"CONTRACTOR_VAN","name":"Van — Contractor ctr_4 (retired)","contractor_id":"ctr_4","active":false }
 ```
-**Reading:** stock lives at locations; a `CONTRACTOR_VAN` is a contractor's rolling stock (keyed to
-`contractor_id`). A WAREHOUSE has no `contractor_id`. `active:false` (the ctr_4 van) is a decommissioned
-location — no new movements post to it.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **WIK-WAREHOUSE-MAIN** | The main Nairobi warehouse (`type=WAREHOUSE`), live, with **no** `contractor_id` (warehouses aren't tied to a contractor). |
+| **WIK-VAN-ctr_9** | Contractor `ctr_9`'s **rolling stock** (`type=CONTRACTOR_VAN`, `contractor_id=ctr_9`), live. |
+| **WIK-WAREHOUSE-MSA** | The Mombasa warehouse, live, no `contractor_id`. |
+| **WIK-VAN-ctr_4** | Contractor `ctr_4`'s van that is **decommissioned** (`active=false`) — no new movements post to it. |
+
+**The columns that did the work:**
+- Stock lives at locations; `type=CONTRACTOR_VAN` is a contractor's rolling stock (keyed to `contractor_id`), a WAREHOUSE has none, and `active=false` retires a location.
 
 ### `stock_balance` (derived projection per (location, sku); `available = quantity − qty_reserved`)
 ```json
@@ -234,9 +255,17 @@ location — no new movements post to it.
 { "id":"sb_3","operator_code":"WIK","location_id":"WIK-WAREHOUSE-MSA","sku_id":"WIK-CABLE-CAT6","quantity":80,"qty_reserved":80 }
 { "id":"sb_4","operator_code":"WIK","location_id":"WIK-WAREHOUSE-MAIN","sku_id":"WIK-ONT-HUAWEI-EG8145V5","quantity":0,"qty_reserved":0 }
 ```
-**Reading:** `stock_balance` is on-hand per (location, sku) for **non-serialized** SKUs (serialized
-units are counted by their instances, so the ONT balance row sb_4 stays 0). `quantity` is the on-hand
-total; `qty_reserved` is the held-but-unavailable portion (sb_3 is fully reserved — nothing available).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **sb_1** | The main warehouse holds **4,200** metres of Cat6 cable, **150 reserved** (`quantity=4200`, `qty_reserved=150`) → 4,050 available. |
+| **sb_2** | Contractor `ctr_9`'s van holds **300** metres of cable, **none reserved** → all 300 available. |
+| **sb_3** | The Mombasa warehouse holds **80** metres of cable, **all 80 reserved** (`quantity=80`, `qty_reserved=80`) → **nothing available**. |
+| **sb_4** | The ONT balance row stays **0** (`quantity=0`) because serialized ONTs are counted by their instances, not here. |
+
+**The columns that did the work:**
+- `stock_balance` is on-hand per (location, sku) for **non-serialized** SKUs; `quantity` is the on-hand total and `qty_reserved` the held-but-unavailable portion (so `available = quantity − qty_reserved`).
 
 ### `stock_movement` (append-only ledger) · `reason_code` (catalog `stock_reason_code`: `direction` IN/OUT/EITHER, `requires_approval`)
 ```json
@@ -245,14 +274,20 @@ total; `qty_reserved` is the held-but-unavailable portion (sb_3 is fully reserve
 { "id":"sm_3","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MAIN","quantity":-10,"reason_code":"WRITE_OFF","reference":"appr_55","approved_by":"u_stockmgr2" }
 { "id":"sm_4","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MSA","quantity":-3,"reason_code":"INVENTORY_AUDIT_ADJUSTMENT","reference":"scs_2","approved_by":"u_stockmgr1" }
 ```
-**Reading:** movements are the **immutable ledger**; the `reason_code` fixes the sign/direction and whether
-approval was needed. The catalog `stock_reason_code` seeds `RECEIPT|ISSUE|TRANSFER_IN|TRANSFER_OUT|INSTALL|RETURN|ADJUST|WRITE_OFF`
-(`ADJUST`/`WRITE_OFF` carry `requires_approval=true`); the services also post the literal flow codes
-`GOODS_RECEIPT` (PO receipt), `TRANSFER_OUT`/`TRANSFER_IN` (a two-tier transfer) and `INVENTORY_AUDIT_ADJUSTMENT`
-(reconcile). sm_1 is a goods receipt (+), sm_2 a transfer to a van (−), sm_3 an **approval-gated** `WRITE_OFF`
-(`reference` is the approval id, `approved_by` the second-person approver per R-OSR-SC-9), sm_4 the single
-`INVENTORY_AUDIT_ADJUSTMENT` a reconcile posts (its `reference` is the count session). `quantity` is
-signed (+ inbound, − outbound). (`stock_movement` has only `created_at` — no `updated_at` on this append-only ledger.)
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **sm_1** | A **goods receipt** of +5,000 cable into the main warehouse (`reason_code=GOODS_RECEIPT`, `quantity=5000`) against PO `po_1` (`reference`), no approval needed (`approved_by=null`). |
+| **sm_2** | A **transfer out** of −50 cable to `ctr_9`'s van (`reason_code=TRANSFER_OUT`, `quantity=-50`, `reference=transfer_7`), no approval. |
+| **sm_3** | An **approval-gated write-off** of −10 cable (`reason_code=WRITE_OFF`) where `reference=appr_55` is the approval id and `approved_by=u_stockmgr2` is the second-person approver (R-OSR-SC-9). |
+| **sm_4** | The single **audit adjustment** a reconcile posted: −3 cable at the Mombasa warehouse (`reason_code=INVENTORY_AUDIT_ADJUSTMENT`, `reference=scs_2` = the count session), approved by `u_stockmgr1`. |
+
+**The columns that did the work:**
+- Movements are the **immutable ledger**; `quantity` is signed (+ inbound, − outbound) and `reason_code` fixes the sign/direction and whether approval was needed.
+- The catalog `stock_reason_code` seeds `RECEIPT|ISSUE|TRANSFER_IN|TRANSFER_OUT|INSTALL|RETURN|ADJUST|WRITE_OFF` (`ADJUST`/`WRITE_OFF` carry `requires_approval=true`); services also post the literal flow codes `GOODS_RECEIPT`, `TRANSFER_OUT`/`TRANSFER_IN` and `INVENTORY_AUDIT_ADJUSTMENT`.
+
+*(`stock_movement` has only `created_at` — no `updated_at` on this append-only ledger.)*
 
 ### `stock_reason_code` (operator catalog, composite-unique `(operator_code, code)`) · `direction`: `IN|OUT|EITHER`
 ```json
@@ -261,10 +296,18 @@ signed (+ inbound, − outbound). (`stock_movement` has only `created_at` — no
 { "id":7,"operator_code":"WIK","code":"ADJUST","description":"Inventory adjustment (count variance)","direction":"EITHER","requires_approval":true,"active":true }
 { "id":8,"operator_code":"WIK","code":"WRITE_OFF","description":"Damaged/lost write-off","direction":"OUT","requires_approval":true,"active":true }
 ```
-**Reading:** the operator-scoped reason catalog governs `stock_movement.reason_code`: `direction` fixes the
-allowed sign, `requires_approval=true` (ADJUST, WRITE_OFF) routes the movement through EM-CFG-04 before it
-posts. When a catalog exists for the operator, `StockService::move` rejects any non-catalog code
-(`UNKNOWN_STOCK_REASON`). Seeded codes: `RECEIPT|ISSUE|TRANSFER_IN|TRANSFER_OUT|INSTALL|RETURN|ADJUST|WRITE_OFF`.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **RECEIPT** | Goods received into stock — an **inbound** code (`direction=IN`), **no approval** (`requires_approval=false`), active. |
+| **INSTALL** | Stock consumed on a customer install — an **outbound** code (`direction=OUT`), no approval, active. |
+| **ADJUST** | A count-variance adjustment that can go either way (`direction=EITHER`) and **requires approval** (`requires_approval=true`), active. |
+| **WRITE_OFF** | A damaged/lost write-off — **outbound** (`direction=OUT`) and **requires approval**, active. |
+
+**The columns that did the work:**
+- This operator-scoped catalog governs `stock_movement.reason_code`: `direction` fixes the allowed sign and `requires_approval=true` (ADJUST, WRITE_OFF) routes the movement through EM-CFG-04 before it posts.
+- When a catalog exists for the operator, `StockService::move` rejects any non-catalog code (`UNKNOWN_STOCK_REASON`). Seeded codes: `RECEIPT|ISSUE|TRANSFER_IN|TRANSFER_OUT|INSTALL|RETURN|ADJUST|WRITE_OFF`.
 
 ### `stock_reservation` · `status`: `ACTIVE|CONSUMED|RELEASED|EXPIRED`
 ```json
@@ -273,11 +316,18 @@ posts. When a catalog exists for the operator, `StockService::move` rejects any 
 { "reservation_id":"rsv_3","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MAIN","qty":25,"wo_id":"wo_5","reference":null,"status":"RELEASED","expires_at":"2026-07-19T09:00:00Z","resolved_at":"2026-06-21T11:45:00Z" }
 { "reservation_id":"rsv_4","operator_code":"WIK","sku_id":"WIK-CABLE-CAT6","location_id":"WIK-WAREHOUSE-MSA","qty":80,"wo_id":"wo_8","reference":null,"status":"EXPIRED","expires_at":"2026-06-18T09:00:00Z","resolved_at":"2026-06-18T09:05:00Z" }
 ```
-**Reading:** a reservation holds stock for a WO (it raises the location's `qty_reserved`). `ACTIVE`
-(held) → `CONSUMED` (WO finalized) or `RELEASED` (WO cancelled) via the lifecycle listener; an
-un-actioned hold past `expires_at` is swept `EXPIRED` (R-OSR-SC-7) — `resolved_at` records the terminal
-transition. This is how install stock is promised without double-allocating. (Serialized SKUs reserve
-the instance; bulk SKUs like cable reserve a `qty`.)
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **rsv_1** | A **live** hold of 150 cable in the main warehouse for `wo_1` (`status=ACTIVE`, `qty=150`) — currently raising that location's `qty_reserved`. |
+| **rsv_2** | A 40-cable hold for `wo_1` that was **used up** when the WO finalized (`status=CONSUMED`, `resolved_at` stamped). |
+| **rsv_3** | A 25-cable hold for `wo_5` that was **freed** when the WO was cancelled (`status=RELEASED`, `resolved_at` stamped). |
+| **rsv_4** | An 80-cable hold for `wo_8` that was **swept** after its `expires_at` (2026-06-18) passed un-actioned (`status=EXPIRED`, `resolved_at` stamped). |
+
+**The columns that did the work:**
+- A reservation holds stock for a WO (raising the location's `qty_reserved`): `ACTIVE` → `CONSUMED` (WO finalized) or `RELEASED` (WO cancelled) via the lifecycle listener; an un-actioned hold past `expires_at` is swept `EXPIRED` (R-OSR-SC-7), and `resolved_at` records the terminal transition.
+- This is how install stock is promised without double-allocating. (Serialized SKUs reserve the instance; bulk SKUs like cable reserve a `qty`.)
 
 ### `purchase_order` · `status`: `DRAFT|PENDING_APPROVAL|APPROVED|RECEIVED|REJECTED`
 ```json
@@ -286,12 +336,20 @@ the instance; bulk SKUs like cable reserve a `qty`.)
 { "po_id":"po_3","operator_code":"WIK","supplier":"Local","location_id":"WIK-WAREHOUSE-MSA","status":"APPROVED","approval_request_id":"appr_71","approval_mode":null,"total_value":20000,"created_by":"u_proc2" }
 { "po_id":"po_4","operator_code":"WIK","supplier":"FiberHome","location_id":"WIK-WAREHOUSE-MAIN","status":"REJECTED","approval_request_id":"appr_72","approval_mode":null,"total_value":50000,"created_by":"u_proc2" }
 ```
-**Reading:** `approve()` opens an EM-CFG-04 request and stamps `approval_request_id`; if a policy makes the
-request `PENDING` the PO parks in `PENDING_APPROVAL` (po_2), otherwise it auto-approves straight to
-`APPROVED`. `decide()` then flips a parked PO to `APPROVED` (po_3) or `REJECTED` (po_4) on the SoD decision.
-po_1 is fully `RECEIVED` (stock posted + serials registered). A `receive` is only allowed from `APPROVED`.
-(`approval_mode` is a reserved EM-CFG-04 snapshot column — present in the schema but not yet written by the
-service, so always `null`.)
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **po_1** | A KES 150,000 Huawei PO into the main warehouse that is fully **received** (`status=RECEIVED`) — stock posted and serials registered; it cleared an approval (`approval_request_id=appr_60`). |
+| **po_2** | A KES 900,000 Casa PO **parked awaiting approval** (`status=PENDING_APPROVAL`, `approval_request_id=appr_70`) because policy made the request PENDING. |
+| **po_3** | A KES 20,000 PO that was **approved** on the SoD decision (`status=APPROVED`) and may now be received. |
+| **po_4** | A KES 50,000 FiberHome PO that was **rejected** on the SoD decision (`status=REJECTED`). |
+
+**The columns that did the work:**
+- `approve()` opens an EM-CFG-04 request and stamps `approval_request_id`; a PENDING policy parks the PO in `PENDING_APPROVAL`, otherwise it auto-approves; `decide()` flips a parked PO to `APPROVED` or `REJECTED`. A `receive` is only allowed from `APPROVED`.
+
+*(`approval_mode` is a reserved EM-CFG-04 snapshot column — present in the schema but not yet written by the
+service, so always `null`.)*
 
 ### `purchase_order_line` (PO detail, FK → `purchase_order` cascade)
 ```json
@@ -300,9 +358,17 @@ service, so always `null`.)
 { "po_line_id":"pol_3","po_id":"po_3","sku_id":"WIK-CABLE-CAT6","quantity_ordered":5000,"quantity_received":0,"unit_cost":4 }
 { "po_line_id":"pol_4","po_id":"po_4","sku_id":"WIK-ONT-HUAWEI-EG8145V5","quantity_ordered":40,"quantity_received":0,"unit_cost":1500 }
 ```
-**Reading:** each line is a SKU on a PO; `receive` posts a `GOODS_RECEIPT` movement per line and bumps
-`quantity_received` (pol_1 is fully received against po_1; serialized lines also register one
-`equipment_instance` per serial). `unit_cost × quantity_ordered` rolls up to `purchase_order.total_value`.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **pol_1** | 100 Huawei ONTs at KES 1,500 each on po_1, **fully received** (`quantity_ordered=100`, `quantity_received=100`). |
+| **pol_2** | 300 STBs at KES 3,000 on po_2, **none received yet** (`quantity_received=0`) — its PO is still pending approval. |
+| **pol_3** | 5,000 metres of cable at KES 4 on po_3, none received yet. |
+| **pol_4** | 40 Huawei ONTs at KES 1,500 on po_4, none received (its PO was rejected). |
+
+**The columns that did the work:**
+- Each line is a SKU on a PO; `receive` posts a `GOODS_RECEIPT` movement per line and bumps `quantity_received` (serialized lines also register one `equipment_instance` per serial). `unit_cost × quantity_ordered` rolls up to `purchase_order.total_value`.
 
 ### `stock_count_session` · `status`: `OPEN|COUNTED|RECONCILED` · & `stock_count_line`
 ```json
@@ -311,10 +377,18 @@ service, so always `null`.)
 { "count_line_id":"scl_1","session_id":"scs_1","sku_id":"WIK-CABLE-CAT6","system_qty":4200,"counted_qty":4200,"variance":0 }
 { "count_line_id":"scl_2","session_id":"scs_2","sku_id":"WIK-CABLE-CAT6","system_qty":83,"counted_qty":80,"variance":-3 }
 ```
-**Reading:** `InventoryAuditService` walks a session `open → count → reconcile`. `count` records
-`system_qty` vs `counted_qty` per SKU (`variance` is the delta; `variance_lines` counts non-zero lines);
-`reconcile` posts ONE `INVENTORY_AUDIT_ADJUSTMENT` movement per variance line (scl_2's −3 produced sm_4
-above, `reference=scs_2`) and stamps `reconciled_at`; a second reconcile is a no-op (R-OSR-05-09).
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **scs_1** | A main-warehouse count session that is **fully reconciled** (`status=RECONCILED`, `reconciled_at` stamped) and found **1** variance line (`variance_lines=1`). |
+| **scs_2** | A Mombasa count session that is **counted but not yet reconciled** (`status=COUNTED`, `reconciled_at=null`), also with **1** variance line. |
+| **scl_1** | A count line under `scs_1`: cable counted **4,200 vs system 4,200** → **no variance** (`variance=0`). |
+| **scl_2** | A count line under `scs_2`: cable counted **80 vs system 83** → **−3 variance** (this is what produced movement `sm_4`). |
+
+**The columns that did the work:**
+- `InventoryAuditService` walks a session `open → count → reconcile`; `count` records `system_qty` vs `counted_qty` per SKU (`variance` is the delta, `variance_lines` counts non-zero lines).
+- `reconcile` posts ONE `INVENTORY_AUDIT_ADJUSTMENT` movement per variance line and stamps `reconciled_at`; a second reconcile is a no-op (R-OSR-05-09).
 
 ### `equipment_swap_request` · `kind`: `SWAP_HFC|SWAP_GPON|EQP|EQU` · `status`: `CREATED|AWAITING_SLOT|WO_CREATED|FIELD_VISIT_IN_PROGRESS|SOURCE_RECOVERED|COMPLETED|COMPLETED_WITHOUT_RECOVERY|FAILED`
 ```json
@@ -323,14 +397,18 @@ above, `reference=scs_2`) and stamps `reconciled_at`; a second reconcile is a no
 { "swap_id":"swp_3","operator_code":"WIK","kind":"EQP","source_instance_id":"eqi_7","target_instance_id":null,"subscription_id":"sub_11","customer_id":"cust_4","homepass_id":"hp_9","recovery_contractor_id":"ctr_4","status":"COMPLETED_WITHOUT_RECOVERY","chargeable":true,"charge_code":"DEPOSIT_FORFEITURE","charge_amount":3000,"failure_code":null,"flow_payload":{"recovered":false},"work_order_id":"wo_32","slot_commitment_id":"sc_7","process_instance_id":"pi_32" }
 { "swap_id":"swp_4","operator_code":"WIK","kind":"SWAP_HFC","source_instance_id":"eqi_8","target_instance_id":null,"subscription_id":"sub_12","customer_id":"cust_5","homepass_id":"hp_3","recovery_contractor_id":"ctr_4","status":"FIELD_VISIT_IN_PROGRESS","chargeable":false,"charge_code":null,"charge_amount":null,"failure_code":null,"flow_payload":null,"work_order_id":"wo_33","slot_commitment_id":"sc_8","process_instance_id":"pi_33" }
 ```
-**Reading:** `kind` selects the flow (GPON/HFC defective swap, EQP pickup, EQU upgrade). In the rows above:
-- **swp_1** — a free in-warranty swap (source recovered, a new `target_instance_id` installed).
-- **swp_2** — an upgrade, charged via BIL-01.
-- **swp_3** — an EQR forfeiture (`COMPLETED_WITHOUT_RECOVERY`, no target installed, deposit billed).
-- **swp_4** — mid field-visit.
+**Read each row as a sentence — *this data means this:***
 
-Each swap stores its `work_order_id`, `slot_commitment_id` and `process_instance_id` (the driving
-workflow); `flow_payload` carries per-flow specifics; `failure_code` is set only on a `FAILED` swap.
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **swp_1** | A **free in-warranty** GPON swap (`kind=SWAP_GPON`, `chargeable=false`): defective `eqi_4` replaced by new `eqi_1`, **done with the old unit recovered** (`status=COMPLETED`, `target_instance_id=eqi_1`). |
+| **swp_2** | An **upgrade** swap (`kind=EQU`) that is **chargeable** KES 5,000 (`chargeable=true`, `charge_code=UPGRADE_FEE`, `charge_amount=5000`), completed, recovering `eqi_5` for new `eqi_6`. |
+| **swp_3** | An **EQR forfeiture** pickup (`kind=EQP`) **completed without recovery** (`status=COMPLETED_WITHOUT_RECOVERY`, `target_instance_id=null`) — the deposit was billed (`charge_code=DEPOSIT_FORFEITURE`, `charge_amount=3000`). |
+| **swp_4** | An HFC swap (`kind=SWAP_HFC`) **mid field-visit** (`status=FIELD_VISIT_IN_PROGRESS`), not chargeable yet, no target installed. |
+
+**The columns that did the work:**
+- `kind` selects the flow (GPON/HFC defective swap, EQP pickup, EQU upgrade); `chargeable`/`charge_code`/`charge_amount` carry any billed fee (via BIL-01).
+- Each swap stores its `work_order_id`, `slot_commitment_id` and `process_instance_id` (the driving workflow); `flow_payload` carries per-flow specifics; `failure_code` is set only on a `FAILED` swap.
 
 The swap's `status` lifecycle (the happy path branches three ways at the end — recovered, refused, or
 failed):
@@ -354,10 +432,15 @@ stateDiagram-v2
 { "id":"vrma_1","operator_code":"WIK","swap_id":"swp_1","source_instance_id":"eqi_4","vendor_ref":null,"batch_ref":"PENDING_BATCH","shipped_at":null }
 { "id":"vrma_2","operator_code":"WIK","swap_id":"swp_2","source_instance_id":"eqi_5","vendor_ref":null,"batch_ref":"PENDING_BATCH","shipped_at":null }
 ```
-**Reading:** when a swap completes with `defectConfirmed`, `CompleteSwapHandler` records one stub per
-recovered defective unit with `batch_ref='PENDING_BATCH'` (`vendor_ref`/`shipped_at` stay null until a real
-vendor-RMA connector batches and ships it). There is no status column — the row's existence + `batch_ref`
-is the whole record in v1.0.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **vrma_1** | A vendor-handoff stub for swap `swp_1`'s recovered unit `eqi_4`, **batched but not yet shipped** (`batch_ref=PENDING_BATCH`, `vendor_ref=null`, `shipped_at=null`). |
+| **vrma_2** | The same for swap `swp_2`'s recovered unit `eqi_5` — `batch_ref=PENDING_BATCH`, not yet shipped. |
+
+**The columns that did the work:**
+- When a swap completes with `defectConfirmed`, `CompleteSwapHandler` records one stub per recovered defective unit with `batch_ref='PENDING_BATCH'`; `vendor_ref`/`shipped_at` stay null until a real vendor-RMA connector batches and ships it. There is no status column — the row's existence + `batch_ref` is the whole record in v1.0.
 
 ## 3. Services (worked calls)
 | Service | Responsibility |

@@ -222,9 +222,17 @@ stateDiagram-v2
 { "operator_code":"WIK","skill_code":"diagnostics","display_name":"Fault diagnostics","category":"TECHNICAL_SUPPORT","active":true }
 { "operator_code":"WIK","skill_code":"vip-handling","display_name":"VIP customer handling","category":"SOFT_SKILL","active":false }
 ```
-**Reading:** the **skill catalog** is operator-extensible — and it is deliberately *distinct from*
-Catalog's `TechContractorSkill` (that is contractor config; this is capacity). `category` groups skills;
-`active:false` (vip-handling) retires a code without deleting it.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **fiber-install** | A live install skill "FTTH installation" (`category=TECHNICAL_INSTALL`, `active=true`). |
+| **coax-install** | A live install skill "HFC installation" (`category=TECHNICAL_INSTALL`). |
+| **diagnostics** | A live support skill "Fault diagnostics" (`category=TECHNICAL_SUPPORT`). |
+| **vip-handling** | A **retired** soft skill "VIP customer handling" (`category=SOFT_SKILL`, `active=false`) — kept as a code, not deleted. |
+
+**The columns that did the work:**
+- The skill catalog is operator-extensible and deliberately *distinct from* Catalog's `TechContractorSkill` (that is contractor config; this is capacity); `category` groups skills and `active=false` retires a code without deleting it.
 
 ### `contractor_region_skill` (the WO routing filter, EM-02 §3.4) · composite PK `(contractor_id, tech_region_id, skill_code)`
 ```json
@@ -233,10 +241,17 @@ Catalog's `TechContractorSkill` (that is contractor config; this is capacity). `
 { "contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","operator_code":"WIK","skill_code":"coax-install","active":true }
 { "contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","operator_code":"WIK","skill_code":"fiber-install","active":false }
 ```
-**Reading:** these rows say things like "ctr_9 is certified for fiber installs + diagnostics in Karen" —
-exactly what the auto-assign matcher requires before it can pick a contractor. The certification is **per
-(contractor, region, skill)**, so ctr_4's fiber-install in Nyali being `active:false` (de-certified) means
-ctr_4 will not match for fiber there.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **ctr_9 · Karen · fiber-install** | Contractor `ctr_9` is **certified** (`active=true`) for fiber installs in Karen. |
+| **ctr_9 · Karen · diagnostics** | The same contractor is also certified for diagnostics in Karen. |
+| **ctr_4 · Nyali · coax-install** | Contractor `ctr_4` is certified for coax installs in Nyali. |
+| **ctr_4 · Nyali · fiber-install** | Contractor `ctr_4` is **de-certified** for fiber installs in Nyali (`active=false`) — it will **not** match for fiber there. |
+
+**The columns that did the work:**
+- These rows are exactly what the auto-assign matcher requires before it can pick a contractor: certification is **per (contractor, region, skill)**, and `active=false` removes that one capability without touching the others.
 
 ### `contractor_region_scope` (per-region service coverage, EM-02 §3.2) · `service_scope`: `INSTALL|SUPPORT|MAINTENANCE|RECOVERY|AUDIT` · `coverage_role`: `PRIMARY|BACKUP|EXCLUSIVE`
 ```json
@@ -245,12 +260,18 @@ ctr_4 will not match for fiber there.
 { "coverage_id":"cov_3","operator_code":"WIK","contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","service_scope":"INSTALL","coverage_role":"PRIMARY","effective_from":"2026-03-01","effective_to":null }
 { "coverage_id":"cov_4","operator_code":"WIK","contractor_id":"ctr_4","tech_region_id":"KE-MSA-NYALI","service_scope":"RECOVERY","coverage_role":"BACKUP","effective_from":"2026-03-01","effective_to":"2026-06-30" }
 ```
-**Reading:** coverage says which contractor serves which region for which service, and it is
-**time-versioned** via `effective_from`/`effective_to`. Each row is scoped per (contractor, region,
-service_scope).
-- `coverage_role` ranks contractors: PRIMARY first, BACKUP as the fallback, EXCLUSIVE locks the region to
-  one contractor.
-- cov_4 is a BACKUP recovery coverage that lapses at the end of June.
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **cov_1** | Contractor `ctr_9` is the **primary** install provider in Karen (`service_scope=INSTALL`, `coverage_role=PRIMARY`), open-ended (`effective_to=null`). |
+| **cov_2** | The same contractor is also the **primary** support provider in Karen, open-ended. |
+| **cov_3** | Contractor `ctr_4` is the **primary** install provider in Nyali, live since 2026-03-01. |
+| **cov_4** | Contractor `ctr_4` is a **backup** recovery provider in Nyali (`coverage_role=BACKUP`, `service_scope=RECOVERY`) that **lapses end of June** (`effective_to=2026-06-30`). |
+
+**The columns that did the work:**
+- Coverage says which contractor serves which region for which service, scoped per (contractor, region, `service_scope`) and **time-versioned** via `effective_from`/`effective_to`.
+- `coverage_role` ranks contractors: PRIMARY first, BACKUP as fallback, EXCLUSIVE locks the region to one contractor.
 
 ## 3. Services
 | Service | Responsibility |
