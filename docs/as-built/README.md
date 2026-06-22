@@ -68,6 +68,14 @@ the engines → config → the revenue core → execution → edges. Each line s
 > — never a partial subset — so a reading can never name a column that isn't present. The Laravel
 > surrogate `id` and `created_at`/`updated_at` timestamps are omitted by convention.
 
+> **Teaching style (how these are written):** lead each scenario with a **plain-English story** a
+> newcomer gets in one read, then the technical detail. **Show, don't just tell** — back a point with a
+> sample row or a **worked example with real numbers** (little tables for any calculation/cascade).
+> **Draw the flow** with **mermaid** — `stateDiagram-v2` for a status lifecycle, `sequenceDiagram` for
+> an approval / cross-module flow, `flowchart` for a branchy decision. (Mermaid renders as a diagram on
+> GitHub and in most Markdown viewers.) The **worked exemplars** are `catalog.md` scenario 1 (package
+> launch + approval) and its `tax_group`/`tax_rule` section (the tax cascade with numbers).
+
 ## How to write a module's as-built doc (the recipe)
 Read these six code sources **in order**; each maps to a section of `_TEMPLATE.md`:
 

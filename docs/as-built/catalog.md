@@ -16,11 +16,61 @@
 
 ## 📖 Scenarios (service + Foundation involvement)
 
-### 1. Launch a package (SIP-02 maker-checker)
-`CatalogService` creates a `package` (`DRAFT`) + a priced `package_version`. `PackageLaunchService`
-opens a `PackageLaunchPlan`; risky launch → **EM-CFG-04** request (`Foundation/Approvals`),
-`PACKAGE_LAUNCH_APPROVAL_REQUIRED`. A different approver approves → `ApplyPackageLaunchApproval`
-(listener) activates the package (`PACKAGE_ACTIVATED`). *Proven by `PackageLaunchTest`.*
+### 1. Launch a package (with maker-checker approval)
+
+**The story in plain English:** A product manager builds a new package and a priced version of it — but
+it stays a **draft**, not on sale yet. To go live they open a *launch plan*. The system runs pre-flight
+checks; if the launch is **risky** (e.g. a first launch or a price cutover) it needs a **second person**
+to approve before the package can be sold. Once a different approver signs off, the package flips to
+**ACTIVE** and is sellable.
+
+**Who does what:**
+1. `CatalogService` creates the `package` (status `DRAFT`) and a priced `package_version` (status `PENDING`).
+2. `PackageLaunchService` opens a `package_launch_plan` and validates it → `READY_FOR_REVIEW`.
+3. A risky launch raises an **EM-CFG-04** approval request (`Foundation/Approvals`) → plan `PENDING_APPROVAL`,
+   event `PackageLaunchApprovalRequired`.
+4. A **different** approver approves → the `ApplyPackageLaunchApproval` listener runs → plan `APPROVED`
+   then `ACTIVE`, the `package` flips to `ACTIVE`, event `PackageActivated`. (A rejection → plan `REJECTED`,
+   package stays `DRAFT`.)
+
+**Sample — the launch plan as it moves:**
+```json
+{ "launch_plan_id":"plp_1","package_id":"pkg_promo","launch_type":"FIRST_LAUNCH","status":"PENDING_APPROVAL","requested_launch_at":"2026-07-01T00:00:00Z","approval_request_id":"appr_77","requested_by_user_id":"u_pm1" }
+```
+
+```mermaid
+sequenceDiagram
+    actor PM as Product Manager
+    participant C as CatalogService
+    participant L as PackageLaunchService
+    participant A as Approvals (EM-CFG-04)
+    actor AP as A different approver
+    PM->>C: create package + version
+    C-->>PM: package DRAFT, version PENDING
+    PM->>L: submit launch plan
+    L->>L: validate → READY_FOR_REVIEW
+    L->>A: risky launch → request approval
+    A-->>L: plan PENDING_APPROVAL (PackageLaunchApprovalRequired)
+    AP->>A: approve (≠ requester)
+    A-->>L: ApplyPackageLaunchApproval listener
+    L-->>PM: plan ACTIVE · package ACTIVE (PackageActivated)
+```
+
+The plan's own lifecycle:
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT
+    DRAFT --> READY_FOR_REVIEW: validate passes
+    READY_FOR_REVIEW --> PENDING_APPROVAL: risky → needs approval
+    READY_FOR_REVIEW --> ACTIVE: low-risk → auto
+    PENDING_APPROVAL --> APPROVED: approver signs off
+    PENDING_APPROVAL --> REJECTED: approver rejects
+    APPROVED --> SCHEDULED: future launch date
+    APPROVED --> ACTIVE: launch now
+    SCHEDULED --> ACTIVE: date reached
+    ACTIVE --> END_OF_SALE --> END_OF_LIFE
+```
+*Proven by `PackageLaunchTest`.*
 
 ### 2. Tax on a 5,000 KES internet package
 Billing calls `TaxComputeService::compute({taxableKind:'PACKAGE', customerCategory:'RES', baseAmount:5000})`.
@@ -120,23 +170,72 @@ dasg_2 is a campaign grant awaiting EM-CFG-04 (`status=PENDING_APPROVAL`, `appro
 dasg_4 has expired (`valid_to` passed, `status=EXPIRED`). *(Delta: grants reach the invoice via Billing's
 adjustment/credit path, not an auto cycle-close line — see `billing.md` §10.)*
 
-### `tax_group` (`order_within_group` = JSON list of rule codes) & `tax_rule` (`base_method`: `BASE|BASE_PLUS_PRIOR`)
-> Both share the column name `order_within_group` but it differs: on `tax_group` it is the JSON **array**
-> of rule codes in order; on `tax_rule` it is the integer **position**. Rules are never deleted —
-> deactivated via `effective_until` (versioning ALTER also keys the unique on `effective_from`).
+### `tax_group` & `tax_rule` — how tax is stacked on a price
+
+**The idea in one line:** a **group** is an ordered list of **rules**; billing runs the rules in that
+order and adds up the tax. A simple product (internet) has a group with one rule; voice has a group with
+**two** rules that stack.
+
+**Two `order_within_group` columns — don't confuse them.** They have the same name but mean different
+things:
+- on **`tax_group`** it's a JSON **list of rule codes** — *which rules run, and in what order* (this is
+  the one the engine actually iterates).
+- on **`tax_rule`** it's a plain **integer** — a per-rule sequence number (legacy/advisory; the group's
+  list is authoritative).
+
 ```json
+// GROUPS — each lists the rule codes to run, in order
 { "tax_group_id":"txg_inet","operator_code":"WIK","code":"KE_INTERNET","name":"KE Internet","order_within_group":["WIK_INTERNET_VAT"],"regulator_reference":"KRA-VAT" }
 { "tax_group_id":"txg_voice","operator_code":"WIK","code":"KE_VOICE","name":"KE Voice","order_within_group":["WIK_EXCISE","WIK_VOICE_VAT"],"regulator_reference":"KRA-EXC-VAT" }
-// rules
+
+// RULES — each is one tax: a rate, and what it is charged ON (base_method)
 { "tax_rule_id":"txr_ivat","operator_code":"WIK","code":"WIK_INTERNET_VAT","name":"Internet VAT","taxable_category":"INTERNET","rate":0.1600,"base_method":"BASE","order_within_group":1,"rounding_mode":"HALF_UP","rounding_scale":2,"regulator":"KRA","regulator_tax_code":"VAT16","effective_from":"2026-01-01T00:00:00Z","effective_until":null }
 { "tax_rule_id":"txr_exc","operator_code":"WIK","code":"WIK_EXCISE","name":"Voice Excise","taxable_category":"VOICE","rate":0.2000,"base_method":"BASE","order_within_group":1,"rounding_mode":"HALF_UP","rounding_scale":2,"regulator":"KRA","regulator_tax_code":"EXC20","effective_from":"2026-01-01T00:00:00Z","effective_until":null }
 { "tax_rule_id":"txr_vvat","operator_code":"WIK","code":"WIK_VOICE_VAT","name":"Voice VAT","taxable_category":"VOICE","rate":0.1600,"base_method":"BASE_PLUS_PRIOR","order_within_group":2,"rounding_mode":"HALF_UP","rounding_scale":2,"regulator":"KRA","regulator_tax_code":"VAT16","effective_from":"2026-01-01T00:00:00Z","effective_until":null }
 ```
-**Reading:** internet = one rule (16% VAT). Voice **cascades**: 20% excise on the base
-(`order_within_group:1`), then 16% VAT on **base + excise** (`BASE_PLUS_PRIOR`, position 2) — Kenya's
-telecoms tax stack. `rules.tax-applicability` picks the group per item; the group's JSON
-`order_within_group` lists which rules run, and each rule's integer `order_within_group` sequences them.
-`rounding_mode`/`rounding_scale` pin per-rule rounding.
+
+**`base_method` is the whole trick:**
+- `BASE` → the rule is charged on the **original price**.
+- `BASE_PLUS_PRIOR` → the rule is charged on the **price + every tax already added before it** (it
+  stacks on top). This is how "VAT on top of excise" works.
+
+**Worked example — internet, price KES 100.00** (group `KE_INTERNET`, one rule):
+
+| # | Rule | Rate | Charged on (`base_method`) | Base | Tax |
+|---|------|-----:|----------------------------|-----:|----:|
+| 1 | WIK_INTERNET_VAT | 16% | `BASE` = 100.00 | 100.00 | **16.00** |
+| | | | | **Total tax** | **16.00** |
+
+→ customer pays **116.00**.
+
+**Worked example — voice, price KES 100.00** (group `KE_VOICE`, two rules that stack):
+
+| # | Rule | Rate | Charged on (`base_method`) | Base | Tax |
+|---|------|-----:|----------------------------|-----:|----:|
+| 1 | WIK_EXCISE | 20% | `BASE` = 100.00 | 100.00 | **20.00** |
+| 2 | WIK_VOICE_VAT | 16% | `BASE_PLUS_PRIOR` = 100.00 + 20.00 | 120.00 | **19.20** |
+| | | | | **Total tax** | **39.20** |
+
+→ customer pays **139.20**. (VAT is 19.20, not 16.00, because it's charged on the price *plus* the
+excise — Kenya's telecoms tax stack.)
+
+```mermaid
+flowchart LR
+    P["Voice price<br/>KES 100.00"] --> E
+    subgraph KE_VOICE["group KE_VOICE — runs rules in order"]
+      direction TB
+      E["1 · WIK_EXCISE 20%<br/>base_method = BASE<br/>20% × 100.00 = 20.00"]
+      V["2 · WIK_VOICE_VAT 16%<br/>base_method = BASE_PLUS_PRIOR<br/>16% × (100.00 + 20.00) = 19.20"]
+      E --> V
+    end
+    V --> T["Total tax 39.20<br/>Gross 139.20"]
+```
+
+**Reading:** `rules.tax-applicability` picks the **group** for each line (internet → `KE_INTERNET`, voice
+→ `KE_VOICE`); `TaxComputeService` then walks the group's `order_within_group` rule list, and for each
+rule charges `rate` on `BASE` (original price) or `BASE_PLUS_PRIOR` (price + tax-so-far), rounding each
+step by `rounding_mode`/`rounding_scale`. A group whose applicability resolves to `NONE` ⇒ the line is
+exempt. Rules are never deleted — they're closed with `effective_until` so old invoices still recompute.
 
 ### `voice_tariff` (legacy simple catalog · `destination`: `ONNET|OFFNET|INTERNATIONAL`) and the PLM-CFG-07 `voice_destination_zone` / `voice_destination_prefix` (longest-prefix model)
 ```json
