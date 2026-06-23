@@ -147,55 +147,14 @@ command for that target now drives the OLT. **No platform code change.**
 
 ## 2. Data model — ≥4 **complete** sample rows + readings per table
 > **Completeness:** each row lists **every domain column** (nullables shown as `null`). The surrogate
-> primary key shown is the real one; `created_at`/`updated_at` are omitted by convention. `network_node`
-> and `homepass` are **Catalog-owned** — shown here only as the path context; their full-width sample
-> rows live in `catalog.md` (`homepass` is ~50 columns of structured address/GIS/RoE, **projected** below
-> to the columns provisioning's path resolution actually reads).
-
-### `network_node` (Catalog — the plant tree)
-**`type`:** `HEADEND|OLT|SPLITTER|FAT|FDT|ONT` (GPON) · `DISTRIBUTION_NODE|AMPLIFIER|LINE_EXTENDER` (HFC) · `VOIPSWITCH|NMS|OTHER`. Tree via `parent_node_code`. **`status`:** `DRAFT|ACTIVE|RETIRED` (default `ACTIVE`).
-```json
-{ "node_id":"nnode_he","operator_code":"WIK","code":"HEADEND-NRB","type":"HEADEND","name":"Nairobi Headend","parent_node_code":null,"description":"Westlands core","metadata":{"site":"WTL"},"status":"ACTIVE" }
-{ "node_id":"nnode_olt","operator_code":"WIK","code":"OLT-NRB-WTL-01","type":"OLT","name":"Westlands OLT 01","parent_node_code":"HEADEND-NRB","description":null,"metadata":{"ports":16},"status":"ACTIVE" }
-{ "node_id":"nnode_fat","operator_code":"WIK","code":"FAT-F12","type":"FAT","name":"FAT F12","parent_node_code":"SPLITTER-S1H","description":null,"metadata":null,"status":"ACTIVE" }
-{ "node_id":"nnode_ont","operator_code":"WIK","code":"ONT-77","type":"ONT","name":"ONT 77","parent_node_code":"FAT-F12","description":"customer leaf","metadata":null,"status":"ACTIVE" }
-```
-**Read each row as a sentence — *this data means this:***
-
-| Row | What it means in plain English |
-|-----|--------------------------------|
-| **HEADEND-NRB** | The **root** of the plant tree (`parent_node_code=null`) — the Nairobi headend everything hangs off. |
-| **OLT-NRB-WTL-01** | An **OLT** that sits under the headend (`parent_node_code=HEADEND-NRB`); this is the GPON box that maps a HomePass to the GPON plane. |
-| **FAT-F12** | A fibre access terminal hanging off a splitter (`parent_node_code=SPLITTER-S1H`) — a mid-tree node. |
-| **ONT-77** | The **customer leaf** (`type=ONT`, `parent_node_code=FAT-F12`) — the box at the premises. |
-
-**The columns that did that work:**
-- **The tree** = `parent_node_code` links each node to its parent; walking it from the leaf (ONT→FAT→…→OLT→HEADEND) gives the physical path, and the serving OLT maps to the GPON target plane.
-- An HFC HomePass would chain modem→AMPLIFIER→DISTRIBUTION_NODE→HEADEND and map to a CMTS target instead.
-
-### `homepass` (Catalog — the premises) · **projected** to provisioning-relevant columns
-> Full ~50-column schema (structured address, building, GIS lat/lng, RoE dates) is in `catalog.md`.
-> `status` is **not** a hardcoded enum — it's a code from the `homepass_status_code` catalog whose
-> *flags* (`is_sellable`, `is_active`, …) drive behaviour; the codes below are illustrative.
-```json
-{ "id":"hp_1","operator_code":"WIK","code":"HP-NRB-0001","status":"RFS","technology":"GPON","house_type_code":"M2M","network_nodes":["ONT-77","OLT-NRB-WTL-01"],"tech_region_id":"KE-NRB-KAREN","has_been_active":true,"has_been_sellable":true }
-{ "id":"hp_2","operator_code":"WIK","code":"HP-NRB-0002","status":"WAI","technology":"GPON","house_type_code":"S1H","network_nodes":[],"tech_region_id":"KE-NRB-KAREN","has_been_active":false,"has_been_sellable":false }
-{ "id":"hp_3","operator_code":"WIK","code":"HP-MSA-0007","status":"RFS","technology":"HFC","house_type_code":"M2M","network_nodes":["CM-12","DN-3"],"tech_region_id":"KE-MSA-NYALI","has_been_active":true,"has_been_sellable":true }
-{ "id":"hp_4","operator_code":"WIK","code":"HP-NRB-0099","status":"RETIRED","technology":"GPON","house_type_code":"OFF","network_nodes":["ONT-3"],"tech_region_id":"KE-NRB-KAREN","has_been_active":true,"has_been_sellable":true }
-```
-**Read each row as a sentence — *this data means this:***
-
-| Row | What it means in plain English |
-|-----|--------------------------------|
-| **hp_1** | A GPON premises that is **ready for service** (`status=RFS`) and **can take an order**; its cached node path is `[ONT-77, OLT-NRB-WTL-01]`, and it has previously been sellable/active. |
-| **hp_2** | A GPON premises still **under construction** (`status=WAI`), with **no node path yet** (`network_nodes=[]`) and never sellable/active — an order can't land here. |
-| **hp_3** | An **HFC** (cable) premises that's RFS and orderable; its path runs through cable nodes (`network_nodes=[CM-12, DN-3]`), so it maps to a CMTS plane, not GPON. |
-| **hp_4** | A **decommissioned** premises (`status=RETIRED`) — not orderable now even though it was sellable/active in the past. |
-
-**The columns that did that work:**
-- **Can it take an order** = whether `status`'s catalog flag `is_sellable` is set (RFS yes; WAI/RETIRED no).
-- **Which plane** = `technology` (GPON→OLT vs HFC→CMTS); `network_nodes` is the cached leaf→…→headend path.
-- **Scope & latch** = `tech_region_id` ties to RBAC scope; `has_been_sellable` is the latch that makes `HomePassReachedSellable` fire only once.
+> primary key shown is the real one; `created_at`/`updated_at` are omitted by convention.
+>
+> **The path lives in Catalog, not here (one owner per table).** `network_node` (the plant tree) and
+> `homepass` (the premises — including its `network_path`, `service_management_endpoints` and
+> `services_supported`) are **Catalog-owned** and documented in **[`catalog.md`](catalog.md)**.
+> Provisioning **reads** them to resolve a service → serving node → target plane (see §2.1 above); they
+> are deliberately **not** re-sampled here to avoid drift. The tables below are the ones Provisioning
+> **owns**.
 
 ### `provisioning_target` (the vendor plane) · `type`: `GPON|HFC|VOIP|NMS`
 ```json
