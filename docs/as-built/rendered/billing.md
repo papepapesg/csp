@@ -429,6 +429,25 @@ adj_4 was turned down. The diagram in Scenario 6 shows these transitions.)
 ![diagram](img/billing_6.png)
 
 
+### `usage_record` — **the raw metered event** (mediation input) · `usage_type`: `VOICE|DATA|SMS` · `status`: `RECEIVED|RATED|REJECTED`
+> The CDR/usage event as it arrives, **before** rating. `MediationRatingService` dedupes it by `source_ref`, then `UsageRatingService` rates it against the catalog `usage_tariff` (DATA/SMS) or voice tariffs (VOICE) → producing a `rated_event`. So the chain is: **usage_record → rate() → rated_event → invoice line**.
+```json
+{ "usage_id":"usg_1","operator_code":"WIK","subscription_id":"sub_1","account_id":"acc_1","usage_type":"VOICE","destination":"OFFNET","quantity":75.0000,"source_ref":"CDR-aa11","occurred_at":"2026-06-20T19:05:00Z","status":"RATED","raw":{"aParty":"+254700","bParty":"+254733"} }
+{ "usage_id":"usg_2","operator_code":"WIK","subscription_id":"sub_1","account_id":"acc_1","usage_type":"VOICE","destination":"INTERNATIONAL","quantity":180.0000,"source_ref":"CDR-bb22","occurred_at":"2026-06-20T20:00:00Z","status":"RATED","raw":null }
+{ "usage_id":"usg_3","operator_code":"WIK","subscription_id":"sub_5","account_id":"acc_3","usage_type":"DATA","destination":null,"quantity":2048.0000,"source_ref":"CDR-cc33","occurred_at":"2026-06-20T21:00:00Z","status":"RECEIVED","raw":null }
+{ "usage_id":"usg_4","operator_code":"WIK","subscription_id":null,"account_id":null,"usage_type":"SMS","destination":"ONNET","quantity":1.0000,"source_ref":"CDR-aa11","occurred_at":"2026-06-20T19:06:00Z","status":"REJECTED","raw":null }
+```
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **usg_1** | A 75-second off-net **voice** call on sub_1 that's been **rated** (`status=RATED`) — it produced `rated_event` rat_1. The original CDR fields sit in `raw`. |
+| **usg_2** | A 180-second **international** call, also rated (→ rat_2). |
+| **usg_3** | 2048 MB of **data**, **just received, not yet rated** (`status=RECEIVED`) — the rater will price it against the WIK·DATA `usage_tariff` next pass. |
+| **usg_4** | A duplicate (`source_ref=CDR-aa11` already seen on usg_1) → **REJECTED** by the dedupe, never charged. |
+
+**The columns that did the work:** `usage_type`(+`destination`) picks the tariff; `quantity` is the raw amount the rater rounds into pulses; `source_ref` is the **dedupe key** (a repeat → `REJECTED`); `status` tracks `RECEIVED→RATED`/`REJECTED`; `raw` keeps the original CDR. The **priced** result lands in `rated_event` below.
+
 ### `pro_forma` (`status`: `ACTIVE|SUPERSEDED`), `rated_event`, `account_credit_balance`
 > `rated_event.invoice_id` (the POSTPAID settlement ref) added by the link-rated-events migration.
 > `account_credit_balance` PK is `account_id` (one balance row per account).

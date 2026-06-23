@@ -275,7 +275,7 @@ catalog lifecycle events (`Foundation/Cache`).
 > `active` columns remain as **LEGACY** (kept in sync; new code reads `scope_type`).
 ```json
 { "assignment_id":"dasg_1","operator_code":"WIK","discount_code":"RET_25","scope":"CUSTOMER","scope_ref":"cust_1","campaign_code":null,"active":true,"redemptions":0,"discount_id":"disc_ret25","scope_type":"CUSTOMER","scope_ref_id":"cust_1","customer_id":"cust_1","account_id":null,"subscription_id":null,"package_ref":null,"campaign_id":null,"franchise_id":null,"reason_code":"RETENTION","source_channel":"BACKOFFICE","valid_from":"2026-06-01","valid_to":null,"status":"ACTIVE","assignment_priority":50,"stacking_group_code":null,"approval_request_id":null,"metadata_json":null,"created_by_user_id":"u_csr1","activated_at":"2026-06-01T09:00:00Z","cancelled_at":null,"assignment_mode":"DIRECT" }
-{ "assignment_id":"dasg_2","operator_code":"WIK","discount_code":"WELCOME_500","scope":"CAMPAIGN","scope_ref":null,"campaign_code":"Q3_ACQ","active":false,"redemptions":0,"discount_id":"disc_wel500","scope_type":"CAMPAIGN_COHORT","scope_ref_id":"camp_q3","customer_id":null,"account_id":null,"subscription_id":null,"package_ref":null,"campaign_id":"camp_q3","franchise_id":null,"reason_code":"ACQUISITION","source_channel":"CAMPAIGN","valid_from":"2026-07-01","valid_to":"2026-09-30","status":"PENDING_APPROVAL","assignment_priority":100,"stacking_group_code":"WELCOME","approval_request_id":"appr_44","metadata_json":{"cohortSize":5000},"created_by_user_id":"u_mkt1","activated_at":null,"cancelled_at":null,"assignment_mode":"CAMPAIGN" }
+{ "assignment_id":"dasg_2","operator_code":"WIK","discount_code":"WELCOME_500","scope":"CAMPAIGN","scope_ref":null,"campaign_code":"Q3_ACQ","active":false,"redemptions":0,"discount_id":"disc_wel500","scope_type":"CAMPAIGN_COHORT","scope_ref_id":"camp_q3","customer_id":null,"account_id":null,"subscription_id":null,"package_ref":null,"campaign_id":"camp_q3","franchise_id":null,"reason_code":"ACQUISITION","source_channel":"CAMPAIGN","valid_from":"2026-07-01","valid_to":"2026-09-30","status":"PENDING_APPROVAL","assignment_priority":100,"stacking_group_code":"WELCOME","approval_request_id":"appr_44","metadata_json":null,"created_by_user_id":"u_mkt1","activated_at":null,"cancelled_at":null,"assignment_mode":"CAMPAIGN" }
 { "assignment_id":"dasg_3","operator_code":"WIK","discount_code":"STAFF_50","scope":"SUBSCRIPTION","scope_ref":"sub_123","campaign_code":null,"active":true,"redemptions":1,"discount_id":"disc_staff","scope_type":"SUBSCRIPTION","scope_ref_id":"sub_123","customer_id":"cust_50","account_id":"acc_1","subscription_id":"sub_123","package_ref":"pkg_triple","campaign_id":null,"franchise_id":null,"reason_code":"STAFF_BENEFIT","source_channel":"BACKOFFICE","valid_from":"2026-01-01","valid_to":null,"status":"ACTIVE","assignment_priority":10,"stacking_group_code":null,"approval_request_id":null,"metadata_json":null,"created_by_user_id":"u_hr1","activated_at":"2026-01-01T00:00:00Z","cancelled_at":null,"assignment_mode":"DIRECT" }
 { "assignment_id":"dasg_4","operator_code":"WIK","discount_code":"LAUNCH_10","scope":"ALL","scope_ref":null,"campaign_code":null,"active":false,"redemptions":12,"discount_id":"disc_old","scope_type":"FRANCHISE","scope_ref_id":"fr_nrb","customer_id":null,"account_id":null,"subscription_id":null,"package_ref":null,"campaign_id":null,"franchise_id":"fr_nrb","reason_code":"LAUNCH","source_channel":"BATCH","valid_from":"2025-01-01","valid_to":"2026-01-01","status":"EXPIRED","assignment_priority":100,"stacking_group_code":null,"approval_request_id":null,"metadata_json":null,"created_by_user_id":"u_mkt1","activated_at":"2025-01-01T00:00:00Z","cancelled_at":null,"assignment_mode":"CAMPAIGN" }
 ```
@@ -390,6 +390,29 @@ excise — Kenya's telecoms tax stack.)
 **The columns that did the work:**
 - **Which zone a number lands in** = longest matching `prefix` wins (`match_priority` breaks ties); the prefix points at a `zone_id`.
 - **What a call costs** = the zone (the priced bucket) vs the legacy flat `voice_tariff` (`rate_per_min`/`setup_fee`/`min_charge_seconds`). PLM-CFG-07 split the old single catalog into `voice_destination_zone` + `voice_destination_prefix`.
+
+### `usage_tariff` — **the usage-rating table** (`usage_type`: `DATA|SMS` · `charge_policy`: `CHARGEABLE|ZERO_RATED|BLOCKED`)
+> Catalog owns the **rating config** for metered **data/SMS** usage; `UsageRatingService::rate()` reads one of these rows (keyed by `operator_code`+`usage_type`) to turn a raw usage event (a `usage_record`, billing-owned) into a charge. **VOICE is NOT rated here** — it uses the voice tariffs (`voice_destination_zone`/`prefix`) above. PK is `(operator_code, usage_type)` — no surrogate id.
+```json
+{ "operator_code":"WIK","usage_type":"DATA","rate_per_unit":0.0500,"unit":"MB","unit_type":"MB","initial_increment_units":1.0000,"subsequent_increment_units":1.0000,"setup_fee":0.0000,"min_charge":0.0000,"included_units":1024.0000,"charge_policy":"CHARGEABLE","active":true }
+{ "operator_code":"WIK","usage_type":"SMS","rate_per_unit":1.0000,"unit":"MESSAGE","unit_type":"MESSAGE","initial_increment_units":1.0000,"subsequent_increment_units":1.0000,"setup_fee":0.0000,"min_charge":0.0000,"included_units":0.0000,"charge_policy":"CHARGEABLE","active":true }
+{ "operator_code":"KEN","usage_type":"DATA","rate_per_unit":0.0200,"unit":"MB","unit_type":"MB","initial_increment_units":1.0000,"subsequent_increment_units":1.0000,"setup_fee":0.0000,"min_charge":0.0000,"included_units":0.0000,"charge_policy":"ZERO_RATED","active":true }
+{ "operator_code":"KEN","usage_type":"SMS","rate_per_unit":1.0000,"unit":"MESSAGE","unit_type":"MESSAGE","initial_increment_units":1.0000,"subsequent_increment_units":1.0000,"setup_fee":0.0000,"min_charge":0.0000,"included_units":0.0000,"charge_policy":"BLOCKED","active":true }
+```
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **WIK · DATA** | Charge **KES 0.05 per MB**, billed MB-by-MB (`*_increment_units=1`), but the **first 1024 MB are free** (`included_units=1024` bundle allowance), no setup/min. |
+| **WIK · SMS** | Charge **KES 1 per message**, one at a time, no allowance. |
+| **KEN · DATA** | **ZERO_RATED** — data here is free (`charge_policy=ZERO_RATED`); the rate is ignored and nothing is charged (a free-data promo). |
+| **KEN · SMS** | **BLOCKED** (`charge_policy=BLOCKED`) — SMS isn't allowed here, so the rater refuses the event rather than charging it. |
+
+**Worked example — WIK·DATA, 1500 MB used this cycle:**
+- allowance: the first **1024 MB** are free (`included_units`), so **chargeable = 1500 − 1024 = 476 MB**.
+- charge = 476 × `rate_per_unit` 0.05 = **KES 23.80** (no `setup_fee`/`min_charge` here).
+
+**The columns that did the work:** `rate_per_unit` is the price per unit; `initial`/`subsequent_increment_units` round the raw quantity up to billing pulses; `included_units` is a free allowance burned first; `setup_fee`/`min_charge` are the per-event add-on and floor; `charge_policy` can make it free (`ZERO_RATED`) or refuse it (`BLOCKED`). (The raw event it rates is a `usage_record` — see `billing.md`.)
 
 ### `wallet_type` (catalog consumed by Billing) & `homepass` (the premises — **full width**)
 > `homepass.status` is **not** a hardcoded enum — it is a code from the `homepass_status_code` catalog
