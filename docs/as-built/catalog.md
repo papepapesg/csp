@@ -496,7 +496,30 @@ flowchart LR
 **The columns that did the work:**
 - **Live or not** = `status` (a launch lifecycle with review/approval; only `ACTIVE` sells).
 - **Sale window** = `launch_date`/`retire_date`; **commercial purpose** = `bundle_type`.
-- (Package and channel links live in child tables — `commercial_bundle` is just the header.)
+- (The `commercial_bundle` row is just the **header** — the packages it contains live in the
+  `commercial_bundle_component` join below; channel/availability, discounts and migration paths live in
+  the other `commercial_bundle_*` child tables.)
+
+### `commercial_bundle_component` — **the bundle → package link** (`component_role`: `PRIMARY|ADDON|OPTIONAL|PROMOTIONAL`)
+> This is how a bundle is "made of packages" — the same pattern as `package` → `service` via `package_service`. The bundle header carries no `package_ref`; the packages are these rows.
+```json
+{ "component_id":"bcomp_1","bundle_id":"bun_triple","package_ref":"pkg_triple","package_version_id":"pv_1","component_role":"PRIMARY","quantity":1,"mandatory":true,"display_order":0,"metadata_json":null }
+{ "component_id":"bcomp_2","bundle_id":"bun_triple","package_ref":"pkg_router_addon","package_version_id":null,"component_role":"ADDON","quantity":1,"mandatory":false,"display_order":1,"metadata_json":null }
+{ "component_id":"bcomp_3","bundle_id":"bun_staff","package_ref":"pkg_inet","package_version_id":"pv_2","component_role":"PRIMARY","quantity":1,"mandatory":true,"display_order":0,"metadata_json":null }
+{ "component_id":"bcomp_4","bundle_id":"bun_win","package_ref":"pkg_triple","package_version_id":null,"component_role":"PROMOTIONAL","quantity":1,"mandatory":true,"display_order":0,"metadata_json":{"promoMonths":3} }
+```
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **bcomp_1** | The "Triple Saver" bundle's **core package** = `pkg_triple`, pinned to version `pv_1` — `PRIMARY` and `mandatory`, shown first (`display_order=0`). |
+| **bcomp_2** | The same bundle also offers a `pkg_router_addon` as an **optional ADD-ON** (`mandatory=false`); no pinned version, so it takes the package's current one. |
+| **bcomp_3** | The Staff bundle is just one package (`pkg_inet`@`pv_2`), `PRIMARY`/mandatory. |
+| **bcomp_4** | The Winback bundle bundles `pkg_triple` as a `PROMOTIONAL` component, with a 3-month promo flag in `metadata_json`. |
+
+**The columns that did the work:** `bundle_id` + `package_ref` are the link; `package_version_id` pins a
+version (null = the package's current one); `component_role`/`mandatory` say whether it's the core offer
+or an optional add-on; `display_order` is the sell order; `quantity` how many.
 
 ## 3. Services
 | Service | Responsibility |
