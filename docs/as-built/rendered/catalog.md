@@ -168,7 +168,31 @@ for customers and routes usage to the right one by its code.
 Billing creates prepaid `wallet`s of those types and routes usage by `wallet_type_code`.
 *Cross-module config handoff.*
 
-### (bonus) 9. Any catalog change evicts stale read-models
+### 9. A homepass's topology binds a service to the network
+
+**The story in plain English:** A homepass isn't just an address — it records *how the network physically
+reaches that premises*: which technology, the chain of nodes down to the customer's box, and, per service,
+the exact node + port to light up. When a subscription activates, Provisioning reads that topology off the
+homepass to know **which vendor system and which port** to push the customer onto. No topology on the
+homepass ⇒ nothing to provision.
+
+**Who does what:** Catalog owns the homepass topology (`technology`, `network_path`,
+`service_management_endpoints`, `services_supported`); Provisioning reads it to pick the target plane +
+adapter (see `provisioning.md` §2.1).
+
+**Worked example — activate DATA at `hp_1`:**
+- `technology=GPON` → the GPON plane family.
+- `service_management_endpoints.DATA = {nodeCode: OLT-NRB-WTL-01, port: 1}` → provision on **OLT-NRB-WTL-01, port 1**.
+- That serving OLT maps to the `HUAWEI_NCE_GPON_KE` target → its adapter pushes `subscriber_key`.
+- (`hp_3` is `HFC` with leaf `CM-12` → resolves to the **CMTS** plane instead.)
+
+
+![diagram](img/catalog_7.png)
+
+*An order for a service not in `services_supported` is rejected; a homepass with `network_path=null`
+(hp_2) can't be provisioned. See `provisioning.md` for the full command/reconcile path.*
+
+### (bonus) 10. Any catalog change evicts stale read-models
 `CatalogCacheInvalidator` (listener) + Billing's `EvictPlmCatalogCache` drop cached snapshots on
 catalog lifecycle events (`Foundation/Cache`).
 
@@ -208,13 +232,13 @@ catalog lifecycle events (`Foundation/Cache`).
 **`package` status lifecycle** (the launch flow that drives `DRAFT → ACTIVE` is Scenario 1):
 
 
-![diagram](img/catalog_7.png)
+![diagram](img/catalog_8.png)
 
 
 **`package_version` status lifecycle** (a price change supersedes the old version):
 
 
-![diagram](img/catalog_8.png)
+![diagram](img/catalog_9.png)
 
 
 ### `service` (`consumption_model`: `FLAT|USAGE`)
@@ -323,7 +347,7 @@ things:
 excise — Kenya's telecoms tax stack.)
 
 
-![diagram](img/catalog_9.png)
+![diagram](img/catalog_10.png)
 
 
 **Read each row as a sentence — *this data means this:***
@@ -391,14 +415,26 @@ excise — Kenya's telecoms tax stack.)
 | **wtyp_main** | The main money wallet kind: holds currency (`unit=currency`, KES), can't go negative, debits automatically each cycle (`allow_negative=false`, `auto_debit=true`). |
 | **wtyp_voice** | The voice money wallet kind: same currency behaviour, auto-debited. |
 | **wtyp_pts** | Loyalty points: counted in points, not money (`unit=points`), and never auto-debited (`auto_debit=false`). |
-| **hp_1** | A premises in Karen that's **ready to sell and live** (`status=RFS`, GPON), with full topology (`network_path`/`services_supported`) and CGIS coordinates (`geo_*`). |
-| **hp_2** | A premises still under construction — **can't take an order** (`status=WAI` = waiting), no topology yet, never been sellable (`has_been_sellable=false`). |
-| **hp_3** | A ready Mombasa premises on **HFC** (`technology=HFC` → the CMTS plane, vs GPON→OLT). |
-| **hp_4** | A decommissioned premises (`status=RETIRED`, `not_serviceable_reason=decommissioned`) — no orders. |
+| **hp_1** | A Karen premises **ready to sell and live** (`status=RFS`, GPON). It carries the **provisioning topology**: `services_supported=[DATA,VOICE,IPTV_MULTICAST]`, a `network_path` whose leaf is `ONT-77`, and `service_management_endpoints` saying *DATA is delivered at node `OLT-NRB-WTL-01`, port 1*. |
+| **hp_2** | A premises still under construction — **can't take an order** (`status=WAI` = waiting). **No topology yet**: `network_path=null`, `network_nodes=[]`, `services_supported=null` — so the network can't be provisioned here. |
+| **hp_3** | A ready Mombasa premises on **HFC**: its leaf is a cable `MODEM` (`CM-12`) and DATA's endpoint is node `DN-3` — so its `technology=HFC` resolves to the **CMTS** plane, not GPON→OLT. |
+| **hp_4** | A decommissioned premises (`status=RETIRED`, `not_serviceable_reason=decommissioned`) — no orders, topology stale. |
 
-**The columns that did the work:**
+**🔌 The provisioning part (why homepass is special) — illustrated by hp_1:**
+A homepass isn't just an address; it's **where + how the network reaches the customer**, and Provisioning reads four columns to bind a service to real hardware:
+
+| Column (hp_1 value) | What it tells Provisioning |
+|---|---|
+| `technology` = `GPON` | which **vendor plane family** (GPON→OLT/Huawei NCE; HFC→CMTS) |
+| `network_path` = `{nodes:[{type:ONT, code:ONT-77, role:LEAF, port:1}]}` | the **physical chain** from the customer leaf up to the headend — the node closest to the customer |
+| `service_management_endpoints` = `{DATA:{nodeCode:OLT-NRB-WTL-01, port:1}}` | **per service**, the exact **node + port** to provision on (the serving OLT) |
+| `services_supported` = `[DATA,VOICE,IPTV_MULTICAST]` | which services this premises can actually carry (an order for an unsupported service is rejected) |
+| `network_nodes` = `[ONT-77, OLT-NRB-WTL-01]` | a flat cache of the node codes for quick lookup |
+
+So when a subscription activates DATA at hp_1, Provisioning takes `technology=GPON` + the serving node `OLT-NRB-WTL-01` (port 1) → picks the **GPON target plane** → its adapter pushes the subscriber. (Full path in `provisioning.md` §2.1; see catalog scenario 9 below.)
+
+**The other columns that did the work:**
 - **Can it take an order** = the `status` code's `is_sellable` flag (RFS yes; WAI/RETIRED no).
-- **Which provisioning plane** = `technology` (GPON→OLT, HFC→CMTS — see `provisioning.md`).
 - **The wallet kind's behaviour** = `unit`/`allow_negative`/`auto_debit` (Billing instantiates real wallets from these).
 - **Uniqueness / one-time latch** = the structured address tuple (`country`…`apartment_number`) is the deployment-wide key; `has_been_sellable` latches `HomePassReachedSellable` to fire once; `geo_*` (CGIS) supersede the deprecated `latitude`/`longitude`.
 
