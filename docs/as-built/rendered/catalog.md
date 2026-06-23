@@ -426,6 +426,9 @@ excise — Kenya's telecoms tax stack.)
 **The columns that did the work:** `rate_per_unit` is the price per unit; `initial`/`subsequent_increment_units` round the raw quantity up to billing pulses; `included_units` is a free allowance burned first; `setup_fee`/`min_charge` are the per-event add-on and floor; `charge_policy` can make it free (`ZERO_RATED`) or refuse it (`BLOCKED`). (The raw event it rates is a `usage_record` — see `billing.md`.)
 
 ### `wallet_type` (catalog consumed by Billing) & `homepass` (the premises — **full width**)
+> `wallet_type` is the catalog of wallet **kinds** (MAIN/VOICE/LOYALTY). The **actual prepaid wallets**
+> that reference these kinds (by `code`) — and their transaction ledger — are Billing-owned `wallet`/
+> `wallet_transaction`, in [`billing.md`](billing.md).
 > `homepass.status` is **not** a hardcoded enum — it is a code from the `homepass_status_code` catalog
 > whose *flags* (`is_sellable`/`is_active`/…) drive behaviour; the codes below (RFS/WAI/RETIRED) are
 > illustrative. `homepass` accreted address/building/GIS/RoE/topology columns across several RLM

@@ -408,9 +408,11 @@ proposer) have signed:
 adj_4 was turned down. The diagram in Scenario 6 shows these transitions.)
 
 ### `wallet` (`status`: `ACTIVE|FROZEN|CLOSED`) & `wallet_transaction` (PREPAID)
-> The multiwallet migration added `wallet_code`/`customer_id` and re-keyed uniqueness to
-> `(subscription_id, wallet_code)`; the expiry migration added `expires_at`. (The routing key is the
-> catalog `wallet_code`, not a `wallet_type_code` column.)
+> Billing owns the **actual prepaid wallets** + their ledger. The wallet **kinds** they reference
+> (`wallet_code` → MAIN/VOICE/LOYALTY) are the Catalog-owned `wallet_type` catalog — see
+> [`catalog.md`](catalog.md). The multiwallet migration added `wallet_code`/`customer_id` and re-keyed
+> uniqueness to `(subscription_id, wallet_code)`; the expiry migration added `expires_at`. (The routing
+> key is the catalog `wallet_code`, not a `wallet_type_code` column.)
 ```json
 { "wallet_id":"wal_1","subscription_id":"sub_2","wallet_code":"MAIN_WALLET","account_id":"acc_2","customer_id":"cust_3","operator_code":"WIK","currency":"KES","balance":1200.00,"status":"ACTIVE","expires_at":"2026-09-01T00:00:00Z" }
 { "wallet_id":"wal_2","subscription_id":"sub_2","wallet_code":"VOICE_WALLET","account_id":"acc_2","customer_id":"cust_3","operator_code":"WIK","currency":"KES","balance":0.00,"status":"ACTIVE","expires_at":null }
