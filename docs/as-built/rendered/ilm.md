@@ -192,6 +192,17 @@ cancels and unwinds it.
 { "operator_code":"WIK","flag_code":"LOYALTY_TIER","name":"Loyalty Tier","value_kind":"TIER","evaluator":"EVENT_DRIVEN","surfaces_attention":false,"affects_dunning":false,"affects_provisioning":false,"customer_visible":true,"active":true }
 { "operator_code":"WIK","flag_code":"CHURN_RISK","name":"Churn Risk Score","value_kind":"SCORE_0_100","evaluator":"DROOLS","surfaces_attention":false,"affects_dunning":false,"affects_provisioning":false,"customer_visible":false,"active":true }
 ```
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **NPD** | A yes/no "Non-Performing Debtor" flag (`value_kind=BOOLEAN`) the **rules engine** sets (`evaluator=DROOLS`); it **surfaces the attention banner** and makes dunning escalate faster (`affects_dunning=true`). |
+| **FRAUD_SUSPECTED** | A boolean flag **back-office staff set by hand** (`evaluator=MANUAL`); it **blocks provisioning** (`affects_provisioning=true`) and raises the banner. |
+| **LOYALTY_TIER** | A **tier** value (`value_kind=TIER`) set by loyalty events (`evaluator=EVENT_DRIVEN`); the only customer-visible one here (`customer_visible=true`), no operational effect. |
+| **CHURN_RISK** | A **0–100 score** (`value_kind=SCORE_0_100`) the rules engine computes; informational (no effects, not visible). |
+
+**The columns that did the work:** `value_kind` says what shape the value is (bool / score / tier / count); `evaluator` says who may set it (MANUAL = staff only); the effect flags (`affects_dunning`/`affects_provisioning`/`customer_visible`/`surfaces_attention`) are what downstream modules read. The **instance** of a flag on an account is the table below.
+
 ### `customer_account_flag` (the per-account instance · `state`: `ACTIVE|CLEARED`)
 ```json
 { "id":"caf_1","operator_code":"WIK","account_id":"acc_3","flag_code":"NPD","bool_value":true,"score_value":null,"text_value":null,"state":"ACTIVE","source":"DROOLS","set_by":"system","set_at":"2026-06-10T00:00:00Z" }
@@ -246,6 +257,17 @@ cancels and unwinds it.
 { "offer_instance_id":"cvo_3","operator_code":"WIK","activity_id":null,"customer_id":"CUS-3","subscription_id":null,"offer_type":"UPGRADE_OFFER","campaign_code":"Q3_UPSELL","discount_ref":null,"discount_percent":null,"status":"DRAFT","approval_request_id":null,"expires_at":null }
 { "offer_instance_id":"cvo_4","operator_code":"WIK","activity_id":null,"customer_id":"CUS-9","subscription_id":"sub_50","offer_type":"WINBACK_PACKAGE","campaign_code":"WINBACK","discount_ref":null,"discount_percent":null,"status":"EXPIRED","approval_request_id":null,"expires_at":"2026-05-01T00:00:00Z" }
 ```
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **cvo_1** | A 10% retention discount that **applied straight through** (`status=APPLIED`, `approval_request_id=null` — under threshold). |
+| **cvo_2** | A 25% offer that **needed approval**: it carries `approval_request_id=appr_9` and sits `status=PROPOSED` after the approval released it. |
+| **cvo_3** | An upgrade offer still being prepared (`status=DRAFT`), tied to campaign `Q3_UPSELL`. |
+| **cvo_4** | A winback offer that **lapsed unused** (`status=EXPIRED`, its `expires_at` passed). |
+
+**The columns that did the work:** `approval_request_id` set ⇒ the offer went through the EM-CFG-04 gate; `status` is the offer lifecycle (`DRAFT`→`PENDING_APPROVAL`→`PROPOSED`→`ACCEPTED`/`APPLIED`, or `EXPIRED`/`REJECTED`); `discount_ref`/`discount_percent` carry the value; `expires_at` lapses an untaken offer.
+
 ### `cvm_activity` (`activity_type`: `RETENTION_CALL|PAYMENT_RECOVERY|UPSELL_OFFER|WINBACK|SERVICE_RECOVERY` · `priority`: `LOW|MEDIUM|HIGH|CRITICAL` · `status`: `OPEN|IN_PROGRESS|WAITING_CUSTOMER|COMPLETED|CANCELLED|EXPIRED`)
 > The EM-03 full-model migration added `activity_type`/`account_id`/`source_event_ref` (idempotency
 > unique `(operator_code, source_event_ref)`), `assigned_to_user_id`/`assigned_team_id`/`priority`/
@@ -262,17 +284,12 @@ cancels and unwinds it.
 
 | Row | What it means in plain English |
 |-----|--------------------------------|
-| **cvo_1** | A 10% retention discount that **applied straight through** (`status=APPLIED`, `approval_request_id=null` — under threshold). |
-| **cvo_2** | A 25% offer that needed approval: it carries an `approval_request_id=appr_9` and sits `status=PROPOSED` after the approval released it. |
-| **cvo_3** | An upgrade offer still being prepared (`status=DRAFT`), tied to campaign `Q3_UPSELL`. |
-| **cvo_4** | A winback offer that **lapsed unused** (`status=EXPIRED`, its `expires_at` passed). |
 | **cva_1** | A high-priority payment-recovery task opened by a dunning signal (`activity_type=PAYMENT_RECOVERY`, `trigger_reason=NON_PAYMENT`, `status=OPEN`), assigned to an agent with a `due_at`. |
 | **cva_2** | An upsell task for a healthy account (`activity_type=UPSELL_OFFER`), in progress over SMS. |
 | **cva_3** | A retention call that **completed** (`status=COMPLETED`) — the customer accepted (`outcome_reason`), with `decided_at`/`closed_at` stamped. |
 | **cva_4** | A winback task that **expired** with no response (`status=EXPIRED`, `outcome_reason="no response"`). |
 
 **The columns that did the work:**
-- **Did the offer need approval** = `approval_request_id` (set ⇒ EM-CFG-04 gate) + `status`.
 - **Why a task exists** = `activity_type`/`trigger_reason`; each activity is **idempotent by `source_event_ref`** (same event → same row).
 - **Worklist routing + closure** = `priority`/`due_at`/`assigned_*` route it; `decided_at`/`closed_at` close it out.
 - The legacy `type` column survives nullable alongside the new `activity_type`.
