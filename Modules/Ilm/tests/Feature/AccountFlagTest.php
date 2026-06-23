@@ -2,9 +2,12 @@
 
 namespace Modules\Ilm\Tests\Feature;
 
-use App\Foundation\Errors\DomainException;
+use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
+use App\Models\User;
+use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Modules\Ilm\Database\Seeders\AccountFlagCatalogSeeder;
 use Modules\Ilm\Models\Customer;
@@ -105,24 +108,31 @@ class AccountFlagTest extends TestCase
         $this->assertSame('ACTIVE', $account->status);
     }
 
-    public function test_sub_status_requiring_approval_needs_a_reference(): void
+    public function test_sub_status_requiring_approval_routes_through_em_cfg_04(): void
     {
+        $this->seed(RbacSeeder::class);
         $svc = app(AccountService::class);
         $account = $this->account();
 
-        // 'hold' is configured requires_approval=true — rejected without a reference (R-ILM-S-2).
-        try {
-            $svc->update($account, ['sub_status' => 'hold']);
-            $this->fail('expected SUB_STATUS_APPROVAL_REQUIRED');
-        } catch (DomainException $e) {
-            $this->assertSame('SUB_STATUS_APPROVAL_REQUIRED', $e->errorCode);
-        }
+        // 'hold' is requires_approval=true → the change is HELD and an EM-CFG-04 request is raised
+        // (the seeded policy is a single supervisor stage; an operator could make it a chain).
+        $svc->update($account, ['sub_status' => 'hold']);
+        $this->assertSame('active', $account->refresh()->sub_status); // unchanged — pending approval
 
-        // With a reference it is accepted and the main status is derived as INACTIVE.
-        $svc->update($account, ['sub_status' => 'hold', 'approval_reference' => 'TKT-2026-01']);
+        $req = ApprovalRequest::query()
+            ->where('entity_type', 'CUSTOMER_SUB_STATUS')->where('entity_ref', $account->account_id)->firstOrFail();
+        $this->assertSame('PENDING', $req->status);
+        $this->assertSame('hold', $req->action);
+
+        // A CUSTOMER_CARE_SUPERVISOR approves → the held transition applies (main status derived INACTIVE).
+        $sup = User::factory()->create(['operator_code' => 'WIK']);
+        $sup->assignRole('CUSTOMER_CARE_SUPERVISOR');
+        app(ApprovalService::class)->decide($req, true, $sup);
+        $this->artisan('sophix:outbox:dispatch')->assertSuccessful();
+
         $this->assertSame('hold', $account->refresh()->sub_status);
         $this->assertSame('INACTIVE', $account->status);
-        $this->assertDatabaseHas('account_status_history', ['account_id' => $account->account_id, 'new_sub_status' => 'hold', 'approval_reference' => 'TKT-2026-01']);
+        $this->assertDatabaseHas('account_status_history', ['account_id' => $account->account_id, 'new_sub_status' => 'hold', 'approval_reference' => $req->request_id]);
     }
 
     public function test_approval_requirement_is_config_not_code(): void

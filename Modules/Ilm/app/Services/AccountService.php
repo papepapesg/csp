@@ -2,9 +2,12 @@
 
 namespace Modules\Ilm\Services;
 
+use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Modules\Ilm\Events\IlmEvents;
@@ -19,7 +22,10 @@ use Modules\Ilm\Models\CustomerSubStatusCatalog;
  */
 class AccountService
 {
-    public function __construct(private readonly EventBus $events) {}
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly ApprovalService $approvals,
+    ) {}
 
     /**
      * @param  array<string, mixed>  $data
@@ -65,9 +71,23 @@ class AccountService
             if (! $catalog) {
                 throw DomainException::ruleRejected('UNKNOWN_SUB_STATUS', "Sub-status {$data['sub_status']} is not in the operator's registry.");
             }
-            // R-ILM-S-2: a sub-status whose catalog row requires_approval must carry a reference.
-            if ($catalog->requires_approval && empty($data['approval_reference'])) {
-                throw DomainException::ruleRejected('SUB_STATUS_APPROVAL_REQUIRED', "Sub-status '{$data['sub_status']}' requires an approval reference.");
+            // R-ILM-S-2: a requires_approval sub-status routes through the EM-CFG-04 engine — which
+            // supports BOTH a single approver (flat) and an ordered chain, per the seeded policy. The
+            // transition is HELD until the approval clears; ApplySubStatusOnApproval applies it on
+            // ApprovalApproved. (`_subStatusApproved` is the internal flag that listener sets to apply.)
+            if ($catalog->requires_approval && empty($data['_subStatusApproved'])) {
+                $request = $this->approvals->request([
+                    'operator_code' => $account->operator_code,
+                    'entity_type' => 'CUSTOMER_SUB_STATUS',
+                    'action' => $data['sub_status'],
+                    'entity_ref' => $account->account_id,
+                    'payload' => ['change' => Arr::except($data, ['_subStatusApproved'])],
+                    'requested_by' => $data['updated_by'] ?? null,
+                ]);
+                if ($request->status !== ApprovalRequest::AUTO_APPROVED) {
+                    return $account; // held — sub-status unchanged until the approval (single or chained) clears
+                }
+                $data['approval_reference'] = $request->request_id; // no policy ⇒ auto-approved ⇒ apply now
             }
             // Main status is DERIVED from the catalog (cloned_from), not trusted from the caller.
             $data['status'] = $catalog->main_status;
@@ -82,7 +102,7 @@ class AccountService
                 $data['sub_status_changed_at'] = now();
             }
 
-            $account->update(array_diff_key($data, ['approval_reference' => null]));
+            $account->update(array_diff_key($data, ['approval_reference' => null, '_subStatusApproved' => null]));
 
             if ($statusChanged) {
                 // Append-only history (the Customer 360 status timeline). R-ILM-S-1.

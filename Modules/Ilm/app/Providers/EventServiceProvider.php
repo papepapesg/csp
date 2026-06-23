@@ -4,6 +4,7 @@ namespace Modules\Ilm\Providers;
 
 use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
+use Modules\Ilm\Listeners\ApplySubStatusOnApproval;
 use Modules\Ilm\Listeners\ResumeCvmOfferOnApproval;
 
 class EventServiceProvider extends ServiceProvider
@@ -17,6 +18,8 @@ class EventServiceProvider extends ServiceProvider
         OutboxEventPublished::class => [
             // EM-CFG-04: a granted/rejected CVM offer approval resumes the parked offer.
             ResumeCvmOfferOnApproval::class,
+            // EM-CFG-04: a granted sub-status approval applies the held account transition.
+            ApplySubStatusOnApproval::class,
         ],
     ];
 

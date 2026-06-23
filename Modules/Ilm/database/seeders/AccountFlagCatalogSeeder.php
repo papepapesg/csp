@@ -2,6 +2,7 @@
 
 namespace Modules\Ilm\Database\Seeders;
 
+use App\Foundation\Approvals\ApprovalDefinition;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Modules\Ilm\Models\CustomerAccountFlagCatalog;
@@ -56,6 +57,14 @@ class AccountFlagCatalogSeeder extends Seeder
                 ['operator_code' => $operator, 'sub_status_code' => $code],
                 ['main_status' => $main, 'requires_approval' => $reqApproval, 'affects_provisioning' => $affectsProv, 'customer_visible' => $custVisible, 'display_name' => $display, 'active' => true],
             );
+            // EM-CFG-04: a requires_approval sub-status gets an approval policy. Default = a single
+            // supervisor stage (flat); an operator can add stages to make it a chain (e.g.
+            // supervisor → manager) — the engine supports both with no code change.
+            if ($reqApproval) {
+                ApprovalDefinition::defineChain($operator, 'CUSTOMER_SUB_STATUS', $code, [
+                    ['name' => 'Sub-status review', 'approver_kind' => 'ROLE', 'approver_roles' => ['CUSTOMER_CARE_SUPERVISOR']],
+                ]);
+            }
         }
 
         // R-ILM-K-3: KYC approval authority per level (operator config). KE: L1 supervisor + Team Leader.
