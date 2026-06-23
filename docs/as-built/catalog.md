@@ -339,6 +339,17 @@ stateDiagram-v2
 { "discount_id":"disc_staff","operator_code":"WIK","code":"STAFF_50","name":"Staff 50%","discount_type":"PERCENT","value":0.5000,"applies_to":"PACKAGE","stackable":false,"priority":10,"max_redemptions":null,"status":"ACTIVE","effective_from":"2026-01-01T00:00:00Z","effective_until":null }
 { "discount_id":"disc_old","operator_code":"WIK","code":"LAUNCH_10","name":"Launch 10%","discount_type":"PERCENT","value":0.1000,"applies_to":"INVOICE","stackable":true,"priority":100,"max_redemptions":null,"status":"INACTIVE","effective_from":"2025-01-01T00:00:00Z","effective_until":"2026-01-01T00:00:00Z" }
 ```
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **disc_ret25** | A **25%-off** rule (`discount_type=PERCENT`, `value=0.25`) applied to the **whole invoice** (`applies_to=INVOICE`); **non-stackable** (`stackable=false`) and unlimited (`max_redemptions=null`). |
+| **disc_wel500** | A **flat KES 500-off** rule (`discount_type=FIXED`, `value=500`); **stackable** and **single-use** (`max_redemptions=1`). |
+| **disc_staff** | A **50%-off** rule applied to a **package** (`applies_to=PACKAGE`), highest combine priority (`priority=10` — lower wins). |
+| **disc_old** | An expired launch discount — **switched off** (`status=INACTIVE`) and past its `effective_until`, so it never applies. |
+
+**The columns that did the work:** `discount_type`+`value` are the maths (percent fraction vs fixed amount); `applies_to` is the target (invoice/package/service); `stackable`+`priority` decide how it combines with others (lower `priority` wins a tie); `max_redemptions` caps uses; `status`+`effective_from`/`until` gate whether it's live. (A live rule is *granted* to a customer via `discount_assignment` below.)
+
 ### `discount_assignment` (`scope_type`: `CUSTOMER|ACCOUNT|SUBSCRIPTION|ORDER|PACKAGE|FRANCHISE|CAMPAIGN_COHORT` · `status`: `DRAFT|PENDING_APPROVAL|ACTIVE|SUSPENDED|EXPIRED|CANCELLED|REJECTED` · `assignment_mode`: `DIRECT|CAMPAIGN`)
 > SIP-03 grew this table: `scope_type`/`scope_ref_id`/typed refs/`status`/`valid_*`/approval all added by
 > the SIP-03 lifecycle migration; `assignment_mode` by a later ALTER. The original `scope`/`scope_ref`/

@@ -347,6 +347,17 @@ from a 2500.00/mo plan to a 3000.00/mo plan:
 { "id":"dprg_3","code":"wik_postpaid_standard","version":2,"description":"WIK postpaid standard dunning v2","operator_code":"WIK","billing_mode":"POSTPAID","level_definitions":[{"level":1,"name":"WARNING","grace_period_days":5,"action_workflow_intent":"WARNING_ONLY"},{"level":2,"name":"SUSPENDED","grace_period_days":10,"action_workflow_intent":"SUSPEND_NP"},{"level":3,"name":"TERMINATED","action_workflow_intent":"TERMINATION"}],"pre_termination_review_required":true,"published_at":"2026-06-01T00:00:00Z","retired_at":null,"created_by":"u_admin" }
 { "id":"dprg_old","code":"wik_legacy","version":1,"description":"Retired legacy program","operator_code":"WIK","billing_mode":"POSTPAID","level_definitions":[{"level":1,"name":"WARNING","action_workflow_intent":"WARNING_ONLY"}],"pre_termination_review_required":false,"published_at":"2024-01-01T00:00:00Z","retired_at":"2026-01-01T00:00:00Z","created_by":"u_admin" }
 ```
+**Read each row as a sentence — *this data means this:***
+
+| Row | What it means in plain English |
+|-----|--------------------------------|
+| **dprg_1** | The live **postpaid** ladder (`billing_mode=POSTPAID`, v1): escalate **WARNING (7d grace) → RESTRICTED (7d) → SUSPENDED (14d) → TERMINATED**, and a **human must review before termination** (`pre_termination_review_required=true`). |
+| **dprg_2** | The **prepaid** ladder — much harsher: **WARNING (0d) → SUSPENDED (3d)**, no termination review. |
+| **dprg_3** | **Version 2** of the same postpaid code (`code=wik_postpaid_standard`, `version=2`) — a tightened ladder (5d/10d, drops the RESTRICTED level); the newest published version wins. |
+| **dprg_old** | A **retired** program (`retired_at` set) — no longer assigned to anyone. |
+
+**The columns that did the work:** `level_definitions` is the **ordered escalation ladder** (each level's `name`, `grace_period_days` before it fires, and the `action_workflow_intent` it triggers — restrict/suspend/terminate); `billing_mode` picks which customers it governs; `(code, version)` versions it (a running account pins the version it entered on — see `dunning_state.dunning_program_ref/_version`); `pre_termination_review_required` forces a manual gate before cut-off; `retired_at` retires it.
+
 ### `dunning_state` (`status`: `ACTIVE|CLEARED|SUSPENDED_BY_PAUSE|PENDING_TERMINATION_REVIEW|RECOVERY_FAILED|ARCHIVED`, `current_level` int 0..4)
 > The dd-alignment migration added `billing_mode`/`triggering_event_type`/`next_evaluation_at`/
 > `review_due_at`/`last_workflow_failure_code`; the program-catalog migration added the program pinning
