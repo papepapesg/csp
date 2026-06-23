@@ -41,13 +41,16 @@ sign off, moving the customer from PENDING up to fully APPROVED. Only then can a
 
 **The story in plain English:** An agent wants to put an account "on hold". They don't type a free-form
 status — they pick a code from a catalog. The catalog row says what the coarse status becomes (hold →
-INACTIVE) and whether the change needs approval. "Hold" needs approval, so the change is rejected unless
-an approval reference is supplied.
+INACTIVE) and whether the change needs approval. "Hold" needs approval, so the change is **held** until a
+back-office approver signs off — and that approval can be a single sign-off or a chain.
 
 **Who does what:** `PATCH /api/customer-accounts/acc_1 {sub_status:'hold'}` → `AccountService::update`:
-the `customer_sub_status_catalog` validates the code, **derives** `main_status` (clone), and because
-`requires_approval=true` it rejects without an `approval_reference` (R-ILM-S-2). With one it commits,
-writes `account_status_history`, and emits `CustomerAccountStatusChanged`. *Proven by `AccountFlagTest`.*
+the `customer_sub_status_catalog` validates the code and **derives** `main_status` (clone). Because
+`requires_approval=true`, it **routes through EM-CFG-04** — raises an `ApprovalService::request`
+(`entity_type=CUSTOMER_SUB_STATUS`, `action=hold`) and returns the account **unchanged** (held PENDING).
+When an approver (a single `CUSTOMER_CARE_SUPERVISOR` by default, or each stage of a chain) approves,
+`ApplySubStatusOnApproval` applies the transition, writes `account_status_history`, and emits
+`CustomerAccountStatusChanged`. *Proven by `AccountFlagTest::test_sub_status_requiring_approval_routes_through_em_cfg_04`.*
 
 ### 3. Raise an NPD flag → attention banner + faster dunning
 
@@ -225,13 +228,14 @@ cancels and unwinds it.
 | Row | What it means in plain English |
 |-----|--------------------------------|
 | **active** | The "Active" sub-status maps to main status `ACTIVE` (`main_status`), needs no approval, and is customer-visible. |
-| **vip** | "VIP" also clones to `ACTIVE` but **needs approval** (`requires_approval=true`) from an Account Manager or Region Head (`approval_roles_jsonb`). |
-| **hold** | "On Hold" clones to `INACTIVE`, needs a Back-Office Supervisor's approval, and **affects provisioning** (`affects_provisioning=true`). |
+| **vip** | "VIP" also clones to `ACTIVE` but **needs approval** (`requires_approval=true`) — the transition is **held until an EM-CFG-04 approval clears** (`approval_roles_jsonb` is the advisory role list). |
+| **hold** | "On Hold" clones to `INACTIVE`, needs approval, and **affects provisioning** (`affects_provisioning=true`). |
 | **churned** | "Churned" clones to `INACTIVE`, needs approval, affects provisioning, and is shown to the customer (`customer_visible=true`). |
+> *(The `approval_roles_jsonb` role names above are illustrative — the seeded rows leave it null; the seeded EM-CFG-04 policy defaults to a single `CUSTOMER_CARE_SUPERVISOR` stage.)*
 
 **The columns that did the work:**
 - **The derived main status** = `main_status` — a sub-status **clones** it, so the 2-value main status is never trusted from the caller.
-- **Approval gate** = `requires_approval` + `approval_roles_jsonb` (which roles may sign).
+- **Approval gate** = `requires_approval` → the transition now **routes through the EM-CFG-04 engine** (`AccountService` raises an `ApprovalService::request(entity_type=CUSTOMER_SUB_STATUS, action=<code>)`); the change is **held PENDING** and `ApplySubStatusOnApproval` applies it on `ApprovalApproved`. The policy can be a **single approver or a chain** — the engine supports both, seeded as one `CUSTOMER_CARE_SUPERVISOR` stage by default. `approval_roles_jsonb` is the advisory list that an operator can use to seed the stage(s).
 - **Provisioning impact** = `affects_provisioning` (the change emits `CustomerAccountStatusChanged` for FUL-03).
 - An operator adds a state by **adding a row** — no code.
 
