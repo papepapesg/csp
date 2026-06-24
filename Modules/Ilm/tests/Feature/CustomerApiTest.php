@@ -108,23 +108,26 @@ class CustomerApiTest extends TestCase
 
     public function test_kyc_approval_authority_is_config_driven(): void
     {
-        // Operator has configured KYC authority per level (kyc_approval_role).
+        // KYC runs on the EM-CFG-04 engine: kyc_approval_role is the per-stage approver config (R-ILM-K-3),
+        // turned into a two-stage chain (L1 → final) when KYC opens. The chain is FROZEN onto the request
+        // at that moment, so the operator's config must be in force before the flow starts — here the
+        // operator points the final stage at the supervisor role too, by editing config, no code change.
         $this->actingAsAgent(['CUSTOMER_CARE_AGENT']);
         $this->seed(\Modules\Ilm\Database\Seeders\AccountFlagCatalogSeeder::class);
+        \Illuminate\Support\Facades\DB::table('kyc_approval_role')
+            ->where('operator_code', 'WIK')->where('approval_level', 2)->update(['required_role' => 'CUSTOMER_CARE_SUPERVISOR']);
         $customer = Customer::factory()->create(['kyc_status' => 'PENDING', 'operator_code' => 'WIK']);
 
-        // A plain agent lacks the configured L1 role → rejected (R-ILM-K-3).
+        // A plain agent lacks the configured L1 role → the engine refuses the stage (R-ILM-K-3).
         $this->postJson("/api/customers/{$customer->customer_id}/kyc/l1-approve")
             ->assertStatus(403)->assertJsonPath('errorCode', 'KYC_APPROVER_ROLE_REQUIRED');
 
-        // The configured L1 supervisor role is authorized.
+        // The configured supervisor role clears L1 (stage 1)...
         $this->actingAsAgent(['CUSTOMER_CARE_SUPERVISOR']);
         $this->postJson("/api/customers/{$customer->customer_id}/kyc/l1-approve")
             ->assertOk()->assertJsonPath('kycStatus', 'L1_APPROVED');
 
-        // An operator re-points L1 authority to a different role by editing config — no code change.
-        \Illuminate\Support\Facades\DB::table('kyc_approval_role')
-            ->where('operator_code', 'WIK')->where('approval_level', 2)->update(['required_role' => 'CUSTOMER_CARE_SUPERVISOR']);
+        // ...and, with the final stage pointed at the same role, clears the final stage → APPROVED.
         $this->postJson("/api/customers/{$customer->customer_id}/kyc/final-approve")
             ->assertOk()->assertJsonPath('kycStatus', 'APPROVED');
     }

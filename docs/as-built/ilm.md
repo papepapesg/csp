@@ -24,10 +24,16 @@
 documents must be checked and approved — and not by just one person. Two approvers at two levels must
 sign off, moving the customer from PENDING up to fully APPROVED. Only then can a parked order proceed.
 
+KYC isn't a bespoke workflow: it **runs on the same EM-CFG-04 approval engine** as everything else that
+needs sign-off. The two levels (L1 supervisor → final) are an **ordered two-stage chain**; each
+`recordKycDecision` is a `decide()` on the current stage. The engine owns *who* may act (the configured
+role per stage, or SUPER_ADMIN) and the distinct-approver rule; `kyc_status` is simply **derived** from
+how far the chain has progressed.
+
 **Who does what:**
 1. `POST /api/customers` → `CustomerService::create` (emits `CustomerCreated`). KYC docs uploaded via the Foundation/Files store.
-2. `recordKycDecision(customer, level, 'APPROVED')` — who may approve each level is config (`kyc_approval_role`).
-3. Two approvals flip `kyc_status` `PENDING → L1_APPROVED → APPROVED` and emit `CustomerKycApproved`.
+2. The first `recordKycDecision(customer, level, 'APPROVED')` opens a `CUSTOMER_KYC` request whose chain is built from `kyc_approval_role` (level → stage role) and **frozen** onto the request. Each decision clears a stage.
+3. Clearing stage 1 → `L1_APPROVED`; clearing stage 2 → `APPROVED` (emits `CustomerKycApproved`). A reject at any stage → `REJECTED`. (An unauthorised approver gets `KYC_APPROVER_ROLE_REQUIRED`.)
 4. Cross-module: Fulfillment's `ResumeOrderOnKycApproved` resumes the parked order.
 
 ```mermaid
@@ -374,7 +380,7 @@ No BPMN; KYC + CVM offer governance via EM-CFG-04; `sophix:cvm:evaluate-flags` d
 | R-ILM-S-2 | a `requires_approval` sub-status change needs an approval reference | `AccountService::update` |
 | R-ILM-S-3 | `affects_provisioning` change emits `CustomerAccountStatusChanged` for FUL-03 | `AccountService` + listener |
 | R-ILM-F-3/F-4 | `affects_dunning`/`affects_provisioning` flags steer BIL-04 / FUL-03 | `hasDunningAccelerantFlag`/`hasProvisioningBlockingFlag` |
-| R-ILM-K-3 | KYC approval authority per level is operator config | `recordKycDecision` |
+| R-ILM-K-3 | KYC approval authority per level is operator config, enforced as an EM-CFG-04 chain | `recordKycDecision` → `ApprovalService` |
 
 ## 10. Open items / deltas
 - `CustomerAccountFlagSet/Cleared` + `CustomerKycRejected` now have consumers (FUL-03 block, order
