@@ -102,13 +102,13 @@ the payment lands, Billing reads that instruction and flips the subscription on.
 
 **The story in plain English:** An agent wants to credit a customer (say, for an outage). They *propose*
 the credit with a reason. Depending on the amount, the system may require one or more approvers to sign
-off (and the proposer can't approve their own). Once enough people sign, Billing issues a credit note
-and applies it.
+off — and when more than one is required, they must be **different people** (one person can't sign a
+dual-control twice). Once enough distinct people sign, Billing issues a credit note and applies it.
 
 **Who does what:**
 1. `AdjustmentService::propose` (reason mandatory) asks `rules.billing.adjustment-approval` (Foundation/Rules) how many `stepsRequired`.
-2. If >0 ⇒ `adjustment_request.status=PENDING_APPROVAL`.
-3. Approvers sign steps (separation of duties); when the count is met → `approveAndApply` issues a `CREDIT_NOTE` invoice (GEN-01) and applies it (CN-01).
+2. If >0 ⇒ the proposal opens an **EM-CFG-04 gate** (a single stage with quorum = `stepsRequired`) and sits `PENDING_APPROVAL`. The N approval steps run on the same platform-wide approval engine as everything else — not a bespoke counter.
+3. Approvers sign through the engine, which enforces **distinct approvers** (one person cannot satisfy a dual-control alone — a second sign by the same person is refused). When the quorum is met → `approveAndApply` issues a `CREDIT_NOTE` invoice (GEN-01) and applies it (CN-01). The `adjustment_approval_step` rows stay as the readable adjustment audit (and carry the non-approval events: limit override, revision, auto-approve).
 
 
 ![diagram](img/billing_3.png)
@@ -389,13 +389,13 @@ termination *review* ~day 28; with an NPD flag the grace is waived and each pass
 
 **The columns that did the work:**
 - **Where the amount comes from** = `scope` (`FULL`=parent total, `LINE`=a capped `line_ref`, `AMOUNT`=free-form needing `service_category_code`).
-- **How many approvals** = `required_approvals` (distinct approvers, not the proposer).
+- **How many approvals** = `required_approvals` (the EM-CFG-04 gate's quorum — that many *distinct* approvers; one person can't sign twice).
 - **The audit basics** = `reason_code` (mandatory) + `direction` (must match the note direction); the issued note is `note_invoice_id`.
 - **Prepaid target / override** = `target_wallet_ref` directs a note at a wallet; `limit_overridden` records a `/override-limit`.
 
 **Worked example — how many approvals each request needs.** `rules.billing.adjustment-approval` returns
-a `required_approvals` count; the request only applies once that many *distinct* approvers (not the
-proposer) have signed:
+a `required_approvals` count; that becomes the EM-CFG-04 gate's quorum, and the request only applies once
+that many *distinct* approvers have signed (the engine refuses a second sign by the same person):
 
 | Request | amount | rule | required_approvals | signed so far | status |
 |---------|-------:|------|-------------------:|--------------:|--------|

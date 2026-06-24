@@ -81,7 +81,7 @@ class AdjustmentController extends ApiController
     {
         $data = $request->validate(['comment' => ['nullable', 'string', 'max:2000']]);
 
-        return ApiResponse::item($this->adjustments->approve($adjustment, $this->actor($request), $data['comment'] ?? null)->load(['approvalSteps', 'applications']));
+        return ApiResponse::item($this->adjustments->approve($adjustment, $request->user(), $data['comment'] ?? null)->load(['approvalSteps', 'applications']));
     }
 
     /** POST /api/adjustments/{adjustment}/reject */
@@ -89,7 +89,7 @@ class AdjustmentController extends ApiController
     {
         $data = $request->validate(['comment' => ['nullable', 'string', 'max:2000']]);
 
-        return ApiResponse::item($this->adjustments->reject($adjustment, $this->actor($request), $data['comment'] ?? null));
+        return ApiResponse::item($this->adjustments->reject($adjustment, $request->user(), $data['comment'] ?? null));
     }
 
     /** POST /api/adjustments/{adjustment}/request-revision */

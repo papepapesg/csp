@@ -29,23 +29,32 @@ class ApprovalService
 {
     public function __construct(private readonly EventBus $events) {}
 
-    /** @param array<string,mixed> $data entity_type, action?, entity_ref?, amount?, payload?, requested_by? */
+    /** @param array<string,mixed> $data entity_type, action?, entity_ref?, amount?, payload?, requested_by?, stages? */
     public function request(array $data): ApprovalRequest
     {
         $operator = $data['operator_code'] ?? Context::operatorCode();
-        $def = ApprovalDefinition::query()
-            ->where('operator_code', $operator)
-            ->where('entity_type', $data['entity_type'])
-            ->where('active', true)
-            ->where(fn ($q) => $q->whereNull('action')->orWhere('action', $data['action'] ?? null))
-            ->orderByRaw('action is null') // prefer action-specific
-            ->first();
-
         $amount = isset($data['amount']) ? (float) $data['amount'] : null;
-        $needsApproval = $def
-            && ($def->threshold_amount === null || ($amount !== null && $amount >= (float) $def->threshold_amount));
 
-        $chain = $needsApproval ? $this->resolveChain($def) : [];
+        if (! empty($data['stages'])) {
+            // The caller resolved the chain itself — used when WHO/how-many is decided at request time
+            // rather than by a static approval_definition (e.g. a rules engine answers "N approvals" per
+            // proposal). We gate on the supplied chain directly; the same frozen-snapshot rules apply.
+            $needsApproval = true;
+            $chain = $this->normaliseStages($data['stages']);
+        } else {
+            $def = ApprovalDefinition::query()
+                ->where('operator_code', $operator)
+                ->where('entity_type', $data['entity_type'])
+                ->where('active', true)
+                ->where(fn ($q) => $q->whereNull('action')->orWhere('action', $data['action'] ?? null))
+                ->orderByRaw('action is null') // prefer action-specific
+                ->first();
+
+            $needsApproval = $def
+                && ($def->threshold_amount === null || ($amount !== null && $amount >= (float) $def->threshold_amount));
+
+            $chain = $needsApproval ? $this->resolveChain($def) : [];
+        }
 
         $request = ApprovalRequest::query()->create([
             'request_id' => Id::make('appr'),
@@ -160,6 +169,33 @@ class ApprovalService
             'required_approvals' => (int) $s->required_approvals ?: 1,
             'allow_requester' => (bool) $s->allow_requester,
         ])->values()->all();
+    }
+
+    /**
+     * Normalise a caller-supplied chain into the frozen-snapshot stage shape (the same shape resolveChain
+     * produces from approval_stage rows). Sequence is assigned by order. An empty list falls back to a
+     * single open stage rather than silently auto-approving.
+     *
+     * @param  list<array<string,mixed>>  $stages
+     * @return list<array<string,mixed>>
+     */
+    private function normaliseStages(array $stages): array
+    {
+        $out = [];
+        foreach (array_values($stages) as $i => $s) {
+            $out[] = [
+                'sequence' => $i + 1,
+                'name' => $s['name'] ?? null,
+                'approver_kind' => $s['approver_kind'] ?? ApprovalStage::ROLE,
+                'approver_roles' => $s['approver_roles'] ?? [],
+                'approver_user_ref' => $s['approver_user_ref'] ?? null,
+                'approver_email' => $s['approver_email'] ?? null,
+                'required_approvals' => (int) ($s['required_approvals'] ?? 1) ?: 1,
+                'allow_requester' => (bool) ($s['allow_requester'] ?? false),
+            ];
+        }
+
+        return $out ?: [$this->openStage(1)];
     }
 
     /** @return array<string,mixed> a single ROLE stage anyone with the permission may clear. */

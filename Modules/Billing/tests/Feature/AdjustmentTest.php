@@ -227,9 +227,18 @@ class AdjustmentTest extends TestCase
         $this->assertSame(2, $res->json('required_approvals'));
         $this->assertSame('R-ADJ-APPR-4', $res->json('approval_rule_id'));
 
-        // First approval is not enough; the second one applies.
+        // First approval is not enough (EM-CFG-04 gate, quorum 2).
         $this->postJson("/api/adjustments/{$adjustmentId}/approve", ['comment' => 'lead ok'])->assertOk()
             ->assertJsonPath('status', 'PENDING_APPROVAL');
+
+        // Dual control means TWO DISTINCT approvers — the same person approving again is refused.
+        $this->postJson("/api/adjustments/{$adjustmentId}/approve", ['comment' => 'again'])->assertStatus(409)
+            ->assertJsonPath('errorCode', 'DUPLICATE_STAGE_APPROVER');
+
+        // A second, distinct approver clears the gate → applied.
+        $second = User::factory()->create(['operator_code' => 'WIK']);
+        $second->assignRole('BILLING_LEAD');
+        Sanctum::actingAs($second);
         $this->postJson("/api/adjustments/{$adjustmentId}/approve", ['comment' => 'manager ok'])->assertOk()
             ->assertJsonPath('status', 'APPLIED');
         $this->assertSame(2, \Modules\Billing\Models\AdjustmentApprovalStep::query()

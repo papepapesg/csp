@@ -2,11 +2,14 @@
 
 namespace Modules\Billing\Services;
 
+use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Rules\RuleEngine;
 use App\Foundation\Support\Context;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Models\AdjustmentReasonCode;
@@ -29,6 +32,16 @@ use Modules\Billing\Models\InvoiceLine;
  * that made it) is PINNED on the proposal at filing time. When no table is
  * deployed, a registered fallback derives the same answer from
  * adjustment_limits_config (steps + auto_approve_under threshold).
+ *
+ * The N approval steps themselves run on the EM-CFG-04 engine — the one approval
+ * mechanism used platform-wide — rather than a bespoke counter. The rules engine
+ * answers HOW MANY (stepsRequired); the proposal raises an ADJUSTMENT
+ * ApprovalRequest carrying a single stage with that quorum, and the engine
+ * enforces it with DISTINCT approvers (one person cannot fill a dual-control on
+ * their own). Route permission (`adjustment.approve`) still gates WHO may act;
+ * the engine adds the quorum + distinct-approver integrity on top. The
+ * adjustment_approval_step rows remain the human-readable adjustment audit
+ * (including the non-approval events: limit override, revision, auto-approve).
  */
 class AdjustmentService
 {
@@ -39,6 +52,7 @@ class AdjustmentService
         private readonly InvoiceService $invoices,
         private readonly NoteApplicationService $noteApplication,
         private readonly RuleEngine $rules,
+        private readonly ApprovalService $approvals,
     ) {}
 
     /**
@@ -147,51 +161,102 @@ class AdjustmentService
                 return $this->approveAndApply($adjustment);
             }
 
+            // Human approval is needed and the proposal is not limit-blocked: open the EM-CFG-04 gate now.
+            // (A limit-blocked proposal stays PROPOSED; the gate opens when /override-limit lifts the block.)
+            if ($limitBreach === null) {
+                $this->openApprovalGate($adjustment, $stepsRequired);
+            }
+
             return $adjustment;
         });
     }
 
-    public function approve(AdjustmentRequest $adjustment, ?string $decidedBy = null, ?string $comment = null): AdjustmentRequest
+    /**
+     * Raise the ADJUSTMENT approval request that gates this proposal: a single stage whose quorum is the
+     * rules-engine's stepsRequired. Roles are left open (route permission already gates WHO may approve);
+     * the engine's job here is the quorum + distinct-approver rule. requested_by is null so SoD never
+     * blocks a legitimate approver — distinctness within the stage is what stops one person self-clearing
+     * a multi-approval gate.
+     */
+    private function openApprovalGate(AdjustmentRequest $adjustment, int $stepsRequired): ApprovalRequest
     {
-        return DB::transaction(function () use ($adjustment, $decidedBy, $comment) {
+        return $this->approvals->request([
+            'operator_code' => $adjustment->operator_code,
+            'entity_type' => 'ADJUSTMENT',
+            'entity_ref' => $adjustment->adjustment_id,
+            'amount' => (float) $adjustment->amount,
+            'requested_by' => null,
+            'stages' => [[
+                'name' => 'Adjustment approval',
+                'approver_kind' => 'ROLE',
+                'approver_roles' => [],
+                'required_approvals' => max(1, $stepsRequired),
+            ]],
+        ]);
+    }
+
+    /** The open EM-CFG-04 gate for this adjustment, if one has been raised. */
+    private function approvalGate(AdjustmentRequest $adjustment): ?ApprovalRequest
+    {
+        return ApprovalRequest::query()
+            ->where('entity_type', 'ADJUSTMENT')
+            ->where('entity_ref', $adjustment->adjustment_id)
+            ->where('status', ApprovalRequest::PENDING)
+            ->latest('created_at')->first();
+    }
+
+    public function approve(AdjustmentRequest $adjustment, ?User $actor = null, ?string $comment = null): AdjustmentRequest
+    {
+        return DB::transaction(function () use ($adjustment, $actor, $comment) {
             $this->assertOpenForDecision($adjustment);
             if ($adjustment->failure_reason === 'ADJUSTMENT_LIMIT_EXCEEDED' && ! $adjustment->limit_overridden) {
                 throw DomainException::ruleRejected('LIMIT_OVERRIDE_REQUIRED', 'This proposal breaches the operator adjustment limits; override the limit first.', nextAction: 'OVERRIDE_LIMIT');
             }
 
-            $stepNo = $adjustment->approvalSteps()->count() + 1;
+            // The EM-CFG-04 gate owns the count + the distinct-approver rule: this records one approval
+            // on the current stage and tells us whether the quorum is now met. A second approval by the
+            // SAME person is refused (DUPLICATE_STAGE_APPROVER) — that is the dual-control guarantee.
+            $gate = $this->approvalGate($adjustment) ?? $this->openApprovalGate($adjustment, max(1, (int) $adjustment->required_approvals));
+            $gate = $this->approvals->decide($gate, true, $actor, $comment);
+
             $adjustment->approvalSteps()->create([
-                'step_no' => $stepNo, 'decision' => 'APPROVED', 'decided_by' => $decidedBy,
+                'step_no' => $adjustment->approvalSteps()->count() + 1,
+                'decision' => 'APPROVED', 'decided_by' => $this->actorRef($actor),
                 'comment' => $comment, 'decided_at' => now(),
             ]);
 
-            // The routing decision was pinned at proposal time; a human decision
-            // point always needs at least one approval (zero-step proposals never
-            // reach here — they auto-applied), and legacy rows fall back to config.
-            $required = $adjustment->required_approvals
-                ?? (int) (DB::table('adjustment_limits_config')->where('operator_code', $adjustment->operator_code)->value('approval_steps_required') ?? 1);
-            $required = max(1, $required);
-            $approvals = $adjustment->approvalSteps()->where('decision', 'APPROVED')->count();
-
-            if ($approvals < $required) {
-                return $adjustment->refresh(); // multi-step: wait for the next approver
+            if ($gate->status !== ApprovalRequest::APPROVED) {
+                return $adjustment->refresh(); // multi-step: the gate still needs another distinct approver
             }
 
             return $this->approveAndApply($adjustment);
         });
     }
 
-    public function reject(AdjustmentRequest $adjustment, ?string $decidedBy = null, ?string $comment = null): AdjustmentRequest
+    public function reject(AdjustmentRequest $adjustment, ?User $actor = null, ?string $comment = null): AdjustmentRequest
     {
-        $this->assertOpenForDecision($adjustment);
-        $adjustment->approvalSteps()->create([
-            'step_no' => $adjustment->approvalSteps()->count() + 1,
-            'decision' => 'REJECTED', 'decided_by' => $decidedBy, 'comment' => $comment, 'decided_at' => now(),
-        ]);
-        $adjustment->update(['status' => AdjustmentRequest::REJECTED]);
-        $this->emit($adjustment, BillingEvents::ADJUSTMENT_REJECTED);
+        return DB::transaction(function () use ($adjustment, $actor, $comment) {
+            $this->assertOpenForDecision($adjustment);
+            // A reject on the gate fails the whole chain; a limit-blocked proposal has no gate yet, so we
+            // simply close it locally.
+            if ($gate = $this->approvalGate($adjustment)) {
+                $this->approvals->decide($gate, false, $actor, $comment);
+            }
+            $adjustment->approvalSteps()->create([
+                'step_no' => $adjustment->approvalSteps()->count() + 1,
+                'decision' => 'REJECTED', 'decided_by' => $this->actorRef($actor), 'comment' => $comment, 'decided_at' => now(),
+            ]);
+            $adjustment->update(['status' => AdjustmentRequest::REJECTED]);
+            $this->emit($adjustment, BillingEvents::ADJUSTMENT_REJECTED);
 
-        return $adjustment;
+            return $adjustment;
+        });
+    }
+
+    /** Stable string handle for the deciding user, for the human-readable adjustment audit. */
+    private function actorRef(?User $actor): ?string
+    {
+        return $actor?->uid ?? $actor?->email;
     }
 
     public function requestRevision(AdjustmentRequest $adjustment, ?string $decidedBy = null, ?string $comment = null): AdjustmentRequest
@@ -221,17 +286,23 @@ class AdjustmentService
         if ($adjustment->failure_reason !== 'ADJUSTMENT_LIMIT_EXCEEDED') {
             throw DomainException::conflict('This proposal has no limit breach to override.');
         }
-        $adjustment->update([
-            'limit_overridden' => true,
-            'failure_reason' => null,
-            'status' => AdjustmentRequest::PENDING_APPROVAL,
-        ]);
-        $adjustment->approvalSteps()->create([
-            'step_no' => $adjustment->approvalSteps()->count() + 1,
-            'decision' => 'LIMIT_OVERRIDDEN', 'decided_by' => $decidedBy, 'decided_at' => now(),
-        ]);
+        return DB::transaction(function () use ($adjustment, $decidedBy) {
+            $adjustment->update([
+                'limit_overridden' => true,
+                'failure_reason' => null,
+                'status' => AdjustmentRequest::PENDING_APPROVAL,
+            ]);
+            $adjustment->approvalSteps()->create([
+                'step_no' => $adjustment->approvalSteps()->count() + 1,
+                'decision' => 'LIMIT_OVERRIDDEN', 'decided_by' => $decidedBy, 'decided_at' => now(),
+            ]);
+            // The breach is lifted: now open the EM-CFG-04 gate (it was withheld while blocked).
+            if (! $this->approvalGate($adjustment)) {
+                $this->openApprovalGate($adjustment, max(1, (int) $adjustment->required_approvals));
+            }
 
-        return $adjustment;
+            return $adjustment;
+        });
     }
 
     /** Re-attempt a failed application (e.g. PREPAID debit after a top-up). */
