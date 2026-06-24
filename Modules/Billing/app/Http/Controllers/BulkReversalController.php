@@ -45,13 +45,13 @@ class BulkReversalController extends ApiController
     /** POST /api/billing/bulk-reversals/{batch}/approve */
     public function approve(Request $request, string $batch): JsonResponse
     {
-        return ApiResponse::item($this->reversal->approveAndExecute($batch, $request->user()?->uid ?? $request->user()?->email));
+        return ApiResponse::item($this->reversal->approveAndExecute($batch, $request->user()));
     }
 
     /** POST /api/billing/bulk-reversals/{batch}/reject */
     public function reject(Request $request, string $batch): JsonResponse
     {
-        $this->reversal->reject($batch, $request->user()?->uid ?? $request->user()?->email);
+        $this->reversal->reject($batch, $request->user());
 
         return ApiResponse::item(['batch_id' => $batch, 'status' => 'REJECTED']);
     }

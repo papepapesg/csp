@@ -2,11 +2,14 @@
 
 namespace Modules\Billing\Services;
 
+use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Models\Invoice;
@@ -20,10 +23,19 @@ use Modules\Billing\Models\Invoice;
  * Flow: propose(scope) → preview → approve(FINANCE_HEAD) → execute per-invoice
  * (cancel + InvoiceCancelled, protected states rejected). Each cancellation is
  * its own transaction; partial failures are visible per invoice (R-GEN-01-R-3/5).
+ *
+ * The dual-control gate runs on the EM-CFG-04 engine (the platform-wide approval
+ * mechanism): propose() raises a BULK_REVERSAL request with the proposer as
+ * requester, and the engine's separation-of-duties rule — not a hand-rolled
+ * check — refuses an approval/rejection by that same person (surfaced as the
+ * existing DUAL_CONTROL_REQUIRED code). Route permission still gates who may act.
  */
 class BulkReversalService
 {
-    public function __construct(private readonly EventBus $events) {}
+    public function __construct(
+        private readonly EventBus $events,
+        private readonly ApprovalService $approvals,
+    ) {}
 
     /** Invoices a scope would affect, split into eligible vs protected (R-GEN-01-R-4). */
     public function preview(array $scope, ?string $operator = null): array
@@ -65,29 +77,31 @@ class BulkReversalService
             'created_at' => now(), 'updated_at' => now(),
         ]);
 
+        // Open the EM-CFG-04 dual-control gate with the proposer as requester (SoD anchor).
+        $this->openReversalGate($batchId, $operator, $proposedBy);
+
         return $batchId;
     }
 
-    public function reject(string $batchId, ?string $by): void
+    public function reject(string $batchId, ?User $by): void
     {
         $this->assertStatus($batchId, 'PENDING_APPROVAL');
+        $this->decideGate($batchId, false, $by); // a rejection is a control decision too: requester ≠ decider
         DB::table('bulk_reversal_batch')->where('batch_id', $batchId)
-            ->update(['status' => 'REJECTED', 'approved_by' => $by, 'updated_at' => now()]);
+            ->update(['status' => 'REJECTED', 'approved_by' => $this->actorRef($by), 'updated_at' => now()]);
     }
 
     /**
      * FINANCE_HEAD approves and the batch executes per invoice (R-GEN-01-R-1/3).
-     * Dual control: the approver must differ from the proposer.
+     * Dual control (engine-enforced): the approver must differ from the proposer.
      */
-    public function approveAndExecute(string $batchId, ?string $approvedBy): array
+    public function approveAndExecute(string $batchId, ?User $approver): array
     {
         $batch = $this->assertStatus($batchId, 'PENDING_APPROVAL');
-        if ($approvedBy !== null && $approvedBy === $batch->proposed_by) {
-            throw DomainException::ruleRejected('DUAL_CONTROL_REQUIRED', 'The approver must differ from the proposer.');
-        }
+        $this->decideGate($batchId, true, $approver); // engine enforces requester ≠ approver
 
         DB::table('bulk_reversal_batch')->where('batch_id', $batchId)->update([
-            'status' => 'IN_PROGRESS', 'approved_by' => $approvedBy, 'started_at' => now(), 'updated_at' => now(),
+            'status' => 'IN_PROGRESS', 'approved_by' => $this->actorRef($approver), 'started_at' => now(), 'updated_at' => now(),
         ]);
 
         $scope = ['operator_code' => $batch->operator_code, 'invoice_type' => $batch->invoice_type,
@@ -142,6 +156,62 @@ class BulkReversalService
         ));
 
         return ['batch_id' => $batchId, 'cancelled' => $cancelled, 'failed' => $failed];
+    }
+
+    /** Raise the single-stage dual-control gate; roles are open (route permission gates WHO), SoD on. */
+    private function openReversalGate(string $batchId, string $operator, ?string $requestedBy): ApprovalRequest
+    {
+        return $this->approvals->request([
+            'operator_code' => $operator,
+            'entity_type' => 'BULK_REVERSAL',
+            'entity_ref' => $batchId,
+            'requested_by' => $requestedBy,
+            'stages' => [[
+                'name' => 'Bulk reversal approval',
+                'approver_kind' => 'ROLE',
+                'approver_roles' => [],
+                'required_approvals' => 1,
+                'allow_requester' => false,
+            ]],
+        ]);
+    }
+
+    /**
+     * Record the decision on the batch's gate. The engine's SoD refusal (the requester cannot decide
+     * their own batch) is re-surfaced as the established DUAL_CONTROL_REQUIRED code. A legacy batch with
+     * no gate (pre-engine) gets one lazily, anchored on its recorded proposer.
+     */
+    private function decideGate(string $batchId, bool $approve, ?User $actor): void
+    {
+        $gate = $this->reversalGate($batchId);
+        if (! $gate) {
+            $batch = DB::table('bulk_reversal_batch')->where('batch_id', $batchId)->first();
+            $gate = $this->openReversalGate($batchId, $batch->operator_code, $batch->proposed_by);
+        }
+        try {
+            $this->approvals->decide($gate, $approve, $actor);
+        } catch (DomainException $e) {
+            if ($e->errorCode === 'SELF_APPROVAL_NOT_ALLOWED') {
+                throw DomainException::ruleRejected('DUAL_CONTROL_REQUIRED', 'The approver must differ from the proposer.');
+            }
+            throw $e;
+        }
+    }
+
+    /** The open EM-CFG-04 gate for this batch, if any. */
+    private function reversalGate(string $batchId): ?ApprovalRequest
+    {
+        return ApprovalRequest::query()
+            ->where('entity_type', 'BULK_REVERSAL')
+            ->where('entity_ref', $batchId)
+            ->where('status', ApprovalRequest::PENDING)
+            ->latest('created_at')->first();
+    }
+
+    /** Stable string handle for the deciding user, for the batch's approved_by audit column. */
+    private function actorRef(?User $actor): ?string
+    {
+        return $actor?->uid ?? $actor?->email;
     }
 
     private function scopeQuery(array $scope, string $operator)

@@ -588,7 +588,7 @@ posting idempotent (gateway_ref or Idempotency-Key).
 | R-BIL-04-D-2 | dunning advances one level per pass | `assessAccount` |
 | R-GEN-01-Q-2/3 | failed generations retried then `GAVE_UP_AUTO` | `GenerationFailureService::retryDue` |
 | R-BIL-01-SC-1 | settled `state_callback` transitions the subscription | `BillingIntentService` |
-| R-GEN-01-R-1 | bulk reversal dual-controlled (requester ≠ approver) | `BulkReversalService` |
+| R-GEN-01-R-1 | bulk reversal dual-controlled (requester ≠ approver), enforced by the EM-CFG-04 gate | `BulkReversalService` → `ApprovalService` |
 
 ## 10. Open items / deltas
 - **Discount auto-application at cycle close** is the one real revenue-path item — discounts reach
