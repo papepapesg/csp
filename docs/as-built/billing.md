@@ -566,9 +566,20 @@ posting idempotent (gateway_ref or Idempotency-Key).
 - **Consumes:** `TaxEventBridge`, `DunningEventBridge`, `RetryFrozenCycleOnTopup`,
   `ApplyCreditBalanceOnInvoice`, `EvictPlmCatalogCache`.
 
-## 6. Processes (scheduled workers)
-`cycle-close` (30m), `dunning-run` (daily), `pro-forma` (daily), `generation-retry` (15m),
-`wallet:expire`, `tax-sign-scan`/`tax-retry-scan`, `rate-usage`. The money heartbeat.
+## 6. Processes & ops console
+**Scheduled workers** (`routes/console.php`): `cycle-close` (30m), `generation-retry` (15m),
+`dunning-run`/`pro-forma`/`wallet:expire` (daily); on-demand: `run-cycle`, `rate-usage`,
+`tax-sign-scan`/`tax-retry-scan`, `dunning-archive`. The money heartbeat.
+
+**Ops console** — `sophix:billing:*`, wrapping existing services (no approval-gate bypass):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--operator]` | review | queue counts needing attention: overdue invoices, dunning review/recovery-failed, adjustments pending/failed, bulk reversals pending, tax signing-failed, generation-failure queue |
+| `dunning-show {account}` | review | one account's dunning episode (level, status, debt, cadence, restrictions) |
+| `dunning-fix {account} {action}` | safe-correction | one dunning admin op — `refresh-debt`/`clear`/`admin-clear`/`hold`/`advance`/`confirm-termination`/`force-terminate`/`extend-review`; destructive actions need `--confirm` |
+
+*If we have a `PENDING_TERMINATION_REVIEW` row, `ops-status` surfaces it and `dunning-fix … confirm-termination` clears it — no SQL, no approval bypass (dunning admin is ungated; EM-CFG-04 paths like adjustment/bulk-reversal approval are inspect-only from the CLI).*
 
 ## 7. Policy & config
 `rules.billing.adjustment-approval`; `billable_event` catalog; versioned `dunning_program`;

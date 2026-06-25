@@ -147,8 +147,16 @@ stateDiagram-v2
 - **Consumed by →** Billing (`adjustment-approval`), Catalog (`tax-applicability`), ILM (`cvm.offer`,
   flag eval), WorkOrder (`field_audit.*`), and more.
 
-## 6. Processes
+## 6. Processes & ops console
 Synchronous evaluation; no workflow.
+
+**Ops console** — `sophix:rules:*`, all read-only (inspect which policy is live and dry-run it; no persistence):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--operator] [--rule-set]` | review | inventory of DEPLOYED decision tables and their live version + status per rule set/operator |
+| `table-show {ruleSet} [--operator]` | review | the table LIVE for a rule set — inputs, every rule's when/then, default output, version (operator-specific overrides global, highest version wins) |
+| `evaluate {ruleSet} [--facts]` | review | dry-run a rule set against sample facts and show the decision (side-effect free: facts in, result out, no persistence) |
 
 ## 7. Policy & config
 The decision tables **are** the config; a registered fallback guarantees a deterministic answer when no

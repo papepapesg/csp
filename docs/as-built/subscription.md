@@ -309,7 +309,7 @@ stateDiagram-v2
 - **Consumes:** Billing `InvoicePaid` → `ConfirmBillingIntentOnPayment` confirms a pay-first intent +
   correlates `sub-payment-confirmed` to resume a parked operation.
 
-## 6. Processes — with handler examples
+## 6. Processes & ops console
 - **Trigger:** `OperationFramework::trigger()` (process key from `subscription_operation_config`).
 - **Reconcile:** `SyncOperationFromProcess` on `ProcessInstanceEnded` closes the ledger.
 - **Handlers:** Validate{Operation,Activation,PackageChange,HomePassChange}, `EnterPendingStatusHandler`,
@@ -320,6 +320,20 @@ stateDiagram-v2
 config; calls `BillingIntentService::emit()`; pay-first → parks `AWAITING_PAYMENT`; outputs
 `{intentConfirmed}`. **`ActivateHandler` (topic `activate`):** `transitionStatus(ACTIVE)` + emit; fail
 `retryable:true`.
+
+**Scheduled worker:** `sophix:subscription:operation-timeouts` — sweeps in-flight operations past their
+config `operation_timeout_seconds`: enters `REVERTING`, cancels the workflow instance, reverts a transient
+`PENDING_*` flip to `prior_subscription_status`, ends `FAILED` with `OPERATION_TIMEOUT` (R-SUB-WF-FW-9/10).
+
+**Ops console** — `sophix:subscription:*`, wrapping the existing `OperationFramework` (no single-in-flight or compensation bypass):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--operator]` | review | counts needing attention: in-flight ops (RESTRICT, REVERTING, started >1h, never-started), FAILED / OPERATION_TIMEOUT, subs in `PENDING_*` / RESTRICTED / SUSPENDED |
+| `operation-show {subscription}` | review | one subscription's master state, its in-flight operations and applied restrictions (read-only) |
+| `operation-cancel {operation} [--reason] [--actor] --confirm` | safe-correction | cancel one stuck in-flight operation via `OperationFramework::cancel` (cancels the instance, reverts a transient `PENDING_*` to prior); destructive, so `--confirm` is required |
+
+*`ops-status` surfaces a stuck `PENDING_*` sub or a never-started op; `operation-show` explains why one sub isn't moving; `operation-cancel … --confirm` applies the same compensation as the timeout sweep (R-SUB-WF-FW-3) — no SQL, no framework bypass.*
 
 ## 7. Policy & config
 `subscription_operation_config` (enable/disable/custom BPMN per kind), per-operation config tables,

@@ -158,8 +158,15 @@ of `MPESA|VISA|BANK_TRANSFER`, else 404), `GET /api/payment-gateway/callbacks[/{
 - **Emits:** `GatewayCallback{Received,Processed,Rejected,Duplicate}`. **Calls:** Billing
   `PaymentService::receiveAndApply` synchronously (not via an event). **Consumes:** none (ingress edge).
 
-## 6. Processes
+## 6. Processes & ops console
 Stateless ingress; no workflow.
+
+**Ops console** — `sophix:paymentgateway:*`, read-only callback inspection (no state change):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--operator] [--provider]` | review | counts of payment-gateway callbacks by status (Received/Processed/Rejected/Duplicate); REJECTED rows are the ones that need follow-up |
+| `callback-show {callback}` | review | show one callback (`pgcb_…`) — provider, external_ref, resolved account, applied payment, reject reason — how it was (or was not) routed to BIL |
 
 ## 7. Policy & config
 Per-provider parsing/credentials are adapter/config at deployment (the connector seam).

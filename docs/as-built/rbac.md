@@ -346,8 +346,15 @@ grants SUPER_ADMIN).
 - **Used by →** every protected route (`permission:` + optional `scope:`); the BO/self-care SPA calls
   `…/navigation` to build menus and show/hide controls.
 
-## 6. Processes
+## 6. Processes & ops console
 Synchronous guards; no workflow.
+
+**Ops console** — `sophix:rbac:*`, read-only wrappers over the Spatie models (no grant writes):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `roles [--guard]` | review | list every role with its guard and attached-permission count — a one-glance map of the role catalog |
+| `user-show {user}` | review | show one user's (`uid` or `email`) roles + effective (role-derived + direct) permissions on guard `web` — what a person can actually do before anyone touches a grant |
 
 ## 7. Policy & config (the seeded role → permission matrix)
 - **`RbacSeeder`** is the canonical bootstrap: a `PERMISSIONS` list + a **`ROLES` map** (role → granted

@@ -309,8 +309,16 @@ start/finalize/cancel/notes/attachments; `…/support-flow` & `…/shifting-flow
 - **Downstream:** Fulfillment/Subscription resume on `WorkOrderFinalized`; Workforce releases capacity;
   Ticketing resolves; Reporting counts.
 
-## 6. Processes
+## 6. Processes & ops console
 Support + shifting flows (process definitions) with the handlers in §1.3/1.4.
+
+**Ops console** — `sophix:workorder:*`, wrapping the existing `WorkOrderService` lifecycle (same methods as the WO API; bypasses route permissions but still goes through the state machine + audit history):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--operator]` | review | queue counts needing attention: unassigned PENDING, ASSIGNED-not-started, IN_PROGRESS, FINALIZATION_PENDING, SLA-breached, open escalation candidates |
+| `show {work_order}` | review | one WO's live state, assignment, SLA clock and status history (read-only) |
+| `fix {work_order} {action}` | safe-correction | one lifecycle op — `auto-assign`/`reassign`/`start`/`cancel` (`--actor`/`--reason`/`--contractor`/`--team`/`--technician`); destructive `cancel` needs `--confirm` |
 
 ## 7. Policy & config
 Job-type catalog, flow config, finalization requirements, SLA-by-priority; FA routing via

@@ -337,10 +337,18 @@ staff user), plus the `staff-notification-*` catalog (`staff_notification.manage
   `NotifyApproversOnApprovalRequested`.
 - **Emits:** `Notification{Dispatched,Suppressed,Escalated,Undeliverable}`, ICN `StaffNotification{…}`.
 
-## 6. Processes
-Scheduled workers: `sophix:notification:retry-dispatch` (NOT-01 dispatch retry/escalation),
+## 6. Processes & ops console
+**Scheduled workers:** `sophix:notification:retry-dispatch` (NOT-01 dispatch retry/escalation),
 `sophix:notification:retry-render` (re-render the `render_failure_queue`), `sophix:icn:retry` (ICN delivery
 retry), `sophix:icn:expire` (ICN ack-window expiry sweep).
+
+**Ops console** — `sophix:notification:*`, wrapping the existing sweep/retry services (no approval-gate bypass):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--operator]` | review | queue counts needing attention (read-only): customer attempts pending-retry/failed/escalated, render failures pending/gave-up, staff deliveries pending/failed/terminally-failed, staff notifications open past ack window |
+| `delivery-show {id}` | review | one customer notification's `notification_log` + every per-channel delivery attempt (read-only) |
+| `retry-fix {action} [--operator]` | safe-correction | run one drain op — `customer-retry`/`render-retry`/`staff-retry`/`staff-expire`; `staff-expire` is destructive (EXPIRES notifications past their ack window + suppresses open deliveries) and needs `--confirm` |
 
 ## 7. Policy & config
 Routing rules, templates, channel config, customer & staff prefs, ICN groups + adapter bindings — all

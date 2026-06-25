@@ -94,8 +94,16 @@ services/{s}/stop,services/{s}/start}`. `permission:itops.{view,manage}`.
 ## 5. Integration
 - **Reads:** outbox/workflow/provisioning/ticket tables for the overview + trace; workers `ping`.
 
-## 6. Processes
+## 6. Processes & ops console
 Workers call `Heartbeat::ping/shouldStop` in their loop; the console writes controls.
+
+**Ops console** — `sophix:itops:*`, wrapping the same heartbeat/control state as the NOC API (no approval-gate bypass):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--minutes=60]` | review | one-glance health: each service's liveness (UP/DOWN by the 120s heartbeat threshold), instance, last-seen, any pending control, plus error/critical log counts in the window (read-only) |
+| `service-show {service}` | review | one worker's live state — last heartbeat, reported metrics, liveness, and any pending RESTART/PAUSE/RESUME control with its ack (read-only) |
+| `service-control {service} {command} [--actor=cli-ops]` | safe-correction | queue a `restart`/`pause`/`resume` control the worker honours via `Heartbeat::shouldStop`; `pause` holds the worker DOWN across restarts so it requires `--confirm` |
 
 ## 7. Policy & config
 Service names + thresholds; logs via the `database` log channel.

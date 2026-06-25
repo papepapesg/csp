@@ -464,9 +464,20 @@ stateDiagram-v2
   (Completed carries `depositForfeited`+amount).
 - **Consumes:** `ConsumeReservationOnWoLifecycle` (WO finalize→consume / cancel→release).
 
-## 6. Processes (swap workflow)
-Handlers: `ValidateSwapEligibility`, `ReserveSlot`, `CreateSwapWorkOrder`, `RecoverSource`,
-`ProvisionSwap`, `CompleteSwap` (chargeable→BIL-01), `CompleteWithoutRecovery` (EQR→forfeit), `FailSwap`.
+## 6. Processes & ops console
+**Swap workflow** handlers: `ValidateSwapEligibility`, `ReserveSlot`, `CreateSwapWorkOrder`,
+`RecoverSource`, `ProvisionSwap`, `CompleteSwap` (chargeable→BIL-01), `CompleteWithoutRecovery`
+(EQR→forfeit), `FailSwap`. **Scheduled worker:** `sophix:stock:expire-reservations` sweeps ACTIVE
+reservations past `expires_at` to `EXPIRED` (R-OSR-SC-7; registered for periodic invocation, the
+module's own schedule wiring is currently disabled).
+
+**Ops console** — `sophix:stock:*`, all read-only (no approval-gate bypass; held movements are decided in
+the EM-CFG-04 approvals app, not the CLI):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `sophix:stock:ops-status [--operator]` | review | queue counts needing attention: ACTIVE reservations past `expires_at` (sweep will release), reservations expiring within 7 days, stock-movement approvals PENDING (EM-CFG-04) |
+| `sophix:stock:show {sku} {location} [--operator]` | review | live stock picture for one (sku, location) — on-hand/reserved/available (`StockService::availability`) plus the ACTIVE reservations holding it |
 
 ## 7. Policy & config
 `stock_reason_code` (sign/direction + `requires_approval`), SKU catalog, EM-CFG-04 definitions for

@@ -230,12 +230,20 @@ stateDiagram-v2
 - **Consumes:** `ResumeOrderOnInstallFinalized` (WorkOrderFinalized), `ResumeOrderOnKycApproved`
   (CustomerKycApproved), `CancelOrderOnKycRejected` (CustomerKycRejected).
 
-## 6. Processes (the journey, as data)
+## 6. Processes & ops console
 - **Flow:** `ful-order-capture` (`FulfillmentFlowSeeder`) — extend in the Studio, not code.
 - **Handlers:** `ValidateOrderHandler`, `CreateSubscriptionHandler`, `CreateInstallWoHandler`,
   `DepositGateHandler` (catch `ful-payment-received`), `KycGateHandler` (gateway → catch
   `ful-kyc-approved`), `TriggerActivationHandler` (→ Subscription ACTIVATE; FUL-03 flag block),
   `CompleteOrderHandler`.
+
+**Ops console** — `sophix:fulfillment:*`, wrapping the existing `OrderCaptureService` desk ops (no approval gate; break-glass for ops with shell access):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--operator]` | review | counts of orders parked mid-journey: awaiting-payment/install/KYC, activating, captured, completed, cancelled (optionally scoped to one operator) |
+| `order-show {order}` | review | one order's state, step ledger and driving workflow instance (read-only) |
+| `order-fix {order} {action}` | safe-correction | drive one order forward via `OrderCaptureService` — `confirm-deposit`/`complete`/`cancel`; `cancel` is destructive and needs `--confirm` (+ `--reason`) |
 
 ## 7. Policy & config
 The flow graph; deposit-required + package come from the request/catalog.
