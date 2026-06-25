@@ -1,23 +1,26 @@
 # 📙 Billing Module — Onboarding Guide
 
-> **Module:** `Modules/Billing`  
-> **Bundle:** Billing, Payments, Invoicing, Dunning, Wallet (DD 05 — BIL)  
-> **What it does:** Handles everything related to money — generating invoices, processing payments, managing customer wallets, chasing unpaid bills (dunning), and issuing credit/debit notes. **Billing owns the money.**
+> **Module:** `Modules/Billing`
+> **Bundle:** Invoicing, Payments, Wallet, Dunning, Tax, Adjustments (DD 05 — BIL)
+> **What it does:** Handles everything related to money — turning rated usage and recurring fees into invoices, taking payments, running prepaid wallets, chasing unpaid bills (dunning), signing tax invoices, and issuing credit/debit notes. **Billing owns the money.**
+
+> ⚠️ **Accuracy note:** Every table, command, event, route, and permission in this guide is verified against the code on this branch. Table names are **singular** (`invoice`, not `invoices`); scheduled commands are **`sophix:`-prefixed**; the dunning event is **`DunningStageAdvanced`**. If you see a different name elsewhere, trust the code.
 
 ---
 
 ## 1. What This Module Does (In Plain English)
 
-Every month, your customers need to pay for their internet service. The **Billing** module makes that happen:
+Every billing cycle, customers owe money for their service. The **Billing** module makes that happen:
 
-- **Charging:** Converts usage data and recurring fees into "charge lines"
-- **Invoicing:** Groups charges into invoices with proper legal invoice numbers
-- **Payments:** Records payments (cash, mobile money, bank transfer) and allocates them to invoices
-- **Wallets:** Manages prepaid balances and top-ups
-- **Dunning:** Automatically chases unpaid bills — sends reminders, escalates, and can suspend service
-- **Adjustments:** Handles refunds, credits, and billing corrections with approval workflows
+- **Rating:** Converts raw usage (`usage_record`) into priced `rated_event` rows (MED-01 + RAT-01)
+- **Invoicing:** Groups charges into an `invoice` with a gap-free legal number and a SUMMARY → DETAIL line hierarchy
+- **Tax:** Computes per-line tax from Catalog rules and issues a separate, signed `tax_invoice`
+- **Payments:** Records a `payment_ledger` entry and either credits a prepaid wallet or allocates to open invoices
+- **Wallets:** Runs prepaid balances (`wallet` + append-only `wallet_transaction`)
+- **Dunning:** Automatically chases overdue debt through configurable levels — warn, restrict, suspend, terminate
+- **Adjustments:** Credit/debit notes through a governed propose → approve → apply pipeline (EM-CFG-04)
 
-**The Golden Rule:** Only Billing writes to `invoices`, `payments`, `wallet_transactions`, and `dunning_states`. Other modules emit events (e.g., "usage recorded") but Billing decides what to charge.
+**The Golden Rule:** Only Billing writes to `invoice`, `payment_ledger`, `wallet` / `wallet_transaction`, and `dunning_state`. Other modules emit events (e.g. "usage published", "subscription activated"); Billing decides what to charge.
 
 ---
 
@@ -25,16 +28,16 @@ Every month, your customers need to pay for their internet service. The **Billin
 
 | Term | Meaning |
 |------|---------|
-| **Charge** | A single line item to bill (e.g., "Internet subscription — June 2026 — $50"). Charges are grouped into invoices. |
-| **Invoice** | A legal billing document with a gap-free invoice number. Has SUMMARY (per package) and DETAIL (per charge) lines. |
-| **Credit Note / Debit Note** | A correction document. Credit = money back to customer. Debit = extra charge. |
-| **Wallet** | A prepaid balance account. Customers top up; charges are deducted automatically. |
-| **Dunning** | The process of chasing unpaid bills. Has stages (reminder → warning → suspension threat → suspension). |
-| **Payment Allocation** | When a payment comes in, Billing decides which invoice(s) to apply it to. |
-| **Billable Event** | Raw usage data (e.g., "500 GB downloaded") that needs to be rated and charged. |
-| **Grouping Policy** | How charges are grouped into invoices (e.g., one invoice per customer, or per wallet, or per subscription). |
-| **Billing Cycle** | The recurring period (usually monthly) when charges are computed and invoiced. |
-| **Proration** | Adjusting charges when a customer starts, pauses, or changes service mid-cycle. |
+| **Charge** | A single priced line to bill (the `Charge` DTO produced by `ChargeComputeService`). Charges are grouped into an invoice. |
+| **Invoice** | A legal billing document (`invoice`) with a gap-free legal number. Lines are a SUMMARY (per package) → DETAIL (per charge) hierarchy. |
+| **Tax Invoice** | A separate fiscal document (`tax_invoice`) issued from a commercial invoice and submitted to the tax authority for signing. |
+| **Credit Note / Debit Note** | A correction document — itself an `invoice` of type `CREDIT_NOTE` / `DEBIT_NOTE`. Credit = money back; Debit = extra charge. |
+| **Wallet** | A prepaid balance (`wallet`); top-ups and deductions are recorded as append-only `wallet_transaction` rows. |
+| **Dunning** | Chasing overdue debt. A per-account state machine (`dunning_state`) advancing through **numeric levels** (0→4) driven by the `dunning_program` catalog. |
+| **Payment Allocation** | When a payment lands, Billing applies it to open invoices by the operator's policy (default `FIFO_DUE_DATE`). |
+| **Billable Event** | A catalog entry (`billable_event`) describing a chargeable usage kind; raw usage arrives as `usage_record` and is rated into `rated_event`. |
+| **Billing Cycle** | The recurring per-subscription boundary; closing it settles unbilled rated events + recurring fees (BIL-03). |
+| **EM-CFG-04** | The platform-wide approval engine. Adjustments and bulk reversals run their sign-offs on it (single-stage quorum or chain). |
 
 ---
 
@@ -46,10 +49,10 @@ Every month, your customers need to pay for their internet service. The **Billin
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        EXTERNAL CALLERS                              │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
-│  │ Backoffice   │  │ Payment      │  │ Nightly      │              │
-│  │   Finance    │  │   Gateway    │  │   Batch Jobs │              │
-│  │   Team       │  │   (M-Pesa,   │  │   (Cron)     │              │
-│  │              │  │    Bank)     │  │              │              │
+│  │ Backoffice   │  │ Payment      │  │ Scheduler    │              │
+│  │   Finance    │  │   Gateway    │  │  (sophix:*   │              │
+│  │   Team       │  │  (M-Pesa,    │  │   commands)  │              │
+│  │              │  │   Bank)      │  │              │              │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘              │
 └─────────┼──────────────────┼──────────────────┼──────────────────────┘
           │                  │                  │
@@ -58,70 +61,65 @@ Every month, your customers need to pay for their internet service. The **Billin
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │                  📙 BILLING MODULE                            │   │
 │  │                                                              │   │
-│  │  Routes (api.php) ──▶ Controllers ──▶ Services ──▶ Models     │   │
+│  │  routes/api.php ──▶ Controllers ──▶ Services ──▶ Models       │   │
 │  │                                      │                        │   │
 │  │                                      ▼                        │   │
-│  │                              Events ──▶ EventBus              │   │
+│  │              DomainEvent ──▶ transactional outbox ──▶ Bus     │   │
 │  │                                                              │   │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │   │
 │  │  │ Invoice  │  │ Payment  │  │ Dunning  │  │ Wallet   │    │   │
 │  │  │ Service  │  │ Service  │  │ Service  │  │ Service  │    │   │
-│  │  │          │  │          │  │          │  │          │    │   │
-│  │  │ "Generate│  │ "Record  │  │ "Chase   │  │ "Top-up  │    │   │
-│  │  │  invoice"│  │  payment"│  │  unpaid" │  │  balance"│    │   │
+│  │  │"structured│ │"receive &│  │"scan &   │  │"credit / │    │   │
+│  │  │ invoice" │  │ apply"   │  │ advance" │  │ debit"   │    │   │
 │  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
           │
-          │ emits events
+          │ emits events (topic: billing.money) via the outbox
           ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        OTHER MODULES (Event Consumers)                │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐            │
-│  │  📘      │  │  📦      │  │  📋      │  │  📞      │            │
-│  │Subscription│  │Fulfillment│  │ WorkOrder│  │   CRM    │            │
-│  │          │  │          │  │          │  │          │            │
-│  │ "Confirm │  │ "Hold    │  │ "Create  │  │ "Send    │            │
-│  │  billing │  │  service │  │  pickup  │  │  invoice │            │
-│  │  intent" │  │  on dun. │  │  order"  │  │  email"  │            │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘            │
+│                   OTHER MODULES (Event Consumers)                     │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐     │
+│  │   📘       │  │   📦       │  │   📞       │  │   📊       │     │
+│  │Subscription│  │Fulfillment │  │Notification│  │ Reporting  │     │
+│  │            │  │            │  │            │  │            │     │
+│  │"confirm    │  │"hold/      │  │"send       │  │"revenue,   │     │
+│  │ intent;    │  │ throttle   │  │ dunning    │  │ dunning    │     │
+│  │ suspend-np"│  │ on dunning"│  │ notice"    │  │ analytics" │     │
+│  └────────────┘  └────────────┘  └────────────┘  └────────────┘     │
 └─────────────────────────────────────────────────────────────────────┘
           │
           │ reads from
           ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        📗 CATALOG MODULE (Reference Data)            │
+│                   📗 CATALOG MODULE (Reference Data)                 │
 │  ┌──────────┐  ┌──────────┐                                       │
-│  │ Tax Rules│  │ Package  │                                       │
-│  │          │  │  Info    │                                       │
-│  │ "16% VAT │  │ "Fiber   │                                       │
-│  │  + excise│  │  100Mbps"│                                       │
+│  │ Tax Rules│  │ Package /│                                       │
+│  │ (PLM-CFG │  │ Wallet   │                                       │
+│  │  -02)    │  │ catalog  │                                       │
 │  └──────────┘  └──────────┘                                       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Mermaid: Invoice Generation Flow
+### Mermaid: Cycle Close → Invoice → Dunning Flow
 
 ```mermaid
 sequenceDiagram
-    actor Batch as Nightly Batch
-    participant Bill as Billing Module
-    participant Bus as EventBus
+    actor Sched as Scheduler
+    participant Bill as Billing
+    participant Outbox as Outbox → Bus
     participant Sub as Subscription
-    participant FUL as Fulfillment
-    participant CRM as CRM
+    participant Not as Notification
 
-    Batch->>Bill: Run invoice generation
-    Bill->>Bill: Group charges → create invoices
-    Bill->>Bus: Publish InvoiceGenerated
-    Bill->>Bus: Publish DunningEscalated (if unpaid)
-
-    Bus->>Sub: Consume DunningEscalated
-    Sub->>Sub: If final stage → trigger suspend-np
-    Bus->>FUL: Consume DunningEscalated
-    FUL->>FUL: Hold service (throttle / block)
-    Bus->>CRM: Consume InvoiceGenerated
-    CRM->>CRM: Send invoice email / SMS
+    Sched->>Bill: sophix:billing:cycle-close
+    Bill->>Bill: settle rated events + recurring fee → invoice
+    Bill->>Outbox: InvoiceGenerated
+    Note over Bill: invoice unpaid past due_date...
+    Sched->>Bill: sophix:billing:dunning-run (daily)
+    Bill->>Bill: scan() → assessAccount() → advance one level
+    Bill->>Outbox: DunningStageAdvanced
+    Outbox->>Sub: (SUSPEND_NP level) trigger suspend-np operation
+    Outbox->>Not: route customer dunning notice (channels = config)
 ```
 
 ---
@@ -131,382 +129,344 @@ sequenceDiagram
 ```
 Modules/Billing/
 ├── routes/
-│   └── api.php                              # All billing endpoints
+│   └── api.php                              # All billing endpoints (see §6)
 │
 ├── app/
-│   ├── Http/
-│   │   ├── Controllers/
-│   │   │   ├── InvoiceController.php           # Invoice CRUD, PDF generation, reprint
-│   │   │   ├── PaymentController.php           # Record payments, allocate, reverse
-│   │   │   ├── DunningController.php           # Run dunning, review, clear, advance, hold
-│   │   │   ├── WalletController.php            # Wallet balance, transactions, top-up
-│   │   │   ├── BillableEventController.php     # Ingest usage events (mediation)
-│   │   │   ├── AdjustmentController.php        # Billing adjustments (credits/refunds)
-│   │   │   ├── BulkReversalController.php      # Bulk payment reversals
-│   │   │   └── UsageController.php             # Usage query/reporting
-│   │   └── Requests/                           # FormRequest validation classes
+│   ├── Console/                             # Artisan commands (sophix:billing:*)
+│   │   ├── DunningRunCommand.php              # sophix:billing:dunning-run
+│   │   ├── ArchiveDunningStatesCommand.php    # sophix:billing:dunning-archive
+│   │   ├── CycleCloseCommand.php              # sophix:billing:cycle-close
+│   │   ├── RunCycleBillingCommand.php         # sophix:billing:run-cycle
+│   │   ├── RateUsageCommand.php               # sophix:billing:rate-usage
+│   │   ├── ProFormaScanCommand.php            # sophix:billing:pro-forma
+│   │   ├── GenerationFailureRetryCommand.php  # sophix:billing:generation-retry
+│   │   ├── TaxSignScanCommand.php             # sophix:billing:tax-sign-scan
+│   │   ├── TaxRetryScanCommand.php            # sophix:billing:tax-retry-scan
+│   │   └── WalletExpiryCommand.php            # sophix:wallet:expire
 │   │
-│   ├── Models/
-│   │   ├── Invoice.php                         # The legal invoice document
-│   │   ├── InvoiceLine.php                     # SUMMARY and DETAIL lines
-│   │   ├── Payment.php                         # A payment record
-│   │   ├── PaymentAllocation.php               # Links payments to invoices
-│   │   ├── WalletTransaction.php               # Prepaid wallet movements
-│   │   ├── BillableEvent.php                   # Raw usage / chargeable events
-│   │   ├── DunningState.php                    # Current dunning stage per account
-│   │   ├── DunningConfig.php                   # Config: dunning stages and timing
-│   │   ├── AdjustmentReasonCode.php            # Config: why was this adjustment made?
-│   │   ├── TaxInvoice.php                      # Tax breakdown per invoice
-│   │   └── BillingCycle.php                    # Subscription billing cycle tracking
+│   ├── Http/Controllers/
+│   │   ├── InvoiceController.php              # List/show invoices, generate, issue tax invoice
+│   │   ├── PaymentController.php              # Record/reverse payments, allocate surplus
+│   │   ├── DunningController.php              # Run/show/clear/advance/hold + termination review
+│   │   ├── DunningProgramController.php       # Versioned dunning policy catalog
+│   │   ├── WalletController.php               # Balance, top-up, debit
+│   │   ├── AdjustmentController.php           # Propose/approve/reject/revise/cancel/override notes
+│   │   ├── BulkReversalController.php         # Dual-controlled bulk invoice reversal
+│   │   ├── TaxInvoiceController.php           # Tax invoice issue/sign/retry/cancel
+│   │   ├── BillableEventController.php        # BillableEvent catalog admin
+│   │   ├── UsageController.php                # Ingest usage, rate-run, query rated events
+│   │   └── CycleCloseController.php           # Read-only cycle-close run monitor
 │   │
-│   ├── Services/
-│   │   ├── InvoiceService.php                    # Generates invoices from charges (BIL-02)
-│   │   ├── ChargeComputeService.php             # Rates usage into charge lines
-│   │   ├── PaymentService.php                   # Receives and applies payments (BIL-01)
-│   │   ├── DunningService.php                   # Dunning logic (BIL-04)
-│   │   ├── AdjustmentService.php                # Invoice adjustments via EM-CFG-04 (BIL-02)
-│   │   ├── BillingIntentService.php             # Prepaid intent confirmation
-│   │   ├── WalletService.php                    # Wallet balance management (BIL-05/06)
-│   │   ├── MediationRatingService.php           # Converts billable events to charges
-│   │   ├── TaxService.php                       # Tax computation per line
-│   │   ├── TaxSigningService.php                # Signs tax invoices
-│   │   ├── CustomerSnapshotService.php            # Captures customer data at invoice time
-│   │   ├── ProFormaService.php                  # Pro forma (quote) invoices
-│   │   ├── BulkReversalService.php              # Bulk payment reversals
-│   │   ├── GenerationFailureService.php         # Tracks failed invoice generation
-│   │   ├── CycleCloseService.php                # Closes billing cycles
-│   │   ├── CycleBillingService.php              # Recurring billing cycle logic
-│   │   ├── NoteApplicationService.php           # Applies credit/debit notes
-│   │   └── DunningProgramResolver.php           # Resolves dunning program config
+│   ├── Models/                               # (table names are SINGULAR)
+│   │   ├── Invoice.php                  → invoice
+│   │   ├── InvoiceLine.php              → invoice_line          (SUMMARY / DETAIL)
+│   │   ├── PaymentLedger.php            → payment_ledger        (payments + reversals)
+│   │   ├── PaymentAllocation.php        → payment_invoice_allocation
+│   │   ├── AccountCreditBalance.php     → account_credit_balance
+│   │   ├── Wallet.php                   → wallet
+│   │   ├── WalletTransaction.php        → wallet_transaction
+│   │   ├── DunningState.php             → dunning_state         (per account)
+│   │   ├── DunningProgram.php           → dunning_program       (versioned policy)
+│   │   ├── AdjustmentRequest.php        → adjustment_request
+│   │   ├── AdjustmentApprovalStep.php   → adjustment_approval_step
+│   │   ├── AdjustmentReasonCode.php     → adjustment_reason_code
+│   │   ├── NoteApplication.php          → note_application_ledger
+│   │   ├── TaxInvoice.php               → tax_invoice
+│   │   ├── TaxInvoiceSigningFailure.php → tax_invoice_signing_failure
+│   │   ├── TaxOperatorConfig.php        → tax_operator_config
+│   │   ├── BillableEvent.php            → billable_event
+│   │   ├── BillableEventCategory.php    → billable_event_category
+│   │   ├── BillingIntent.php            → billing_intent
+│   │   ├── UsageRecord.php              → usage_record
+│   │   └── RatedEvent.php               → rated_event
 │   │
-│   ├── Events/
-│   │   └── BillingEvents.php                    # All billing event constants
+│   ├── Services/                             # Business logic (see §5)
+│   ├── Events/BillingEvents.php              # Event-type constants (topic: billing.money)
+│   ├── Listeners/                            # All subscribe to OutboxEventPublished
+│   │   ├── ApplyCreditBalanceOnInvoice.php   # apply credit balance when an invoice is issued
+│   │   ├── RetryFrozenCycleOnTopup.php        # resume a frozen prepaid cycle after a top-up
+│   │   ├── DunningEventBridge.php             # bridge dunning to cross-module reactions
+│   │   ├── TaxEventBridge.php                 # bridge tax-invoice lifecycle events
+│   │   └── EvictPlmCatalogCache.php           # drop cached catalog data on change
 │   │
-│   └── Listeners/
-│       ├── OnSubscriptionActivated.php          # Create billing account on activation
-│       ├── OnSubscriptionSuspended.php            # Pause billing on suspension
-│       └── OnUsageEventReceived.php             # Rate usage into charges
+│   └── Providers/
+│       ├── BillingServiceProvider.php
+│       └── BillingRuntimeProvider.php        # registers the rules.billing.adjustment-approval fallback
 │
-├── database/
-│   ├── migrations/                               # Invoice, payment, wallet, dunning tables
-│   │   ├── 2026_06_01_100000_create_invoice_tables.php
-│   │   ├── 2026_06_02_100000_create_payment_tables.php
-│   │   ├── 2026_06_03_100000_create_wallet_tables.php
-│   │   ├── 2026_06_04_100000_create_dunning_tables.php
-│   │   └── ...
-│   └── seeders/                                  # (if any)
-│
-├── tests/
-│   ├── Feature/                                  # API tests
-│   └── Unit/                                     # Service tests
-│
-└── module.json                                   # Module metadata
+├── database/migrations/                      # invoice, payment, wallet, dunning, tax, adjustment tables
+└── tests/Feature/                            # AdjustmentTest, BulkReversalAndFailureQueueTest, Wallet*, Dunning*, Tax01, ...
 ```
 
 ---
 
-## 5. Services, Models, Events, Rules, and Workflows — The Full Map
+## 5. Services, Models, Events, and Approvals — The Full Map
 
 ### Services (Business Logic)
 
-| Service | What It Does | Called By |
-|---------|-------------|-----------|
-| `InvoiceService` | Generates invoices from charges, creates legal invoice numbers, handles PDF generation | Controllers, Nightly batch jobs |
-| `ChargeComputeService` | Rates usage into charge lines (converts "500 GB" to "$10") | MediationRatingService, Controllers |
-| `PaymentService` | Receives and applies payments, allocates to invoices (FIFO/LIFO), handles reversals | PaymentController |
-| `DunningService` | Scans overdue accounts, advances dunning levels, applies restrictions/suspensions/terminations | Nightly batch, Controllers |
-| `AdjustmentService` | Proposes and applies invoice adjustments (credit/debit notes) via EM-CFG-04 approval | AdjustmentController |
-| `BillingIntentService` | Creates prepaid/postpaid billing intents, confirms on payment | Subscription workflow handlers |
-| `WalletService` | Manages wallet balances, records transactions, handles top-ups and deductions | WalletController, PaymentService |
-| `MediationRatingService` | Converts raw billable events (usage) into rated charges | BillableEventController, Queue jobs |
-| `TaxService` | Computes tax per line from Catalog's tax rules | InvoiceService |
-| `TaxSigningService` | Signs tax invoices for legal compliance | TaxInvoiceController |
-| `CustomerSnapshotService` | Captures customer data at invoice time for audit | InvoiceService |
-| `ProFormaService` | Generates pro forma invoices (quotes, not legal documents) | ProFormaController |
-| `BulkReversalService` | Handles bulk payment reversals with dual-control approval | AdminController |
-| `GenerationFailureService` | Tracks and retries failed invoice generation attempts | InvoiceService, Nightly batch |
-| `CycleCloseService` | Closes billing cycles and triggers invoice generation | Nightly batch |
-| `CycleBillingService` | Manages recurring billing cycle logic | CycleCloseService |
-| `NoteApplicationService` | Applies credit/debit notes to invoices | AdjustmentService |
-| `DunningProgramResolver` | Resolves dunning program config per operator/billing mode | DunningService |
+| Service | What It Does |
+|---------|-------------|
+| `InvoiceService` | Builds a structured (SUMMARY/DETAIL) invoice from charges, assigns the gap-free legal number, issues credit/debit notes (`issueNote`) |
+| `ChargeComputeService` | Produces priced `Charge` DTOs (recurring + usage) for a cycle |
+| `MediationRatingService` | Rates raw `usage_record` rows into priced `rated_event` rows (MED-01 / RAT-01) |
+| `CycleCloseService` / `CycleBillingService` | Close a subscription's cycle boundary and settle unbilled rated events + recurring fee (BIL-03) |
+| `ProFormaService` | Generates pre-cycle pro-forma (quote) documents for prepaid subscriptions |
+| `PaymentService` | `receiveAndApply()` (PREPAID → wallet, POSTPAID → allocate), `reverse()`, surplus → credit balance |
+| `WalletService` | Atomic wallet `credit()` / `debit()`, `ensureWallet()`, expiry sweep |
+| `TaxService` | Per-line tax computation from Catalog's PLM-CFG-02 rules (no config ⇒ zero tax, not a failure) |
+| `TaxInvoiceGenerator` / `TaxSigningService` | Issue a `tax_invoice` and submit it to the tax-authority gateway for signing |
+| `DunningService` | Scans overdue debt and advances `dunning_state` levels; applies restrict/suspend/terminate; recovery + admin overrides |
+| `DunningProgramResolver` | Resolves the versioned `dunning_program` for an operator + billing mode |
+| `AdjustmentService` | Governed credit/debit-note pipeline; routes the N approvals through **EM-CFG-04** |
+| `NoteApplicationService` | Applies a credit/debit note to invoices / wallet / credit balance |
+| `BulkReversalService` | Dual-controlled bulk invoice reversal (EM-CFG-04 separation-of-duties) |
+| `GenerationFailureService` | Captures + retries recoverable invoice-generation failures (rule group Q) |
+| `BillingIntentService` | Creates/confirms prepaid & postpaid billing intents (settled state callbacks) |
+| `BillableEventCatalogService` | Manages the `billable_event` catalog |
+| `CustomerSnapshotService` | Captures customer header data (from ILM) at invoice time for audit |
 
-### Models (Data)
+### Models → Tables (Data, all singular)
 
-| Model | Table | What It Stores | Owned By |
-|-------|-------|---------------|----------|
-| `Invoice` | `invoices` | Legal billing document with gap-free number | Billing |
-| `InvoiceLine` | `invoice_lines` | SUMMARY and DETAIL lines per invoice | Billing |
-| `Payment` | `payments` | Payment records (cash, mobile money, bank) | Billing |
-| `PaymentAllocation` | `payment_allocations` | Links payments to invoices | Billing |
-| `WalletTransaction` | `wallet_transactions` | Prepaid wallet movements (top-up, deduction) | Billing |
-| `BillableEvent` | `billable_events` | Raw usage data (GB downloaded, calls made) | Billing |
-| `DunningState` | `dunning_states` | Current dunning stage per account | Billing |
-| `DunningConfig` | `dunning_config` | Config: stages, timing, actions per operator | Billing |
-| `AdjustmentReasonCode` | `adjustment_reason_codes` | Config: valid reasons for billing adjustments | Billing |
-| `TaxInvoice` | `tax_invoices` | Tax breakdown per invoice line | Billing |
-| `BillingCycle` | `billing_cycles` | Tracks active billing periods per subscription | Billing |
+| Model | Table | What It Stores |
+|-------|-------|---------------|
+| `Invoice` | `invoice` | Legal billing document (incl. CREDIT_NOTE / DEBIT_NOTE / TAX types) |
+| `InvoiceLine` | `invoice_line` | SUMMARY (per package) + DETAIL (per charge) lines |
+| `PaymentLedger` | `payment_ledger` | Payments and reversals (cash, mobile money, gateway) |
+| `PaymentAllocation` | `payment_invoice_allocation` | Links a payment to the invoice(s) it settled |
+| `AccountCreditBalance` | `account_credit_balance` | Surplus/credit held at account level |
+| `Wallet` | `wallet` | Prepaid balance per subscription/wallet code |
+| `WalletTransaction` | `wallet_transaction` | Append-only wallet movements (CREDIT / DEBIT) |
+| `DunningState` | `dunning_state` | Per-account dunning episode (`current_level` 0–4, `status`) |
+| `DunningProgram` | `dunning_program` | Versioned dunning policy (grace + action per level) |
+| `AdjustmentRequest` | `adjustment_request` | A credit/debit-note proposal and its lifecycle |
+| `AdjustmentApprovalStep` | `adjustment_approval_step` | Human-readable adjustment audit (approve/reject/override/auto) |
+| `AdjustmentReasonCode` | `adjustment_reason_code` | Operator catalog of valid adjustment reasons |
+| `NoteApplication` | `note_application_ledger` | How a note was applied (invoice / wallet / credit balance) |
+| `TaxInvoice` | `tax_invoice` | Fiscal document issued from a commercial invoice |
+| `BillableEvent` | `billable_event` | Catalog of chargeable usage kinds |
+| `UsageRecord` / `RatedEvent` | `usage_record` / `rated_event` | Raw usage → priced usage |
+| `BillingIntent` | `billing_intent` | Prepaid/postpaid billing intent + settlement |
 
-### Events (What This Module Publishes)
+### Events This Module Publishes (`BillingEvents`, topic `billing.money`)
 
-| Event | When It Happens | Who Consumes It | What They Do |
-|-------|-----------------|-----------------|--------------|
-| `InvoiceGenerated` | Invoice created from charges | CRM, Subscription, Reporting | CRM: send to customer. Subscription: confirm billing. Reporting: log revenue. |
-| `PaymentReceived` | Payment recorded & allocated | Subscription, CRM, Wallet | Subscription: confirm billing intent. CRM: thank you message. Wallet: update balance. |
-| `CreditNoteIssued` | Credit note created | Wallet, Subscription | Wallet: add credit. Subscription: if applicable. |
-| `DebitNoteIssued` | Debit note created | Invoice, Subscription | Invoice: link to original. Subscription: if applicable. |
-| `DunningEscalated` | Account moves to next dunning stage | Subscription, CRM, Fulfillment | Subscription: may trigger suspend-np. CRM: send warning. Fulfillment: throttle service. |
-| `DunningCleared` | Account pays up / dunning resolved | Subscription, CRM | Subscription: restore service. CRM: close ticket. |
-| `WalletToppedUp` | Prepaid balance added | Subscription, CRM | Subscription: confirm prepaid intent. CRM: send receipt. |
-| `AdjustmentApproved` | Billing correction approved | Invoice, Reporting | Invoice: regenerate if needed. Reporting: log adjustment. |
-| `BillableEventRated` | Usage converted to charge | Reporting | Reporting: update usage dashboards. |
+| Constant → value | When | Notable consumers |
+|---|---|---|
+| `INVOICE_GENERATED` → `InvoiceGenerated` | Invoice issued | Subscription, Notification, Reporting |
+| `INVOICE_PAID` → `InvoicePaid` | Invoice fully settled | Subscription, Reporting |
+| `PAYMENT_RECEIVED` / `PAYMENT_APPLIED` → `PaymentReceived` / `PaymentApplied` | Payment landed / allocated | Subscription (intent), Reporting |
+| `WALLET_CREDITED` / `WALLET_DEBITED` / `WALLET_TOPPED_UP` | Wallet movement | Subscription, Notification |
+| `DUNNING_STAGE_ADVANCED` → `DunningStageAdvanced` | Account advances a dunning **level** | Subscription (suspend), Notification, Fulfillment |
+| `SUBSCRIPTION_ENTERED_DUNNING` → `SubscriptionEnteredDunning` | First level entered | Notification, Reporting |
+| `DUNNING_TERMINATION_PENDING` → `SubscriptionDunningTerminationPending` | Pre-termination review opened | Backoffice review queue |
+| `DUNNING_CLEARED` → `DunningCleared` | Debt settled / cleared | Subscription (resume), Notification |
+| `SUBSCRIPTION_SUSPENDED_NP` → `SubscriptionSuspendedForNonPayment` | Suspended for non-payment | Subscription, Fulfillment |
+| `TAX_INVOICE_ISSUED` / `TAX_INVOICE_SIGNED` / `TAX_INVOICE_SIGNING_FAILED` | Tax invoice lifecycle | Reporting, compliance |
+| `ADJUSTMENT_PROPOSED` / `ADJUSTMENT_APPROVED` / `ADJUSTMENT_REJECTED` | Adjustment lifecycle | Reporting |
+| `CREDIT_NOTE_ISSUED` / `DEBIT_NOTE_ISSUED` / `CREDIT_NOTE_APPLIED` / `DEBIT_NOTE_APPLIED` | Note issued / applied | Subscription, Wallet, Reporting |
+| `BULK_REVERSAL_COMPLETED` → `BulkReversalCompleted` | Bulk reversal finished | Reporting |
+| `BILLABLE_EVENT_CHANGED` → `BillableEventCatalogChanged` | Catalog edited | cache eviction |
+
+> ⚠️ There is **no** `DunningEscalated` or `BillableEventRated` event — those names are not in `BillingEvents`.
 
 ### Events This Module Listens To
 
-| Event | Listener | What It Does |
-|-------|----------|--------------|
-| `SubscriptionActivated` | `OnSubscriptionActivated` | Creates billing account, opens first billing cycle |
-| `SubscriptionPaused` | `OnSubscriptionSuspended` | Pauses billing cycle, prorates charges |
-| `SubscriptionResumed` | `OnSubscriptionResumed` | Resumes billing cycle, prorates charges |
-| `SubscriptionTerminated` | `OnSubscriptionTerminated` | Generates final invoice, closes billing account |
-| `UsageEventPublished` | `OnUsageEventReceived` | Rates usage into billable charges |
-| `PaymentGatewayConfirmed` | `OnPaymentGatewayConfirmed` | Records payment from external gateway |
+Billing does **not** register per-event listener classes. All listeners subscribe to the foundation `OutboxEventPublished` event and switch on the published event's type inside `handle()`:
 
-### Rules (Business Policy Validation)
+| Listener | Reacts to (event type) | What It Does |
+|----------|------------------------|--------------|
+| `ApplyCreditBalanceOnInvoice` | `InvoiceGenerated` | Auto-applies any held account credit balance to a fresh invoice |
+| `RetryFrozenCycleOnTopup` | wallet top-up | Resumes a prepaid cycle that was frozen for non-payment |
+| `DunningEventBridge` | dunning lifecycle | Bridges dunning state changes to cross-module reactions |
+| `TaxEventBridge` | tax-invoice lifecycle | Bridges tax-invoice signing outcomes |
+| `EvictPlmCatalogCache` | catalog change | Invalidates cached catalog data |
 
-Rules are **side-effect-free** PHP classes that return `true` (allowed) or throw `DomainException` (rejected). They live in the `Rules` module and are called by controllers and services.
+### Rules & Approvals
 
-**Important:** Sensitive operations that require approval (e.g., adjustments, payment reversals, credit notes) use the **EM-CFG-04 approval engine** — a unified Foundation service. The Rules module checks *business preconditions* (e.g., "Can this payment be reversed?"), while EM-CFG-04 handles *approval workflow* (e.g., "Does this reversal need manager sign-off?"). The two work together: Rules answer "should we?" and EM-CFG-04 answers "may we?".
+- **Rules (Rules module decision tables):** the routing decision for adjustments is `rules.billing.adjustment-approval`, an operator-overridable decision table that answers `{stepsRequired}`. `BillingRuntimeProvider` registers a config-derived fallback (from `adjustment_limits_config`) when no table is deployed. *(There are no `CanGenerateInvoice` / `CanRecordPayment` rule classes — guard logic lives inline in the services as `DomainException`s.)*
+- **EM-CFG-04 approval engine — the one approval mechanism, used everywhere:**
 
-| Rule | When It Runs | What It Checks |
-|------|-------------|----------------|
-| `CanGenerateInvoice` | Before invoice generation | Are charges valid? Is customer active? |
-| `CanRecordPayment` | Before payment recording | Is payment amount valid? Is invoice unpaid? |
-| `CanReversePayment` | Before payment reversal | Is payment within reversal window? Is allocation valid? |
-| `CanEscalateDunning` | Before dunning escalation | Has enough time passed? Is customer in grace period? |
-| `CanIssueCreditNote` | Before credit note creation | Is there a valid reason? Is amount within limits? |
-| `CanTopUpWallet` | Before wallet top-up | Is customer eligible? Is amount within limits? |
-
-### Workflow References
-
-Billing uses workflows via the EM-CFG-04 engine for:
-
-| Process | Purpose | Approval Required? |
-|---------|---------|-------------------|
-| `billing-adjustment` | Credit/debit note creation | Yes (via EM-CFG-04, rules-engine decides stepsRequired) |
-| `payment-reversal` | Reversing a recorded payment | Yes (manager approval via EM-CFG-04) |
-| `dunning-hold` | Pausing dunning for a customer | Yes (customer service manager via EM-CFG-04) |
-
-**EM-CFG-04 Integration:** Adjustments use dynamic stages — the rules engine answers "how many approvals" (stepsRequired), and the proposal raises an `ADJUSTMENT` ApprovalRequest with a single stage carrying that quorum. The engine enforces distinct approvers (one person cannot self-clear a dual-control gate). See [Pattern 6](#pattern-6-how-to-handle-a-billing-adjustment) below.
-| `invoice-write-off` | Writing off uncollectible debt | Yes (finance director) |
+| Approval point | Shape on EM-CFG-04 |
+|---|---|
+| Adjustment (credit/debit note) | Single stage, quorum = `stepsRequired` from the rules engine; engine enforces **distinct approvers** |
+| Bulk invoice reversal | Single stage, proposer = requester; engine's **separation-of-duties** refuses self-approval (surfaced as `DUAL_CONTROL_REQUIRED`) |
+| Tax-invoice cancellation | Approve step gated by `tax.compliance` |
 
 ---
 
 ## 6. API Surface — What You Can Call
 
-All endpoints require `auth:sanctum`. The `X-Operator-Code` header scopes all queries.
+All endpoints sit under `auth:sanctum`; write endpoints add the `idempotency` middleware where shown. `account_id` (or `subscriptionId` for wallets) is the partition.
 
 ### Invoices
-
-| Method | Endpoint | Permission | What It Does |
-|--------|----------|------------|--------------|
-| `GET` | `/api/invoices` | `invoice.read` | List invoices (paginated, filterable by status, customer, date) |
-| `GET` | `/api/invoices/{id}` | `invoice.read` | Get invoice + all line items |
-| `POST` | `/api/invoices` | `invoice.manage` | Generate an invoice manually |
-| `POST` | `/api/invoices/{id}/reprint` | `invoice.read` | Reprint PDF (new copy number) |
-| `POST` | `/api/invoices/{id}/void` | `invoice.admin` | Void an invoice (rare — use credit note instead) |
+| Method | Endpoint | Permission |
+|--------|----------|------------|
+| `GET` | `/api/invoices` | `invoice.read` |
+| `GET` | `/api/invoices/{invoice}` | `invoice.read` |
+| `POST` | `/api/invoices` | `invoice.manage` (+ idempotency) |
+| `POST` | `/api/invoices/{invoice}/tax-invoice` | `invoice.manage` (+ idempotency) |
 
 ### Payments
-
-| Method | Endpoint | Permission | What It Does |
-|--------|----------|------------|--------------|
-| `GET` | `/api/payments` | `invoice.read` | List payments |
-| `POST` | `/api/payments` | `invoice.manage` | Record a payment |
-| `POST` | `/api/payments/{id}/reverse` | `dunning.admin` | Reverse a payment (with approval workflow) |
-| `POST` | `/api/payments/bulk-reverse` | `dunning.admin` | Bulk reverse payments (with approval) |
-| `GET` | `/api/payments/{id}/allocations` | `invoice.read` | See which invoices this payment was applied to |
+| Method | Endpoint | Permission |
+|--------|----------|------------|
+| `GET` | `/api/payments` · `/api/payments/{payment}` | `payment.read` |
+| `POST` | `/api/payments` | `payment.apply` (+ idempotency) |
+| `POST` | `/api/payments/{payment}/reverse` | `payment.reverse` |
+| `POST` | `/api/payments/{payment}/allocate-surplus` | `payment.apply` |
 
 ### Dunning (Collections)
+| Method | Endpoint | Permission |
+|--------|----------|------------|
+| `GET` | `/api/dunning` · `/api/dunning/{account}` · `/api/dunning/{account}/history` | `invoice.read` |
+| `GET` | `/api/dunning/pending-termination-review` | `invoice.read` |
+| `POST` | `/api/dunning/run` · `/api/dunning/refresh-debt` | `invoice.manage` |
+| `POST` | `/api/dunning/{account}/clear` | `invoice.manage` |
+| `POST` | `/api/dunning/{account}/advance` · `/hold` · `/admin-clear` · `/clear-without-payment` · `/confirm-termination` · `/force-terminate` · `/extend-review` | `dunning.admin` |
 
-| Method | Endpoint | Permission | What It Does |
-|--------|----------|------------|--------------|
-| `GET` | `/api/dunning` | `invoice.read` | List accounts in dunning (filter by stage, amount) |
-| `POST` | `/api/dunning/run` | `invoice.manage` | Run dunning batch (automated — usually cron) |
-| `GET` | `/api/dunning/{account}` | `invoice.read` | Dunning status for one account |
-| `POST` | `/api/dunning/{account}/clear` | `invoice.manage` | Clear dunning (payment received) |
-| `POST` | `/api/dunning/{account}/advance` | `dunning.admin` | Force next dunning stage (skip wait) |
-| `POST` | `/api/dunning/{account}/hold` | `dunning.admin` | Pause dunning (e.g., customer dispute — requires approval) |
+### Dunning Programs (versioned policy)
+| Method | Endpoint | Permission |
+|--------|----------|------------|
+| `GET` | `/api/dunning-programs` · `/api/dunning-programs/{code}` | `invoice.read` |
+| `POST` | `/api/dunning-programs` · `/api/dunning-programs/{code}/new-version` | `dunning.admin` |
 
-### Wallet
+### Wallet (keyed by **subscriptionId**)
+| Method | Endpoint | Permission |
+|--------|----------|------------|
+| `GET` | `/api/wallets/{subscriptionId}/balance` | `wallet.read` |
+| `POST` | `/api/wallets/{subscriptionId}/topup` | `wallet.manage` (+ idempotency) |
+| `POST` | `/api/wallets/{subscriptionId}/debit` | `wallet.manage` |
 
-| Method | Endpoint | Permission | What It Does |
-|--------|----------|------------|--------------|
-| `GET` | `/api/wallets/{account}` | `invoice.read` | Get wallet balance |
-| `GET` | `/api/wallets/{account}/transactions` | `invoice.read` | Transaction history (paginated) |
-| `POST` | `/api/wallets/{account}/top-up` | `invoice.manage` | Record a top-up (cash, mobile money, etc.) |
-| `POST` | `/api/wallets/{account}/deduct` | `invoice.manage` | Manually deduct from wallet (rare — usually automatic) |
+### Adjustments (credit/debit notes)
+| Method | Endpoint | Permission |
+|--------|----------|------------|
+| `GET` | `/api/adjustments` · `/api/adjustments/{adjustment}` · `/api/adjustment-reason-codes` | `invoice.read` |
+| `POST` | `/api/adjustments` | `adjustment.create` (+ idempotency) |
+| `POST` | `/api/adjustments/{adjustment}/approve` · `/reject` · `/request-revision` · `/override-limit` · `/retry-application` | `adjustment.approve` |
+| `POST` | `/api/adjustments/{adjustment}/cancel` | `adjustment.create` |
+| `GET` | `/api/credit-notes/{note}` | `invoice.read` |
 
-### Adjustments
+### Bulk Reversal (dual-controlled)
+| Method | Endpoint | Permission |
+|--------|----------|------------|
+| `GET` | `/api/billing/bulk-reversals` | `invoice.read` |
+| `POST` | `/api/billing/bulk-reversals/preview` · `/api/billing/bulk-reversals` | `invoice.manage` |
+| `POST` | `/api/billing/bulk-reversals/{batch}/approve` · `/reject` | `adjustment.approve` |
 
-| Method | Endpoint | Permission | What It Does |
-|--------|----------|------------|--------------|
-| `POST` | `/api/adjustments` | `invoice.manage` | Request a billing adjustment (credit/debit) |
-| `POST` | `/api/adjustments/{id}/approve` | `dunning.admin` | Approve adjustment (maker-checker workflow) |
-| `POST` | `/api/adjustments/{id}/reject` | `dunning.admin` | Reject adjustment |
+### Tax Invoices
+| Method | Endpoint | Permission |
+|--------|----------|------------|
+| `GET` | `/api/tax-invoices` · `/{taxInvoice}` · `/{taxInvoice}/pdf` · `/signing-history` · `/dashboard` | `invoice.read` |
+| `POST` | `/api/tax-invoices/manual` (+ idempotency) · `/{taxInvoice}/retry-signing` · `/resolve-no-action` · `/cancel` | `invoice.manage` |
+| `POST` | `/api/tax-invoices/{taxInvoice}/cancel/approve` | `tax.compliance` |
 
-### Billable Events (Usage Mediation)
-
-| Method | Endpoint | Permission | What It Does |
-|--------|----------|------------|--------------|
-| `POST` | `/api/billable-events` | `billing.internal` | Ingest raw usage events (from mediation system) |
-| `GET` | `/api/billable-events` | `invoice.read` | Query usage events |
-| `POST` | `/api/billable-events/rate` | `billing.internal` | Trigger rating of unprocessed events |
+### Usage & Billable Events
+| Method | Endpoint | Permission |
+|--------|----------|------------|
+| `GET` | `/api/usage` · `/api/rated-events` | `invoice.read` |
+| `POST` | `/api/usage` (+ idempotency) · `/api/usage/rate-run` | `invoice.manage` |
+| `GET` | `/api/billing/billable-events` · `/{billableEvent}` · `/billable-event-categories` | `catalog.read` |
+| `POST/PATCH` | `/api/billing/billable-events` (+ idempotency) · `/{billableEvent}` · `/activate` · `/retire` | `catalog.manage` |
 
 ---
 
-## 7. Scheduled Commands / Batch Jobs / Cron Jobs
+## 7. Scheduled Commands / Batch Jobs
 
-The Billing module runs these scheduled jobs (defined in `app/Console/Kernel.php` or module service providers):
+Schedules are registered in `routes/console.php`. All commands are `sophix:`-prefixed.
 
-| Job | Schedule | What It Does | Why |
-|-----|----------|-------------|-----|
-| `billing:generate-invoices` | Daily at 01:00 | Generates invoices for all active billing cycles | Customers need invoices on their cycle day |
-| `billing:run-dunning` | Daily at 02:00 | Checks all unpaid invoices and advances dunning stages | Automatic collections |
-| `billing:rate-billable-events` | Every 15 minutes | Rates unprocessed usage events into charges | Near-real-time usage billing |
-| `billing:process-wallet-deductions` | Hourly | Deducts wallet balances for prepaid customers | Prepaid customers need continuous service |
-| `billing:remind-upcoming-dues` | Daily at 09:00 | Sends reminder emails/SMS for invoices due in 3 days | Reduces late payments |
-| `billing:close-expired-cycles` | Daily at 23:00 | Closes billing cycles that have passed their end date | Cleanup |
-| `billing:reconcile-payments` | Hourly | Matches PaymentGateway confirmations with Payment records | Ensures no missed payments |
-| `billing:generate-dunning-reports` | Weekly | Generates dunning performance report for finance team | Reporting |
+| Command | Schedule | What It Does |
+|---------|----------|--------------|
+| `sophix:billing:cycle-close` | every 30 min (no overlap) | Close due subscription cycles; settle recurring fee + usage (BIL-03) |
+| `sophix:billing:generation-retry` | every 15 min (no overlap) | Retry recoverable invoice-generation failures (rule group Q) |
+| `sophix:billing:pro-forma` | daily | Pre-cycle pro-forma documents for prepaid subscriptions |
+| `sophix:billing:dunning-run` | daily | Scan overdue accounts, advance dunning escalation (BIL-04) |
+| `sophix:wallet:expire` | daily | Expire wallet balances past their validity window (R-W-9) |
+| `sophix:outbox:dispatch` | every minute (no overlap) | Publish committed outbox events to the bus (foundation; carries billing events) |
 
-**How to check what's scheduled:**
+**On-demand / not auto-scheduled** (run manually or invoked by flows): `sophix:billing:run-cycle`, `sophix:billing:rate-usage`, `sophix:billing:tax-sign-scan`, `sophix:billing:tax-retry-scan`, `sophix:billing:dunning-archive {--days=30}`.
+
 ```bash
-php artisan schedule:list
-```
-
-**How to run a job manually:**
-```bash
-php artisan billing:generate-invoices --operator=DEFAULT --dry-run
-```
-
-**How to run dunning for a specific account:**
-```bash
-php artisan billing:run-dunning --account=acc_xxx
+php artisan schedule:list                       # see what's scheduled
+php artisan sophix:billing:dunning-run           # run the dunning scanner now
+php artisan sophix:billing:cycle-close --operator=WIK
 ```
 
 ---
 
 ## 8. Common Patterns
 
-### Pattern 1: Structured Invoice Generation (SUMMARY → DETAIL)
+### Pattern 1: Structured Invoice (SUMMARY → DETAIL)
 
-Invoices have a hierarchy: SUMMARY lines (per package) → DETAIL lines (per charge):
+`InvoiceService` writes a SUMMARY line per package, then DETAIL lines under it, computing per-line tax from Catalog:
 
 ```php
-// In InvoiceService::writeStructuredInvoice()
-foreach ($charges->groupBy(fn($c) => $c->packageRef ?? 'GENERAL') as $pkg => $pkgCharges) {
-    // Create SUMMARY line (what the customer sees first)
-    $summary = $invoice->lines()->create([
+// InvoiceService — SUMMARY per package; DETAIL per charge (R-GEN-01-L-1)
+foreach (collect($charges)->groupBy(fn (Charge $c) => $c->packageRef ?? 'GENERAL') as $pkg => $pkgCharges) {
+    $summaryId = Id::make('invl');
+    $invoice->lines()->create([
+        'id' => $summaryId,
         'line_type' => 'SUMMARY',
-        'description' => $this->packageName($pkg),
-        'amount' => $pkgCharges->sum('amount'),
-        'tax_amount' => $pkgCharges->sum('tax_amount'),
+        'description' => $pkg === 'GENERAL' ? 'Charges' : 'Package — '.$pkg,
+        'package_ref' => $pkg === 'GENERAL' ? null : $pkg,
+        'subtotal' => round($pkgCharges->sum(fn (Charge $c) => $c->amount), 2),
+        'tax_amount' => 0,
     ]);
 
-    // Create DETAIL lines under it (drill-down)
     foreach ($pkgCharges as $charge) {
+        // No tax config for the operator resolves to ZERO tax (R-PLM-02-AP-2/3), not a failure.
+        try {
+            $taxResult = $this->tax->compute([
+                'operatorCode' => $operator, 'baseAmount' => $charge->amount, 'currency' => $currency,
+                'taxableKind' => $charge->serviceCategoryCode, 'taxableRef' => $charge->packageRef,
+                'customerCategory' => $customerCategory, 'customerLocation' => $customerLocation,
+            ]);
+        } catch (\App\Foundation\Errors\DomainException) {
+            $taxResult = ['totalTaxAmount' => 0, 'taxLines' => []];
+        }
+
         $invoice->lines()->create([
             'line_type' => 'DETAIL',
-            'parent_summary_line_id' => $summary->id,
-            'description' => $this->resources[$charge->descriptionKey],
-            'amount' => $charge->amount,
-            'tax_amount' => $charge->tax_amount,
+            'parent_summary_line_id' => $summaryId,
+            'service_category_code' => $charge->serviceCategoryCode,
+            'subtotal' => $charge->amount,
+            'tax_amount' => round((float) ($taxResult['totalTaxAmount'] ?? 0), 2),
+            'tax_breakdown' => $taxResult['taxLines'] ?? [],
         ]);
     }
 }
 ```
 
-**Why this matters:** Customers see a clean summary ("Internet Package — $50") but can drill down to details ("Base fee $45 + Overage $5"). This is required by tax authorities in many countries.
+**Why it matters:** Customers see a clean per-package summary but can drill into the detail; tax is per-line and config-driven (the injected service is `TaxService`, not a hardcoded rate).
 
-### Pattern 2: Gap-Free Legal Invoice Numbers
+### Pattern 2: Gap-Free Legal Numbers
 
-Every invoice gets a unique, sequential number per operator/fiscal year:
+`InvoiceService::nextLegalNumber()` allocates a sequential number per operator + fiscal year + type from the `invoice_sequence` table under a row lock:
 
 ```php
 private function nextLegalNumber(string $operator, string $type): string
 {
-    $year = now()->year;
-    $prefix = match ($type) {
-        'TAX' => 'TInv',
-        'CREDIT_NOTE' => 'CN',
-        'DEBIT_NOTE' => 'DN',
-        default => 'Inv',
-    };
-
-    // Lock the counter row, increment atomically
+    DB::table('invoice_sequence')->insertOrIgnore([...]);        // ensure the counter row exists
     $row = DB::table('invoice_sequence')
-        ->where('operator_code', $operator)
-        ->where('fiscal_year', $year)
-        ->where('type', $type)
-        ->lockForUpdate()
-        ->first();
-
+        ->where('operator_code', $operator)->where('fiscal_year', $year)->where('type', $type)
+        ->lockForUpdate()->first();                              // serialize concurrent issuers
     $next = ($row->last_number ?? 0) + 1;
-
-    DB::table('invoice_sequence')
-        ->where('id', $row->id)
-        ->update(['last_number' => $next]);
-
-    return sprintf('%s-%s-%d-%06d', $prefix, $operator, $year, $next);
-    // Result: "Inv-DEFAULT-2026-000042"
+    DB::table('invoice_sequence')->where(...)->update(['last_number' => $next]);
+    // e.g. "CN-WIK-2026-000001" for a credit note
 }
 ```
 
-**Why this matters:** Tax authorities in most countries require sequential, gap-free invoice numbering. If you have Inv-001 and Inv-003, the tax authority will ask "where is Inv-002?" This code guarantees no gaps using database row locking.
+**Why it matters:** Tax authorities require gap-free numbering. The row lock guarantees no two invoices share or skip a number.
 
-### Pattern 3: Tax Computation Per Line
+### Pattern 3: Dunning as a Config-Driven Level Machine
 
-Tax isn't a flat rate — it depends on service type, customer category, and location:
-
-```php
-$taxResult = $this->tax->compute([
-    'operatorCode' => $operator,
-    'baseAmount' => $charge->amount,
-    'taxableKind' => $charge->serviceCategoryCode,  // e.g., "BROADBAND"
-    'customerCategory' => $customerCategory,           // e.g., "RESIDENTIAL"
-    'customerLocation' => $customerLocation,           // e.g., "NAIROBI_NORTH"
-]);
-
-// Returns:
-// [
-//     'totalTaxAmount' => 8.50,
-//     'taxBreakdown' => [
-//         ['name' => 'VAT', 'rate' => 16, 'amount' => 8.00],
-//         ['name' => 'Excise', 'rate' => 1, 'amount' => 0.50],
-//     ]
-// ]
-```
-
-**Why this matters:** Different services have different tax treatments. Internet might have VAT, voice might have excise tax, business customers might be exempt. The `TaxComputeService` reads from Catalog's `tax_configs` table so tax rules are config-driven, not hardcoded.
-
-### Pattern 4: Dunning as Config-Driven Level Machine
-
-The dunning engine scans overdue accounts and advances them through **levels** defined in the `dunning_program` catalog. Each level has a **grace period** and an **action** (`WARNING_ONLY`, `RESTRICTION_ADD`, `SUSPEND_NP`, `TERMINATION`). The program version is **pinned** on first entry so policy edits never disturb in-flight episodes.
+`DunningService::scan()` runs a **SQL aggregate** over overdue invoices, then `assessAccount()` advances each account by **one level** based on the pinned `dunning_program`:
 
 ```php
-// DunningService::scan() — the real entry point
 public function scan(): array
 {
-    // SQL aggregate: group overdue invoices by account, sum debt, find oldest due
     $accounts = Invoice::query()
         ->whereIn('status', [Invoice::OPEN, Invoice::PARTIALLY_PAID, Invoice::OVERDUE])
-        ->where('amount_due', '>', 0)
-        ->where('due_date', '<', now())
+        ->where('amount_due', '>', 0)->where('due_date', '<', now())
         ->select('account_id', 'operator_code')
-        ->selectRaw('SUM(amount_due) as debt')
-        ->selectRaw('MIN(due_date) as oldest_due')
-        ->groupBy('account_id', 'operator_code')
-        ->limit(500) // batch cap
-        ->get();
+        ->selectRaw('SUM(amount_due) as debt')->selectRaw('MIN(due_date) as oldest_due')
+        ->groupBy('account_id', 'operator_code')->limit(500)->get();   // batch cap
 
     $advanced = 0;
     foreach ($accounts as $row) {
@@ -514,557 +474,198 @@ public function scan(): array
             $advanced++;
         }
     }
-
     return ['scanned' => $accounts->count(), 'advanced' => $advanced];
 }
 ```
 
-The real `assessAccount()` does this:
+`assessAccount()` does the real work: `lockForUpdate()` the `dunning_state`; skip if paused/in-review/recovery-failed/archived; enforce an at-most-daily cadence (`next_evaluation_at`); read grace from `$program->graceDays($level)` (an NPD flag via `hasDunningAccelerantFlag()` waives it); **advance exactly one level** (`current_level + 1`, never skip); open a review window before `TERMINATION` if required; then apply the level's action (`WARNING_ONLY` / `RESTRICTION_ADD` / `SUSPEND_NP` / `TERMINATION`) and emit `DunningStageAdvanced`.
+
+**Why it matters:** Everything (grace, actions, level names) is config in `dunning_program`, pinned per episode so policy edits never disturb in-flight customers. There are **no hardcoded day thresholds** and **no `STAGE_*` strings** — levels are integers 0–4.
+
+### Pattern 4: Payment Application (PREPAID vs POSTPAID)
+
+`PaymentService::receiveAndApply()` is idempotent on `payment_reference`, then routes by billing mode — PREPAID credits the wallet; POSTPAID allocates to open invoices by the operator's policy (`FIFO_DUE_DATE` default), with any surplus going to the account credit balance:
 
 ```php
-private function assessAccount(string $accountId, string $operator, float $debt, string $oldestDue): bool
-{
-    // Lock the DunningState row for this account (or create a new one)
-    $state = DunningState::query()
-        ->where('operator_code', $operator)
-        ->where('account_id', $accountId)
-        ->lockForUpdate()
-        ->first()
-        ?? new DunningState(['operator_code' => $operator, 'account_id' => $accountId, 'current_level' => 0]);
+$payment = PaymentLedger::query()->create([... 'unallocated_amount' => $amount, 'status' => 'RECEIVED']);
 
-    // Skip if paused, in review, recovery-failed, or archived
-    if (in_array($state->status, [
-        DunningState::STATUS_SUSPENDED_BY_PAUSE,
-        DunningState::STATUS_PENDING_TERMINATION_REVIEW,
-        DunningState::STATUS_RECOVERY_FAILED,
-        DunningState::STATUS_ARCHIVED,
-    ], true)) {
-        return false;
-    }
-
-    // At-most-daily cadence: don't evaluate more than once per day
-    if ($state->exists && $state->next_evaluation_at && $state->next_evaluation_at->isFuture()) {
-        return false;
-    }
-
-    // Resolve the dunning program (pinned on first entry)
-    $program = $this->pinProgram($state, $operator, $billingMode);
-    if (! $program) {
-        return false; // no policy for this operator/mode
-    }
-
-    // Grace check: days at current level vs program's grace for that level
-    $graceDays = $state->current_level === 0 ? 0 : $program->graceDays($state->current_level);
-    // NPD flag (hasDunningAccelerantFlag) waives grace — accelerates dunning
-    if ($graceDays > 0 && $this->accounts->hasDunningAccelerantFlag($accountId, $operator)) {
-        $graceDays = 0;
-    }
-    $daysAtLevel = $state->entered_level_at ? (int) abs(now()->diffInDays($state->entered_level_at)) : 0;
-    if ($daysAtLevel < $graceDays) {
-        $state->save();
-        return false; // grace not elapsed
-    }
-
-    // Monotonic advance: exactly one level per pass, never skip
-    $nextLevel = $state->current_level + 1;
-    if ($nextLevel > $program->maxLevel()) {
-        $state->save();
-        return false; // already at terminal level
-    }
-
-    // Pre-termination review window (if program requires it)
-    if ($program->actionIntent($nextLevel) === DunningProgram::TERMINATION && $program->pre_termination_review_required) {
-        $state->status = DunningState::STATUS_PENDING_TERMINATION_REVIEW;
-        $state->review_due_at = now()->addHours($this->reviewWindowHours($operator));
-        $state->save();
-        $this->events->publish($this->stateEvent(BillingEvents::DUNNING_TERMINATION_PENDING, $state, [
-            'reviewDueAt' => $state->review_due_at->toIso8601String(),
-        ]));
-        return true;
-    }
-
-    // Advance the level inside a transaction
-    DB::transaction(function () use ($state, $nextLevel, $program, $wasNone) {
-        $state->current_level = $nextLevel;
-        $state->entered_level_at = now();
-        if ($wasNone) {
-            $state->entered_dunning_at = now();
-        }
-        $state->save();
-
-        if ($wasNone) {
-            $this->events->publish($this->stateEvent(BillingEvents::SUBSCRIPTION_ENTERED_DUNNING, $state, [
-                'triggeringEventType' => $state->triggering_event_type,
-            ]));
-        }
-        $this->events->publish($this->stateEvent(BillingEvents::DUNNING_STAGE_ADVANCED, $state, [
-            'level' => $nextLevel,
-            'levelName' => $program->levelDef($nextLevel)['name'] ?? null,
-            'debt' => (string) $state->outstanding_debt_amount,
-        ]));
-    });
-
-    // Apply the level's action (RESTRICTION_ADD, SUSPEND_NP, TERMINATION)
-    $this->applyLevelAction($program, $nextLevel, $subscription, $state);
-
-    return true;
+if ($prepaid) {                                  // PREPAID → wallet top-up
+    $wallet = $this->wallets->ensureWallet($prepaid->subscription_id, WalletService::DEFAULT_WALLET_CODE, ...);
+    $this->wallets->credit($wallet, $amount, 'TOPUP', $reference);
+    $payment->update(['unallocated_amount' => 0, 'status' => 'APPLIED']);
+} else {                                         // POSTPAID → allocate FIFO and settle surplus
+    $invoices = $this->allocatableInvoices(...)->lockForUpdate()->get();
+    // ... allocate, update amount_paid/amount_due/status per invoice ...
+    $this->settleSurplus($payment, ...);
+    $this->clearDunningIfPaid($data['account_id']);
 }
 ```
 
-**Why this matters:** The dunning engine is fully config-driven. An operator can change grace periods, actions, and level definitions by updating the `dunning_program` catalog — no code changes. The monotonic level advancement ensures a customer never jumps from "reminder" to "termination" without passing through intermediate levels. The pinned program version (R-BIL-04-C-1) means a policy change doesn't retroactively affect customers already in dunning.
+### Pattern 5: Adjustment via EM-CFG-04 (dynamic quorum)
 
-**Key behaviors the real code has that the fabricated snippet missed:**
-- `scan()` not `run()` — SQL aggregate over invoices, not model loop
-- Grace days from `$program->graceDays($level)` — config, not hardcoded
-- Monotonic advancement (`current_level + 1`) — never skips levels
-- Actions from program (`WARNING_ONLY`, `RESTRICTION_ADD`, `SUSPEND_NP`, `TERMINATION`) — not string stages
-- `lockForUpdate()` on `DunningState` — prevents race conditions
-- At-most-daily cadence (`next_evaluation_at`) — no hammering
-- NPD flag (`hasDunningAccelerantFlag`) — accelerates dunning by waiving grace
-- Pre-termination review window (`review_due_at`) — human review before termination
-- Per-subscription restriction serialization (`applyRestrictions`) — one RESTRICT per Subscription at a time
-- Recovery paths (`clear()`, `recoverOnTopup()`) — auto-clears when debt is paid
-- Admin overrides (`adminClear()`, `hold()`, `advance()`, `confirmTermination()`, `forceTerminate()`) — manual control
-- Archive (`archiveCleared()`) — snapshots settled episodes, never hard-deletes
-
-### Pattern 5: Payment Application (PREPAID vs POSTPAID)
-
-When a payment arrives, `PaymentService::receiveAndApply()` routes it based on the account's billing mode. PREPAID credits the wallet; POSTPAID allocates to open invoices:
+The rules engine answers *how many* approvals; `AdjustmentService` raises an `ADJUSTMENT` approval request with a single stage carrying that quorum, and the engine enforces **distinct approvers**:
 
 ```php
-public function receiveAndApply(array $data): PaymentLedger
-{
-    $operator = $data['operator_code'] ?? Context::operatorCode();
-    $reference = $data['payment_reference'] ?? $data['gateway_ref'] ?? null;
-
-    // RC-3 idempotency: retried receipt returns the prior result
-    if ($reference) {
-        $prior = PaymentLedger::query()
-            ->where('account_id', $data['account_id'])
-            ->where('payment_reference', $reference)
-            ->first();
-        if ($prior) {
-            return $prior->load('allocations');
-        }
-    }
-
-    // RC-4 billing-mode resolution: PREPAID routes to wallet top-up
-    $prepaid = empty($data['target_invoice_id'])
-        ? Subscription::query()
-            ->where('account_id', $data['account_id'])
-            ->where('billing_mode', 'PREPAID')
-            ->whereNotIn('status_code', [Subscription::TERMINATED])
-            ->first()
-        : null;
-
-    return DB::transaction(function () use ($data, $operator, $reference, $prepaid) {
-        $amount = round((float) $data['paid_amount'], 2);
-
-        $payment = PaymentLedger::query()->create([
-            'account_id' => $data['account_id'],
-            'operator_code' => $operator,
-            'method' => $data['method'] ?? 'OFFLINE',
-            'gateway_ref' => $data['gateway_ref'] ?? null,
-            'payment_reference' => $reference,
-            'currency' => $data['currency'] ?? 'KES',
-            'paid_amount' => $amount,
-            'unallocated_amount' => $amount,
-            'status' => 'RECEIVED',
-            'received_at' => now(),
-        ]);
-
-        // PREPAID path: credit wallet, done
-        if ($prepaid) {
-            $wallet = $this->wallets->ensureWallet(
-                $prepaid->subscription_id,
-                WalletService::DEFAULT_WALLET_CODE,
-                $data['account_id'],
-                $prepaid->customer_id
-            );
-            $this->wallets->credit($wallet, $amount, 'TOPUP', $reference);
-            $payment->update(['unallocated_amount' => 0, 'status' => 'APPLIED']);
-            return $payment->refresh()->load('allocations');
-        }
-
-        // POSTPAID path: allocate to open invoices by operator policy
-        $policy = (string) (DB::table('payment_config')
-            ->where('operator_code', $operator)
-            ->value('allocation_policy') ?? 'FIFO_DUE_DATE');
-
-        $invoices = $this->allocatableInvoices(
-            $data['account_id'],
-            $data['target_invoice_id'] ?? null,
-            $policy
-        )->lockForUpdate()->get();
-
-        $remaining = $amount;
-        foreach ($invoices as $invoice) {
-            if ($remaining <= 0.0001) break;
-            $applied = round(min($remaining, (float) $invoice->amount_due), 2);
-            if ($applied <= 0) continue;
-
-            $before = (float) $invoice->amount_due;
-            $payment->allocations()->create([
-                'invoice_id' => $invoice->invoice_id,
-                'allocated_amount' => $applied,
-                'outstanding_before' => $before,
-                'outstanding_after' => round($before - $applied, 2),
-                'allocation_strategy' => $data['target_invoice_id'] ?? false ? 'DIRECTED' : $policy,
-            ]);
-
-            $newPaid = (float) $invoice->amount_paid + $applied;
-            $newDue = round((float) $invoice->total_amount - $newPaid, 2);
-            $invoice->update([
-                'amount_paid' => $newPaid,
-                'amount_due' => max($newDue, 0),
-                'status' => $newDue <= 0.0001 ? Invoice::PAID : Invoice::PARTIALLY_PAID,
-            ]);
-            $remaining = round($remaining - $applied, 2);
-        }
-
-        $this->settleSurplus($payment, $data['account_id'], $operator, $currency, $remaining, $amount);
-        $this->clearDunningIfPaid($data['account_id']);
-
-        return $payment->refresh()->load('allocations');
-    });
-}
+$this->approvals->request([
+    'operator_code' => $adjustment->operator_code,
+    'entity_type'   => 'ADJUSTMENT',
+    'entity_ref'    => $adjustment->adjustment_id,
+    'amount'        => (float) $adjustment->amount,
+    'requested_by'  => null,                      // no requester anchor; distinctness is the control
+    'stages'        => [[
+        'name' => 'Adjustment approval',
+        'approver_kind' => 'ROLE',
+        'approver_roles' => [],                   // route permission (adjustment.approve) gates WHO
+        'required_approvals' => max(1, $stepsRequired),
+    ]],
+]);
 ```
 
-**Why this matters:** The real code handles both PREPAID and POSTPAID in one method. PREPAID customers get wallet credits; POSTPAID customers get invoice allocations. The allocation policy (`FIFO_DUE_DATE`, `LIFO_DUE_DATE`, etc.) is config-driven per operator. The method is idempotent — retrying the same payment reference returns the prior result without double-applying.
+`approve()`/`reject()` then call `ApprovalService::decide()`; a second sign by the same person is refused (`DUPLICATE_STAGE_APPROVER`). The `adjustment_approval_step` rows remain the readable audit (and carry the non-approval events: limit override, revision, auto-approve).
 
-### Pattern 6: How to Handle a Billing Adjustment via EM-CFG-04
+### Pattern 6: Bulk Reversal (dual-control via EM-CFG-04)
 
-Adjustments require approval. The EM-CFG-04 engine handles this with dynamic stages:
+`BulkReversalService::propose()` previews eligible vs protected invoices, creates a `bulk_reversal_batch`, and opens a single-stage gate with the proposer as the requester so the engine's separation-of-duties refuses self-approval:
 
 ```php
-// AdjustmentService::propose()
-public function propose(array $data, ?string $proposedBy = null): AdjustmentRequest
-{
-    // ... validation, limit checks ...
-
-    // Rules engine answers "how many approvals needed?"
-    $stepsRequired = $this->rules->evaluate('billing.adjustment-approval', [
-        'amount' => $data['amount'],
-        'operator' => $data['operator_code'],
-    ])['stepsRequired'] ?? 1;
-
-    // Open the EM-CFG-04 gate with a single stage carrying the quorum
-    $approval = app(ApprovalService::class)->request([
-        'operator_code' => $data['operator_code'],
-        'entity_type' => 'ADJUSTMENT',
-        'entity_ref' => $adjustment->adjustment_id,
-        'amount' => (float) $adjustment->amount,
-        'stages' => [[
-            'name' => 'Adjustment approval',
-            'approver_kind' => 'ROLE',
-            'approver_roles' => [],
-            'required_approvals' => max(1, $stepsRequired),
-        ]],
-    ]);
-
-    // The engine enforces distinct approvers (one person can't self-clear)
-    // and handles the quorum automatically
-}
+$this->approvals->request([
+    'operator_code' => $operator,
+    'entity_type'   => 'BULK_REVERSAL',
+    'entity_ref'    => $batchId,
+    'requested_by'  => $proposedBy,               // SoD anchor
+    'stages'        => [[
+        'name' => 'Bulk reversal approval', 'approver_kind' => 'ROLE',
+        'approver_roles' => [], 'required_approvals' => 1, 'allow_requester' => false,
+    ]],
+]);
 ```
 
-**Why this matters:** Previously, adjustments had bespoke approval logic. Now they use the same EM-CFG-04 engine as KYC and HomePass status changes. The rules engine decides how many approvals are needed; the engine enforces distinct approvers and quorum. One unified engine for all approvals.
+`approveAndExecute()` calls `decide(true)`; the engine's `SELF_APPROVAL_NOT_ALLOWED` is re-surfaced as the established `DUAL_CONTROL_REQUIRED` code. Each invoice cancellation is its own transaction; partial failures are visible per invoice.
 
-### Pattern 7: How to Debug an Unpaid Invoice
+### Pattern 7: Atomic Wallet Credit
 
-```bash
-# Check the invoice details
-SELECT * FROM invoices WHERE invoice_id = 'inv_xxx';
-
-# Check payment allocations
-SELECT * FROM payment_allocations WHERE invoice_id = 'inv_xxx';
-
-# Check if a payment was recorded but not allocated
-SELECT * FROM payments WHERE account_id = 'acc_xxx' AND allocated_amount < amount;
-
-# Check dunning state
-SELECT * FROM dunning_states WHERE account_id = 'acc_xxx';
-
-# Check if the customer has credit balance
-SELECT * FROM account_credit_balance WHERE account_id = 'acc_xxx';
-
-# Re-run allocation manually
-php artisan billing:reallocate --invoice=inv_xxx
-```
-
-**Why this matters:** An invoice can be unpaid for many reasons: payment not received, payment not allocated, credit balance not applied, or dunning hold. These queries help you find the exact cause.
-
-### Pattern 8: How to Process a Bulk Reversal
-
-Bulk reversals cancel a whole batch of invoices that were billed with a systemic error (wrong tax rate, wrong package price). The operation is dual-controlled via EM-CFG-04:
+`WalletService::credit()` locks the wallet row, updates the balance and appends a `wallet_transaction` in one transaction, then emits `WalletCredited`:
 
 ```php
-// BulkReversalService::propose() — the real entry point
-public function propose(array $scope, ?string $proposedBy, bool $reIssue = false, ?string $notes = null): string
-{
-    $operator = $scope['operator_code'] ?? Context::operatorCode();
-
-    // Preview: split invoices into eligible vs protected (e.g., already paid, in dispute)
-    $preview = $this->preview($scope, $operator);
-    $batchId = Id::make('brb');
-
-    // Create the batch record
-    DB::table('bulk_reversal_batch')->insert([
-        'batch_id' => $batchId,
-        'operator_code' => $operator,
-        'invoice_type' => $scope['invoice_type'] ?? null,
-        'date_from' => $scope['date_from'] ?? null,
-        'date_to' => $scope['date_to'] ?? null,
-        'filters' => isset($scope['filters']) ? json_encode($scope['filters']) : null,
-        're_issue' => $reIssue,
-        'status' => 'PENDING_APPROVAL',
-        'invoices_in_scope' => $preview['eligible'],
-        'proposed_by' => $proposedBy,
-        'notes' => $notes,
-        'created_at' => now(), 'updated_at' => now(),
-    ]);
-
-    // Open EM-CFG-04 dual-control gate: proposer is the requester,
-    // and the engine's separation-of-duties rule refuses self-approval
-    $this->approvals->request([
-        'operator_code' => $operator,
-        'entity_type' => 'BULK_REVERSAL',
-        'entity_ref' => $batchId,
-        'requester_id' => $proposedBy,
-        'approval_definition' => 'BULK_REVERSAL_APPROVAL', // static definition from config
-    ]);
-
-    return $batchId;
-}
-```
-
-**Why this matters:** Reversing a whole batch is high-risk. The `preview()` method shows exactly which invoices are eligible vs protected before you commit. The EM-CFG-04 engine enforces dual control (proposer ≠ approver) via its separation-of-duties rule, not a hand-rolled check. Each cancellation is its own transaction; partial failures are visible per invoice.
-
-### Pattern 9: How to Handle a Wallet Top-Up
-
-Wallet top-ups credit a prepaid balance. The real `WalletService::credit()` is atomic (balance + transaction in one DB transaction) and emits an event:
-
-```php
-// WalletService::credit() — the real method
 public function credit(Wallet $wallet, float $amount, string $reason = 'TOPUP', ?string $reference = null): WalletTransaction
 {
-    $amount = round($amount, 2);
-    if ($amount <= 0) {
-        throw DomainException::validation('Amount must be positive.');
-    }
-
     return DB::transaction(function () use ($wallet, $amount, $reason, $reference) {
-        // Lock the wallet row to prevent concurrent balance updates
         $locked = Wallet::query()->where('wallet_id', $wallet->wallet_id)->lockForUpdate()->firstOrFail();
-
         $before = (float) $locked->balance;
         $locked->update(['balance' => round($before + $amount, 2)]);
-
         $txn = WalletTransaction::query()->create([
-            'wallet_id' => $locked->wallet_id,
-            'amount' => $amount,
-            'type' => 'CREDIT',
-            'reason' => $reason, // e.g., 'TOPUP', 'REFUND', 'ADJUSTMENT'
-            'reference' => $reference,
-            'balance_before' => $before,
-            'balance_after' => round($before + $amount, 2),
+            'wallet_id' => $locked->wallet_id, 'amount' => $amount, 'type' => 'CREDIT',
+            'reason' => $reason, 'reference' => $reference,
+            'balance_before' => $before, 'balance_after' => round($before + $amount, 2),
         ]);
-
-        $this->events->publish($this->event(
-            BillingEvents::WALLET_CREDITED,
-            $txn,
-            ['walletId' => $locked->wallet_id, 'amount' => (string) $amount, 'reason' => $reason],
-        ));
-
+        $this->events->publish(/* WALLET_CREDITED */);
         return $txn;
     });
 }
 ```
 
-**Why this matters:** Wallet operations must be atomic. If two top-ups happen simultaneously, the `lockForUpdate()` prevents a race condition where both read the old balance and both write the new balance, losing one update. The transaction ledger (`WalletTransaction`) is append-only — you never edit a row, you always add a new one. This gives a full audit trail.
-
-### Pattern 10: How to Retry a Failed Invoice Generation
-
-```bash
-# Check the failure queue
-SELECT * FROM generation_failures WHERE status = 'PENDING';
-
-# Retry a specific failure
-php artisan billing:retry-generation --failure-id=gf_xxx
-
-# Retry all pending failures
-php artisan billing:retry-generation --all
-
-# Check if the retry succeeded
-SELECT * FROM generation_failures WHERE id = 'gf_xxx';
-
-# Check the invoice was created
-SELECT * FROM invoices WHERE cycle_id = 'cycle_xxx';
-```
-
-**Why this matters:** Invoice generation can fail for transient reasons (DB timeout, network issue). The failure queue captures these and retries them automatically. But sometimes you need to manually retry after fixing the root cause.
+**Why it matters:** The row lock prevents lost updates under concurrent top-ups; the ledger is append-only for a full audit trail.
 
 ---
 
-## 9. Dependencies — What This Module Needs
+## 9. Dependencies
 
-| Module | What It Uses | How It Uses It | File Paths |
-|--------|-------------|----------------|------------|
-| **Catalog** | Tax rules, package info, wallet configs | `TaxComputeService` reads from `tax_configs`. `InvoiceService` reads package descriptions. | `Services/InvoiceService.php`, `Services/TaxComputeService.php` |
-| **Subscription** | Subscription status, customer data, billing mode | Reads to know when to invoice. Emits events that Subscription consumes. | `Listeners/OnSubscriptionActivated.php` |
-| **Ilm** | Customer snapshots (name, address, category) | Used for invoice headers and tax computation. | `Services/InvoiceService.php` |
-| **PaymentGateway** | Payment confirmations from external gateways | `Listeners/OnPaymentGatewayConfirmed.php` records payments from M-Pesa, bank, etc. | `Listeners/OnPaymentGatewayConfirmed.php` |
-| **Rules** | Dunning policy, billing validation | `DunningService` checks rules before escalation. `InvoiceService` validates before generation. | `Services/DunningService.php` |
-| **Workflow** | Adjustment approval, payment reversal | `AdjustmentController` triggers approval workflow. `PaymentController` triggers reversal workflow. | `AdjustmentController.php`, `PaymentController.php` |
+| Module | What Billing Uses | How |
+|--------|-------------------|-----|
+| **Catalog** | Tax rules (PLM-CFG-02), package/wallet catalog | `TaxService` computes per-line tax; invoice descriptions; wallet codes |
+| **Subscription** | `billing_mode`, status, cycle anchors | Decides PREPAID vs POSTPAID; dunning drives suspend/terminate/resume via `OperationFramework` |
+| **Ilm** | Customer header (name/category/location) | `CustomerSnapshotService` captures it at invoice time |
+| **Rules** | `rules.billing.adjustment-approval` decision table | `AdjustmentService` asks for `stepsRequired` |
+| **Foundation** | Approvals (EM-CFG-04), transactional outbox/EventBus, Files | Approval gates; event publication; tax-invoice PDFs |
+| **Payment Gateway** | External payment confirmations | Recorded as `payment_ledger` entries |
 
-### What Depends on This Module
+### What Depends on Billing
 
-| Module | Why It Needs Billing |
-|--------|---------------------|
-| **Subscription** | Listens to `InvoiceGenerated` to confirm billing intent. Receives `DunningEscalated` to potentially suspend. |
-| **CRM** | Listens to `InvoiceGenerated`, `PaymentReceived`, `DunningEscalated` to send customer communications. |
-| **Fulfillment** | Listens to `DunningEscalated` to hold/throttle service. Listens to `DunningCleared` to restore service. |
-| **Reporting** | Reads invoice data for revenue dashboards, payment reports, dunning analytics. |
-| **Ticketing** | Creates tickets when dunning escalates to final stage or when payments fail. |
+| Module | Why |
+|--------|-----|
+| **Subscription** | Confirms billing intent on `InvoiceGenerated`/`PaymentApplied`; reacts to `DunningStageAdvanced` / `SubscriptionSuspendedForNonPayment` |
+| **Notification** | Routes customer dunning/payment notices off billing events (channels are operator config) |
+| **Fulfillment** | Holds/throttles or restores service on dunning suspend/clear |
+| **Reporting** | Revenue, payments, dunning, tax-invoice analytics |
 
 ---
 
 ## 10. New Dev Checklist
 
 ### Must-Read Files (In Order)
-
-- [ ] `Modules/Billing/app/Models/Invoice.php` — Understand the invoice structure and legal number generation
-- [ ] `Modules/Billing/app/Services/InvoiceService.php` — See how invoices are generated from charges
-- [ ] `Modules/Billing/app/Services/DunningService.php` — Understand dunning stages and automation
-- [ ] `Modules/Billing/app/Services/PaymentService.php` — See how payments are allocated
-- [ ] `Modules/Billing/app/Models/DunningState.php` — Understand dunning state tracking
-- [ ] `Modules/Billing/routes/api.php` — See all endpoints in one place
+- [ ] `Modules/Billing/app/Services/InvoiceService.php` — structured invoice + legal numbering
+- [ ] `Modules/Billing/app/Services/PaymentService.php` — receive & apply, PREPAID vs POSTPAID
+- [ ] `Modules/Billing/app/Services/DunningService.php` — `scan()` / `assessAccount()` level machine
+- [ ] `Modules/Billing/app/Services/AdjustmentService.php` — EM-CFG-04 adjustment pipeline
+- [ ] `Modules/Billing/app/Models/DunningState.php` & `DunningProgram.php` — state vs versioned policy
+- [ ] `Modules/Billing/routes/api.php` — the full endpoint + permission surface
 
 ### Must-Run Commands
-
 ```bash
-# Run billing tests
-php artisan test --filter=Billing
-
-# See what invoices exist
-php artisan tinker --execute="dd(Invoice::query()->with('lines')->limit(5)->get());"
-
-# Check dunning states
-php artisan tinker --execute="dd(DunningState::query()->where('stage', '!=', 'CLEARED')->limit(5)->get());"
-
-# Check scheduled jobs
+php artisan test Modules/Billing                               # the Billing suite
+php artisan tinker --execute="dd(\Modules\Billing\Models\Invoice::with('lines')->limit(3)->get());"
+php artisan tinker --execute="dd(\Modules\Billing\Models\DunningState::where('current_level','>',0)->limit(5)->get());"
 php artisan schedule:list
-
-# Run invoice generation manually (dry run)
-php artisan billing:generate-invoices --operator=DEFAULT --dry-run
-
-# Run dunning manually
-php artisan billing:run-dunning --operator=DEFAULT
-
-# Check failed jobs
+php artisan sophix:billing:dunning-run                          # run dunning now
 php artisan queue:failed
 ```
 
-### How to Add a New Tax Rule
-
-1. Add tax config: `POST /api/tax-configs` (as Catalog admin)
-2. Test computation: `POST /api/tax-configs/compute`
-3. Create a subscription with the relevant service
-4. Generate an invoice: `POST /api/invoices`
-5. Verify tax breakdown in invoice lines
-
-### How to Handle a Customer Dispute (Dunning Hold)
-
-1. Find account dunning state: `GET /api/dunning/{account}`
-2. Place hold: `POST /api/dunning/{account}/hold` (requires approval workflow)
-3. Investigation happens... (CRM/CS team handles this)
-4. Clear hold: `POST /api/dunning/{account}/clear` or resume normal dunning
-
 ### Debugging Guide
 
-**"Invoice has no tax!"**
-```bash
-# Check tax config for this service/location/customer
-SELECT * FROM tax_configs
-WHERE operator_code = 'DEFAULT'
-  AND service_category = 'BROADBAND'
-  AND customer_category = 'RESIDENTIAL'
-  AND location = 'NAIROBI'
-  AND active = true;
-
-# Check if Catalog's TaxComputeService is reachable
-php artisan tinker --execute="
-    $svc = app(\Modules\Catalog\app\Services\TaxComputeService::class);
-    dd($svc->compute([...]));
-"
+**"Invoice has no tax!"** — tax config resolves to zero when none matches; that's allowed, not an error.
+```sql
+-- tax config is owned by Catalog (PLM-CFG-02); inspect via its API/tables, then:
+SELECT line_type, subtotal, tax_amount, tax_breakdown FROM invoice_line WHERE invoice_id = 'inv_xxx';
 ```
 
-**"Payment not allocated to invoice!"**
-```bash
-# Check payment allocations
-SELECT * FROM payment_allocations WHERE payment_id = 'pay_xxx';
-
-# Check if invoice status is UNPAID
-SELECT status, balance_due FROM invoices WHERE id = 'inv_xxx';
-
-# Check payment allocation strategy for this operator
-SELECT * FROM billing_config WHERE operator_code = 'DEFAULT' AND key = 'payment_allocation_strategy';
+**"Payment not allocated!"**
+```sql
+SELECT * FROM payment_invoice_allocation WHERE payment_id = 'pay_xxx';
+SELECT status, amount_due, amount_paid FROM invoice WHERE invoice_id = 'inv_xxx';
+SELECT allocation_policy FROM payment_config WHERE operator_code = 'WIK';   -- default FIFO_DUE_DATE
 ```
 
-**"Dunning not advancing!"**
-```bash
-# Check dunning config
-SELECT * FROM dunning_config WHERE operator_code = 'DEFAULT' ORDER BY stage_order;
-
-# Check if account is on hold
-SELECT * FROM dunning_states WHERE account_id = 'acc_xxx' AND hold_until IS NOT NULL;
-
-# Check if customer has dunning exemption
-SELECT * FROM customer_exemptions WHERE account_id = 'acc_xxx' AND type = 'DUNNING';
+**"Dunning not advancing!"** — note there is no `stage`/`hold_until` column; it's `current_level` + `status` + `next_evaluation_at`.
+```sql
+SELECT current_level, status, entered_level_at, next_evaluation_at FROM dunning_state WHERE account_id = 'acc_xxx';
+-- status SUSPENDED_BY_PAUSE / PENDING_TERMINATION_REVIEW / RECOVERY_FAILED / ARCHIVED is skipped by the scanner;
+-- next_evaluation_at in the future = at-most-daily cadence not yet elapsed.
 ```
 
 **"Wallet balance wrong!"**
-```bash
-# Check wallet transactions
-SELECT * FROM wallet_transactions WHERE account_id = 'acc_xxx' ORDER BY created_at DESC;
-
-# Recalculate balance from transactions
-SELECT SUM(CASE WHEN type = 'CREDIT' THEN amount ELSE -amount END) as balance
-FROM wallet_transactions WHERE account_id = 'acc_xxx';
+```sql
+SELECT type, amount, balance_before, balance_after, reason FROM wallet_transaction
+WHERE wallet_id = (SELECT wallet_id FROM wallet WHERE subscription_id = 'sub_xxx' AND wallet_code = 'MONEY_KES')
+ORDER BY created_at DESC;
 ```
 
 ---
 
 ## 11. Quick FAQ
 
-**Q: What's the difference between a Charge and an Invoice?**  
-A: A Charge is a single line item ("Internet June — $50"). An Invoice is a legal document that groups multiple charges. One invoice can have many charges. Think of Charge as a line item, Invoice as the document.
+**Q: What's the difference between a Charge and an Invoice?**
+A: A `Charge` is one priced line (DTO from `ChargeComputeService`). An `invoice` groups many charges into a legal document with SUMMARY/DETAIL lines.
 
-**Q: Why are invoice numbers gap-free?**  
-A: Tax law in most countries requires sequential, gap-free invoice numbering. If you have Inv-001 and Inv-003, the tax authority will ask "where is Inv-002?" We use `invoice_sequence` with database row locking to guarantee this. No UUIDs allowed!
+**Q: Why are invoice numbers gap-free?**
+A: Tax law requires sequential numbering. `nextLegalNumber()` allocates from `invoice_sequence` under a row lock — no gaps, no reuse.
 
-**Q: What happens if tax computation fails?**  
-A: Tax failure is caught and defaults to zero tax (`$taxResult = ['totalTaxAmount' => 0]`). The invoice still generates — partial tax is better than no invoice. The failure is logged and a notification is sent to the finance team.
+**Q: What happens if tax computation fails / has no config?**
+A: It resolves to zero tax (`['totalTaxAmount' => 0]`) and the invoice still generates. No tax config for the operator is a valid "zero tax" outcome (R-PLM-02-AP-2/3), not a failure.
 
-**Q: Can I delete an invoice?**  
-A: **NO.** Invoices are immutable legal documents. If there's a mistake, you issue a Credit Note (money back) or Debit Note (extra charge). Deleting an invoice is illegal in most jurisdictions.
+**Q: Can I delete an invoice?**
+A: No. Invoices are immutable. Corrections are a CREDIT_NOTE (money back) or DEBIT_NOTE (extra charge) — both are `invoice` rows with their own gap-free numbers — or a governed bulk reversal that VOIDs them with an audit trail.
 
-**Q: What's the difference between a Wallet and a Payment?**  
-A: A Wallet is a **prepaid balance** (customer tops up, then charges are deducted automatically). A Payment is a **postpaid settlement** (customer pays after receiving an invoice). A customer can have both: a wallet for prepaid services and payment records for postpaid invoices.
+**Q: Wallet vs Payment?**
+A: A `wallet` is a prepaid balance (top up, then deduct). A `payment_ledger` entry is a settlement; for PREPAID accounts a payment becomes a wallet top-up, for POSTPAID it allocates to invoices.
 
-**Q: Who triggers dunning?**  
-A: Usually a nightly cron job (`billing:run-dunning`) checks all unpaid invoices and advances dunning stages automatically. But a backoffice user can also trigger it manually via `POST /api/dunning/run` or force a specific account with `POST /api/dunning/{account}/advance`.
+**Q: Who triggers dunning?**
+A: The daily `sophix:billing:dunning-run` scanner. A backoffice user can also run it via `POST /api/dunning/run` or force one account forward with `POST /api/dunning/{account}/advance` (`dunning.admin`).
 
-**Q: What is proration?**  
-A: When a customer starts service on the 15th of the month, they shouldn't pay for the full month. Proration calculates the partial charge: `(monthly_price / days_in_month) * days_of_service`. Billing does this automatically when a subscription is activated mid-cycle.
+**Q: How are adjustment / bulk-reversal approvals enforced?**
+A: Both run on the EM-CFG-04 engine. Adjustments use a dynamic quorum (`stepsRequired` from the rules engine) with distinct-approver enforcement; bulk reversal is single-sign dual control (proposer ≠ approver, surfaced as `DUAL_CONTROL_REQUIRED`).
 
-**Q: What happens when a customer pays partially?**  
-A: The payment allocation service applies the payment to the oldest invoice first (FIFO). If $100 is paid against a $150 invoice, the invoice balance becomes $50 and status remains `UNPAID`. The customer still gets dunning reminders for the remaining $50.
-
-**Q: What's a Credit Note vs a Debit Note?**  
-A: A **Credit Note** is money back to the customer (e.g., refund, billing correction). A **Debit Note** is an extra charge (e.g., missed usage, correction). Both are legal documents with their own gap-free numbers. Both reference the original invoice.
-
-**Q: How do I know if a subscription is prepaid or postpaid?**  
-A: Check the `billing_mode` field on the subscription. `PREPAID` means wallet-based (charges deducted automatically). `POSTPAID` means invoice-based (pay after usage). `HYBRID` means both. Billing reads this from Subscription and handles each mode differently.
+**Q: How do I know if a subscription is prepaid or postpaid?**
+A: The `billing_mode` field on the Subscription (`PREPAID` / `POSTPAID`). Billing reads it to route payments and pick the dunning program.
 
 ---
 
