@@ -216,6 +216,10 @@ Modules/Fulfillment/
 
 ### Rules (Business Policy Validation)
 
+Rules are **side-effect-free** PHP classes that return `true` (allowed) or throw `DomainException` (rejected). They live in the `Rules` module and are called by workflow handlers.
+
+**Important:** Sensitive operations that require approval (e.g., order cancellation, deposit waiver) use the **EM-CFG-04 approval engine** — a unified Foundation service. The Rules module checks *business preconditions* (e.g., "Can this order be cancelled?"), while EM-CFG-04 handles *approval workflow* (e.g., "Does this cancellation need supervisor sign-off?"). The two work together: Rules answer "should we?" and EM-CFG-04 answers "may we?".
+
 | Rule | When It Runs | What It Checks |
 |------|-------------|----------------|
 | `CanCaptureOrder` | Before order capture | Is customer valid? Is homepass sellable? Is package active? |
@@ -223,6 +227,8 @@ Modules/Fulfillment/
 | `CanCancelOrder` | Before cancellation | Is order not already COMPLETED? Is cancellation within window? |
 | `IsDepositRequired` | During order capture | Does this package require a deposit? Has customer paid it? |
 | `IsKycRequired` | During order capture | Does this operator require KYC before activation? |
+
+**EM-CFG-04 Integration:** Order cancellations that are outside the standard window may trigger an approval request. The workflow handler checks `ApprovalService::request()` before proceeding. See [Pattern 10](#pattern-10-approval-gating-for-exceptional-cancellations) below.
 
 ### Workflow Handlers (Process Steps)
 
@@ -411,6 +417,143 @@ $this->engine->correlateMessage(
 ```
 
 **Why this matters:** Some packages require a deposit (e.g., equipment deposit). The order can't proceed until the customer pays. The workflow parks efficiently and resumes when the payment event arrives.
+
+### Pattern 6: How to Debug a Stuck Order
+
+```bash
+# Find the order and its steps
+SELECT * FROM fulfillment_orders WHERE id = 'ford_xxx';
+SELECT * FROM fulfillment_order_steps WHERE order_id = 'ford_xxx' ORDER BY completed_at;
+
+# Check the linked subscription
+SELECT * FROM subscriptions WHERE id = (SELECT subscription_id FROM fulfillment_orders WHERE id = 'ford_xxx');
+
+# Check the linked work order
+SELECT * FROM work_orders WHERE id = (SELECT work_order_id FROM fulfillment_orders WHERE id = 'ford_xxx');
+
+# Check the workflow instance
+SELECT * FROM process_instances WHERE business_key = 'ford_xxx';
+
+# Check if a message is waiting
+SELECT * FROM process_messages WHERE instance_id = 'pi_xxx';
+```
+
+**Why this matters:** Orders get stuck when: the install isn't done, KYC isn't approved, or the deposit isn't paid. These queries show you exactly which gate is blocking the order.
+
+### Pattern 7: How to Add a New Journey Step
+
+1. Create a new `TaskHandler` in `Modules/Fulfillment/app/Workflow/`
+2. Register it in `FulfillmentWorkflowProvider.php`
+3. Update the `ful-order-capture` process definition in the database (or via Workflow Studio)
+4. Add a step name constant to `FulfillmentEvents.php`
+5. Update `OrderStepService` to record the new step
+6. Write tests!
+
+```php
+// New handler: VerifyEquipmentHandler.php
+class VerifyEquipmentHandler implements TaskHandler
+{
+    public function handle(TaskContext $context): TaskResult
+    {
+        $order = FulfillmentOrder::query()->find($context->variable('orderId'));
+        // Check if equipment is available
+        $available = app(InventoryService::class)->checkAvailability($order->equipment_id);
+        if (!$available) {
+            return TaskResult::park('AWAITING_EQUIPMENT');
+        }
+        return TaskResult::success();
+    }
+}
+```
+
+**Why this matters:** Adding a new step (e.g., equipment verification) should not require code changes to the existing handlers. Each handler is independent. The process definition in the database defines the order of steps.
+
+### Pattern 8: How to Handle a Failed Compensation
+
+```php
+// Compensation can fail if the work order is already completed
+private function compensate(FulfillmentOrder $order, ?string $reason): void
+{
+    try {
+        if ($order->work_order_id) {
+            app(WorkOrderService::class)->cancel($order->work_order_id, $reason);
+        }
+    } catch (DomainException $e) {
+        // Log but don't fail — the work order might already be done
+        Log::warning('Work order cancel failed', ['orderId' => $order->id, 'error' => $e->errorCode]);
+    }
+
+    try {
+        if ($order->subscription_id) {
+            $sub = Subscription::query()->find($order->subscription_id);
+            app(SubscriptionService::class)->transitionStatus($sub, Subscription::TERMINATED, ['reason' => $reason]);
+        }
+    } catch (DomainException $e) {
+        // Log but don't fail
+        Log::warning('Subscription termination failed', ['orderId' => $order->id, 'error' => $e->errorCode]);
+    }
+}
+```
+
+**Why this matters:** Compensation is best-effort. If the work order is already completed, you can't cancel it. But you still need to terminate the subscription. Each compensation step is independent and should not fail the whole process.
+
+### Pattern 9: How to Retry a Correlation Message
+
+```bash
+# Check if a message was sent but not correlated
+SELECT * FROM event_outbox
+WHERE type LIKE '%install-finalized%'
+  AND aggregate_id = 'wo_xxx'
+  AND delivered = false;
+
+# Manually correlate the message
+php artisan workflow:correlate-message
+  --business-key=ford_xxx
+  --message-name=ful-install-finalized
+  --variables='{"installConfirmed": true}'
+
+# Check if the workflow resumed
+SELECT * FROM process_instances WHERE business_key = 'ford_xxx';
+```
+
+**Why this matters:** Sometimes the install is done but the message doesn't get correlated (network issue, consumer down). You can manually correlate the message to unblock the workflow.
+
+### Pattern 10: Approval Gating for Exceptional Cancellations
+
+Order cancellations outside the standard window may require approval via EM-CFG-04:
+
+```php
+// In OrderCaptureService::cancel()
+public function cancel(FulfillmentOrder $order, ?string $reason = null): FulfillmentOrder
+{
+    // Check if cancellation is within the standard window (e.g., 24 hours)
+    $withinWindow = $order->created_at->diffInHours(now()) < 24;
+
+    if (!$withinWindow) {
+        // Requires approval via EM-CFG-04
+        $approval = app(ApprovalService::class)->request([
+            'operator_code' => $order->operator_code,
+            'entity_type' => 'FULFILLMENT_ORDER_CANCELLATION',
+            'entity_ref' => $order->id,
+            'payload' => ['reason' => $reason],
+        ]);
+
+        if ($approval->status === ApprovalRequest::PENDING) {
+            throw new DomainException('CANCELLATION_APPROVAL_REQUIRED', [
+                'approvalId' => $approval->request_id,
+            ]);
+        }
+    }
+
+    // Proceed with compensation
+    $this->compensate($order, $reason);
+    $order->update(['status' => 'CANCELLED']);
+
+    return $order;
+}
+```
+
+**Why this matters:** Cancelling an order after the technician has already been dispatched is expensive. The system requires approval for late cancellations to prevent abuse. The EM-CFG-04 engine handles the approval chain consistently across all modules.
 
 ---
 

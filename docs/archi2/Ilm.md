@@ -234,6 +234,10 @@ Modules/Ilm/
 
 ### Rules (Business Policy Validation)
 
+Rules are **side-effect-free** PHP classes that return `true` (allowed) or throw `DomainException` (rejected). They live in the `Rules` module and are called by controllers and services.
+
+**Important:** Sensitive operations that require approval (e.g., KYC decisions, account flag changes, CVM offers) use the **EM-CFG-04 approval engine** — a unified Foundation service. The Rules module checks *business preconditions* (e.g., "Can this customer be flagged as high-risk?"), while EM-CFG-04 handles *approval workflow* (e.g., "Does this KYC rejection need supervisor sign-off?"). The two work together: Rules answer "should we?" and EM-CFG-04 answers "may we?".
+
 | Rule | When It Runs | What It Checks |
 |------|-------------|----------------|
 | `CanCreateCustomer` | Before customer creation | Is ID number unique? Is contact info valid? |
@@ -246,14 +250,16 @@ Modules/Ilm/
 
 ### Workflow References
 
-Ilm uses workflows for:
+Ilm uses workflows via the EM-CFG-04 engine for:
 
 | Process | Purpose | Approval Required? |
 |---------|---------|-------------------|
-| `kyc-approval` | KYC document review and approval | Yes (role-based: L1, L2) |
-| `cvm-offer-approval` | CVM offer creation and approval | Yes (manager approval) |
-| `account-flag-approval` | Setting sensitive account flags | Yes (supervisor approval) |
-| `customer-merge` | Merging duplicate customer records | Yes (manager approval) |
+| `kyc-approval` | KYC document review and approval | Yes (via EM-CFG-04, dynamic stages based on `kyc_approval_role`) |
+| `cvm-offer-approval` | CVM offer creation and approval | Yes (manager approval via EM-CFG-04) |
+| `account-flag-approval` | Setting sensitive account flags | Yes (supervisor approval via EM-CFG-04) |
+| `customer-merge` | Merging duplicate customer records | Yes (manager approval via EM-CFG-04) |
+
+**EM-CFG-04 Integration:** KYC approvals use dynamic stages — the system checks if the customer has an `approval_role` mapping; if not, it falls back to the `DEFAULT` operator. If a `kyc_approval_role` exists, a single stage with that role is used. This ensures KYC decisions are reviewed by the right people. Previously, KYC used bespoke approval logic; now it uses the same EM-CFG-04 engine as Billing adjustments and HomePass status changes. See [Pattern 2](#pattern-2-kyc-approval-workflow) below.
 
 ---
 
@@ -376,27 +382,45 @@ public function create(array $data): Customer
 
 **Why this matters:** If you allow direct model creation, you bypass validation, event publishing, and audit trails. The service is the gatekeeper.
 
-### Pattern 2: KYC Role-Based Approval
+### Pattern 2: KYC Approval Workflow via EM-CFG-04
 
-Each KYC level can be gated by a role. If the operator has configured `kyc_approval_role` for level 2, only users with that role (or `SUPER_ADMIN`) can approve.
+KYC documents are reviewed and approved via the EM-CFG-04 approval engine:
 
 ```php
-$roleCfg = DB::table('kyc_approval_role')
-    ->where('operator_code', $customer->operator_code)
-    ->where('approval_level', $level)
-    ->first();
+// CustomerService::resolveKycApprovers()
+public function resolveKycApprovers(Customer $customer, string $decision): array
+{
+    $mapping = KycApprovalRole::query()
+        ->where('operator_code', $customer->operator_code)
+        ->first();
 
-if ($roleCfg) {
-    $authorized = $actor->hasRole($roleCfg->required_role) || $actor->hasRole('SUPER_ADMIN');
-    if (!$authorized) {
-        throw new DomainException('KYC_APPROVER_ROLE_REQUIRED', [
-            'requiredRole' => $roleCfg->required_role,
-        ]);
+    if (!$mapping) {
+        $mapping = KycApprovalRole::query()
+            ->where('operator_code', 'DEFAULT')
+            ->first();
     }
+
+    return [
+        'name' => 'KYC Review',
+        'approver_kind' => 'ROLE',
+        'approver_roles' => [$mapping->approval_role],
+        'required_approvals' => 1,
+    ];
 }
+
+// When KYC is submitted:
+$approval = app(ApprovalService::class)->request([
+    'operator_code' => $customer->operator_code,
+    'entity_type' => 'KYC_REVIEW',
+    'entity_ref' => $customer->id,
+    'stages' => [$this->resolveKycApprovers($customer, 'APPROVE')],
+]);
+
+// The engine enforces distinct approvers (one person can't self-clear)
+// and handles the quorum automatically
 ```
 
-**Why this matters:** In a regulated industry, KYC approval is a legal requirement. The system must enforce who can approve. A junior agent can't approve a high-risk customer — only a supervisor can.
+**Why this matters:** Previously, KYC used bespoke approval logic with hardcoded roles. Now it uses the same EM-CFG-04 engine as Billing adjustments and HomePass status changes. The `kyc_approval_role` table maps operators to approval roles, so each operator can configure who approves KYC without code changes.
 
 ### Pattern 3: Document Supersession (Audit Trail)
 
@@ -468,6 +492,152 @@ $document = CustomerKycDocument::query()->create([
 ```
 
 **Why this matters:** File storage is a separate concern from customer data. By separating them, you can: change storage backends (S3, local, etc.) without touching Ilm code; enforce file-level security policies; and deduplicate files across modules.
+
+### Pattern 6: How to Debug a KYC Approval Issue
+
+```bash
+# Check the customer's KYC status
+SELECT * FROM customers WHERE id = 'cus_xxx';
+
+# Check uploaded documents
+SELECT * FROM kyc_documents WHERE customer_id = 'cus_xxx';
+
+# Check approval requests for this customer
+SELECT * FROM approval_requests
+WHERE entity_type = 'KYC_REVIEW' AND entity_ref = 'cus_xxx';
+
+# Check approval decisions
+SELECT * FROM approval_decisions WHERE request_id = 'ar_xxx';
+
+# Check if the approver has the right role
+SELECT * FROM kyc_approval_roles WHERE operator_code = 'DEFAULT';
+
+# Re-submit KYC for approval
+php artisan ilm:kyc-approve --customer=cus_xxx --approver=admin_xxx
+```
+
+**Why this matters:** KYC can get stuck if: documents are missing, the approver doesn't have the right role, or the approval request was never created. These queries help you find the bottleneck.
+
+### Pattern 7: How to Handle a Customer Merge
+
+```php
+// CustomerMergeService::merge()
+public function merge(string $sourceId, string $targetId, string $reason): void
+{
+    return DB::transaction(function () use ($sourceId, $targetId, $reason) {
+        // 1. Move all accounts from source to target
+        Account::query()->where('customer_id', $sourceId)
+            ->update(['customer_id' => $targetId]);
+
+        // 2. Move all subscriptions
+        Subscription::query()->where('customer_id', $sourceId)
+            ->update(['customer_id' => $targetId]);
+
+        // 3. Move all contacts
+        Contact::query()->where('customer_id', $sourceId)
+            ->update(['customer_id' => $targetId]);
+
+        // 4. Mark source as merged
+        Customer::query()->where('id', $sourceId)
+            ->update(['status' => 'MERGED', 'merged_into' => $targetId]);
+
+        // 5. Emit event
+        $this->events->publish(new DomainEvent(
+            type: IlmEvents::CUSTOMER_MERGED,
+            payload: ['sourceId' => $sourceId, 'targetId' => $targetId],
+        ));
+    });
+}
+```
+
+**Why this matters:** Duplicate customer records are common (e.g., a customer signs up twice with different phone numbers). Merging them requires moving all related data (accounts, subscriptions, contacts) and marking the source as merged. This must be done in a transaction to avoid data loss.
+
+### Pattern 8: How to Add a New Document Type for KYC
+
+1. Add the document type to `kyc_document_types` table (or migration)
+2. Update `CanUploadKycDocument` rule to accept the new type
+3. Update the UI to show the new document type in the upload form
+4. Update the KYC approval workflow if the new type requires different approval
+5. Write tests!
+
+```php
+// Add a new document type
+DB::table('kyc_document_types')->insert([
+    'code' => 'BUSINESS_LICENSE',
+    'name' => 'Business License',
+    'description' => 'Required for business accounts',
+    'required_for' => 'BUSINESS',
+]);
+```
+
+**Why this matters:** New document types are config-driven. Adding "Business License" for corporate customers doesn't require a code deployment — just a database entry. But you must update the rules and UI to recognize it.
+
+### Pattern 9: How to Handle a CVM Offer
+
+```php
+// CvmOfferService::create()
+public function create(array $data, ?string $proposedBy = null): CvmOffer
+{
+    $offer = CvmOffer::query()->create($data);
+
+    // If offer requires approval, use EM-CFG-04
+    if ($data['amount'] > 100) {
+        $approval = app(ApprovalService::class)->request([
+            'operator_code' => $data['operator_code'],
+            'entity_type' => 'CVM_OFFER',
+            'entity_ref' => $offer->id,
+            'amount' => $data['amount'],
+        ]);
+
+        if ($approval->status === ApprovalRequest::PENDING) {
+            $offer->update(['status' => 'PENDING_APPROVAL']);
+            return $offer;
+        }
+    }
+
+    $offer->update(['status' => 'APPROVED']);
+
+    // Emit event so CRM can notify the customer
+    $this->events->publish(new DomainEvent(
+        type: IlmEvents::CVM_OFFER_CREATED,
+        payload: ['offerId' => $offer->id, 'customerId' => $offer->customer_id],
+    ));
+
+    return $offer;
+}
+```
+
+**Why this matters:** CVM offers (e.g., "upgrade to Fiber 100 for $10/month") can be expensive. Large offers require approval. The EM-CFG-04 engine handles this consistently with other approval workflows.
+
+### Pattern 10: How to Trace a Customer's Full Lifecycle
+
+```bash
+# Get customer details
+SELECT * FROM customers WHERE id = 'cus_xxx';
+
+# Get all accounts
+SELECT * FROM accounts WHERE customer_id = 'cus_xxx';
+
+# Get all subscriptions
+SELECT * FROM subscriptions WHERE customer_id = 'cus_xxx';
+
+# Get all KYC documents
+SELECT * FROM kyc_documents WHERE customer_id = 'cus_xxx';
+
+# Get all account flags
+SELECT * FROM account_flags WHERE account_id = 'acc_xxx';
+
+# Get all CVM offers
+SELECT * FROM cvm_offers WHERE customer_id = 'cus_xxx';
+
+# Get all events from the outbox
+SELECT * FROM event_outbox WHERE aggregate_id = 'cus_xxx' ORDER BY created_at;
+
+# Get customer 360 overview
+php artisan ilm:customer-overview --customer=cus_xxx
+```
+
+**Why this matters:** When a customer calls support, you need their complete history in one place. These queries give you every account, subscription, KYC document, flag, and offer associated with the customer. The `customer-overview` command aggregates all this into a single JSON response.
 
 ---
 

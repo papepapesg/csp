@@ -206,6 +206,10 @@ Modules/Catalog/
 
 ### Rules (Business Policy Validation)
 
+Rules are **side-effect-free** PHP classes that return `true` (allowed) or throw `DomainException` (rejected). They live in the `Rules` module and are called by controllers and services.
+
+**Important:** Sensitive operations that require approval (e.g., HomePass status changes, package activation) use the **EM-CFG-04 approval engine** — a unified Foundation service. The Rules module checks *business preconditions* (e.g., "Can this HomePass be retired?"), while EM-CFG-04 handles *approval workflow* (e.g., "Does this status change need manager sign-off?"). The two work together: Rules answer "should we?" and EM-CFG-04 answers "may we?".
+
 | Rule | When It Runs | What It Checks |
 |------|-------------|----------------|
 | `CanActivatePackage` | Before package activation | Is there a valid version? Is the package complete? |
@@ -215,14 +219,14 @@ Modules/Catalog/
 
 ### Workflow References
 
-Catalog doesn't own workflows, but some HomePass status transitions require approval workflows:
+Catalog doesn't own workflows, but some HomePass status transitions require approval workflows via the EM-CFG-04 engine:
 
 | Transition | Workflow | Approval Required? |
 |------------|----------|-------------------|
 | `DRAFT` → `SELLABLE` | HomePass activation | Yes (maker-checker) |
 | `SELLABLE` → `UNREACHABLE` | Network issue | No (system-driven) |
 | `UNREACHABLE` → `SELLABLE` | Network restored | No (system-driven) |
-| `SELLABLE` → `RETIRED` | End of life | Yes (manager approval) |
+| `SELLABLE` → `RETIRED` | End of life | Yes (manager approval via EM-CFG-04) |
 
 ---
 
@@ -402,9 +406,9 @@ $taxResult = $this->tax->compute([
 
 **Why this matters:** Tax rules change per country/operator. When Kenya changes VAT from 16% to 18%, you update the `tax_configs` table. No code changes. No deployments. No testing.
 
-### Pattern 4: Maker-Checker for HomePass Status
+### Pattern 4: Maker-Checker for HomePass Status via EM-CFG-04
 
-Some HomePass status transitions require approval:
+Some HomePass status transitions require approval. The EM-CFG-04 engine handles this:
 
 ```php
 public function changeHomePassStatus(HomePass $homepass, string $status, bool $bypassApproval = false): HomePass
@@ -412,7 +416,9 @@ public function changeHomePassStatus(HomePass $homepass, string $status, bool $b
     $code = HomePassStatusCode::resolve($homepass->operator_code, $status);
 
     if ($code->requires_approval_to_enter && !$bypassApproval) {
-        $req = $this->approvals->request([
+        // EM-CFG-04: request approval via the unified engine
+        $req = app(ApprovalService::class)->request([
+            'operator_code' => $homepass->operator_code,
             'entity_type' => 'HOMEPASS_STATUS_TRANSITION',
             'action' => $status,
             'entity_ref' => $homepass->id,
@@ -424,7 +430,7 @@ public function changeHomePassStatus(HomePass $homepass, string $status, bool $b
         }
     }
 
-    // Only reaches here if approved (or no approval needed)
+    // Only reaches here if APPROVED or AUTO_APPROVED (or no approval needed)
     $homepass->update(['status' => $status]);
     $this->events->publish(new DomainEvent(
         type: CatalogEvents::HOMEPASS_STATUS_CHANGED,
@@ -435,7 +441,143 @@ public function changeHomePassStatus(HomePass $homepass, string $status, bool $b
 }
 ```
 
-**Why this matters:** Changing a HomePass from "SELLABLE" to "RETIRED" is a big deal — it means we can't sell to that address anymore. A manager should approve it. The system enforces this at the code level.
+**Why this matters:** Changing a HomePass from "SELLABLE" to "RETIRED" is a big deal — it means we can't sell to that address anymore. The EM-CFG-04 engine ensures the right people approve it, with multi-stage chains if configured. Previously, this used bespoke approval logic; now it uses the same engine as Billing adjustments and KYC approvals.
+
+### Pattern 5: How to Add a New Service Type
+
+1. Add the service to `service_classes` table (or migration)
+2. Add the service to `services` table with the correct class
+3. Update any packages that should include the new service
+4. Update the `TaxComputeService` if the new service has different tax treatment
+5. Update the UI to show the new service in the package builder
+6. Write tests!
+
+```php
+// Add a new service class
+DB::table('service_classes')->insert([
+    'code' => 'IPTV_PREMIUM',
+    'name' => 'IPTV Premium Package',
+    'description' => 'Premium TV channels',
+]);
+
+// Add the service
+DB::table('services')->insert([
+    'service_code' => 'iptv_premium',
+    'service_class_id' => 'IPTV_PREMIUM',
+    'operator_code' => 'DEFAULT',
+]);
+```
+
+**Why this matters:** New services are config-driven. Adding "IPTV Premium" doesn't require a code deployment — just database entries. But you must ensure tax, pricing, and UI are updated too.
+
+### Pattern 6: How to Roll Out a Package Update
+
+1. Create a new package version (status = DRAFT)
+2. Update prices, services, or descriptions in the version
+3. Test the version with a preview subscription
+4. Activate the version (marks old version as SUPERSEDED)
+5. Monitor for issues (new subscriptions use the new version)
+6. Existing subscriptions stay on their original version
+
+```bash
+# Preview a version before activating
+php artisan catalog:preview-version --package=pkg_xxx --version=ver_yyy
+
+# Activate a version
+php artisan catalog:activate-version --version=ver_yyy
+```
+
+**Why this matters:** Package updates are incremental and reversible. If the new version has a bug, you can activate the old version again. Existing customers are never affected.
+
+### Pattern 7: How to Debug a Tax Computation Issue
+
+```bash
+# Check the tax config for a service
+SELECT * FROM tax_configs
+WHERE operator_code = 'DEFAULT'
+  AND service_category_code = 'BROADBAND'
+  AND customer_category = 'RESIDENTIAL'
+  AND location = 'NAIROBI_NORTH';
+
+# Check if the tax config is active
+SELECT * FROM tax_configs WHERE id = 'tc_xxx' AND active = true;
+
+# Check the customer's category and location
+SELECT customer_category, location FROM customer WHERE customer_id = 'cus_xxx';
+
+# Recompute tax for a specific charge
+php artisan catalog:compute-tax --amount=100 --service=BROADBAND --customer=cus_xxx
+```
+
+**Why this matters:** Tax issues are usually config issues. The service is correct, the customer is correct, but the tax config row is missing or has the wrong rate. These queries help you find the gap.
+
+### Pattern 8: How to Handle a Campaign Launch
+
+```php
+// Launch a campaign
+$campaign = CampaignOffer::query()->create([
+    'name' => 'Summer Sale 2026',
+    'package_id' => 'pkg_xxx',
+    'discount_amount' => 10.00,
+    'start_date' => '2026-07-01',
+    'end_date' => '2026-07-31',
+    'operator_code' => 'DEFAULT',
+]);
+
+// The campaign is automatically picked up by Billing
+// No code changes needed — Billing reads active campaigns at cycle close
+```
+
+**Why this matters:** Campaigns are config-driven. Marketing sets the dates and discount; Billing applies it automatically. The campaign expires when the end date passes, and the discount stops applying.
+
+### Pattern 9: How to Validate a HomePass Coverage Map
+
+```bash
+# Check coverage for an address
+php artisan catalog:check-coverage --address="123 Main St" --region=NAIROBI_NORTH
+
+# Check all HomePasses in a region
+SELECT * FROM home_passes WHERE tech_region_id = 'tr_xxx';
+
+# Check sellable vs non-sellable ratio
+SELECT status, COUNT(*) FROM home_passes
+WHERE operator_code = 'DEFAULT'
+GROUP BY status;
+
+# Find orphaned HomePasses (no subscriptions)
+SELECT hp.* FROM home_passes hp
+LEFT JOIN subscriptions s ON s.homepass_id = hp.id
+WHERE s.id IS NULL AND hp.status = 'SELLABLE';
+```
+
+**Why this matters:** Coverage maps are critical for sales. If a customer enters their address and gets "not available," you need to know if it's a real coverage gap or a data issue. These queries help validate the coverage data.
+
+### Pattern 10: How to Handle a Package Retirement
+
+```php
+// 1. Check if any active subscriptions use this package
+$activeCount = Subscription::query()
+    ->where('package_ref', $package->package_ref)
+    ->whereIn('status', ['ACTIVE', 'PAUSED'])
+    ->count();
+
+if ($activeCount > 0) {
+    throw new DomainException('CANNOT_RETIRE_ACTIVE_PACKAGE', [
+        'activeSubscriptions' => $activeCount,
+    ]);
+}
+
+// 2. Mark the package as RETIRED
+$package->update(['status' => Package::STATUS_RETIRED]);
+
+// 3. Emit event so other modules can clean up
+$this->events->publish(new DomainEvent(
+    type: CatalogEvents::PACKAGE_RETIRED,
+    ...
+));
+```
+
+**Why this matters:** Retiring a package with active subscriptions would break billing. The system enforces this at the code level. You must migrate or terminate all subscriptions before retiring a package.
 
 ---
 

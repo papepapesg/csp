@@ -79,6 +79,11 @@ This trial covers the **core revenue modules**. Each guide is designed to be rea
 │  │ RuleEngine   │  │WorkflowEngine│  │Idempotency   │              │
 │  │              │  │              │  │  Middleware   │              │
 │  └──────────────┘  └──────────────┘  └──────────────┘              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
+│  │ EM-CFG-04    │  │              │  │              │              │
+│  │ Approval     │  │              │  │              │              │
+│  │ Engine       │  │              │  │              │              │
+│  └──────────────┘  └──────────────┘  └──────────────┘              │
 └─────────────────────────────────────────────────────────────────────┘
           │                  │                  │
           ▼                  ▼                  ▼
@@ -105,6 +110,7 @@ This trial covers the **core revenue modules**. Each guide is designed to be rea
 │  │  PostgreSQL (Authoritative)                                  │   │
 │  │  ├─ subscriptions, invoices, packages, customers, ...       │   │
 │  │  ├─ event_outbox (transactional events)                     │   │
+│  │  ├─ approval_requests, approval_decisions (EM-CFG-04)       │   │
 │  │  └─ process_instances, task_queues (workflow state)           │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────────┐   │
@@ -127,6 +133,7 @@ flowchart TB
         RULES["RuleEngine"]
         WF["Workflow Engine"]
         IDEM["Idempotency Middleware"]
+        APR["EM-CFG-04 Approval Engine"]
     end
 
     subgraph Modules["Modules/"]
@@ -150,6 +157,11 @@ flowchart TB
     API --> CAT_M
     API --> BIL_M
     API --> FUL_M
+
+    APR --> SUB_M
+    APR --> BIL_M
+    APR --> ILM_M
+    APR --> CAT_M
 
     SUB_M --> BUS
     CAT_M --> BUS
@@ -241,6 +253,35 @@ Idempotency-Key: abc-123-xyz
 
 **Why this matters:** Networks are unreliable. If a client sends "create subscription" and the connection drops, the client doesn't know if it worked. With idempotency, it can safely retry with the same key. If the first request succeeded, the retry returns the same result without creating a duplicate.
 
+### 6. Approval via EM-CFG-04 (Unified Approval Engine)
+> **Rule:** Sensitive operations requiring approval use the unified EM-CFG-04 approval engine.
+
+The EM-CFG-04 approval engine is a **platform-wide Foundation service** (`app/Foundation/Approvals/ApprovalService.php`) that replaces bespoke approval logic in every module. It supports:
+
+- **Multi-stage ordered chains:** Approval is not a flat count — it's a sequence of stages. Each stage must be cleared before the next opens.
+- **Two configuration modes:**
+  - *Static config:* `approval_definition` + `approval_stage` rows define who must approve what.
+  - *Dynamic stages:* The caller supplies the chain at request time (e.g., a rules engine decides N approvals per case).
+- **Stage properties:** Each stage has `approver_kind` (ROLE or USER), `approver_roles` (role pool), `approver_user_ref` (named user), `required_approvals` (quorum), and `allow_requester` (SoD toggle).
+- **Frozen snapshots:** The chain is frozen in `stages_snapshot` at request time. Config changes after the request don't affect in-flight requests.
+- **Distinct approvers:** One person cannot fill multiple slots in the same stage (dual-control enforcement).
+- **Auto-approval:** Below a configurable threshold amount, requests auto-approve without human review.
+
+**Previously**, KYC approvals (Ilm), billing adjustments (Billing), and HomePass status changes (Catalog) each had their own bespoke approval logic. Now all of them use EM-CFG-04 via their respective `approval_definition` rows. When you need approval for a new sensitive operation, you add a definition row — not new code.
+
+```php
+// Any module can request approval
+$approval = app(ApprovalService::class)->request([
+    'entity_type' => 'BILLING_ADJUSTMENT',
+    'action' => 'CREDIT_NOTE',
+    'amount' => 500.00,
+    'entity_ref' => $invoice->id,
+]);
+
+// The engine handles: multi-stage chains, quorum, distinct approvers, SoD
+// Returns PENDING, APPROVED, AUTO_APPROVED, or REJECTED
+```
+
 ---
 
 ## 🚀 New Dev Onboarding Path
@@ -301,6 +342,207 @@ All 16+ modules in the system:
 | Workflow | 02_framework | ✅ Active | *(pending)* | BPMN process engine |
 | ItOps | 10_other | ✅ Active | *(pending)* | Internal tools, monitoring |
 | Workforce | 07 | ✅ Active | *(pending)* | Technician dispatch |
+
+---
+
+## 🔧 Common Patterns (Cross-Module)
+
+### Pattern 1: How to Trace an Event Through the System
+
+When debugging, follow the event outbox:
+
+```bash
+# 1. Find the event
+SELECT * FROM event_outbox
+WHERE aggregate_id = 'sub_xxx'
+ORDER BY created_at DESC;
+
+# 2. Check delivery status
+SELECT * FROM event_outbox
+WHERE event_id = 'evt_xxx'
+  AND delivered = false;
+
+# 3. Check consumer logs
+php artisan queue:work --queue=events
+# Or check Redis stream consumers
+```
+
+**Why this matters:** The outbox is the source of truth for cross-module communication. If Billing never received a `SubscriptionActivated` event, the outbox will show whether it was published (and not delivered) or never published at all.
+
+### Pattern 2: How to Debug a Stuck Workflow
+
+```bash
+# Find the process instance
+SELECT * FROM process_instances WHERE business_key = 'sub_xxx';
+
+# Check current activity
+SELECT * FROM process_activities WHERE instance_id = 'pi_xxx';
+
+# Check if an external task is waiting
+SELECT * FROM external_tasks WHERE instance_id = 'pi_xxx';
+
+# Check job queue for the instance
+php artisan queue:retry --queue=workflow
+```
+
+**Why this matters:** Workflows can get stuck for many reasons: a handler threw an exception, an external task timed out, or a message was never correlated. These queries let you pinpoint exactly where the workflow is parked.
+
+### Pattern 3: How to Add a New Operator
+
+1. Create operator config row in `operators` table
+2. Seed status codes for the operator (subscription, homepass, etc.)
+3. Seed tax configs for the operator's region
+4. Seed dunning config for the operator's policies
+5. Seed approval definitions for the operator's sensitive operations
+6. Create operator-specific process definitions (or clone from template)
+7. Assign users to the operator with appropriate roles
+8. Run operator-specific tests: `php artisan test --filter=OperatorTests`
+
+**Why this matters:** SOPHIX is multi-tenant. Adding a new operator should be configuration, not code. But you need to seed all the config tables or the operator won't have any business rules to operate with.
+
+### Pattern 4: How to Verify EM-CFG-04 Approval Chain for an Operation
+
+```bash
+# Check the approval definition
+SELECT * FROM approval_definitions
+WHERE operator_code = 'DEFAULT'
+  AND entity_type = 'BILLING_ADJUSTMENT';
+
+# Check the stages
+SELECT * FROM approval_stages
+WHERE definition_id = 'def_xxx'
+ORDER BY sequence;
+
+# Check a specific request
+SELECT * FROM approval_requests WHERE entity_ref = 'inv_xxx';
+
+# Check decision history
+SELECT * FROM approval_decisions WHERE request_id = 'appr_xxx';
+```
+
+**Why this matters:** When an approval "doesn't work," the problem is usually in the definition (wrong roles), the stages (missing sequence), or the actor (missing role). These queries show the full chain from policy to request to decision.
+
+### Pattern 5: How to Run a Single Module's Tests in Isolation
+
+```bash
+# Run only Subscription tests
+php artisan test --filter=Subscription
+
+# Run a specific test class
+php artisan test --filter=SubscriptionOperationTest
+
+# Run with coverage
+php artisan test --filter=Subscription --coverage --min=80
+
+# Run in parallel (if configured)
+php artisan test --filter=Subscription --parallel
+```
+
+**Why this matters:** Full test suites can take 5+ minutes. When you're iterating on one module, run only its tests for fast feedback.
+
+### Pattern 6: How to Inspect the Context for a Request
+
+```php
+// In a controller or service
+use App\Foundation\Support\Context;
+
+$ctx = [
+    'operator' => Context::operatorCode(),
+    'user' => Context::userId(),
+    'correlation' => Context::correlationId(),
+    'request_id' => Context::requestId(),
+];
+// Log this for debugging cross-request issues
+```
+
+**Why this matters:** Context carries the operator, user, correlation ID, and request ID through the entire call stack. When debugging "why did this subscription get created for Operator B instead of A?", the context tells you exactly which request caused it.
+
+### Pattern 7: How to Check Database Locks and Deadlocks
+
+```bash
+# Check for long-running queries (potential locks)
+SELECT pid, state, query_start, query
+FROM pg_stat_activity
+WHERE state = 'active'
+  AND query_start < NOW() - INTERVAL '30 seconds';
+
+# Check for blocked queries
+SELECT blocked_locks.pid AS blocked_pid,
+       blocking_locks.pid AS blocking_pid,
+       blocked_activity.query AS blocked_query
+FROM pg_locks blocked_locks
+JOIN pg_stat_activity blocked_activity ON blocked_activity.pid = blocked_locks.pid
+JOIN pg_locks blocking_locks ON blocking_locks.locktype = blocked_locks.locktype
+JOIN pg_stat_activity blocking_activity ON blocking_activity.pid = blocking_locks.pid
+WHERE NOT blocked_locks.granted;
+```
+
+**Why this matters:** Invoice generation, payment allocation, and approval decisions all use row locking. Under high load, deadlocks can occur. These queries help you identify the culprit.
+
+### Pattern 8: How to Mock a Module Dependency in Tests
+
+```php
+// When testing Subscription, mock Catalog to avoid DB setup
+$this->mock(CatalogService::class, function ($mock) {
+    $mock->shouldReceive('validatePackage')
+        ->with('pkg_basic_100')
+        ->andReturn(true);
+});
+
+// Or use a fake event bus to assert events were published
+$this->mock(EventBus::class, function ($mock) {
+    $mock->shouldReceive('publish')
+        ->once()
+        ->with(\Mockery::on(function ($event) {
+            return $event->type === 'SubscriptionCreated';
+        }));
+});
+```
+
+**Why this matters:** Unit tests should be fast and isolated. Mocking module boundaries means your Subscription test doesn't need Catalog data seeded. Integration tests (Feature tests) should use real dependencies.
+
+### Pattern 9: How to Read a Module's Event Contract
+
+```bash
+# Find all event types published by a module
+# Subscription events
+grep -r "const.*=" Modules/Subscription/app/Events/ | grep -v TOPIC
+
+# Or read the Events class directly
+cat Modules/Subscription/app/Events/SubscriptionEvents.php
+
+# Find all listeners that consume a specific event
+grep -r "SubscriptionCreated" Modules/*/app/Listeners/
+```
+
+**Why this matters:** Events are the API between modules. Before you change an event payload, you need to know who consumes it. These commands show the full producer/consumer graph.
+
+### Pattern 10: How to Handle a Production Incident (Playbook)
+
+```bash
+# 1. Identify the scope
+php artisan tinker --execute="dd(DB::table('subscriptions')->where('status', 'PENDING_UPGRADE')->count());"
+
+# 2. Check the error rate in logs
+tail -f storage/logs/laravel.log | grep ERROR
+
+# 3. Check queue health
+php artisan queue:monitor
+
+# 4. Check database connections
+php artisan db:monitor
+
+# 5. If a workflow is stuck, manually retry
+php artisan workflow:retry --business-key=sub_xxx
+
+# 6. If an approval is stuck, check the chain
+php artisan tinker --execute="
+    $req = App\Models\ApprovalRequest::where('entity_ref', 'xxx')->first();
+    dd($req->stages_snapshot);
+"
+```
+
+**Why this matters:** When production is on fire, you need a systematic approach. These commands let you quickly narrow down whether the issue is in the database, the queue, a stuck workflow, or an approval bottleneck.
 
 ---
 

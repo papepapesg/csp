@@ -251,6 +251,10 @@ Modules/Billing/
 
 ### Rules (Business Policy Validation)
 
+Rules are **side-effect-free** PHP classes that return `true` (allowed) or throw `DomainException` (rejected). They live in the `Rules` module and are called by controllers and services.
+
+**Important:** Sensitive operations that require approval (e.g., adjustments, payment reversals, credit notes) use the **EM-CFG-04 approval engine** — a unified Foundation service. The Rules module checks *business preconditions* (e.g., "Can this payment be reversed?"), while EM-CFG-04 handles *approval workflow* (e.g., "Does this reversal need manager sign-off?"). The two work together: Rules answer "should we?" and EM-CFG-04 answers "may we?".
+
 | Rule | When It Runs | What It Checks |
 |------|-------------|----------------|
 | `CanGenerateInvoice` | Before invoice generation | Are charges valid? Is customer active? |
@@ -262,13 +266,15 @@ Modules/Billing/
 
 ### Workflow References
 
-Billing uses workflows for:
+Billing uses workflows via the EM-CFG-04 engine for:
 
 | Process | Purpose | Approval Required? |
 |---------|---------|-------------------|
-| `billing-adjustment` | Credit/debit note creation | Yes (maker-checker) |
-| `payment-reversal` | Reversing a recorded payment | Yes (manager approval) |
-| `dunning-hold` | Pausing dunning for a customer | Yes (customer service manager) |
+| `billing-adjustment` | Credit/debit note creation | Yes (via EM-CFG-04, rules-engine decides stepsRequired) |
+| `payment-reversal` | Reversing a recorded payment | Yes (manager approval via EM-CFG-04) |
+| `dunning-hold` | Pausing dunning for a customer | Yes (customer service manager via EM-CFG-04) |
+
+**EM-CFG-04 Integration:** Adjustments use dynamic stages — the rules engine answers "how many approvals" (stepsRequired), and the proposal raises an `ADJUSTMENT` ApprovalRequest with a single stage carrying that quorum. The engine enforces distinct approvers (one person cannot self-clear a dual-control gate). See [Pattern 6](#pattern-6-how-to-handle-a-billing-adjustment) below.
 | `invoice-write-off` | Writing off uncollectible debt | Yes (finance director) |
 
 ---
@@ -523,6 +529,146 @@ public function allocatePayment(Payment $payment, string $strategy = 'FIFO'): vo
 ```
 
 **Why this matters:** If a customer has 3 unpaid invoices and pays $100, the allocation decides which invoices get paid. FIFO (oldest first) is standard. Some operators prefer LIFO (newest first) or proportional. The strategy is config-driven.
+
+### Pattern 6: How to Handle a Billing Adjustment via EM-CFG-04
+
+Adjustments require approval. The EM-CFG-04 engine handles this with dynamic stages:
+
+```php
+// AdjustmentService::propose()
+public function propose(array $data, ?string $proposedBy = null): AdjustmentRequest
+{
+    // ... validation, limit checks ...
+
+    // Rules engine answers "how many approvals needed?"
+    $stepsRequired = $this->rules->evaluate('billing.adjustment-approval', [
+        'amount' => $data['amount'],
+        'operator' => $data['operator_code'],
+    ])['stepsRequired'] ?? 1;
+
+    // Open the EM-CFG-04 gate with a single stage carrying the quorum
+    $approval = app(ApprovalService::class)->request([
+        'operator_code' => $data['operator_code'],
+        'entity_type' => 'ADJUSTMENT',
+        'entity_ref' => $adjustment->adjustment_id,
+        'amount' => (float) $adjustment->amount,
+        'stages' => [[
+            'name' => 'Adjustment approval',
+            'approver_kind' => 'ROLE',
+            'approver_roles' => [],
+            'required_approvals' => max(1, $stepsRequired),
+        ]],
+    ]);
+
+    // The engine enforces distinct approvers (one person can't self-clear)
+    // and handles the quorum automatically
+}
+```
+
+**Why this matters:** Previously, adjustments had bespoke approval logic. Now they use the same EM-CFG-04 engine as KYC and HomePass status changes. The rules engine decides how many approvals are needed; the engine enforces distinct approvers and quorum. One unified engine for all approvals.
+
+### Pattern 7: How to Debug an Unpaid Invoice
+
+```bash
+# Check the invoice details
+SELECT * FROM invoices WHERE invoice_id = 'inv_xxx';
+
+# Check payment allocations
+SELECT * FROM payment_allocations WHERE invoice_id = 'inv_xxx';
+
+# Check if a payment was recorded but not allocated
+SELECT * FROM payments WHERE account_id = 'acc_xxx' AND allocated_amount < amount;
+
+# Check dunning state
+SELECT * FROM dunning_states WHERE account_id = 'acc_xxx';
+
+# Check if the customer has credit balance
+SELECT * FROM account_credit_balance WHERE account_id = 'acc_xxx';
+
+# Re-run allocation manually
+php artisan billing:reallocate --invoice=inv_xxx
+```
+
+**Why this matters:** An invoice can be unpaid for many reasons: payment not received, payment not allocated, credit balance not applied, or dunning hold. These queries help you find the exact cause.
+
+### Pattern 8: How to Process a Bulk Reversal
+
+Bulk reversals are dual-controlled (requester ≠ approver) via EM-CFG-04:
+
+```php
+// BulkReversalService::request()
+public function request(array $data): BulkReversal
+{
+    $reversal = BulkReversal::query()->create($data);
+
+    // Open EM-CFG-04 gate with two stages for dual control
+    $approval = app(ApprovalService::class)->request([
+        'operator_code' => $data['operator_code'],
+        'entity_type' => 'BULK_REVERSAL',
+        'entity_ref' => $reversal->id,
+        'stages' => [
+            ['name' => 'Requester', 'approver_kind' => 'ROLE', 'required_approvals' => 1],
+            ['name' => 'Reviewer', 'approver_kind' => 'ROLE', 'required_approvals' => 1],
+        ],
+    ]);
+
+    return $reversal;
+}
+```
+
+**Why this matters:** Reversing 1,000 payments is a high-risk operation. Dual control ensures two different people review the request. The EM-CFG-04 engine enforces that the requester and approver are distinct users.
+
+### Pattern 9: How to Handle a Wallet Top-Up
+
+```php
+// WalletService::topUp()
+public function topUp(string $accountId, float $amount, string $source): WalletTransaction
+{
+    return DB::transaction(function () use ($accountId, $amount, $source) {
+        $wallet = Wallet::query()->where('account_id', $accountId)->firstOrFail();
+
+        $wallet->balance += $amount;
+        $wallet->save();
+
+        $transaction = WalletTransaction::query()->create([
+            'wallet_id' => $wallet->id,
+            'amount' => $amount,
+            'type' => 'TOPUP',
+            'source' => $source, // e.g., 'M-PESA', 'BANK_TRANSFER', 'CASH'
+        ]);
+
+        $this->events->publish(new DomainEvent(
+            type: BillingEvents::WALLET_TOPPED_UP,
+            payload: ['accountId' => $accountId, 'amount' => $amount],
+        ));
+
+        return $transaction;
+    });
+}
+```
+
+**Why this matters:** Wallet top-ups are simple but critical. They must be atomic (balance + transaction in one DB transaction) and emit an event so other modules can react. If a prepaid customer tops up, the dunning state might need to be cleared.
+
+### Pattern 10: How to Retry a Failed Invoice Generation
+
+```bash
+# Check the failure queue
+SELECT * FROM generation_failures WHERE status = 'PENDING';
+
+# Retry a specific failure
+php artisan billing:retry-generation --failure-id=gf_xxx
+
+# Retry all pending failures
+php artisan billing:retry-generation --all
+
+# Check if the retry succeeded
+SELECT * FROM generation_failures WHERE id = 'gf_xxx';
+
+# Check the invoice was created
+SELECT * FROM invoices WHERE cycle_id = 'cycle_xxx';
+```
+
+**Why this matters:** Invoice generation can fail for transient reasons (DB timeout, network issue). The failure queue captures these and retries them automatically. But sometimes you need to manually retry after fixing the root cause.
 
 ---
 

@@ -240,6 +240,8 @@ Published to topic: **`subscription.lifecycle`**
 
 Rules are **side-effect-free** PHP classes that return `true` (allowed) or throw `DomainException` (rejected). They live in the `Rules` module and are called by workflow handlers.
 
+**Important:** Sensitive operations that require approval (e.g., large upgrades, status changes) use the **EM-CFG-04 approval engine** — a unified Foundation service. The Rules module checks *business preconditions* (e.g., "Can this subscription be upgraded?"), while EM-CFG-04 handles *approval workflow* (e.g., "Does this upgrade need manager sign-off?"). The two work together: Rules answer "should we?" and EM-CFG-04 answers "may we?".
+
 | Rule | When It Runs | What It Checks |
 |------|-------------|----------------|
 | `CanActivateSubscription` | Before activation | Is status CREATED? Is billing intent resolved? Is homepass valid? |
@@ -247,6 +249,8 @@ Rules are **side-effect-free** PHP classes that return `true` (allowed) or throw
 | `CanUpgradeSubscription` | Before upgrade | Is status ACTIVE? Is new package compatible? Is customer eligible? |
 | `CanTerminateSubscription` | Before termination | Is status not already TERMINATED? Is there an unpaid balance? |
 | `CanRelocateSubscription` | Before relocation | Is new homepass valid? Is service available there? |
+
+**EM-CFG-04 Integration:** Operations that modify money or legal state (upgrade, terminate, relocate) may trigger an approval request. The workflow handler checks `ApprovalService::request()` before proceeding. See [Pattern 10](#pattern-10-approval-gating-for-sensitive-operations) below.
 
 ### Workflow Handlers (Process Steps)
 
@@ -440,6 +444,141 @@ private function resolveProcessKey(string $operator, string $kind): string
 ```
 
 **Why this matters:** Different operators may have different workflows. One operator might require a deposit before activation. Another might not. The process definition is data, not code.
+
+### Pattern 6: How to Debug a Stuck Workflow
+
+```bash
+# Find the process instance for a subscription
+SELECT * FROM process_instances WHERE business_key = 'sub_xxx';
+
+# Check current activity
+SELECT * FROM process_activities WHERE instance_id = 'pi_xxx';
+
+# Check if an external task is waiting
+SELECT * FROM external_tasks WHERE instance_id = 'pi_xxx';
+
+# Check the operation ledger
+SELECT * FROM subscription_operations WHERE subscription_id = 'sub_xxx' ORDER BY created_at DESC;
+
+# Retry the workflow manually (if stuck on a recoverable error)
+php artisan workflow:retry --business-key=sub_xxx
+```
+
+**Why this matters:** Workflows can get stuck for many reasons: a handler threw an exception, an external task timed out, or a message was never correlated. These queries let you pinpoint exactly where the workflow is parked.
+
+### Pattern 7: How to Add a New Status Code
+
+1. Add the status code to `subscription_status_codes` table (or migration)
+2. Add the constant to `Subscription.php` model
+3. Update the state machine diagram in the design doc
+4. Add validation rules (which transitions are valid from this status)
+5. Update the `OperationFramework` to recognize the new status
+6. Write tests for the new transitions
+
+```php
+// Add to subscription_status_codes table
+DB::table('subscription_status_codes')->insert([
+    'operator_code' => 'DEFAULT',
+    'status_code' => 'PENDING_MIGRATION',
+    'description' => 'Customer requested migration, awaiting approval',
+    'is_terminal' => false,
+    'is_active' => true,
+]);
+```
+
+**Why this matters:** Status codes are config-driven, not hardcoded. Adding a new status is a database change, not a code change. But you still need to teach the system what transitions are valid from that status.
+
+### Pattern 8: How to Handle Concurrent Operations
+
+```php
+// In OperationFramework::trigger()
+DB::transaction(function () use ($subscription, $kind, $data) {
+    // Lock the subscription row to prevent race conditions
+    $locked = Subscription::query()
+        ->where('id', $subscription->id)
+        ->lockForUpdate()
+        ->first();
+
+    // Check if another operation is already running
+    $running = SubscriptionOperation::query()
+        ->where('subscription_id', $subscription->id)
+        ->where('status', 'STARTED')
+        ->first();
+
+    if ($running) {
+        throw new DomainException('OPERATION_ALREADY_IN_PROGRESS', [
+            'operationId' => $running->operation_id,
+            'kind' => $running->kind,
+        ]);
+    }
+
+    // Create the operation record
+    $operation = SubscriptionOperation::query()->create([
+        'subscription_id' => $subscription->id,
+        'kind' => $kind,
+        'status' => 'STARTED',
+        'idempotency_key' => $data['idempotency_key'] ?? null,
+    ]);
+
+    return $operation;
+});
+```
+
+**Why this matters:** Two support agents might try to upgrade the same subscription at the same time. Row locking prevents this. The second agent gets "OPERATION_ALREADY_IN_PROGRESS" instead of creating a conflicting operation.
+
+### Pattern 9: How to Trace a Subscription Through Its Lifecycle
+
+```bash
+# Get the full history of a subscription
+SELECT * FROM subscriptions WHERE id = 'sub_xxx';
+
+# Get all operations
+SELECT * FROM subscription_operations WHERE subscription_id = 'sub_xxx' ORDER BY created_at;
+
+# Get all status changes
+SELECT * FROM subscription_status_history WHERE subscription_id = 'sub_xxx' ORDER BY changed_at;
+
+# Get all restrictions
+SELECT * FROM subscription_restrictions WHERE subscription_id = 'sub_xxx';
+
+# Get all pause history
+SELECT * FROM subscription_pause_history WHERE subscription_id = 'sub_xxx';
+
+# Get all events from the outbox
+SELECT * FROM event_outbox WHERE aggregate_id = 'sub_xxx' ORDER BY created_at;
+```
+
+**Why this matters:** When a customer calls and says "my internet was working yesterday but not today," you need the full timeline. These queries give you every status change, operation, restriction, and event in chronological order.
+
+### Pattern 10: Approval Gating for Sensitive Operations
+
+Some operations (large upgrades, termination, relocation) require approval before execution. The EM-CFG-04 engine handles this:
+
+```php
+// In a workflow handler for a sensitive operation
+public function handle(TaskContext $context): TaskResult
+{
+    $subscription = Subscription::query()->find($context->businessKey());
+    $upgradeAmount = $context->variable('upgradeAmount'); // e.g., $500
+
+    // Check if approval is needed (threshold-based)
+    $approval = app(ApprovalService::class)->request([
+        'entity_type' => 'SUBSCRIPTION_UPGRADE',
+        'entity_ref' => $subscription->id,
+        'amount' => $upgradeAmount,
+    ]);
+
+    if ($approval->status === ApprovalRequest::PENDING) {
+        // Pause the workflow until approval is granted
+        return TaskResult::park('AWAITING_APPROVAL');
+    }
+
+    // Only reaches here if APPROVED or AUTO_APPROVED
+    // Proceed with the upgrade...
+}
+```
+
+**Why this matters:** A customer upgrading from a $50/month plan to a $500/month plan is a big deal. The system automatically routes it for approval based on the amount. The workflow parks until the approval is granted, then resumes automatically.
 
 ---
 
