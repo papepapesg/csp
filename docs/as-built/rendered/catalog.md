@@ -545,8 +545,16 @@ package/bundle launch via an approve/decide pair.
 - **Consumes (`platform.approvals`):** `ApplyHomePassTransitionOnApproval`, `ApplyPackageLaunchApproval`.
 - **Cache:** `CatalogCacheInvalidator` (+ Billing's `EvictPlmCatalogCache`).
 
-## 6. Processes
+## 6. Processes & ops console
 Service-level governance (approval-gated launches + HomePass transitions); no BPMN.
+
+**Ops console** — `sophix:catalog:*`, wrapping `PackageLaunchService` (no approval-gate bypass):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `launch-status [--operator]` | review | counts of package-launch plans by lifecycle state, plus the due (SCHEDULED + arrived) and blocking-FAIL queues |
+| `launch-show {plan}` | review | one launch plan's state/schedule + its recorded validation checks (flags FAIL checks blocking activation) |
+| `launch-activate-due {operator} --confirm` | safe-correction | runs the SIP-02 §11 worker for one operator — activates every due SCHEDULED plan (`activateDuePlans`), each re-validated first so a blocking FAIL stays SCHEDULED; gated behind `--confirm` (without it, a dry due count) |
 
 ## 7. Policy & config
 `rules.tax-applicability`; every catalog table **is** config (prices/versions, discounts/campaigns,

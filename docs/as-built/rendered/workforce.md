@@ -280,8 +280,16 @@ employees, picking one whose skills fit.
   — `WorkOrderFinalized`→consume, `WorkOrderCancelled`→release.
 - **Consumed by →** WorkOrder auto-assign (synchronous capacity query + commit).
 
-## 6. Processes
+## 6. Processes & ops console
 No BPMN; service + the WO-lifecycle event listener.
+
+**Ops console** — `sophix:workforce:*`, wrapping existing services (no approval-gate bypass):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--operator]` | review | counts of workforce items needing attention: non-active contractors still holding ACTIVE commitments, stale ACTIVE commitments (committed day past), commitment-ledger counts by status, inactive slots |
+| `contractor-show {contractor} [--date]` | review | one contractor's EM-02 picture (read-only): registry status, region/scope coverage, availability slots with live remaining capacity for the day, and ACTIVE slot commitments |
+| `release-wo {wo} --confirm` | safe-correction | release a WO's ACTIVE slot commitments via the existing `ContractorAvailabilityService::releaseForWorkOrder` (the WO-cancel path; R-EM-CS-7), restoring capacity — break-glass for cancelled/abandoned WOs whose commitments still pin capacity; destructive, requires `--confirm` |
 
 ## 7. Policy & config
 Slots, coverage, skills, teams — operator data; `max_concurrent` is the capacity knob; `emergency_only`

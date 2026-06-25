@@ -251,8 +251,16 @@ Timeline (the immutable status history):
 - **Consumes:** `WorkOrderFinalized` → resolve the linked ticket; `WorkOrderCancelled` → send it back for
   review (`ResolveTicketOnWorkOrderFinalized`).
 
-## 6. Processes
+## 6. Processes & ops console
 Service-level; ASR may start a fulfillment/WO flow.
+
+**Ops console** — `sophix:ticketing:*`, wrapping existing services (no approval-gate bypass):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--operator]` | review | queue counts needing attention (read-only): SLA-breached, first-response breached, unassigned, awaiting sign-off (UNDER_REVIEW), flagged (requires_review), waiting on work order, reopened |
+| `ticket-show {ticket} [--timeline=20]` | review | one ticket's live state + append-only timeline (read-only); `{ticket}` is the `ticket_id` or `ticket_number` |
+| `ticket-reassign {ticket} {assignee} [--actor=cli-ops]` | safe-correction | reassign a ticket to a new owner via `TicketService::assign` (sets assignee + status ASSIGNED); mutating, so requires `--confirm`; refuses terminal tickets |
 
 ## 7. Policy & config
 `ticket_category_catalog` + `sla_policy` (operator SLA matrix), per-category routing — data.

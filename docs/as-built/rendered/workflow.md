@@ -201,8 +201,20 @@ rejected. *Proven by `WorkflowEngineTest::test_strict_outputs_rejects_a_handler_
 ## 5. Integration
 - **Emits:** `ProcessInstanceEnded`. **Driven by:** every orchestrating module (`*WorkflowProvider`).
 
-## 6. Processes
-The engine itself; `sophix:workflow:work` + `:tick` are its heartbeat.
+## 6. Processes & ops console
+The engine itself; `sophix:workflow:work` (the worker, `--once`/`--max`/`--sleep`) + `:tick` (every
+minute: fires due timers, releases expired task locks) are its heartbeat.
+
+**Ops console** — `sophix:workflow:*`, read-only inspection over the engine state (no engine bypass):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--operator]` | review | one-glance queue counts needing attention: running/failed/suspended instances, external tasks created/incident/failed and locks expired (re-pollable), timers due to fire, user tasks open/overdue |
+| `instance-show {instance} [--trace=N]` | review | one instance's live state + tokens: status, active nodes, pending external/user tasks, timers, message-catch subscriptions, and the recent activity trace — see exactly where a flow is parked |
+
+*`ops-status` surfaces the work to drain and points at the drainers (`:tick` for timers/locks, `:work`
+for tasks); `instance-show <instance_id>` then shows one parked flow in detail — read-only, the engine
+still does the advancing.*
 
 ## 7. Policy & config
 Flows are data (operator override by definition row); worker `--max/--sleep` tune throughput;

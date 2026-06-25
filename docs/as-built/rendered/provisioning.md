@@ -393,6 +393,16 @@ the default (logs + mirrors desired; honours `forceFail`/`simulateAsync`/`simula
   `broadcast('ACTIVATE')`; outputs `{provisioned, provisioningRefs}`; on fail
   `TaskResult::fail(retryable:true)`.
 
+**Ops console** — `sophix:provisioning:*`, wrapping existing services (no EM-CFG-04 bypass; gated force-sync stays on the `dunning.admin` `/force-sync` API path):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--operator]` | review | queue counts needing attention (read-only): commands pending/sent/accepted-async/failed/mismatch, open + in-review reconciliation items, force-sync awaiting approval/running |
+| `command-show {command}` | review | one command's live state (read-only): status, execution mode, target, attempts, external ref, desired/observed state, last error |
+| `ops-fix {action} [--operator] [--target] [--command] [--confirm]` | safe-correction | run one ops op via the same service entry points the workers use — `poll-async`/`reconcile`/`redispatch`; `redispatch` re-pushes to the network so it needs `--confirm` |
+
+*`reconcile`/`poll-async` mirror the scheduled workers on demand; `ops-status` surfaces failed/mismatch queues and `command-show`/`ops-fix … redispatch` drive recovery — no SQL, no approval bypass (force-sync stays EM-CFG-04-gated).*
+
 ## 7. Policy & config
 `provisioning_target` + `provisioning_adapter_config` (the connector binding), `retry_policy_json`,
 EM-CFG-04 force-sync definition (seeded gated by default), Catalog topology (`network_node`,`homepass`).

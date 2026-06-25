@@ -329,8 +329,18 @@ Resource-scoped permissions `customer.read|create|update` (no `customer.*` wildc
   Accepted,Applied}`.
 - **Consumes:** `ResumeCvmOfferOnApproval`. **Downstream of ILM:** Provisioning, Notification, Fulfillment.
 
-## 6. Processes
-No BPMN; KYC + CVM offer governance via EM-CFG-04; `sophix:cvm:evaluate-flags` daily worker.
+## 6. Processes & ops console
+No BPMN; KYC + CVM offer governance via EM-CFG-04; `sophix:cvm:evaluate-flags {--operator}` daily worker
+(rule-driven retention/risk flags).
+
+**Ops console** — `sophix:ilm:*`, wrapping existing services (no EM-CFG-04 bypass; KYC decisions are
+inspect-only here — they must go through the approval engine):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `customer-show {customer}` | review | one customer's master state (read-only): identity, derived `kyc_status`, KYC approval trail, and every account with status/sub-status/attention-banner/active flags |
+| `kyc-queue [--operator] [--limit]` | review | customers by `kyc_status` count, then those stuck mid-chain (PENDING awaiting L1, L1_APPROVED awaiting final) — read-only |
+| `flag-clear {account} {flag} [--actor]` | safe-correction | clear one ACTIVE account flag via `AccountService::clearFlag` — marks it CLEARED, recomputes the attention banner, emits `AccountFlagCleared` (reversible, non-gated; no `--confirm`) |
 
 ## 7. Policy & config
 `rules.cvm.offer` + flag-evaluation rules; the flag/sub-status/KYC-authority catalogs — operator data.

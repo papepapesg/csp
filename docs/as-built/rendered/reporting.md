@@ -119,8 +119,15 @@ Add a `MetricMap` case (+ the emitting event) and the projector counts it — no
 - **Consumes:** all domain events via `OutboxEventPublished` (only those in `MetricMap` count).
 - **Emits:** none (read model).
 
-## 6. Processes
+## 6. Processes & ops console
 Live projection on dispatch; export/reconcile on demand or scheduled.
+
+**Ops console** — `sophix:reporting:*`, read-only (the mart is a read model — nothing here writes):
+
+| Command | Kind | Does |
+| --- | --- | --- |
+| `ops-status [--operator]` | review | report-mart inventory & freshness: row count, distinct operators/metric keys, earliest/latest `metric_date`; warns if empty or > 2 days stale (projector not consuming) |
+| `reconcile-show {operator} [--from] [--to]` | review | mart-vs-event-log reconciliation for one operator+window via `ReportReconciliationService` (same check as `GET /api/reports/reconcile`); lists per-cell discrepancies (expected/actual/delta) |
 
 ## 7. Policy & config
 `MetricMap` is the declared contract; dashboards select metric subsets.
