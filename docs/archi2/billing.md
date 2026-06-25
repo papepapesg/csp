@@ -669,4 +669,123 @@ A: The `billing_mode` field on the Subscription (`PREPAID` / `POSTPAID`). Billin
 
 ---
 
+## 12. Operations Runbook (Ops / Support)
+
+> Everything here is a **real** command, endpoint, service method, table, or column on this branch — nothing invented. Two correction paths exist:
+> - **API (preferred):** enforces permissions, idempotency, approvals (EM-CFG-04), and emits events. Use this for anything customer-affecting.
+> - **Tinker (break-glass):** calls a service method directly — **bypasses route permissions and approval gates**. Use only when the API can't be reached, and record what you did.
+>
+> Replace `WIK` with the operator code and `acc_…` / `sub_…` / `inv_…` with real ids. API calls need a bearer token with the permission shown in §6.
+
+### 12.1 Health & inventory (read-only)
+
+```bash
+php artisan schedule:list                       # confirm the sophix:billing:* jobs are wired
+php artisan queue:failed                         # failed queue jobs (rating, dispatch)
+php artisan migrate:status | grep -i billing     # are billing migrations applied?
+php artisan sophix:outbox:dispatch               # flush committed events now (safe, idempotent)
+```
+
+```sql
+-- Overdue debt waiting on dunning
+SELECT account_id, SUM(amount_due) debt, MIN(due_date) oldest
+FROM invoice WHERE status IN ('OPEN','PARTIALLY_PAID','OVERDUE') AND amount_due > 0 AND due_date < now()
+GROUP BY account_id ORDER BY debt DESC LIMIT 50;
+
+-- Dunning population by level (0=none,1=warning,2=restricted,3=suspended,4=terminated)
+SELECT current_level, status, COUNT(*) FROM dunning_state GROUP BY current_level, status ORDER BY current_level;
+
+-- Work queues an op should drain
+SELECT status, COUNT(*) FROM adjustment_request        GROUP BY status;   -- PENDING_APPROVAL / PROPOSED need action
+SELECT status, COUNT(*) FROM bulk_reversal_batch        GROUP BY status;   -- PENDING_APPROVAL awaits a 2nd approver
+SELECT status, COUNT(*) FROM tax_invoice                GROUP BY status;   -- SIGNING_FAILED needs retry/resolve
+SELECT status, COUNT(*) FROM generation_failure_queue   GROUP BY status;   -- PENDING_RETRY auto-retries every 15m
+SELECT account_id, review_due_at FROM dunning_state WHERE status = 'PENDING_TERMINATION_REVIEW';
+```
+
+### 12.2 Routine batch ops (run a scheduled job on demand)
+
+```bash
+php artisan sophix:billing:cycle-close --operator=WIK     # close due cycles, settle fees + usage
+php artisan sophix:billing:rate-usage --operator=WIK      # rate pending usage_record → rated_event
+php artisan sophix:billing:run-cycle --operator=WIK       # settle unbilled rated events at cycle close
+php artisan sophix:billing:pro-forma --operator=WIK       # prepaid pre-cycle pro-forma documents
+php artisan sophix:billing:dunning-run                    # advance overdue accounts one level
+php artisan sophix:billing:generation-retry --operator=WIK# retry recoverable invoice-generation failures
+php artisan sophix:billing:tax-sign-scan --operator=WIK   # submit GENERATED tax invoices for signing
+php artisan sophix:billing:tax-retry-scan --operator=WIK  # re-submit transient SIGNING_FAILED tax invoices
+php artisan sophix:wallet:expire --operator=WIK           # expire wallet balances past validity (R-W-9)
+php artisan sophix:billing:dunning-archive --days=30      # snapshot+mark old CLEARED/terminated episodes
+```
+
+### 12.3 Diagnose → correct, by symptom
+
+**Dunning stuck / customer disputes / paid-but-still-chased**
+```bash
+# Re-pull debt from open invoices (auto-clears if debt is now 0)
+curl -XPOST .../api/dunning/refresh-debt -d '{"account_id":"acc_x"}'        # invoice.manage
+# Pay-confirmed → clear; dispute → hold; admin write-off → clear-without-payment
+curl -XPOST .../api/dunning/acc_x/clear                                      # invoice.manage
+curl -XPOST .../api/dunning/acc_x/hold                                       # dunning.admin
+curl -XPOST .../api/dunning/acc_x/clear-without-payment                      # dunning.admin
+curl -XPOST .../api/dunning/acc_x/advance                                    # dunning.admin (skip grace, one level)
+# Pre-termination review queue: confirm / extend / force
+curl -XPOST .../api/dunning/acc_x/confirm-termination                        # dunning.admin
+curl -XPOST .../api/dunning/acc_x/extend-review                              # dunning.admin
+```
+Break-glass equivalents (bypass permissions): `app(\Modules\Billing\Services\DunningService::class)->refreshDebt('acc_x')`, `->adminClear('acc_x','ops:jane')`, `->hold('acc_x','ops:jane',48)`, `->advance('acc_x','ops:jane')`.
+
+**Adjustment blocked or failed**
+```bash
+# "LIMIT_OVERRIDE_REQUIRED" on approve → an approver lifts the breach, then approve
+curl -XPOST .../api/adjustments/adj_x/override-limit                          # adjustment.approve
+# Note application failed (e.g. PREPAID debit, insufficient wallet) → retry after a top-up
+curl -XPOST .../api/adjustments/adj_x/retry-application                       # adjustment.approve
+# Needs rework / withdraw
+curl -XPOST .../api/adjustments/adj_x/request-revision                        # adjustment.approve
+curl -XPOST .../api/adjustments/adj_x/cancel                                  # adjustment.create
+```
+Remember: a 2nd approval on a dual-control adjustment must come from a **different** user, or the engine returns `409 DUPLICATE_STAGE_APPROVER`.
+
+**Payment misapplied / surplus stranded**
+```bash
+curl -XPOST .../api/payments/pay_x/reverse -d '{"reasonCode":"WRONG_ACCOUNT"}' # payment.reverse
+curl -XPOST .../api/payments/pay_x/allocate-surplus                            # payment.apply
+# Apply a held account credit balance to a specific invoice (break-glass):
+php artisan tinker --execute="app(\Modules\Billing\Services\PaymentService::class)->applyCreditBalanceToInvoice('inv_x');"
+```
+
+**Tax invoice won't sign**
+```bash
+curl -XPOST .../api/tax-invoices/tax_x/retry-signing                          # invoice.manage
+curl -XPOST .../api/tax-invoices/tax_x/resolve-no-action -d '{"notes":"..."}' # invoice.manage (gave-up → close)
+# Or sweep all due ones:
+php artisan sophix:billing:tax-retry-scan --operator=WIK
+```
+
+**Prepaid cycle frozen / wallet balance looks wrong**
+```sql
+-- Audit the wallet ledger (append-only; balance = last balance_after)
+SELECT type, amount, balance_before, balance_after, reason, reference, created_at
+FROM wallet_transaction
+WHERE wallet_id = (SELECT wallet_id FROM wallet WHERE subscription_id = 'sub_x' AND wallet_code = 'MONEY_KES')
+ORDER BY created_at DESC;
+```
+A top-up auto-resumes a frozen cycle (`RetryFrozenCycleOnTopup`). Manual credit/debit is a customer-money operation — prefer the API (`POST /api/wallets/{subscriptionId}/topup|debit`, `wallet.manage`). Break-glass: `app(\Modules\Billing\Services\WalletService::class)->credit($wallet, 100, 'MANUAL_ADJUST', 'ticket-123')`.
+
+**Invoice generation failed for a cycle**
+```sql
+SELECT subscription_id, trigger_code, reason_code, attempts, next_attempt_at, status
+FROM generation_failure_queue WHERE status = 'PENDING_RETRY' ORDER BY next_attempt_at;
+```
+These auto-retry every 15 min (`sophix:billing:generation-retry`); run it now to force a pass. A row that exhausts its budget becomes `GAVE_UP_AUTO` for human review — fix the root cause, then re-run the cycle (`sophix:billing:run-cycle`).
+
+### 12.4 Safety notes
+- **Invoices are immutable** — never `UPDATE`/`DELETE` an `invoice` row to "fix" money. Use a credit/debit note or a governed bulk reversal.
+- **Tinker bypasses approvals.** Adjustments and bulk reversals are dual-controlled for a reason; reaching past the API removes that control. Prefer the endpoint.
+- **Everything is operator-scoped** — always pass/`WHERE operator_code` so you don't touch another operator's data.
+- **Writes are event-sourced** via the outbox; if downstream modules didn't react, check `php artisan queue:failed` and re-run `sophix:outbox:dispatch`.
+
+---
+
 > **Next:** Read the [Subscription Module Guide](./Subscription.md) — where the customer journey begins.
