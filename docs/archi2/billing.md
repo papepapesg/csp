@@ -162,11 +162,22 @@ Modules/Billing/
 │   ├── Services/
 │   │   ├── InvoiceService.php                    # Generates invoices from charges (BIL-02)
 │   │   ├── ChargeComputeService.php             # Rates usage into charge lines
+│   │   ├── PaymentService.php                   # Receives and applies payments (BIL-01)
 │   │   ├── DunningService.php                   # Dunning logic (BIL-04)
+│   │   ├── AdjustmentService.php                # Invoice adjustments via EM-CFG-04 (BIL-02)
 │   │   ├── BillingIntentService.php             # Prepaid intent confirmation
-│   │   ├── PaymentAllocationService.php         # Allocates payments to invoices
-│   │   ├── WalletService.php                    # Wallet balance management
-│   │   └── MediationRatingService.php           # Converts billable events to charges
+│   │   ├── WalletService.php                    # Wallet balance management (BIL-05/06)
+│   │   ├── MediationRatingService.php           # Converts billable events to charges
+│   │   ├── TaxService.php                       # Tax computation per line
+│   │   ├── TaxSigningService.php                # Signs tax invoices
+│   │   ├── CustomerSnapshotService.php            # Captures customer data at invoice time
+│   │   ├── ProFormaService.php                  # Pro forma (quote) invoices
+│   │   ├── BulkReversalService.php              # Bulk payment reversals
+│   │   ├── GenerationFailureService.php         # Tracks failed invoice generation
+│   │   ├── CycleCloseService.php                # Closes billing cycles
+│   │   ├── CycleBillingService.php              # Recurring billing cycle logic
+│   │   ├── NoteApplicationService.php           # Applies credit/debit notes
+│   │   └── DunningProgramResolver.php           # Resolves dunning program config
 │   │
 │   ├── Events/
 │   │   └── BillingEvents.php                    # All billing event constants
@@ -202,11 +213,22 @@ Modules/Billing/
 |---------|-------------|-----------|
 | `InvoiceService` | Generates invoices from charges, creates legal invoice numbers, handles PDF generation | Controllers, Nightly batch jobs |
 | `ChargeComputeService` | Rates usage into charge lines (converts "500 GB" to "$10") | MediationRatingService, Controllers |
-| `DunningService` | Runs dunning stages, checks unpaid invoices, escalates | Nightly batch, Controllers |
+| `PaymentService` | Receives and applies payments, allocates to invoices (FIFO/LIFO), handles reversals | PaymentController |
+| `DunningService` | Scans overdue accounts, advances dunning levels, applies restrictions/suspensions/terminations | Nightly batch, Controllers |
+| `AdjustmentService` | Proposes and applies invoice adjustments (credit/debit notes) via EM-CFG-04 approval | AdjustmentController |
 | `BillingIntentService` | Creates prepaid/postpaid billing intents, confirms on payment | Subscription workflow handlers |
-| `PaymentAllocationService` | Allocates incoming payments to unpaid invoices (FIFO, LIFO, or custom) | PaymentController |
-| `WalletService` | Manages wallet balances, records transactions, handles top-ups | WalletController |
+| `WalletService` | Manages wallet balances, records transactions, handles top-ups and deductions | WalletController, PaymentService |
 | `MediationRatingService` | Converts raw billable events (usage) into rated charges | BillableEventController, Queue jobs |
+| `TaxService` | Computes tax per line from Catalog's tax rules | InvoiceService |
+| `TaxSigningService` | Signs tax invoices for legal compliance | TaxInvoiceController |
+| `CustomerSnapshotService` | Captures customer data at invoice time for audit | InvoiceService |
+| `ProFormaService` | Generates pro forma invoices (quotes, not legal documents) | ProFormaController |
+| `BulkReversalService` | Handles bulk payment reversals with dual-control approval | AdminController |
+| `GenerationFailureService` | Tracks and retries failed invoice generation attempts | InvoiceService, Nightly batch |
+| `CycleCloseService` | Closes billing cycles and triggers invoice generation | Nightly batch |
+| `CycleBillingService` | Manages recurring billing cycle logic | CycleCloseService |
+| `NoteApplicationService` | Applies credit/debit notes to invoices | AdjustmentService |
+| `DunningProgramResolver` | Resolves dunning program config per operator/billing mode | DunningService |
 
 ### Models (Data)
 
@@ -466,69 +488,249 @@ $taxResult = $this->tax->compute([
 
 **Why this matters:** Different services have different tax treatments. Internet might have VAT, voice might have excise tax, business customers might be exempt. The `TaxComputeService` reads from Catalog's `tax_configs` table so tax rules are config-driven, not hardcoded.
 
-### Pattern 4: Dunning as State Machine
+### Pattern 4: Dunning as Config-Driven Level Machine
 
-Dunning progresses through stages automatically. Each stage has actions and conditions:
-
-```php
-// DunningService::run()
-foreach ($unpaidAccounts as $account) {
-    $dunning = $account->dunningState;
-    $daysOverdue = now()->diffInDays($account->oldestUnpaidInvoice->due_date);
-
-    $nextStage = match (true) {
-        $daysOverdue > 30 => 'STAGE_4_SUSPEND',      // Final notice → suspend
-        $daysOverdue > 21 => 'STAGE_3_FINAL',       // Warning → final notice
-        $daysOverdue > 14 => 'STAGE_2_WARNING',     // Reminder → warning
-        $daysOverdue > 7 => 'STAGE_1_REMINDER',     // Due → reminder
-        default => null,                             // Not yet overdue
-    };
-
-    if ($nextStage && $nextStage !== $dunning->stage) {
-        $dunning->update(['stage' => $nextStage, 'last_escalated_at' => now()]);
-        $this->events->publish(new DomainEvent(
-            type: BillingEvents::DUNNING_ESCALATED,
-            payload: ['accountId' => $account->id, 'stage' => $nextStage],
-        ));
-    }
-}
-```
-
-**Why this matters:** Dunning is fully automated. A customer who is 8 days late gets a polite reminder. At 30 days, their service gets suspended. No human intervention required. But each stage emits an event so CRM can send the right message and Subscription can act if needed.
-
-### Pattern 5: Payment Allocation (FIFO by Default)
-
-When a payment comes in, Billing applies it to the oldest unpaid invoice first:
+The dunning engine scans overdue accounts and advances them through **levels** defined in the `dunning_program` catalog. Each level has a **grace period** and an **action** (`WARNING_ONLY`, `RESTRICTION_ADD`, `SUSPEND_NP`, `TERMINATION`). The program version is **pinned** on first entry so policy edits never disturb in-flight episodes.
 
 ```php
-public function allocatePayment(Payment $payment, string $strategy = 'FIFO'): void
+// DunningService::scan() — the real entry point
+public function scan(): array
 {
-    $remaining = $payment->amount;
-
-    $invoices = Invoice::query()
-        ->where('account_id', $payment->account_id)
-        ->where('status', 'UNPAID')
-        ->when($strategy === 'FIFO', fn($q) => $q->orderBy('due_date', 'asc'))
-        ->when($strategy === 'LIFO', fn($q) => $q->orderBy('due_date', 'desc'))
+    // SQL aggregate: group overdue invoices by account, sum debt, find oldest due
+    $accounts = Invoice::query()
+        ->whereIn('status', [Invoice::OPEN, Invoice::PARTIALLY_PAID, Invoice::OVERDUE])
+        ->where('amount_due', '>', 0)
+        ->where('due_date', '<', now())
+        ->select('account_id', 'operator_code')
+        ->selectRaw('SUM(amount_due) as debt')
+        ->selectRaw('MIN(due_date) as oldest_due')
+        ->groupBy('account_id', 'operator_code')
+        ->limit(500) // batch cap
         ->get();
 
-    foreach ($invoices as $invoice) {
-        if ($remaining <= 0) break;
-
-        $toApply = min($remaining, $invoice->balance_due);
-        $invoice->allocations()->create([
-            'payment_id' => $payment->id,
-            'amount' => $toApply,
-        ]);
-        $invoice->update(['balance_due' => $invoice->balance_due - $toApply]);
-        $remaining -= $toApply;
+    $advanced = 0;
+    foreach ($accounts as $row) {
+        if ($this->assessAccount($row->account_id, $row->operator_code, (float) $row->debt, $row->oldest_due)) {
+            $advanced++;
+        }
     }
 
-    $payment->update(['allocated_amount' => $payment->amount - $remaining]);
+    return ['scanned' => $accounts->count(), 'advanced' => $advanced];
 }
 ```
 
-**Why this matters:** If a customer has 3 unpaid invoices and pays $100, the allocation decides which invoices get paid. FIFO (oldest first) is standard. Some operators prefer LIFO (newest first) or proportional. The strategy is config-driven.
+The real `assessAccount()` does this:
+
+```php
+private function assessAccount(string $accountId, string $operator, float $debt, string $oldestDue): bool
+{
+    // Lock the DunningState row for this account (or create a new one)
+    $state = DunningState::query()
+        ->where('operator_code', $operator)
+        ->where('account_id', $accountId)
+        ->lockForUpdate()
+        ->first()
+        ?? new DunningState(['operator_code' => $operator, 'account_id' => $accountId, 'current_level' => 0]);
+
+    // Skip if paused, in review, recovery-failed, or archived
+    if (in_array($state->status, [
+        DunningState::STATUS_SUSPENDED_BY_PAUSE,
+        DunningState::STATUS_PENDING_TERMINATION_REVIEW,
+        DunningState::STATUS_RECOVERY_FAILED,
+        DunningState::STATUS_ARCHIVED,
+    ], true)) {
+        return false;
+    }
+
+    // At-most-daily cadence: don't evaluate more than once per day
+    if ($state->exists && $state->next_evaluation_at && $state->next_evaluation_at->isFuture()) {
+        return false;
+    }
+
+    // Resolve the dunning program (pinned on first entry)
+    $program = $this->pinProgram($state, $operator, $billingMode);
+    if (! $program) {
+        return false; // no policy for this operator/mode
+    }
+
+    // Grace check: days at current level vs program's grace for that level
+    $graceDays = $state->current_level === 0 ? 0 : $program->graceDays($state->current_level);
+    // NPD flag (hasDunningAccelerantFlag) waives grace — accelerates dunning
+    if ($graceDays > 0 && $this->accounts->hasDunningAccelerantFlag($accountId, $operator)) {
+        $graceDays = 0;
+    }
+    $daysAtLevel = $state->entered_level_at ? (int) abs(now()->diffInDays($state->entered_level_at)) : 0;
+    if ($daysAtLevel < $graceDays) {
+        $state->save();
+        return false; // grace not elapsed
+    }
+
+    // Monotonic advance: exactly one level per pass, never skip
+    $nextLevel = $state->current_level + 1;
+    if ($nextLevel > $program->maxLevel()) {
+        $state->save();
+        return false; // already at terminal level
+    }
+
+    // Pre-termination review window (if program requires it)
+    if ($program->actionIntent($nextLevel) === DunningProgram::TERMINATION && $program->pre_termination_review_required) {
+        $state->status = DunningState::STATUS_PENDING_TERMINATION_REVIEW;
+        $state->review_due_at = now()->addHours($this->reviewWindowHours($operator));
+        $state->save();
+        $this->events->publish($this->stateEvent(BillingEvents::DUNNING_TERMINATION_PENDING, $state, [
+            'reviewDueAt' => $state->review_due_at->toIso8601String(),
+        ]));
+        return true;
+    }
+
+    // Advance the level inside a transaction
+    DB::transaction(function () use ($state, $nextLevel, $program, $wasNone) {
+        $state->current_level = $nextLevel;
+        $state->entered_level_at = now();
+        if ($wasNone) {
+            $state->entered_dunning_at = now();
+        }
+        $state->save();
+
+        if ($wasNone) {
+            $this->events->publish($this->stateEvent(BillingEvents::SUBSCRIPTION_ENTERED_DUNNING, $state, [
+                'triggeringEventType' => $state->triggering_event_type,
+            ]));
+        }
+        $this->events->publish($this->stateEvent(BillingEvents::DUNNING_STAGE_ADVANCED, $state, [
+            'level' => $nextLevel,
+            'levelName' => $program->levelDef($nextLevel)['name'] ?? null,
+            'debt' => (string) $state->outstanding_debt_amount,
+        ]));
+    });
+
+    // Apply the level's action (RESTRICTION_ADD, SUSPEND_NP, TERMINATION)
+    $this->applyLevelAction($program, $nextLevel, $subscription, $state);
+
+    return true;
+}
+```
+
+**Why this matters:** The dunning engine is fully config-driven. An operator can change grace periods, actions, and level definitions by updating the `dunning_program` catalog — no code changes. The monotonic level advancement ensures a customer never jumps from "reminder" to "termination" without passing through intermediate levels. The pinned program version (R-BIL-04-C-1) means a policy change doesn't retroactively affect customers already in dunning.
+
+**Key behaviors the real code has that the fabricated snippet missed:**
+- `scan()` not `run()` — SQL aggregate over invoices, not model loop
+- Grace days from `$program->graceDays($level)` — config, not hardcoded
+- Monotonic advancement (`current_level + 1`) — never skips levels
+- Actions from program (`WARNING_ONLY`, `RESTRICTION_ADD`, `SUSPEND_NP`, `TERMINATION`) — not string stages
+- `lockForUpdate()` on `DunningState` — prevents race conditions
+- At-most-daily cadence (`next_evaluation_at`) — no hammering
+- NPD flag (`hasDunningAccelerantFlag`) — accelerates dunning by waiving grace
+- Pre-termination review window (`review_due_at`) — human review before termination
+- Per-subscription restriction serialization (`applyRestrictions`) — one RESTRICT per Subscription at a time
+- Recovery paths (`clear()`, `recoverOnTopup()`) — auto-clears when debt is paid
+- Admin overrides (`adminClear()`, `hold()`, `advance()`, `confirmTermination()`, `forceTerminate()`) — manual control
+- Archive (`archiveCleared()`) — snapshots settled episodes, never hard-deletes
+
+### Pattern 5: Payment Application (PREPAID vs POSTPAID)
+
+When a payment arrives, `PaymentService::receiveAndApply()` routes it based on the account's billing mode. PREPAID credits the wallet; POSTPAID allocates to open invoices:
+
+```php
+public function receiveAndApply(array $data): PaymentLedger
+{
+    $operator = $data['operator_code'] ?? Context::operatorCode();
+    $reference = $data['payment_reference'] ?? $data['gateway_ref'] ?? null;
+
+    // RC-3 idempotency: retried receipt returns the prior result
+    if ($reference) {
+        $prior = PaymentLedger::query()
+            ->where('account_id', $data['account_id'])
+            ->where('payment_reference', $reference)
+            ->first();
+        if ($prior) {
+            return $prior->load('allocations');
+        }
+    }
+
+    // RC-4 billing-mode resolution: PREPAID routes to wallet top-up
+    $prepaid = empty($data['target_invoice_id'])
+        ? Subscription::query()
+            ->where('account_id', $data['account_id'])
+            ->where('billing_mode', 'PREPAID')
+            ->whereNotIn('status_code', [Subscription::TERMINATED])
+            ->first()
+        : null;
+
+    return DB::transaction(function () use ($data, $operator, $reference, $prepaid) {
+        $amount = round((float) $data['paid_amount'], 2);
+
+        $payment = PaymentLedger::query()->create([
+            'account_id' => $data['account_id'],
+            'operator_code' => $operator,
+            'method' => $data['method'] ?? 'OFFLINE',
+            'gateway_ref' => $data['gateway_ref'] ?? null,
+            'payment_reference' => $reference,
+            'currency' => $data['currency'] ?? 'KES',
+            'paid_amount' => $amount,
+            'unallocated_amount' => $amount,
+            'status' => 'RECEIVED',
+            'received_at' => now(),
+        ]);
+
+        // PREPAID path: credit wallet, done
+        if ($prepaid) {
+            $wallet = $this->wallets->ensureWallet(
+                $prepaid->subscription_id,
+                WalletService::DEFAULT_WALLET_CODE,
+                $data['account_id'],
+                $prepaid->customer_id
+            );
+            $this->wallets->credit($wallet, $amount, 'TOPUP', $reference);
+            $payment->update(['unallocated_amount' => 0, 'status' => 'APPLIED']);
+            return $payment->refresh()->load('allocations');
+        }
+
+        // POSTPAID path: allocate to open invoices by operator policy
+        $policy = (string) (DB::table('payment_config')
+            ->where('operator_code', $operator)
+            ->value('allocation_policy') ?? 'FIFO_DUE_DATE');
+
+        $invoices = $this->allocatableInvoices(
+            $data['account_id'],
+            $data['target_invoice_id'] ?? null,
+            $policy
+        )->lockForUpdate()->get();
+
+        $remaining = $amount;
+        foreach ($invoices as $invoice) {
+            if ($remaining <= 0.0001) break;
+            $applied = round(min($remaining, (float) $invoice->amount_due), 2);
+            if ($applied <= 0) continue;
+
+            $before = (float) $invoice->amount_due;
+            $payment->allocations()->create([
+                'invoice_id' => $invoice->invoice_id,
+                'allocated_amount' => $applied,
+                'outstanding_before' => $before,
+                'outstanding_after' => round($before - $applied, 2),
+                'allocation_strategy' => $data['target_invoice_id'] ?? false ? 'DIRECTED' : $policy,
+            ]);
+
+            $newPaid = (float) $invoice->amount_paid + $applied;
+            $newDue = round((float) $invoice->total_amount - $newPaid, 2);
+            $invoice->update([
+                'amount_paid' => $newPaid,
+                'amount_due' => max($newDue, 0),
+                'status' => $newDue <= 0.0001 ? Invoice::PAID : Invoice::PARTIALLY_PAID,
+            ]);
+            $remaining = round($remaining - $applied, 2);
+        }
+
+        $this->settleSurplus($payment, $data['account_id'], $operator, $currency, $remaining, $amount);
+        $this->clearDunningIfPaid($data['account_id']);
+
+        return $payment->refresh()->load('allocations');
+    });
+}
+```
+
+**Why this matters:** The real code handles both PREPAID and POSTPAID in one method. PREPAID customers get wallet credits; POSTPAID customers get invoice allocations. The allocation policy (`FIFO_DUE_DATE`, `LIFO_DUE_DATE`, etc.) is config-driven per operator. The method is idempotent — retrying the same payment reference returns the prior result without double-applying.
 
 ### Pattern 6: How to Handle a Billing Adjustment via EM-CFG-04
 
@@ -593,61 +795,92 @@ php artisan billing:reallocate --invoice=inv_xxx
 
 ### Pattern 8: How to Process a Bulk Reversal
 
-Bulk reversals are dual-controlled (requester ≠ approver) via EM-CFG-04:
+Bulk reversals cancel a whole batch of invoices that were billed with a systemic error (wrong tax rate, wrong package price). The operation is dual-controlled via EM-CFG-04:
 
 ```php
-// BulkReversalService::request()
-public function request(array $data): BulkReversal
+// BulkReversalService::propose() — the real entry point
+public function propose(array $scope, ?string $proposedBy, bool $reIssue = false, ?string $notes = null): string
 {
-    $reversal = BulkReversal::query()->create($data);
+    $operator = $scope['operator_code'] ?? Context::operatorCode();
 
-    // Open EM-CFG-04 gate with two stages for dual control
-    $approval = app(ApprovalService::class)->request([
-        'operator_code' => $data['operator_code'],
-        'entity_type' => 'BULK_REVERSAL',
-        'entity_ref' => $reversal->id,
-        'stages' => [
-            ['name' => 'Requester', 'approver_kind' => 'ROLE', 'required_approvals' => 1],
-            ['name' => 'Reviewer', 'approver_kind' => 'ROLE', 'required_approvals' => 1],
-        ],
+    // Preview: split invoices into eligible vs protected (e.g., already paid, in dispute)
+    $preview = $this->preview($scope, $operator);
+    $batchId = Id::make('brb');
+
+    // Create the batch record
+    DB::table('bulk_reversal_batch')->insert([
+        'batch_id' => $batchId,
+        'operator_code' => $operator,
+        'invoice_type' => $scope['invoice_type'] ?? null,
+        'date_from' => $scope['date_from'] ?? null,
+        'date_to' => $scope['date_to'] ?? null,
+        'filters' => isset($scope['filters']) ? json_encode($scope['filters']) : null,
+        're_issue' => $reIssue,
+        'status' => 'PENDING_APPROVAL',
+        'invoices_in_scope' => $preview['eligible'],
+        'proposed_by' => $proposedBy,
+        'notes' => $notes,
+        'created_at' => now(), 'updated_at' => now(),
     ]);
 
-    return $reversal;
+    // Open EM-CFG-04 dual-control gate: proposer is the requester,
+    // and the engine's separation-of-duties rule refuses self-approval
+    $this->approvals->request([
+        'operator_code' => $operator,
+        'entity_type' => 'BULK_REVERSAL',
+        'entity_ref' => $batchId,
+        'requester_id' => $proposedBy,
+        'approval_definition' => 'BULK_REVERSAL_APPROVAL', // static definition from config
+    ]);
+
+    return $batchId;
 }
 ```
 
-**Why this matters:** Reversing 1,000 payments is a high-risk operation. Dual control ensures two different people review the request. The EM-CFG-04 engine enforces that the requester and approver are distinct users.
+**Why this matters:** Reversing a whole batch is high-risk. The `preview()` method shows exactly which invoices are eligible vs protected before you commit. The EM-CFG-04 engine enforces dual control (proposer ≠ approver) via its separation-of-duties rule, not a hand-rolled check. Each cancellation is its own transaction; partial failures are visible per invoice.
 
 ### Pattern 9: How to Handle a Wallet Top-Up
 
+Wallet top-ups credit a prepaid balance. The real `WalletService::credit()` is atomic (balance + transaction in one DB transaction) and emits an event:
+
 ```php
-// WalletService::topUp()
-public function topUp(string $accountId, float $amount, string $source): WalletTransaction
+// WalletService::credit() — the real method
+public function credit(Wallet $wallet, float $amount, string $reason = 'TOPUP', ?string $reference = null): WalletTransaction
 {
-    return DB::transaction(function () use ($accountId, $amount, $source) {
-        $wallet = Wallet::query()->where('account_id', $accountId)->firstOrFail();
+    $amount = round($amount, 2);
+    if ($amount <= 0) {
+        throw DomainException::validation('Amount must be positive.');
+    }
 
-        $wallet->balance += $amount;
-        $wallet->save();
+    return DB::transaction(function () use ($wallet, $amount, $reason, $reference) {
+        // Lock the wallet row to prevent concurrent balance updates
+        $locked = Wallet::query()->where('wallet_id', $wallet->wallet_id)->lockForUpdate()->firstOrFail();
 
-        $transaction = WalletTransaction::query()->create([
-            'wallet_id' => $wallet->id,
+        $before = (float) $locked->balance;
+        $locked->update(['balance' => round($before + $amount, 2)]);
+
+        $txn = WalletTransaction::query()->create([
+            'wallet_id' => $locked->wallet_id,
             'amount' => $amount,
-            'type' => 'TOPUP',
-            'source' => $source, // e.g., 'M-PESA', 'BANK_TRANSFER', 'CASH'
+            'type' => 'CREDIT',
+            'reason' => $reason, // e.g., 'TOPUP', 'REFUND', 'ADJUSTMENT'
+            'reference' => $reference,
+            'balance_before' => $before,
+            'balance_after' => round($before + $amount, 2),
         ]);
 
-        $this->events->publish(new DomainEvent(
-            type: BillingEvents::WALLET_TOPPED_UP,
-            payload: ['accountId' => $accountId, 'amount' => $amount],
+        $this->events->publish($this->event(
+            BillingEvents::WALLET_CREDITED,
+            $txn,
+            ['walletId' => $locked->wallet_id, 'amount' => (string) $amount, 'reason' => $reason],
         ));
 
-        return $transaction;
+        return $txn;
     });
 }
 ```
 
-**Why this matters:** Wallet top-ups are simple but critical. They must be atomic (balance + transaction in one DB transaction) and emit an event so other modules can react. If a prepaid customer tops up, the dunning state might need to be cleared.
+**Why this matters:** Wallet operations must be atomic. If two top-ups happen simultaneously, the `lockForUpdate()` prevents a race condition where both read the old balance and both write the new balance, losing one update. The transaction ledger (`WalletTransaction`) is append-only — you never edit a row, you always add a new one. This gives a full audit trail.
 
 ### Pattern 10: How to Retry a Failed Invoice Generation
 
@@ -702,7 +935,7 @@ SELECT * FROM invoices WHERE cycle_id = 'cycle_xxx';
 - [ ] `Modules/Billing/app/Models/Invoice.php` — Understand the invoice structure and legal number generation
 - [ ] `Modules/Billing/app/Services/InvoiceService.php` — See how invoices are generated from charges
 - [ ] `Modules/Billing/app/Services/DunningService.php` — Understand dunning stages and automation
-- [ ] `Modules/Billing/app/Services/PaymentAllocationService.php` — See how payments are allocated
+- [ ] `Modules/Billing/app/Services/PaymentService.php` — See how payments are allocated
 - [ ] `Modules/Billing/app/Models/DunningState.php` — Understand dunning state tracking
 - [ ] `Modules/Billing/routes/api.php` — See all endpoints in one place
 
