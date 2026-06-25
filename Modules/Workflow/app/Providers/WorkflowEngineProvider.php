@@ -3,6 +3,8 @@
 namespace Modules\Workflow\Providers;
 
 use Illuminate\Support\ServiceProvider;
+use Modules\Workflow\Console\InstanceShowCommand;
+use Modules\Workflow\Console\OpsStatusCommand;
 use Modules\Workflow\Console\WorkflowTickCommand;
 use Modules\Workflow\Console\WorkflowWorkerCommand;
 use Modules\Workflow\Engine\TaskRegistry;
@@ -27,6 +29,8 @@ class WorkflowEngineProvider extends ServiceProvider
             $this->commands([
                 WorkflowWorkerCommand::class,
                 WorkflowTickCommand::class,
+                OpsStatusCommand::class,
+                InstanceShowCommand::class,
             ]);
         }
     }

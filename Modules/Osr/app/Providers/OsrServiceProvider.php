@@ -24,6 +24,8 @@ class OsrServiceProvider extends ModuleServiceProvider
      */
     protected array $commands = [
         \Modules\Osr\Console\ReservationExpiryCommand::class,
+        \Modules\Osr\Console\OpsStatusCommand::class,
+        \Modules\Osr\Console\StockShowCommand::class,
     ];
 
     /**

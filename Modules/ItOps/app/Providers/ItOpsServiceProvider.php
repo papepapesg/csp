@@ -35,6 +35,22 @@ class ItOpsServiceProvider extends ModuleServiceProvider
     ];
 
     /**
+     * Boot the module and register its ops console commands.
+     */
+    public function boot(): void
+    {
+        parent::boot();
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                \Modules\ItOps\Console\OpsStatusCommand::class,
+                \Modules\ItOps\Console\ServiceShowCommand::class,
+                \Modules\ItOps\Console\ServiceControlCommand::class,
+            ]);
+        }
+    }
+
+    /**
      * Define module schedules.
      *
      * @param  $schedule

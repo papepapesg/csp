@@ -4,6 +4,9 @@ namespace Modules\WorkOrder\Providers;
 
 use Illuminate\Support\ServiceProvider;
 use Modules\Workflow\Engine\TaskRegistry;
+use Modules\WorkOrder\Console\OpsStatusCommand;
+use Modules\WorkOrder\Console\WorkOrderFixCommand;
+use Modules\WorkOrder\Console\WorkOrderShowCommand;
 use Modules\WorkOrder\Workflow\CaptureBindingsHandler;
 use Modules\WorkOrder\Workflow\CheckWarrantyHandler;
 use Modules\WorkOrder\Workflow\FinalizeShiftingHandler;
@@ -27,5 +30,10 @@ class WorkOrderWorkflowProvider extends ServiceProvider
         $registry->register(FinalizeSupportHandler::class);
         $registry->register(MarkPhaseHandler::class);
         $registry->register(FinalizeShiftingHandler::class);
+
+        // WO-01 ops console: read-only review + break-glass safe-correction commands.
+        if ($this->app->runningInConsole()) {
+            $this->commands([OpsStatusCommand::class, WorkOrderShowCommand::class, WorkOrderFixCommand::class]);
+        }
     }
 }

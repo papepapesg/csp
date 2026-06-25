@@ -22,7 +22,10 @@ class RbacServiceProvider extends ModuleServiceProvider
      *
      * @var string[]
      */
-    // protected array $commands = [];
+    protected array $commands = [
+        \Modules\Rbac\Console\OpsUserShowCommand::class,
+        \Modules\Rbac\Console\OpsRolesCommand::class,
+    ];
 
     /**
      * Provider classes to register.

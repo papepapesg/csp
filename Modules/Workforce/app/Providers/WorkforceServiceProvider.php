@@ -43,4 +43,20 @@ class WorkforceServiceProvider extends ModuleServiceProvider
     // {
     //     $schedule->command('inspire')->hourly();
     // }
+
+    /**
+     * Boot the module and register its OPS CONSOLE COMMANDS.
+     */
+    public function boot(): void
+    {
+        parent::boot();
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                \Modules\Workforce\Console\OpsStatusCommand::class,
+                \Modules\Workforce\Console\ContractorShowCommand::class,
+                \Modules\Workforce\Console\ReleaseWoCommand::class,
+            ]);
+        }
+    }
 }

@@ -5,9 +5,12 @@ namespace Modules\Notification\Providers;
 use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Event;
+use Modules\Notification\Console\DeliveryShowCommand;
 use Modules\Notification\Console\Icn\StaffExpireCommand;
 use Modules\Notification\Console\Icn\StaffRetryCommand;
+use Modules\Notification\Console\OpsStatusCommand;
 use Modules\Notification\Console\RetryDispatchCommand;
+use Modules\Notification\Console\RetryFixCommand;
 use Modules\Notification\Console\RetryRenderCommand;
 use Modules\Notification\Dispatch\ChannelAdapterRegistry;
 use Modules\Notification\Icn\StaffAdapterRegistry;
@@ -39,6 +42,9 @@ class NotificationServiceProvider extends ModuleServiceProvider
         RetryRenderCommand::class,
         StaffRetryCommand::class,
         StaffExpireCommand::class,
+        OpsStatusCommand::class,
+        DeliveryShowCommand::class,
+        RetryFixCommand::class,
     ];
 
     public function boot(): void

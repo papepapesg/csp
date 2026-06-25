@@ -5,6 +5,9 @@ namespace Modules\Fulfillment\Providers;
 use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Modules\Fulfillment\Console\OpsStatusCommand;
+use Modules\Fulfillment\Console\OrderFixCommand;
+use Modules\Fulfillment\Console\OrderShowCommand;
 use Modules\Fulfillment\Listeners\CancelOrderOnKycRejected;
 use Modules\Fulfillment\Listeners\ResumeOrderOnInstallFinalized;
 use Modules\Fulfillment\Listeners\ResumeOrderOnKycApproved;
@@ -34,5 +37,9 @@ class FulfillmentWorkflowProvider extends ServiceProvider
         Event::listen(OutboxEventPublished::class, [ResumeOrderOnInstallFinalized::class, 'handle']);
         Event::listen(OutboxEventPublished::class, [ResumeOrderOnKycApproved::class, 'handle']);
         Event::listen(OutboxEventPublished::class, [CancelOrderOnKycRejected::class, 'handle']);
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([OpsStatusCommand::class, OrderShowCommand::class, OrderFixCommand::class]);
+        }
     }
 }

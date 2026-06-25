@@ -40,5 +40,13 @@ class RulesRuntimeProvider extends ServiceProvider
         };
         \Modules\Rules\Models\DecisionTable::saved($forget);
         \Modules\Rules\Models\DecisionTable::deleted($forget);
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                \Modules\Rules\Console\OpsRuleStatusCommand::class,
+                \Modules\Rules\Console\RuleTableShowCommand::class,
+                \Modules\Rules\Console\RuleEvaluateCommand::class,
+            ]);
+        }
     }
 }

@@ -3,6 +3,8 @@
 namespace Modules\PaymentGateway\Providers;
 
 use Illuminate\Console\Scheduling\Schedule;
+use Modules\PaymentGateway\Console\CallbackShowCommand;
+use Modules\PaymentGateway\Console\OpsStatusCommand;
 use Nwidart\Modules\Support\ModuleServiceProvider;
 
 class PaymentGatewayServiceProvider extends ModuleServiceProvider
@@ -22,7 +24,23 @@ class PaymentGatewayServiceProvider extends ModuleServiceProvider
      *
      * @var string[]
      */
-    // protected array $commands = [];
+    protected array $commands = [];
+
+    /**
+     * Boot the module, registering its ops console commands (read-only reviews)
+     * only when running in the console.
+     */
+    public function boot(): void
+    {
+        parent::boot();
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                OpsStatusCommand::class,
+                CallbackShowCommand::class,
+            ]);
+        }
+    }
 
     /**
      * Provider classes to register.

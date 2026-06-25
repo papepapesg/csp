@@ -22,7 +22,11 @@ class CatalogServiceProvider extends ModuleServiceProvider
      *
      * @var string[]
      */
-    // protected array $commands = [];
+    protected array $commands = [
+        \Modules\Catalog\Console\LaunchStatusCommand::class,
+        \Modules\Catalog\Console\LaunchShowCommand::class,
+        \Modules\Catalog\Console\LaunchActivateDueCommand::class,
+    ];
 
     /**
      * Provider classes to register.

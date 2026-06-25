@@ -5,7 +5,10 @@ namespace Modules\Subscription\Providers;
 use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Modules\Subscription\Console\OperationCancelCommand;
+use Modules\Subscription\Console\OperationShowCommand;
 use Modules\Subscription\Console\OperationTimeoutCommand;
+use Modules\Subscription\Console\OpsStatusCommand;
 use Modules\Subscription\Listeners\ConfirmBillingIntentOnPayment;
 use Modules\Subscription\Listeners\ConfirmPrepaidIntentOnTopup;
 use Modules\Subscription\Workflow\ActivateHandler;
@@ -58,7 +61,7 @@ class SubscriptionWorkflowProvider extends ServiceProvider
         Event::listen(OutboxEventPublished::class, [ConfirmPrepaidIntentOnTopup::class, 'handle']);
 
         if ($this->app->runningInConsole()) {
-            $this->commands([OperationTimeoutCommand::class]);
+            $this->commands([OperationTimeoutCommand::class, OpsStatusCommand::class, OperationShowCommand::class, OperationCancelCommand::class]);
         }
     }
 }

@@ -34,6 +34,19 @@ class TicketingServiceProvider extends ModuleServiceProvider
         RouteServiceProvider::class,
     ];
 
+    public function boot(): void
+    {
+        parent::boot();
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                \Modules\Ticketing\Console\OpsStatusCommand::class,
+                \Modules\Ticketing\Console\TicketShowCommand::class,
+                \Modules\Ticketing\Console\TicketReassignCommand::class,
+            ]);
+        }
+    }
+
     /**
      * Define module schedules.
      *

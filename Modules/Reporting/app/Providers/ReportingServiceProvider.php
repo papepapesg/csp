@@ -36,6 +36,21 @@ class ReportingServiceProvider extends ModuleServiceProvider
     ];
 
     /**
+     * Boot the module, then register the ops console commands (console-only).
+     */
+    public function boot(): void
+    {
+        parent::boot();
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                \Modules\Reporting\Console\OpsStatusCommand::class,
+                \Modules\Reporting\Console\ReconcileShowCommand::class,
+            ]);
+        }
+    }
+
+    /**
      * Define module schedules.
      *
      * @param  $schedule
