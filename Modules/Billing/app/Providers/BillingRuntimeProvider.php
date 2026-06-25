@@ -62,7 +62,8 @@ class BillingRuntimeProvider extends ServiceProvider
         });
 
         if ($this->app->runningInConsole()) {
-            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, CycleCloseCommand::class, WalletExpiryCommand::class, ProFormaScanCommand::class, TaxSignScanCommand::class, TaxRetryScanCommand::class, GenerationFailureRetryCommand::class]);
+            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, CycleCloseCommand::class, WalletExpiryCommand::class, ProFormaScanCommand::class, TaxSignScanCommand::class, TaxRetryScanCommand::class, GenerationFailureRetryCommand::class,
+                \Modules\Billing\Console\OpsStatusCommand::class, \Modules\Billing\Console\DunningShowCommand::class, \Modules\Billing\Console\DunningFixCommand::class]);
         }
     }
 
