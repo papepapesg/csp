@@ -46,10 +46,12 @@ as done. The whole point is to do this safely and only once.
 we would credit the customer twice. So the same payment reference is only ever acted on once — a repeat
 is recognised and quietly ignored.
 
-**Who does what:** the provider re-posts the same `(provider, external_ref)` → the dedup key hits → the
-**existing** callback row is returned (no new row), only a `GatewayCallbackDuplicate` audit event fires,
-and `receiveAndApply` is **not** called again. *Proven by
-`GatewayCallbackTest::test_duplicate_callback_is_deduped`.*
+**Who does what:**
+1. the provider re-posts the same `(provider, external_ref)`.
+2. the dedup key hits → the **existing** callback row is returned (no new row).
+3. only a `GatewayCallbackDuplicate` audit event fires, and `receiveAndApply` is **not** called again.
+
+*Proven by `GatewayCallbackTest::test_duplicate_callback_is_deduped`.*
 
 ### 3. Prepaid vs postpaid routing (Billing-owned)
 
@@ -77,9 +79,12 @@ A bank feed posts a transfer → recorded + applied (method `BANK_TRANSFER`).
 apply it to anyone — we mark the notification rejected and keep the raw details so a human can sort it
 out.
 
-**Who does what:** a callback whose `account_ref` resolves to no billing account → callback `REJECTED`
-(`reject_reason=ACCOUNT_NOT_FOUND`), `GatewayCallbackRejected` emitted, no money applied. *Proven by
-`GatewayCallbackTest::test_unresolvable_account_is_rejected`.*
+**Who does what:**
+1. a callback whose `account_ref` resolves to no billing account → callback `REJECTED`
+   (`reject_reason=ACCOUNT_NOT_FOUND`).
+2. `GatewayCallbackRejected` emitted, no money applied.
+
+*Proven by `GatewayCallbackTest::test_unresolvable_account_is_rejected`.*
 
 ### 7. Apply fails downstream → REJECTED
 If `receiveAndApply` throws, the callback is recorded `REJECTED` with the exception message as

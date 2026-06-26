@@ -79,12 +79,13 @@ should I show this user?" The server keeps the list of all renderable actions an
 needs, then hands back only the ones this user's permissions unlock. So a dispatcher sees the "Assign
 technician" button and a care agent doesn't — but this is only about drawing the screen, not about security.
 
-**Who does what:** `GET /api/rbac/users/{u}/navigation` → loads `rbac_frontend_action` (ACTIVE), keeps each
-action whose `required_permission_code` is in the user's **effective permissions**, returns
-`{actionCode, type, displayName, app}`. So the **“Assign technician”** BUTTON
-(`required_permission_code: workorder.assign`) renders for a DISPATCHER but is hidden for a
-CUSTOMER_CARE_AGENT. The BO SPA calls this to build the menu and show/hide controls. *Visibility is UX,
-never security — the API still enforces `permission:`/`scope:` regardless.*
+**Who does what:**
+1. `GET /api/rbac/users/{u}/navigation` → loads `rbac_frontend_action` (ACTIVE).
+2. Keeps each action whose `required_permission_code` is in the user's **effective permissions**, returns `{actionCode, type, displayName, app}`.
+3. So the **“Assign technician”** BUTTON (`required_permission_code: workorder.assign`) renders for a DISPATCHER but is hidden for a CUSTOMER_CARE_AGENT.
+4. The BO SPA calls this to build the menu and show/hide controls.
+
+*Visibility is UX, never security — the API still enforces `permission:`/`scope:` regardless.*
 
 
 ![diagram](img/rbac_3.png)

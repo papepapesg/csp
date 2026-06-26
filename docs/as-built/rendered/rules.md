@@ -30,9 +30,12 @@ decides — the caller supplies the facts and applies the result.
 varies by operator and by what is being sold. Instead of hard-coding it, the caller asks the rules engine,
 which looks up a table and returns the right tax group.
 
-**Who does what:** Catalog `TaxComputeService` calls `RuleEngine::evaluate('rules.tax-applicability',
-{taxableKind, customerCategory})` → a deployed `decision_table`'s rows match the facts → returns the tax
-group. *Proven by consumers' tests + `DecisionTableTest`.*
+**Who does what:**
+1. Catalog `TaxComputeService` calls `RuleEngine::evaluate('rules.tax-applicability', {taxableKind, customerCategory})`.
+2. A deployed `decision_table`'s rows match the facts.
+3. Returns the tax group.
+
+*Proven by consumers' tests + `DecisionTableTest`.*
 
 **Worked example — which row matches** (using deployed table `dt_1`, `rule_set: rules.tax-applicability`,
 `hit_policy: FIRST`):

@@ -50,13 +50,12 @@ status — they pick a code from a catalog. The catalog row says what the coarse
 INACTIVE) and whether the change needs approval. "Hold" needs approval, so the change is **held** until a
 back-office approver signs off — and that approval can be a single sign-off or a chain.
 
-**Who does what:** `PATCH /api/customer-accounts/acc_1 {sub_status:'hold'}` → `AccountService::update`:
-the `customer_sub_status_catalog` validates the code and **derives** `main_status` (clone). Because
-`requires_approval=true`, it **routes through EM-CFG-04** — raises an `ApprovalService::request`
-(`entity_type=CUSTOMER_SUB_STATUS`, `action=hold`) and returns the account **unchanged** (held PENDING).
-When an approver (a single `CUSTOMER_CARE_SUPERVISOR` by default, or each stage of a chain) approves,
-`ApplySubStatusOnApproval` applies the transition, writes `account_status_history`, and emits
-`CustomerAccountStatusChanged`. *Proven by `AccountFlagTest::test_sub_status_requiring_approval_routes_through_em_cfg_04`.*
+**Who does what:**
+1. `PATCH /api/customer-accounts/acc_1 {sub_status:'hold'}` → `AccountService::update`: the `customer_sub_status_catalog` validates the code and **derives** `main_status` (clone).
+2. Because `requires_approval=true`, it **routes through EM-CFG-04** — raises an `ApprovalService::request` (`entity_type=CUSTOMER_SUB_STATUS`, `action=hold`) and returns the account **unchanged** (held PENDING).
+3. When an approver (a single `CUSTOMER_CARE_SUPERVISOR` by default, or each stage of a chain) approves, `ApplySubStatusOnApproval` applies the transition, writes `account_status_history`, and emits `CustomerAccountStatusChanged`.
+
+*Proven by `AccountFlagTest::test_sub_status_requiring_approval_routes_through_em_cfg_04`.*
 
 ### 3. Raise an NPD flag → attention banner + faster dunning
 
@@ -64,10 +63,11 @@ When an approver (a single `CUSTOMER_CARE_SUPERVISOR` by default, or each stage 
 attention banner on the account, and — because the catalog says this flag affects dunning — the next
 debt-chasing scan in Billing skips the usual grace period and escalates faster.
 
-**Who does what:** `PUT /api/customer-accounts/acc_3/flags/NPD` → `setFlag`: catalog-gated; sets
-`attention_banner` and emits `CustomerAccountFlagSet`. Because the catalog marks NPD
-`affects_dunning=true`, BIL-04's next scan calls `hasDunningAccelerantFlag` → **waives the grace window**
-(R-ILM-F-3). *Cross-module read.* *Proven by `AccountFlagTest`, `DunningTest`.*
+**Who does what:**
+1. `PUT /api/customer-accounts/acc_3/flags/NPD` → `setFlag`: catalog-gated; sets `attention_banner` and emits `CustomerAccountFlagSet`.
+2. Because the catalog marks NPD `affects_dunning=true`, BIL-04's next scan calls `hasDunningAccelerantFlag` → **waives the grace window** (R-ILM-F-3). *Cross-module read.*
+
+*Proven by `AccountFlagTest`, `DunningTest`.*
 
 ### 4. FRAUD_SUSPECTED flag blocks activation
 
@@ -83,10 +83,11 @@ cleared. *Proven by `FulfillmentJourneyTest::test_fraud_suspected_flag_blocks_ac
 **The story in plain English:** When an account's status changes in a way that affects service, one
 event fans out to two places: Provisioning re-syncs the network, and Notification tells the customer.
 
-**Who does what:** A provisioning-affecting status change emits
-`CustomerAccountStatusChanged{affectsProvisioning, customerVisible}` to the **outbox** → Provisioning's
-`SyncProvisioningOnAccountStatusChanged` re-broadcasts the network, and Notification's
-`AccountStatusNotificationBridge` notifies the customer. *Foundation: one event, two reactions.*
+**Who does what:**
+1. A provisioning-affecting status change emits `CustomerAccountStatusChanged{affectsProvisioning, customerVisible}` to the **outbox**.
+2. Provisioning's `SyncProvisioningOnAccountStatusChanged` re-broadcasts the network, and Notification's `AccountStatusNotificationBridge` notifies the customer.
+
+*Foundation: one event, two reactions.*
 
 
 ![diagram](img/ilm_2.png)
@@ -99,10 +100,11 @@ event fans out to two places: Provisioning re-syncs the network, and Notificatio
 their churn risk, drops them into a segment (e.g. "high retention risk"), and opens a follow-up task for
 an agent. The same triggering event always produces the same task — no duplicates.
 
-**Who does what:** `POST /api/cvm/customers/CUS-1/evaluate {signals}` → `CvmEvaluationService`: writes a
-`cvm_customer_signal_profile`, computes a churn score, assigns a `cvm_segment_membership` (e.g.
-`RETENTION_HIGH_RISK`), and opens a `cvm_activity` — **idempotent by source event** (same event → same
-activity). Emits `CvmCustomerEvaluated`/`CvmActivityCreated`. *Proven by `CvmTest`.*
+**Who does what:**
+1. `POST /api/cvm/customers/CUS-1/evaluate {signals}` → `CvmEvaluationService`: writes a `cvm_customer_signal_profile`, computes a churn score, assigns a `cvm_segment_membership` (e.g. `RETENTION_HIGH_RISK`), and opens a `cvm_activity` — **idempotent by source event** (same event → same activity).
+2. Emits `CvmCustomerEvaluated`/`CvmActivityCreated`.
+
+*Proven by `CvmTest`.*
 
 ### 7. Retention offer over threshold → EM-CFG-04 → accept → SIP-03
 
@@ -138,8 +140,11 @@ decision-context pattern.*
 **The story in plain English:** If KYC is rejected, the parked order can't go ahead — Fulfillment
 cancels and unwinds it.
 
-**Who does what:** `recordKycDecision(..,'REJECTED')` emits `CustomerKycRejected` → Fulfillment
-`CancelOrderOnKycRejected` cancels + compensates the parked order. *Proven by `FulfillmentJourneyTest`.*
+**Who does what:**
+1. `recordKycDecision(..,'REJECTED')` emits `CustomerKycRejected`.
+2. Fulfillment `CancelOrderOnKycRejected` cancels + compensates the parked order.
+
+*Proven by `FulfillmentJourneyTest`.*
 
 ## 2. Data model — ≥4 **complete** sample rows + readings
 > **Completeness:** each row lists **every domain column** (nullables shown as `null`). The surrogate

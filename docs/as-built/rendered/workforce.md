@@ -30,12 +30,13 @@ contractor works, what they are qualified for, and which hours they are free —
 operator seeds, not something you click through an API.
 
 **Who does what:**
-- `POST /api/contractors`, `…/{contractor}/teams`, and `POST /api/staff` write the contractor registry
-  (the companies, crews, and technicians).
-- The coverage rows — `contractor_availability_slot`, `contractor_region_skill`,
-  `contractor_region_scope`, `skill_catalog` — are **operator seed data with no write API**. They define
-  the bookable windows (`max_concurrent`), the certifications, and the region coverage.
-- *Operator config.*
+1. `POST /api/contractors`, `…/{contractor}/teams`, and `POST /api/staff` write the contractor registry
+   (the companies, crews, and technicians).
+2. The coverage rows — `contractor_availability_slot`, `contractor_region_skill`,
+   `contractor_region_scope`, `skill_catalog` — are **operator seed data with no write API**. They define
+   the bookable windows (`max_concurrent`), the certifications, and the region coverage.
+
+*Operator config.*
 
 ### 2. Match + atomically commit capacity for a WO
 
@@ -44,11 +45,12 @@ the right skill, and still has a free spot in their schedule — then books that
 one safe step so two jobs can never grab the same last place.
 
 **Who does what:**
-- WorkOrder's `autoAssign` calls `ContractorAvailabilityService::resolve(...)` to rank candidates by
-  region + skill + spare capacity.
-- It then calls `commit(slot, wo_id, when)`, which atomically reserves one of the slot's `max_concurrent`
-  places and writes a `contractor_slot_commitment` row with status `ACTIVE`.
-- *Foundation: a DB transaction guarantees no over-booking.* *Proven by `WorkforceApiTest`.*
+1. WorkOrder's `autoAssign` calls `ContractorAvailabilityService::resolve(...)` to rank candidates by
+   region + skill + spare capacity.
+2. It then calls `commit(slot, wo_id, when)`, which atomically reserves one of the slot's `max_concurrent`
+   places and writes a `contractor_slot_commitment` row with status `ACTIVE`.
+
+*Foundation: a DB transaction guarantees no over-booking.* *Proven by `WorkforceApiTest`.*
 
 **Sample —** the hold this writes (one place taken in a slot that allows five):
 ```json
@@ -63,9 +65,10 @@ quietly moves on to the next-best option, and if no outside contractor has room,
 technician.
 
 **Who does what:**
-- If the slot is already at `max_concurrent`, `commit` returns no hold.
-- WorkOrder then tries the next contractor, and finally an in-house `StaffMember`.
-- *Shows: capacity is a hard limit that drives the dispatch strategy.*
+1. If the slot is already at `max_concurrent`, `commit` returns no hold.
+2. WorkOrder then tries the next contractor, and finally an in-house `StaffMember`.
+
+*Shows: capacity is a hard limit that drives the dispatch strategy.*
 
 ### 4. WO finalized → consume capacity
 
@@ -73,10 +76,11 @@ technician.
 used" — that place is spent, not given back.
 
 **Who does what:**
-- The `WorkOrderFinalized` event (via the outbox) reaches `ResolveSlotCommitmentOnWoLifecycle`.
-- That listener calls `consumeForWorkOrder(wo_id)`, flipping the commitment `ACTIVE → CONSUMED` (capacity
-  spent).
-- *Foundation: an outbox listener.* *Proven by `SlotCommitmentLifecycleTest`.*
+1. The `WorkOrderFinalized` event (via the outbox) reaches `ResolveSlotCommitmentOnWoLifecycle`.
+2. That listener calls `consumeForWorkOrder(wo_id)`, flipping the commitment `ACTIVE → CONSUMED` (capacity
+   spent).
+
+*Foundation: an outbox listener.* *Proven by `SlotCommitmentLifecycleTest`.*
 
 ### 5. WO cancelled → release capacity
 
@@ -84,9 +88,10 @@ used" — that place is spent, not given back.
 else to book.
 
 **Who does what:**
-- The `WorkOrderCancelled` event reaches the same listener, which calls `releaseForWorkOrder(wo_id)`.
-- That flips the commitment to `RELEASED` (capacity restored, the place is bookable again).
-- *Proven by `SlotCommitmentLifecycleTest`.*
+1. The `WorkOrderCancelled` event reaches the same listener, which calls `releaseForWorkOrder(wo_id)`.
+2. That flips the commitment to `RELEASED` (capacity restored, the place is bookable again).
+
+*Proven by `SlotCommitmentLifecycleTest`.*
 
 ### 6. Re-running consume/release is a no-op
 
@@ -94,9 +99,10 @@ else to book.
 nothing — no double-counting, no errors.
 
 **Who does what:**
-- A duplicate `WorkOrderFinalized` (event replay) calls `consumeForWorkOrder` again.
-- It finds no `ACTIVE` commitment for that work order, so it makes 0 changes.
-- *Foundation: an idempotent reaction.* *Proven by `SlotCommitmentLifecycleTest`.*
+1. A duplicate `WorkOrderFinalized` (event replay) calls `consumeForWorkOrder` again.
+2. It finds no `ACTIVE` commitment for that work order, so it makes 0 changes.
+
+*Foundation: an idempotent reaction.* *Proven by `SlotCommitmentLifecycleTest`.*
 
 ### 7. Emergency-only slots
 
@@ -104,9 +110,10 @@ nothing — no double-counting, no errors.
 booked into them, so there is always room when something urgent comes in.
 
 **Who does what:**
-- A slot with `emergency_only=true` is only matched for URGENT work orders.
-- This keeps routine work off the emergency window.
-- *Config-driven matching.*
+1. A slot with `emergency_only=true` is only matched for URGENT work orders.
+2. This keeps routine work off the emergency window.
+
+*Config-driven matching.*
 
 ### 8. In-house staff matching
 
@@ -115,7 +122,8 @@ employees, picking one whose skills fit.
 
 **Who does what:**
 - When no contractor fits, the matcher uses a `StaffMember` whose skills cover the job.
-- *Shows: the two-tier (outsourced → in-house) model.*
+
+*Shows: the two-tier (outsourced → in-house) model.*
 
 ## 2. Data model — ≥4 **complete** sample rows + readings
 > **Completeness:** each row lists **every domain column** (nullables shown as `null`). The string
