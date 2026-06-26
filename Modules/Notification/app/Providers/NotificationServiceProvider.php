@@ -76,6 +76,10 @@ class NotificationServiceProvider extends ModuleServiceProvider
         $this->app->singleton(ChannelAdapterRegistry::class);
         $this->app->singleton(TemplateEngineRegistry::class);
         $this->app->singleton(StaffAdapterRegistry::class);
+
+        // NOT-01 document layer: render-on-demand, decoupled from sending. Other modules
+        // (e.g. Billing's invoice PDF download) depend on the Foundation contract only.
+        $this->app->bind(\App\Foundation\Documents\DocumentRenderer::class, \Modules\Notification\Rendering\DocumentService::class);
     }
 
     /**

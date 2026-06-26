@@ -2,11 +2,15 @@
 
 namespace Modules\Billing\Http\Controllers;
 
+use App\Foundation\Documents\DocumentRenderer;
+use App\Foundation\Files\FileObject;
+use App\Foundation\Files\FileStorageService;
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Services\InvoiceService;
 use Modules\Billing\Services\TaxService;
@@ -90,5 +94,66 @@ class InvoiceController extends ApiController
     public function issueTaxInvoice(Invoice $invoice, TaxService $tax): JsonResponse
     {
         return ApiResponse::created($tax->issue($invoice));
+    }
+
+    /**
+     * GET /api/invoices/{invoice}/pdf — render (or fetch the cached) printable invoice PDF
+     * and download it. This is the GENERATE path, separate from sending: it produces a
+     * rendered_artifact and streams it back, creating NO notification/delivery record.
+     * `?refresh=1` forces a re-render; `?locale=` picks the template locale.
+     */
+    public function pdf(Request $request, Invoice $invoice, DocumentRenderer $documents, FileStorageService $files): Response
+    {
+        $doc = $documents->render(
+            operator: $invoice->operator_code,
+            entityType: 'INVOICE',
+            entityId: $invoice->invoice_id,
+            format: 'PDF',
+            purpose: 'INVOICE_DOCUMENT',
+            locale: (string) $request->query('locale', 'en'),
+            context: $this->renderContext($invoice),
+            force: $request->boolean('refresh'),
+        );
+
+        $file = FileObject::query()->find($doc->fileId);
+        abort_unless($file !== null, 404, 'Rendered invoice artifact not found.');
+
+        return response((string) $files->contents($file), 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="'.$invoice->legal_invoice_number.'.pdf"',
+        ]);
+    }
+
+    /**
+     * Template placeholder data for the invoice document. Built here (Billing knows the
+     * invoice shape); the document layer stays ignorant of it.
+     *
+     * @return array<string,mixed>
+     */
+    private function renderContext(Invoice $invoice): array
+    {
+        $invoice->loadMissing('lines');
+
+        return [
+            'invoice' => [
+                'number' => $invoice->legal_invoice_number,
+                'type' => $invoice->type,
+                'status' => $invoice->status,
+                'currency' => $invoice->currency,
+                'issue_date' => (string) $invoice->issue_date,
+                'due_date' => (string) $invoice->due_date,
+                'subtotal' => (string) $invoice->subtotal_amount,
+                'tax' => (string) $invoice->tax_amount_total,
+                'total' => (string) $invoice->total_amount,
+                'amount_due' => (string) $invoice->amount_due,
+            ],
+            'customer' => $invoice->customer_snapshot ?? ['id' => $invoice->customer_id],
+            'operator' => $invoice->operator_code,
+            'lines' => $invoice->lines->map(fn ($l) => [
+                'description' => $l->description,
+                'amount' => (string) $l->subtotal,
+                'tax' => (string) $l->tax_amount,
+            ])->values()->all(),
+        ];
     }
 }

@@ -60,6 +60,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // BIL-02 — Invoices
     Route::get('invoices', [InvoiceController::class, 'index'])->middleware('permission:invoice.read');
     Route::get('invoices/{invoice}', [InvoiceController::class, 'show'])->middleware('permission:invoice.read');
+    Route::get('invoices/{invoice}/pdf', [InvoiceController::class, 'pdf'])->middleware('permission:invoice.read');
     Route::post('invoices', [InvoiceController::class, 'store'])->middleware(['permission:invoice.manage', 'idempotency']);
     Route::post('invoices/{invoice}/tax-invoice', [InvoiceController::class, 'issueTaxInvoice'])->middleware(['permission:invoice.manage', 'idempotency']);
 
