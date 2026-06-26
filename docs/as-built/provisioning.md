@@ -85,12 +85,15 @@ sequenceDiagram
 on it". The command sits in an *accepted* state and the subscription flow waits. A small worker checks
 back every few minutes until the vendor reports it is really done.
 
-**Who does what:** same broadcast, but `adapter_config.execution_mode_default=ASYNC_ACCEPTED`.
-`adapter.dispatch` returns **accepted** → command `ACCEPTED` (`external_ref` set), and the flow's
-`ActivateServiceHandler` sees not-yet-confirmed. The scheduled worker `sophix:provisioning:poll-async` (a
-**Foundation/Console** scheduled command, every 5 min) calls `adapter.pollStatus` → `CONFIRMED`. The
-parked workflow advances on the next tick. *Shows: async vendors + the poll worker resolving terminal
-state.*
+**Who does what:**
+1. Same broadcast, but `adapter_config.execution_mode_default=ASYNC_ACCEPTED`.
+2. `adapter.dispatch` returns **accepted** → command `ACCEPTED` (`external_ref` set), and the flow's
+   `ActivateServiceHandler` sees not-yet-confirmed.
+3. The scheduled worker `sophix:provisioning:poll-async` (a **Foundation/Console** scheduled command,
+   every 5 min) calls `adapter.pollStatus` → `CONFIRMED`.
+4. The parked workflow advances on the next tick.
+
+*Shows: async vendors + the poll worker resolving terminal state.*
 
 ### 3. Speed change (MODIFY) mid-cycle
 A subscription upgrade flow broadcasts `action:MODIFY` with `desired_state.speedProfile:'200M'`.
@@ -105,11 +108,14 @@ module, the network should follow without anyone re-typing anything. The account
 out through the event backbone and every service that customer had provisioned gets re-pushed as
 suspended.
 
-**Who does what:** ILM `AccountService` emits
-`CustomerAccountStatusChanged{affectsProvisioning:true,status:INACTIVE}` to the **outbox**.
-`sophix:outbox:dispatch` fires `OutboxEventPublished` → `SyncProvisioningOnAccountStatusChanged` looks up
-the account's subscriptions and **re-broadcasts** each provisioned target at `SUSPENDED` (action
-`ACCOUNT_STATUS_SYNC`). *Shows: a domain event in one module driving provisioning, the whole Foundation
+**Who does what:**
+1. ILM `AccountService` emits
+   `CustomerAccountStatusChanged{affectsProvisioning:true,status:INACTIVE}` to the **outbox**.
+2. `sophix:outbox:dispatch` fires `OutboxEventPublished` → `SyncProvisioningOnAccountStatusChanged` looks up
+   the account's subscriptions and **re-broadcasts** each provisioned target at `SUSPENDED` (action
+   `ACCOUNT_STATUS_SYNC`).
+
+*Shows: a domain event in one module driving provisioning, the whole Foundation
 event backbone (R-ILM-S-3).* *(ReconciliationTest::test_account_status_change_syncs_provisioning.)*
 
 ### 5. Terminate → desired NOT_PRESENT

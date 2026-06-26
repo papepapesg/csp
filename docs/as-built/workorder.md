@@ -53,10 +53,10 @@ the problem is bigger than a normal visit can solve. If it is fixed, the job clo
 system opens a fresh quality-control job to chase the deeper problem.
 
 **Who does what:**
-- `startSupportFlow` runs the support process steps: `SiteVisitDecisionHandler` → `ResolutionGateHandler`.
-- If resolved → `FinalizeSupportHandler` closes it out.
-- If not resolved → `MarkEscalationHandler` spawns a QCS (quality-control) work order as a child of the
-  original.
+1. `startSupportFlow` runs the support process steps: `SiteVisitDecisionHandler` → `ResolutionGateHandler`.
+2. If resolved → `FinalizeSupportHandler` closes it out.
+3. If not resolved → `MarkEscalationHandler` spawns a QCS (quality-control) work order as a child of the
+   original.
 
 This is built on the Foundation workflow toolbox. *Proven by `WorkOrderSupportFlowTest`.*
 
@@ -80,8 +80,9 @@ records say should be there. They scan the device, the serial matches the expect
 and the audit task simply closes.
 
 **Who does what:**
-- `POST …/field-audit-tasks/{id}/observations` with the expected serial → `FieldAuditCampaignService` finds
-  no discrepancy → the task moves to `CLOSED` and emits `FieldAuditTaskClosed`.
+1. `POST …/field-audit-tasks/{id}/observations` with the expected serial → `FieldAuditCampaignService` finds
+   no discrepancy.
+2. The task moves to `CLOSED` and emits `FieldAuditTaskClosed`.
 
 *Proven by `FieldAuditCampaignTest`.*
 
@@ -92,11 +93,11 @@ so the system flags it as high-severity and kicks off a recovery request to get 
 accounted for.
 
 **Who does what:**
-- `presenceStatus:MISSING` → a `MISSING` discrepancy is raised.
-- `rules.field_audit.equipment.discrepancy` (Foundation rules) rates it `HIGH` and routes it
-  `CREATE_RMA_RECOVERY`.
-- An OSR RMA request is emitted for the owning module to act on. This is a **safe** route, so it goes
-  straight through with no approval.
+1. `presenceStatus:MISSING` → a `MISSING` discrepancy is raised.
+2. `rules.field_audit.equipment.discrepancy` (Foundation rules) rates it `HIGH` and routes it
+   `CREATE_RMA_RECOVERY`.
+3. An OSR RMA request is emitted for the owning module to act on.
+   - This is a **safe** route, so it goes straight through with no approval.
 
 *Proven by `FieldAuditCampaignTest`.*
 
@@ -151,9 +152,9 @@ task is set up, the system automatically creates a real field work order for it 
 so the dispatch can happen.
 
 **Who does what:**
-- A task created with `createWorkOrder=true` emits `FieldAuditWorkOrderRequested`.
-- The `CreateFieldAuditWorkOrder` listener (an outbox listener, Foundation) builds a `FIELD_AUDIT` work
-  order, links it back via `wo_id`, and moves the task to `ASSIGNED`.
+1. A task created with `createWorkOrder=true` emits `FieldAuditWorkOrderRequested`.
+2. The `CreateFieldAuditWorkOrder` listener (an outbox listener, Foundation) builds a `FIELD_AUDIT` work
+   order, links it back via `wo_id`, and moves the task to `ASSIGNED`.
 
 *Proven by `FieldAuditCampaignTest`.*
 

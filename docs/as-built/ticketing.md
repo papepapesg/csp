@@ -17,9 +17,10 @@
 on it — a deadline to respond and a deadline to resolve — taken from the operator's SLA rules for that
 kind of problem. From that moment the ticket is being timed.
 
-**Who does what:** `POST /api/tickets {category:'NO_INTERNET', subcategory:'NO_SIGNAL', subscription_id}`
-→ `TicketService::create` opens the ticket `OPEN` and stamps the SLA due-times from the matching
-`sla_policy`. Emits `TicketCreated`.
+**Who does what:**
+1. `POST /api/tickets {category:'NO_INTERNET', subcategory:'NO_SIGNAL', subscription_id}`
+2. `TicketService::create` opens the ticket `OPEN` and stamps the SLA due-times from the matching `sla_policy`.
+3. Emits `TicketCreated`.
 
 **Sample — a freshly created ticket:**
 ```json
@@ -33,9 +34,11 @@ kind of problem. From that moment the ticket is being timed.
 visit. The agent raises a work order from the ticket, the two are linked, and the ticket goes into a
 "waiting on the field crew" holding state.
 
-**Who does what:** `POST …/{id}/work-orders` creates a WO-01 support WO linked back
-(`source_type=TICKET`), writes a `ticket_link` (`relation=CREATED_FROM_TICKET`), and moves the ticket to
-`WAITING_WORK_ORDER`. Gated by the category's `wo_allowed` (TCK-3). Emits `TicketWorkOrderCreated`.
+**Who does what:**
+1. `POST …/{id}/work-orders` creates a WO-01 support WO linked back (`source_type=TICKET`).
+2. Writes a `ticket_link` (`relation=CREATED_FROM_TICKET`), and moves the ticket to `WAITING_WORK_ORDER`.
+3. Gated by the category's `wo_allowed` (TCK-3). Emits `TicketWorkOrderCreated`.
+
 *Cross-module: WorkOrder.* *Proven by `TicketApiTest::test_technical_ticket_raises_work_order`.*
 
 ### 3. WO finalized → auto-resolve (event-driven)
@@ -45,10 +48,11 @@ ticket to close it — the work order finishing automatically resolves the waiti
 needs a supervisor's eye, it parks in review instead; if the work was cancelled, the ticket goes back
 into the work queue.
 
-**Who does what:** `WorkOrderFinalized` (outbox) → `ResolveTicketOnWorkOrderFinalized` →
-`onWorkOrderFinalized` moves the linked ticket out of `WAITING_WORK_ORDER` to `RESOLVED` (or, if the
-category's `review_required` is set, to `UNDER_REVIEW`). A `WorkOrderCancelled` instead sends it back to
-`ASSIGNED`/`WAITING_INTERNAL` with `requires_review`. *Foundation: outbox listener.*
+**Who does what:**
+1. `WorkOrderFinalized` (outbox) → `ResolveTicketOnWorkOrderFinalized` → `onWorkOrderFinalized` moves the linked ticket out of `WAITING_WORK_ORDER` to `RESOLVED` (or, if the category's `review_required` is set, to `UNDER_REVIEW`).
+2. A `WorkOrderCancelled` instead sends it back to `ASSIGNED`/`WAITING_INTERNAL` with `requires_review`.
+
+*Foundation: outbox listener.*
 
 ```mermaid
 sequenceDiagram
@@ -76,10 +80,11 @@ sequenceDiagram
 ticket. We validate its type, run the operator's routing rules to pick a queue and priority, and create a
 ticket from it. Certain technical-trouble requests automatically spin up a field work order.
 
-**Who does what:** `POST /api/asr` (idempotent) → `AsrService::create` validates an `asr_type`, applies
-`rules.asr.routing` (queue + priority + auto-actions), and creates an ASR-typed ticket; a
-`TECHNICAL_TROUBLE` whose routing sets `autoCreateWorkOrder` auto-raises a support WO. *Proven by
-`AsrTest::test_technical_trouble_routes_to_noc_and_raises_work_order`.*
+**Who does what:**
+1. `POST /api/asr` (idempotent) → `AsrService::create` validates an `asr_type`, applies `rules.asr.routing` (queue + priority + auto-actions), and creates an ASR-typed ticket.
+2. A `TECHNICAL_TROUBLE` whose routing sets `autoCreateWorkOrder` auto-raises a support WO.
+
+*Proven by `AsrTest::test_technical_trouble_routes_to_noc_and_raises_work_order`.*
 
 ### 6. SLA breach surfaces on the NOC
 Past-due open tickets appear in ItOps `GET /api/noc/sla-overdue` (reads ticket SLA timestamps).

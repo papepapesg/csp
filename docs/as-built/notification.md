@@ -20,15 +20,16 @@ say it gets suspended. We turn that one event into the right messages on the rig
 we check the customer's preferences and the regulatory rules, render the templates, send them, and write
 down exactly what we did.
 
-**Who does what:** ILM `CustomerAccountStatusChanged{customerVisible:true}` →
-`AccountStatusNotificationBridge` → `NotificationOrchestrator::ingest` runs the NOT-01 pipeline:
-1. **route** — a `notification_routing_rule` maps the event to channels (EMAIL+SMS) and purpose
-   `ACCOUNT_STATUS_CHANGE`.
-2. **preference** filter — drop channels the customer opted out of (marketing only).
-3. **regulatory** filter — apply category rules (transactional ignores opt-out).
-4. **render** — fill the templates for each surviving channel.
-5. **dispatch** — send via the channel adapters.
-6. **audit** — write `notification_log` (`DISPATCHED`).
+**Who does what:**
+1. ILM `CustomerAccountStatusChanged{customerVisible:true}` → `AccountStatusNotificationBridge`.
+2. `NotificationOrchestrator::ingest` runs the NOT-01 pipeline:
+   1. **route** — a `notification_routing_rule` maps the event to channels (EMAIL+SMS) and purpose
+      `ACCOUNT_STATUS_CHANGE`.
+   2. **preference** filter — drop channels the customer opted out of (marketing only).
+   3. **regulatory** filter — apply category rules (transactional ignores opt-out).
+   4. **render** — fill the templates for each surviving channel.
+   5. **dispatch** — send via the channel adapters.
+   6. **audit** — write `notification_log` (`DISPATCHED`).
 
 **Sample — the audit row written at the end:**
 ```json
@@ -52,10 +53,10 @@ flowchart LR
 the entire team at once, each person on whatever channel they prefer. The first to acknowledge takes it;
 the rest are stood down.
 
-**Who does what:** any EM-CFG-04 `ApprovalRequested`/`ApprovalStageAdvanced` →
-`NotifyApproversOnApprovalRequested` → for a **ROLE** stage
-`StaffNotificationService::dispatch(template:'approval-needed', candidateGroup:<approver role>)` → the
-group's members get EMAIL/SLACK/IN_APP_PUSH per their prefs.
+**Who does what:**
+1. any EM-CFG-04 `ApprovalRequested`/`ApprovalStageAdvanced` → `NotifyApproversOnApprovalRequested`.
+2. for a **ROLE** stage `StaffNotificationService::dispatch(template:'approval-needed', candidateGroup:<approver role>)`.
+3. the group's members get EMAIL/SLACK/IN_APP_PUSH per their prefs.
 
 ```mermaid
 sequenceDiagram
@@ -103,8 +104,10 @@ next channel → `notification_log` `PARTIALLY_DISPATCHED`. *Proven by `Not01Pip
 the same job. The moment one of them acknowledges, the others' still-pending messages are cancelled and
 the notification is marked done.
 
-**Who does what:** a staff notification fanned to 4 supervisors; the first to ACK → `AckService`
-suppresses the other pending deliveries → notification `ACKNOWLEDGED`.
+**Who does what:**
+1. a staff notification fanned to 4 supervisors.
+2. the first to ACK → `AckService` suppresses the other pending deliveries.
+3. notification `ACKNOWLEDGED`.
 
 ```mermaid
 sequenceDiagram

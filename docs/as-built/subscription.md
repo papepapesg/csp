@@ -57,9 +57,10 @@ same subscription. The system refuses — only one change job may run at a time,
 with a "wait for the other operation to finish" error. (A *restriction* would be the exception: it is
 allowed to run alongside another job.)
 
-**Who does what:** An `upgrade` while the pause is still in flight (`final_state IS NULL`) →
-`trigger` throws `conflict(WAIT_FOR_OPERATION)` → HTTP **409**. A `RESTRICT` op would be allowed
-because it is non-exclusive (R-SUB-WF-FW-2).
+**Who does what:**
+1. An `upgrade` while the pause is still in flight (`final_state IS NULL`).
+2. `trigger` throws `conflict(WAIT_FOR_OPERATION)` → HTTP **409**.
+3. A `RESTRICT` op would be allowed because it is non-exclusive (R-SUB-WF-FW-2).
 
 ### 3. Idempotent retry
 
@@ -108,17 +109,22 @@ sequenceDiagram
 month. The system works out the part-month price difference (proration), swaps the package on the
 subscription, and records the change.
 
-**Who does what:** `…/upgrade {package_ref}` → `sub-upgrade`: `ValidatePackageChangeHandler` →
-`BillingIntentHandler` (mid-cycle **proration** via the BillingIntent path) → `ChangePackageHandler`
-(swaps `package_ref`/`package_version_id`) → `SubscriptionUpgraded`.
+**Who does what:**
+1. `…/upgrade {package_ref}` → `sub-upgrade`.
+2. `ValidatePackageChangeHandler`.
+3. `BillingIntentHandler` (mid-cycle **proration** via the BillingIntent path).
+4. `ChangePackageHandler` (swaps `package_ref`/`package_version_id`).
+5. `SubscriptionUpgraded`.
 
 ### 6. Terminate
 
 **The story in plain English:** A customer leaves. The system arranges to pick up the equipment, then
 switches the subscription to TERMINATED and tells Billing and Reporting it has ended.
 
-**Who does what:** `…/terminate` → `sub-terminate`: `EquipmentPickupHandler` (raises an OSR pickup) →
-`TerminateHandler` (`transitionStatus(TERMINATED)` + `SubscriptionTerminated`, which Billing/Reporting consume).
+**Who does what:**
+1. `…/terminate` → `sub-terminate`.
+2. `EquipmentPickupHandler` (raises an OSR pickup).
+3. `TerminateHandler` (`transitionStatus(TERMINATED)` + `SubscriptionTerminated`, which Billing/Reporting consume).
 
 ### 7. Add a restriction (non-exclusive)
 
@@ -127,9 +133,12 @@ without cutting off the whole service. This is a partial restriction — the sub
 whatever status it was; only the bar is added. Because it doesn't change status, it can run even while
 another job is in flight.
 
-**Who does what:** `POST …/{id}/restrictions {code:'OUTGOING_VOICE_BARRED'}` → `RestrictionService`
-(the one op that does **not** change `status_code`): writes a `subscription_restriction`, broadcasts to
-Provisioning, emits `SubscriptionRestrictionAdded`. Runs even with another op in flight (R-SUB-WF-FW-2).
+**Who does what:**
+1. `POST …/{id}/restrictions {code:'OUTGOING_VOICE_BARRED'}` → `RestrictionService` (the one op that does **not** change `status_code`).
+2. writes a `subscription_restriction`.
+3. broadcasts to Provisioning.
+4. emits `SubscriptionRestrictionAdded`.
+5. Runs even with another op in flight (R-SUB-WF-FW-2).
 
 ### 8. Cancel an in-flight job → compensation
 
@@ -137,9 +146,11 @@ Provisioning, emits `SubscriptionRestrictionAdded`. Runs even with another op in
 it. The system stops the running workflow and, if the subscription was sitting in a temporary
 "PENDING_…" state, **rolls it back** to whatever status it had before the job started.
 
-**Who does what:** `POST /api/subscription-operations/{op}/cancel` → `OperationFramework::cancel`:
-cancels the running `process_instance` and, if the master sits in a transient `PENDING_*`, **reverts**
-it to `prior_subscription_status` (R-SUB-WF-FW-3). Emits `SubscriptionOperationCancelled`.
+**Who does what:**
+1. `POST /api/subscription-operations/{op}/cancel` → `OperationFramework::cancel`.
+2. cancels the running `process_instance`.
+3. if the master sits in a transient `PENDING_*`, **reverts** it to `prior_subscription_status` (R-SUB-WF-FW-3).
+4. Emits `SubscriptionOperationCancelled`.
 
 ```mermaid
 sequenceDiagram

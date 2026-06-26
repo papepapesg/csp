@@ -79,16 +79,20 @@ sequenceDiagram
 **The story in plain English:** A flow reaches a fork in the road. Which way it goes depends on a value it is
 carrying — for example, "was KYC approved?". The engine reads that value and picks the matching arrow.
 
-**Who does what:** A gateway routes on `{kycApproved: true}` vs default — the engine evaluates the condition
-against the instance `variables`. *Proven by `WorkflowEngineTest::test_exclusive_gateway_branches_on_variables`.*
+**Who does what:**
+1. A gateway routes on `{kycApproved: true}` vs default.
+2. The engine evaluates the condition against the instance `variables`.
+
+*Proven by `WorkflowEngineTest::test_exclusive_gateway_branches_on_variables`.*
 
 ### 5. Input mapping wires an upstream output into a downstream input
 
 **The story in plain English:** An early step produces a value (say a provisioning reference). A later step
 needs it. Input mapping is the wire that carries that output forward into the later step's input.
 
-**Who does what:** A node's declared output (`{provisioningRef}`) is mapped into a later node's input. *Proven
-by `WorkflowEngineTest::test_input_mapping_wires_an_upstream_output_into_a_downstream_input`.*
+**Who does what:** A node's declared output (`{provisioningRef}`) is mapped into a later node's input.
+
+*Proven by `WorkflowEngineTest::test_input_mapping_wires_an_upstream_output_into_a_downstream_input`.*
 
 ### 6. Message catch parks → correlate resumes
 
@@ -118,7 +122,9 @@ to sneak in an extra value it never declared, the engine refuses it — keeping 
 honest and predictable.
 
 **Who does what:** With `SOPHIX_WORKFLOW_STRICT_OUTPUTS`, a handler returning a key it didn't declare is
-rejected. *Proven by `WorkflowEngineTest::test_strict_outputs_rejects_a_handler_that_returns_undeclared_keys`.*
+rejected.
+
+*Proven by `WorkflowEngineTest::test_strict_outputs_rejects_a_handler_that_returns_undeclared_keys`.*
 
 ### (bonus) 9. Reconcile on end
 `ProcessInstanceEnded` lets a module close its ledger (e.g. Subscription `SyncOperationFromProcess`).

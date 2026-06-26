@@ -100,9 +100,10 @@ sequenceDiagram
 **The story in plain English:** A customer pays more than they owe. The extra isn't lost — it's parked
 as an account credit balance, and the next invoice automatically draws it down.
 
-**Who does what:** A payment exceeds the invoice → `PaymentService` posts the surplus to
-`account_credit_balance` (emits `OverpaymentPendingReview`/`CreditBalanceAdjusted`). The next
-`InvoiceGenerated` → `ApplyCreditBalanceOnInvoice` (listener) auto-draws the credit.
+**Who does what:**
+1. A payment exceeds the invoice → `PaymentService` posts the surplus to `account_credit_balance` (emits `OverpaymentPendingReview` / `CreditBalanceAdjusted`).
+2. The next `InvoiceGenerated` → `ApplyCreditBalanceOnInvoice` (listener) auto-draws the credit.
+
 *Foundation: event-driven credit application.*
 
 ### 5. Paid reconnection fee flips the subscription ACTIVE (state_callback)
@@ -111,9 +112,11 @@ as an account credit balance, and the next invoice automatically draws it down.
 charge carries a built-in instruction: "once this is paid, switch the subscription back to ACTIVE." When
 the payment lands, Billing reads that instruction and flips the subscription on.
 
-**Who does what:** A `RECONNECTION_FEE_AFTER_DUNNING` `billable_event` has `state_callback{targetStatus:ACTIVE}`.
-`BillingIntentService::emit` raises it pay-first (`billing_intent.status=PENDING`); on `InvoicePaid`,
-`confirm()` reads the pinned callback → `SubscriptionService::transitionStatus(ACTIVE)`.
+**Who does what:**
+1. A `RECONNECTION_FEE_AFTER_DUNNING` `billable_event` has `state_callback{targetStatus:ACTIVE}`.
+2. `BillingIntentService::emit` raises it pay-first (`billing_intent.status=PENDING`).
+3. On `InvoicePaid`, `confirm()` reads the pinned callback → `SubscriptionService::transitionStatus(ACTIVE)`.
+
 *Proven by `BillableEventCatalogTest::test_paid_state_callback_transitions_the_subscription`.*
 
 ### 6. Credit-note adjustment → propose → approve → apply
@@ -147,10 +150,12 @@ stateDiagram-v2
 Normally dunning waits a grace period between escalation levels; with this flag, the wait is **waived**
 and the customer is escalated immediately. The new level can add a restriction or suspend the service.
 
-**Who does what:** `sophix:billing:dunning-run` → `DunningService::assessAccount`: an ILM
-`affects_dunning` flag (`AccountService::hasDunningAccelerantFlag`) **waives the grace window** → advance
-a level now; the level action fires `RESTRICTION_ADD`/`SUSPEND_NP` via Subscription `OperationFramework`.
-*Cross-module read + workflow.* *Proven by `DunningTest`.*
+**Who does what:**
+1. `sophix:billing:dunning-run` → `DunningService::assessAccount`.
+2. An ILM `affects_dunning` flag (`AccountService::hasDunningAccelerantFlag`) **waives the grace window** → advance a level now.
+3. The level action fires `RESTRICTION_ADD` / `SUSPEND_NP` via Subscription `OperationFramework`.
+
+*Cross-module read + workflow. Proven by `DunningTest`.*
 
 ### 8. Cycle generation fails → retry queue → give up
 
@@ -158,9 +163,11 @@ a level now; the level action fires `RESTRICTION_ADD`/`SUSPEND_NP` via Subscript
 losing the work, the failure goes into a retry queue with a backoff. A scheduled job retries it; if it
 keeps failing, it's marked "gave up" so a human can look.
 
-**Who does what:** `closeCycle` throws (snapshot/tax/BIL01 unavailable) → `GenerationFailureService::enqueue`
-writes a `generation_failure_queue` row (`PENDING_RETRY`, backoff). `sophix:billing:generation-retry`
-(every 15 min) re-invokes the generator; persistent failure → `GAVE_UP_AUTO` for human review.
+**Who does what:**
+1. `closeCycle` throws (snapshot / tax / BIL01 unavailable) → `GenerationFailureService::enqueue` writes a `generation_failure_queue` row (`PENDING_RETRY`, backoff).
+2. `sophix:billing:generation-retry` (every 15 min) re-invokes the generator.
+3. Persistent failure → `GAVE_UP_AUTO` for human review.
+
 *Proven by `BulkReversalAndFailureQueueTest`.*
 
 ### (bonus) 9. Tax invoice signed asynchronously
@@ -169,9 +176,12 @@ writes a `generation_failure_queue` row (`PENDING_RETRY`, backoff). `sophix:bill
 must be digitally signed by the tax authority's system. Signing happens asynchronously: a scanner job
 calls the signer; if it fails it backs off and retries, eventually giving up.
 
-**Who does what:** A payment moment → `TaxEventBridge` → `TaxInvoiceGenerator` issues a `tax_invoice`
-(inclusive decomposition), then `sophix:billing:tax-sign-scan` calls the signer; failure →
-`tax-retry-scan` backoff → `TaxInvoiceSigningGaveUp`. *Proven by `Tax01Test`.*
+**Who does what:**
+1. A payment moment → `TaxEventBridge` → `TaxInvoiceGenerator` issues a `tax_invoice` (inclusive decomposition).
+2. `sophix:billing:tax-sign-scan` calls the signer.
+3. Failure → `tax-retry-scan` backoff → `TaxInvoiceSigningGaveUp`.
+
+*Proven by `Tax01Test`.*
 
 ## 2. Data model — ≥4 **complete** sample rows + readings
 > **Completeness:** each row lists **every domain column** (nullables shown as `null`). The surrogate

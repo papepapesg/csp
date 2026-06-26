@@ -80,11 +80,13 @@ this?" Catalog picks the right tax group for the product, runs that group's rule
 back the subtotal and the tax. (The full mechanics, with worked numbers, are in the `tax_group`/
 `tax_rule` section of the data model below.)
 
-**Who does what:** Billing calls
-`TaxComputeService::compute({taxableKind:'PACKAGE', customerCategory:'RES', baseAmount:5000})`. It
-evaluates **`rules.tax-applicability`** (Foundation/Rules) → a `tax_group`; iterates its `tax_rule` rows
-by `order_within_group`, computing each per `base_method` (`BASE`/`BASE_PLUS_PRIOR` cascade); a `NONE`
-applicability ⇒ exempt. Returns `{subtotal, taxTotal, taxLines}`. *Proven by `TaxComputeTest`.*
+**Who does what:**
+1. Billing calls `TaxComputeService::compute({taxableKind:'PACKAGE', customerCategory:'RES', baseAmount:5000})`.
+2. It evaluates **`rules.tax-applicability`** (Foundation/Rules) → a `tax_group`.
+3. Iterates its `tax_rule` rows by `order_within_group`, computing each per `base_method` (`BASE`/`BASE_PLUS_PRIOR` cascade); a `NONE` applicability ⇒ exempt.
+4. Returns `{subtotal, taxTotal, taxLines}`.
+
+*Proven by `TaxComputeTest`.*
 *(See the tax cascade worked example below for the full numbers.)*
 
 ### 3. Grant a discount (EM-CFG-04 if high-value)
@@ -128,9 +130,12 @@ stateDiagram-v2
 apply. The system decides which ones actually combine ("stack") and in what order, then returns the net
 effect. A direct (manually granted) discount beats a campaign one when they're otherwise tied.
 
-**Who does what:** `DiscountComputeService::compute(operator, baseAmount, context)` finds the applicable
-assignments, applies stacking + priority (DIRECT beats CAMPAIGN on a tie), and returns the effective
-discount. *Proven by `DiscountComputeTest`.*
+**Who does what:**
+1. `DiscountComputeService::compute(operator, baseAmount, context)` finds the applicable assignments.
+2. Applies stacking + priority (DIRECT beats CAMPAIGN on a tie).
+3. Returns the effective discount.
+
+*Proven by `DiscountComputeTest`.*
 
 **Worked example — base price KES 1,000, two candidate discounts:**
 
@@ -149,7 +154,9 @@ e.g. an acquisition offer). Like a package launch, it can't go live by itself �
 approval lifecycle before it becomes ACTIVE and sellable.
 
 **Who does what:** `BundleService` walks a `commercial_bundle` `DRAFT → READY_FOR_REVIEW → APPROVED →
-ACTIVE` with launch checks; approval gated. *Proven by `BundleAndCampaignTest`.*
+ACTIVE` with launch checks; approval gated.
+
+*Proven by `BundleAndCampaignTest`.*
 
 ```mermaid
 stateDiagram-v2
@@ -171,10 +178,11 @@ stateDiagram-v2
 the most specific matching prefix in its prefix table. The longest matching prefix wins, which points to
 a destination zone, and the zone's rate is what the call is charged at.
 
-**Who does what:** `VoiceTariffService` rates a call by matching the dialled number against
-`voice_destination_prefix` (longest prefix wins via `match_priority`) → its `voice_destination_zone`
-rate. `UsageRatingService` does the same for data/SMS tariffs. *Proven by `VoiceTariffTest`,
-`UsageRatingTest`.*
+**Who does what:**
+1. `VoiceTariffService` rates a call by matching the dialled number against `voice_destination_prefix` (longest prefix wins via `match_priority`) → its `voice_destination_zone` rate.
+2. `UsageRatingService` does the same for data/SMS tariffs.
+
+*Proven by `VoiceTariffTest`, `UsageRatingTest`.*
 
 **Worked example — dialling `+447700900123`:**
 
@@ -198,9 +206,11 @@ flowchart LR
 still being built it can't be sold. Moving it to "sellable" is gated by an approval; once approved, the
 system flips it and announces it so Fulfillment can start taking orders for that address.
 
-**Who does what:** `HomePassTopologyService` transitions a `homepass` `UNDER_CONSTRUCTION → SELLABLE`;
-an EM-CFG-04 gate (RLM-CFG-01 H-5) → `ApplyHomePassTransitionOnApproval` applies it → emits
-`HomePassReachedSellable` (Fulfillment can now take orders for it). *Proven by `ConfigCatalogTest`.*
+**Who does what:**
+1. `HomePassTopologyService` transitions a `homepass` `UNDER_CONSTRUCTION → SELLABLE`.
+2. An EM-CFG-04 gate (RLM-CFG-01 H-5) → `ApplyHomePassTransitionOnApproval` applies it → emits `HomePassReachedSellable` (Fulfillment can now take orders for it).
+
+*Proven by `ConfigCatalogTest`.*
 
 ```mermaid
 sequenceDiagram
@@ -221,8 +231,10 @@ sequenceDiagram
 voice wallet, loyalty points) and their behaviour. Billing then creates actual wallets of those kinds
 for customers and routes usage to the right one by its code.
 
-**Who does what:** `WalletCatalogService` defines `wallet_type` rows (`allow_negative`, `auto_debit`);
-Billing creates prepaid `wallet`s of those types and routes usage by `wallet_type_code`.
+**Who does what:**
+1. `WalletCatalogService` defines `wallet_type` rows (`allow_negative`, `auto_debit`).
+2. Billing creates prepaid `wallet`s of those types and routes usage by `wallet_type_code`.
+
 *Cross-module config handoff.*
 
 ### 9. A homepass's topology binds a service to the network
@@ -233,9 +245,9 @@ the exact node + port to light up. When a subscription activates, Provisioning r
 homepass to know **which vendor system and which port** to push the customer onto. No topology on the
 homepass ⇒ nothing to provision.
 
-**Who does what:** Catalog owns the homepass topology (`technology`, `network_path`,
-`service_management_endpoints`, `services_supported`); Provisioning reads it to pick the target plane +
-adapter (see `provisioning.md` §2.1).
+**Who does what:**
+1. Catalog owns the homepass topology (`technology`, `network_path`, `service_management_endpoints`, `services_supported`).
+2. Provisioning reads it to pick the target plane + adapter (see `provisioning.md` §2.1).
 
 **Worked example — activate DATA at `hp_1`:**
 - `technology=GPON` → the GPON plane family.

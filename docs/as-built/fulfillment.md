@@ -85,9 +85,12 @@ money. Once the deposit lands, it picks up where it left off.
 job and closes their work order. That closure automatically wakes the parked order up — nobody at the desk
 has to do anything.
 
-**Who does what:** the tech finalizes the WO → `WorkOrderFinalized` (outbox) →
-`ResumeOrderOnInstallFinalized` correlates the `ful-install-finalized` catch → the flow resumes and moves
-on to the KYC gate. *Foundation: outbox listener + message correlation.*
+**Who does what:**
+1. the tech finalizes the WO → `WorkOrderFinalized` (outbox).
+2. `ResumeOrderOnInstallFinalized` correlates the `ful-install-finalized` catch.
+3. the flow resumes and moves on to the KYC gate.
+
+*Foundation: outbox listener + message correlation.*
 
 ### 4. Desk completes the install (manual path)
 
@@ -116,9 +119,10 @@ back through the gate (now passing), and activates the service.
 subscription and a work order that now need to be torn down. The system cancels the order and cleanly
 undoes everything it created.
 
-**Who does what:** KYC `REJECTED` → `CustomerKycRejected` → `CancelOrderOnKycRejected` →
-`OrderCaptureService::cancel`: interrupts the workflow, **cancels the install WO**, **terminates the
-half-built subscription**. Order → `CANCELLED`.
+**Who does what:**
+1. KYC `REJECTED` → `CustomerKycRejected` → `CancelOrderOnKycRejected` → `OrderCaptureService::cancel`.
+2. interrupts the workflow, **cancels the install WO**, **terminates the half-built subscription**.
+3. Order → `CANCELLED`.
 
 *Proven by `FulfillmentJourneyTest::test_kyc_rejection_cancels_the_parked_order_and_compensates`.*
 
@@ -127,9 +131,11 @@ half-built subscription**. Order → `CANCELLED`.
 **The story:** Even with everything else green, the system won't switch a customer on if they've been
 flagged as a fraud risk. The order sits un-activated until the flag is cleared.
 
-**Who does what:** `TriggerActivationHandler` checks ILM `hasProvisioningBlockingFlag`; a `FRAUD_SUSPECTED`
-flag blocks activation (R-ILM-F-4) — the order stays un-activated until cleared. *Proven by
-`FulfillmentJourneyTest`.*
+**Who does what:**
+1. `TriggerActivationHandler` checks ILM `hasProvisioningBlockingFlag`.
+2. a `FRAUD_SUSPECTED` flag blocks activation (R-ILM-F-4) — the order stays un-activated until cleared.
+
+*Proven by `FulfillmentJourneyTest`.*
 
 ### 8. Cancel mid-flight → compensate
 
@@ -137,9 +143,10 @@ flag blocks activation (R-ILM-F-4) — the order stays un-activated until cleare
 reverse order — the work order is cancelled, then the subscription is terminated — so nothing is left
 dangling.
 
-**Who does what:** `POST …/{id}/cancel` → `cancel` interrupts the running `process_instance`, then
-`compensate()` cancels a cancellable WO and terminates a non-terminated subscription (reverse creation
-order).
+**Who does what:**
+1. `POST …/{id}/cancel` → `cancel` interrupts the running `process_instance`.
+2. then `compensate()` cancels a cancellable WO and terminates a non-terminated subscription (reverse creation
+   order).
 
 *Proven by `FulfillmentJourneyTest::test_cancelling_an_order_compensates_its_install_wo_and_subscription`.*
 

@@ -54,9 +54,11 @@ the operations dashboard then shows.
 recognises it has already counted that exact event and quietly ignores the repeat, so the numbers stay
 correct.
 
-**Who does what:** The same event fired again → the **inbox** (`event_id`+consumer) short-circuits → counts
-unchanged. So in the worked example above, a redelivery of that `SubscriptionActivated` leaves the value at
-**13**, not 14. *Foundation: at-most-once projection.* *Proven by
+**Who does what:**
+1. The same event fired again → the **inbox** (`event_id`+consumer) short-circuits → counts unchanged.
+2. So in the worked example above, a redelivery of that `SubscriptionActivated` leaves the value at **13**, not 14.
+
+*Foundation: at-most-once projection.* *Proven by
 `ReportingApiTest::…idempotent_on_redispatch`.*
 
 ### 3. A termination is projected

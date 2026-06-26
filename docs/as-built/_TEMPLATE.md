@@ -28,8 +28,11 @@
 
 ### Scenario 1 — <happy path>
 **The story:** <2–4 lines of plain English a newcomer understands with no codebase knowledge.>
-**Who does what:** 1) `<Service>` does <…> → `<table>` `<status>` A→B → 2) emits `<Event>` →
-`<Listener>` reacts. **Sample:** `{ "<id>":"…", "status":"B" }`. *Proven by `<Test>`.*
+**Who does what:** (one step per line — a numbered list, not a run-on sentence)
+1. `<Service>` does <…> → `<table>` `<status>` A→B.
+2. Emits `<Event>` → `<Listener>` reacts.
+
+**Sample:** `{ "<id>":"…", "status":"B" }`. *Proven by `<Test>`.*
 ```mermaid
 stateDiagram-v2
     [*] --> A
