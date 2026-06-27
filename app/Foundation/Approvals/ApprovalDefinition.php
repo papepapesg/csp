@@ -21,7 +21,7 @@ class ApprovalDefinition extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['active' => 'boolean', 'threshold_amount' => 'decimal:2'];
+    protected $casts = ['active' => 'boolean', 'threshold_amount' => 'decimal:2', 'config' => 'array'];
 
     /** Ordered chain of stages (empty ⇒ legacy single implicit stage from the flat columns). */
     public function stages(): HasMany
@@ -47,6 +47,7 @@ class ApprovalDefinition extends Model
                 'definition_id' => Id::make('appd'),
                 'threshold_amount' => $opts['threshold_amount'] ?? null,
                 'active' => $opts['active'] ?? true,
+                'config' => $opts['config'] ?? null,
             ],
         );
 

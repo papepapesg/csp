@@ -30,17 +30,8 @@ return new class extends Migration
             $table->unique(['operator_code', 'code']);
         });
 
-        // Per-operator adjustment guard-rails (limits + approval policy).
-        Schema::create('adjustment_limits_config', function (Blueprint $table) {
-            $table->id();
-            $table->string('operator_code')->unique();
-            $table->decimal('max_per_request', 14, 2)->nullable();      // single adjustment cap (null = uncapped)
-            $table->decimal('max_per_customer_period', 14, 2)->nullable(); // rolling-window cap per customer
-            $table->unsignedInteger('period_days')->default(30);        // rolling window for the customer cap
-            $table->unsignedInteger('approval_steps_required')->default(1); // 0 = auto-approve on propose
-            $table->decimal('auto_approve_under', 14, 2)->nullable();   // threshold under which approval is skipped
-            $table->timestamps();
-        });
+        // adjustment guard-rails (limits) now live on the base ADJUSTMENT approval_definition's
+        // config (EM-CFG-04 "config on the process row"), not a separate per-operator table.
 
         // The adjustment proposal and its lifecycle.
         Schema::create('adjustment_request', function (Blueprint $table) {
@@ -117,7 +108,6 @@ return new class extends Migration
         Schema::dropIfExists('note_application_ledger');
         Schema::dropIfExists('adjustment_approval_step');
         Schema::dropIfExists('adjustment_request');
-        Schema::dropIfExists('adjustment_limits_config');
         Schema::dropIfExists('adjustment_reason_code');
     }
 };

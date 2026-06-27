@@ -4,6 +4,7 @@ namespace Modules\Billing\Adjustments\Services;
 use Modules\Billing\Invoicing\Services\InvoiceService;
 use Modules\Billing\Payments\Services\NoteApplicationService;
 
+use App\Foundation\Approvals\ApprovalDefinition;
 use App\Foundation\Approvals\ApprovalRequest;
 use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Errors\DomainException;
@@ -123,7 +124,10 @@ class AdjustmentService
                 'limitBreached' => $limitBreach !== null,
             ]);
             $stepsRequired = max(0, (int) ($routing['stepsRequired'] ?? 1));
-            $autoApprove = $limitBreach === null && $stepsRequired === 0;
+            // The rules engine names the pre-authored approval PROCESS to use (the ADJUSTMENT
+            // approval_definition's action). Legacy tables that return only stepsRequired are mapped.
+            $process = (string) ($routing['approvalProcess'] ?? $this->processForSteps($stepsRequired));
+            $autoApprove = $limitBreach === null && ($process === 'AUTO' || $stepsRequired === 0);
 
             $adjustment = AdjustmentRequest::query()->create([
                 'operator_code' => $operator,
@@ -145,6 +149,7 @@ class AdjustmentService
                 'failure_reason' => $limitBreach,
                 'required_approvals' => $stepsRequired,
                 'approval_rule_id' => $routing['ruleId'] ?? null,
+                'approval_process' => $process,
                 'proposed_by' => $proposedBy,
             ]);
 
@@ -166,34 +171,39 @@ class AdjustmentService
             // Human approval is needed and the proposal is not limit-blocked: open the EM-CFG-04 gate now.
             // (A limit-blocked proposal stays PROPOSED; the gate opens when /override-limit lifts the block.)
             if ($limitBreach === null) {
-                $this->openApprovalGate($adjustment, $stepsRequired);
+                $this->openApprovalGate($adjustment);
             }
 
             return $adjustment;
         });
     }
 
+    /** Map a legacy stepsRequired count to a pre-authored process tier. */
+    private function processForSteps(int $steps): string
+    {
+        return match (true) {
+            $steps <= 0 => 'AUTO',
+            $steps === 1 => 'SINGLE',
+            default => 'DUAL',
+        };
+    }
+
     /**
-     * Raise the ADJUSTMENT approval request that gates this proposal: a single stage whose quorum is the
-     * rules-engine's stepsRequired. Roles are left open (route permission already gates WHO may approve);
-     * the engine's job here is the quorum + distinct-approver rule. requested_by is null so SoD never
-     * blocks a legitimate approver — distinctness within the stage is what stops one person self-clearing
-     * a multi-approval gate.
+     * Raise the gate against the PRE-AUTHORED ADJUSTMENT process the rules engine selected
+     * (the approval_definition action pinned on the proposal). No inline stages — the chain
+     * (quorum, roles, SoD) comes from that definition, consistent with every other approval flow.
+     * requested_by is null so SoD never blocks a legitimate approver; the stage's distinct-approver
+     * quorum is what stops one person self-clearing a multi-approval gate.
      */
-    private function openApprovalGate(AdjustmentRequest $adjustment, int $stepsRequired): ApprovalRequest
+    private function openApprovalGate(AdjustmentRequest $adjustment): ApprovalRequest
     {
         return $this->approvals->request([
             'operator_code' => $adjustment->operator_code,
             'entity_type' => 'ADJUSTMENT',
+            'action' => $adjustment->approval_process ?: 'SINGLE',
             'entity_ref' => $adjustment->adjustment_id,
             'amount' => (float) $adjustment->amount,
             'requested_by' => null,
-            'stages' => [[
-                'name' => 'Adjustment approval',
-                'approver_kind' => 'ROLE',
-                'approver_roles' => [],
-                'required_approvals' => max(1, $stepsRequired),
-            ]],
         ]);
     }
 
@@ -218,7 +228,7 @@ class AdjustmentService
             // The EM-CFG-04 gate owns the count + the distinct-approver rule: this records one approval
             // on the current stage and tells us whether the quorum is now met. A second approval by the
             // SAME person is refused (DUPLICATE_STAGE_APPROVER) — that is the dual-control guarantee.
-            $gate = $this->approvalGate($adjustment) ?? $this->openApprovalGate($adjustment, max(1, (int) $adjustment->required_approvals));
+            $gate = $this->approvalGate($adjustment) ?? $this->openApprovalGate($adjustment);
             $gate = $this->approvals->decide($gate, true, $actor, $comment);
 
             $adjustment->approvalSteps()->create([
@@ -300,7 +310,7 @@ class AdjustmentService
             ]);
             // The breach is lifted: now open the EM-CFG-04 gate (it was withheld while blocked).
             if (! $this->approvalGate($adjustment)) {
-                $this->openApprovalGate($adjustment, max(1, (int) $adjustment->required_approvals));
+                $this->openApprovalGate($adjustment);
             }
 
             return $adjustment;
@@ -398,26 +408,32 @@ class AdjustmentService
         return [$amount, null, $data['service_category_code']];
     }
 
-    /** Returns the breach code, or null when within the operator's limits. */
+    /**
+     * Returns the breach code, or null when within the operator's limits. Limits live on the BASE
+     * ADJUSTMENT approval process (the approval_definition action=null, config bag) — EM-CFG-04
+     * "config on the process row", not a separate per-operator table.
+     */
     private function checkLimits(string $operator, ?string $customerId, float $amount): ?string
     {
-        $config = DB::table('adjustment_limits_config')->where('operator_code', $operator)->first();
+        $config = ApprovalDefinition::query()
+            ->where('operator_code', $operator)->where('entity_type', 'ADJUSTMENT')->whereNull('action')
+            ->first()?->config;
         if (! $config) {
             return null;
         }
 
-        if ($config->max_per_request !== null && $amount > (float) $config->max_per_request) {
+        if (($config['max_per_request'] ?? null) !== null && $amount > (float) $config['max_per_request']) {
             return 'ADJUSTMENT_LIMIT_EXCEEDED';
         }
 
-        if ($config->max_per_customer_period !== null && $customerId) {
+        if (($config['max_per_customer_period'] ?? null) !== null && $customerId) {
             $windowTotal = (float) AdjustmentRequest::query()
                 ->where('operator_code', $operator)
                 ->where('customer_id', $customerId)
                 ->whereNotIn('status', [AdjustmentRequest::REJECTED, AdjustmentRequest::CANCELLED_BY_PROPOSER])
-                ->where('created_at', '>=', now()->subDays((int) $config->period_days))
+                ->where('created_at', '>=', now()->subDays((int) ($config['period_days'] ?? 30)))
                 ->sum('amount');
-            if ($windowTotal + $amount > (float) $config->max_per_customer_period) {
+            if ($windowTotal + $amount > (float) $config['max_per_customer_period']) {
                 return 'ADJUSTMENT_LIMIT_EXCEEDED';
             }
         }

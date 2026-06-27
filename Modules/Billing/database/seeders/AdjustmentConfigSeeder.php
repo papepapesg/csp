@@ -2,6 +2,7 @@
 
 namespace Modules\Billing\Database\Seeders;
 
+use App\Foundation\Approvals\ApprovalDefinition;
 use App\Foundation\Support\Id;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
@@ -35,21 +36,27 @@ class AdjustmentConfigSeeder extends Seeder
                 );
             }
 
-            // Limits keep an agent from issuing unbounded credits without an
-            // override; steps/threshold remain the FALLBACK approval policy when
-            // no decision table is deployed for the rule set.
-            DB::table('adjustment_limits_config')->updateOrInsert(
-                ['operator_code' => $operator],
-                [
+            // EM-CFG-04 "config on the process row": the operator's adjustment guard-rails live on
+            // the BASE ADJUSTMENT process (action=null) — no separate global table. Limits keep an
+            // agent from issuing unbounded credits without an override.
+            ApprovalDefinition::defineChain($operator, 'ADJUSTMENT', null, [], [
+                'config' => [
                     'max_per_request' => 50000,
                     'max_per_customer_period' => 100000,
                     'period_days' => 30,
-                    'approval_steps_required' => 1,
                     'auto_approve_under' => 500,
-                    'created_at' => now(),
-                    'updated_at' => now(),
                 ],
-            );
+            ]);
+
+            // Pre-authored approval PROCESSES (tiers) the rules engine selects between. Roles are
+            // open — route permission (adjustment.approve) gates WHO; the engine enforces the
+            // distinct-approver quorum. AUTO needs no process (it auto-approves on propose).
+            ApprovalDefinition::defineChain($operator, 'ADJUSTMENT', 'SINGLE', [
+                ['name' => 'Adjustment approval', 'approver_kind' => 'ROLE', 'approver_roles' => [], 'required_approvals' => 1],
+            ]);
+            ApprovalDefinition::defineChain($operator, 'ADJUSTMENT', 'DUAL', [
+                ['name' => 'Adjustment dual control', 'approver_kind' => 'ROLE', 'approver_roles' => [], 'required_approvals' => 2],
+            ]);
         }
 
         // Approval routing as a GLOBAL decision table (FIRST hit). Operators
@@ -65,18 +72,18 @@ class AdjustmentConfigSeeder extends Seeder
                 'rules' => [
                     // A limit breach (after override) always escalates to dual control.
                     ['ruleId' => 'R-ADJ-APPR-1', 'when' => [['var' => 'limitBreached', 'op' => 'truthy']],
-                        'then' => ['stepsRequired' => 2, 'decisionCode' => 'LIMIT_ESCALATION']],
+                        'then' => ['stepsRequired' => 2, 'approvalProcess' => 'DUAL', 'decisionCode' => 'LIMIT_ESCALATION']],
                     // Debit notes (we take money) always need a human, however small.
                     ['ruleId' => 'R-ADJ-APPR-2', 'when' => [['var' => 'direction', 'op' => 'eq', 'value' => 'DEBIT']],
-                        'then' => ['stepsRequired' => 1, 'decisionCode' => 'DEBIT_STANDARD']],
+                        'then' => ['stepsRequired' => 1, 'approvalProcess' => 'SINGLE', 'decisionCode' => 'DEBIT_STANDARD']],
                     // Small credits flow without friction.
                     ['ruleId' => 'R-ADJ-APPR-3', 'when' => [['var' => 'amount', 'op' => 'lt', 'value' => 500]],
-                        'then' => ['stepsRequired' => 0, 'decisionCode' => 'AUTO_SMALL_CREDIT']],
+                        'then' => ['stepsRequired' => 0, 'approvalProcess' => 'AUTO', 'decisionCode' => 'AUTO_SMALL_CREDIT']],
                     // Large credits need dual control.
                     ['ruleId' => 'R-ADJ-APPR-4', 'when' => [['var' => 'amount', 'op' => 'gte', 'value' => 20000]],
-                        'then' => ['stepsRequired' => 2, 'decisionCode' => 'DUAL_CONTROL']],
+                        'then' => ['stepsRequired' => 2, 'approvalProcess' => 'DUAL', 'decisionCode' => 'DUAL_CONTROL']],
                 ],
-                'default_output' => ['stepsRequired' => 1, 'decisionCode' => 'SINGLE_APPROVAL'],
+                'default_output' => ['stepsRequired' => 1, 'approvalProcess' => 'SINGLE', 'decisionCode' => 'SINGLE_APPROVAL'],
                 'status' => DecisionTable::DEPLOYED,
             ],
         );
