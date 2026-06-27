@@ -1,12 +1,12 @@
 <?php
 
-namespace Modules\Billing\Listeners;
+namespace Modules\Billing\Tax\Listeners;
 
 use App\Foundation\Events\OutboxEventPublished;
 use App\Foundation\Support\Context;
 use Modules\Billing\Models\Invoice;
-use Modules\Billing\Models\TaxOperatorConfig;
-use Modules\Billing\Services\TaxInvoiceGenerator;
+use Modules\Billing\Tax\Models\TaxOperatorConfig;
+use Modules\Billing\Tax\Services\TaxInvoiceGenerator;
 
 /**
  * BIL-02-TAX-01 trigger bridge (rule group T). Every customer payment moment fires a tax

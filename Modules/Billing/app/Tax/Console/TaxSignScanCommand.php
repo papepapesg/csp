@@ -1,9 +1,9 @@
 <?php
 
-namespace Modules\Billing\Console;
+namespace Modules\Billing\Tax\Console;
 
 use Illuminate\Console\Command;
-use Modules\Billing\Services\TaxSigningService;
+use Modules\Billing\Tax\Services\TaxSigningService;
 
 /** BIL-02-TAX-01 signing scanner — submits GENERATED tax invoices to the gateway (S-2). */
 class TaxSignScanCommand extends Command

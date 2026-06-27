@@ -3,7 +3,7 @@
 namespace Modules\Billing\Database\Seeders;
 
 use Illuminate\Database\Seeder;
-use Modules\Billing\Models\TaxOperatorConfig;
+use Modules\Billing\Tax\Models\TaxOperatorConfig;
 
 /**
  * BIL-02-TAX-01 per-operator enablement. Enables tax invoicing for the default operator with

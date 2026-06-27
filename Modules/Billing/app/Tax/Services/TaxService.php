@@ -1,12 +1,12 @@
 <?php
 
-namespace Modules\Billing\Services;
-use Modules\Billing\Services\TaxInvoiceGenerator;
-use Modules\Billing\Services\TaxSigningService;
+namespace Modules\Billing\Tax\Services;
+use Modules\Billing\Tax\Services\TaxInvoiceGenerator;
+use Modules\Billing\Tax\Services\TaxSigningService;
 
 use Modules\Billing\Models\Invoice;
-use Modules\Billing\Models\TaxInvoice;
-use Modules\Billing\Models\TaxOperatorConfig;
+use Modules\Billing\Tax\Models\TaxInvoice;
+use Modules\Billing\Tax\Models\TaxOperatorConfig;
 
 /**
  * BIL-02-TAX-01 — legacy synchronous entry point retained for the existing

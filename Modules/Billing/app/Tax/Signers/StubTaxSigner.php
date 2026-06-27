@@ -2,9 +2,9 @@
 
 namespace Modules\Billing\Tax\Signers;
 
-use Modules\Billing\Models\TaxInvoice;
-use Modules\Billing\Models\TaxInvoiceSigningFailure;
-use Modules\Billing\Models\TaxOperatorConfig;
+use Modules\Billing\Tax\Models\TaxInvoice;
+use Modules\Billing\Tax\Models\TaxInvoiceSigningFailure;
+use Modules\Billing\Tax\Models\TaxOperatorConfig;
 use Modules\Billing\Tax\TaxInvoiceSigner;
 use Modules\Billing\Tax\TaxSignaturePayload;
 use Modules\Billing\Tax\TaxSigningException;

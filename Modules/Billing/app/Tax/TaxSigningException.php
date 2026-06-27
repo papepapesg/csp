@@ -2,7 +2,7 @@
 
 namespace Modules\Billing\Tax;
 
-use Modules\Billing\Models\TaxInvoiceSigningFailure;
+use Modules\Billing\Tax\Models\TaxInvoiceSigningFailure;
 
 /**
  * Thrown by a signer when the authority rejects a submission or the gateway is unreachable.

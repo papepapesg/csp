@@ -2,8 +2,8 @@
 
 namespace Modules\Billing\Tax;
 
-use Modules\Billing\Models\TaxInvoice;
-use Modules\Billing\Models\TaxOperatorConfig;
+use Modules\Billing\Tax\Models\TaxInvoice;
+use Modules\Billing\Tax\Models\TaxOperatorConfig;
 
 /**
  * BIL-02-TAX-01 pluggable signer contract (R-TAX-01-S-1/S-5). One implementation per operator

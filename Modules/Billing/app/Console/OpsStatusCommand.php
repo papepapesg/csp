@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\DB;
 use Modules\Billing\Models\AdjustmentRequest;
 use Modules\Billing\Models\DunningState;
 use Modules\Billing\Models\Invoice;
-use Modules\Billing\Models\TaxInvoice;
+use Modules\Billing\Tax\Models\TaxInvoice;
 
 /**
  * Ops review: a one-glance health summary of the billing work queues an operator

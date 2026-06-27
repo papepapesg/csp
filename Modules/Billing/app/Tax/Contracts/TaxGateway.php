@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Contracts;
+namespace Modules\Billing\Tax\Contracts;
 
 use Modules\Billing\Models\Invoice;
 

@@ -1,15 +1,15 @@
 <?php
 
-namespace Modules\Billing\Services;
+namespace Modules\Billing\Tax\Services;
 
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
-use Modules\Billing\Models\TaxInvoice;
-use Modules\Billing\Models\TaxInvoiceSigningFailure;
-use Modules\Billing\Models\TaxOperatorConfig;
+use Modules\Billing\Tax\Models\TaxInvoice;
+use Modules\Billing\Tax\Models\TaxInvoiceSigningFailure;
+use Modules\Billing\Tax\Models\TaxOperatorConfig;
 use Modules\Billing\Tax\TaxSignerRegistry;
 use Modules\Billing\Tax\TaxSigningException;
 

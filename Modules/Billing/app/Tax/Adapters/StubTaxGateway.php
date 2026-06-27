@@ -1,10 +1,10 @@
 <?php
 
-namespace Modules\Billing\Adapters;
+namespace Modules\Billing\Tax\Adapters;
 
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\Log;
-use Modules\Billing\Contracts\TaxGateway;
+use Modules\Billing\Tax\Contracts\TaxGateway;
 use Modules\Billing\Models\Invoice;
 
 /** Stub fiscalisation gateway: returns a fiscal number so flows run end-to-end. */

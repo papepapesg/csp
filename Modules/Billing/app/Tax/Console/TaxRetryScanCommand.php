@@ -1,9 +1,9 @@
 <?php
 
-namespace Modules\Billing\Console;
+namespace Modules\Billing\Tax\Console;
 
 use Illuminate\Console\Command;
-use Modules\Billing\Services\TaxSigningService;
+use Modules\Billing\Tax\Services\TaxSigningService;
 
 /** BIL-02-TAX-01 retry scanner — re-submits due transient signing failures (F-2). */
 class TaxRetryScanCommand extends Command

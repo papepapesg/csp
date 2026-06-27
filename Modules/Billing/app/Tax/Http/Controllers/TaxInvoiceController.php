@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Http\Controllers;
+namespace Modules\Billing\Tax\Http\Controllers;
 
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Http\ApiController;
@@ -10,9 +10,9 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Models\PaymentLedger;
-use Modules\Billing\Models\TaxInvoice;
-use Modules\Billing\Services\TaxInvoiceGenerator;
-use Modules\Billing\Services\TaxSigningService;
+use Modules\Billing\Tax\Models\TaxInvoice;
+use Modules\Billing\Tax\Services\TaxInvoiceGenerator;
+use Modules\Billing\Tax\Services\TaxSigningService;
 
 /**
  * BIL-02-TAX-01 admin operations (rule group D) + cancellation/re-signing (group C).

@@ -33,7 +33,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('dunning/{account}/extend-review', [DunningController::class, 'extendReview'])->middleware('permission:dunning.admin');
 
     // BIL-02-TAX-01 tax invoice & gateway
-    $tax = \Modules\Billing\Http\Controllers\TaxInvoiceController::class;
+    $tax = \Modules\Billing\Tax\Http\Controllers\TaxInvoiceController::class;
     Route::get('tax-invoices/dashboard', [$tax, 'dashboard'])->middleware('permission:invoice.read');
     Route::get('tax-invoices', [$tax, 'index'])->middleware('permission:invoice.read');
     Route::post('tax-invoices/manual', [$tax, 'manual'])->middleware(['permission:invoice.manage', 'idempotency']);

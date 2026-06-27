@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Models;
+namespace Modules\Billing\Tax\Models;
 
 use App\Foundation\Models\HasPrefixedId;
 use Illuminate\Database\Eloquent\Model;

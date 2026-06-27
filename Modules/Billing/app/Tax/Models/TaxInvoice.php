@@ -1,7 +1,7 @@
 <?php
 
-namespace Modules\Billing\Models;
-use Modules\Billing\Models\TaxInvoiceSigningFailure;
+namespace Modules\Billing\Tax\Models;
+use Modules\Billing\Tax\Models\TaxInvoiceSigningFailure;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;

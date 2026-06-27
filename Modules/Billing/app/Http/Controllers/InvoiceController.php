@@ -13,7 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Services\InvoiceService;
-use Modules\Billing\Services\TaxService;
+use Modules\Billing\Tax\Services\TaxService;
 
 /**
  * BIL-02 invoicing API (generate + read; BIL-02-READ-01).

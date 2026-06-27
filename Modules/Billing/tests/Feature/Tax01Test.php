@@ -8,10 +8,10 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Billing\Database\Seeders\TaxConfigSeeder;
 use Modules\Billing\Models\Invoice;
-use Modules\Billing\Models\TaxInvoice;
-use Modules\Billing\Models\TaxOperatorConfig;
-use Modules\Billing\Services\TaxInvoiceGenerator;
-use Modules\Billing\Services\TaxSigningService;
+use Modules\Billing\Tax\Models\TaxInvoice;
+use Modules\Billing\Tax\Models\TaxOperatorConfig;
+use Modules\Billing\Tax\Services\TaxInvoiceGenerator;
+use Modules\Billing\Tax\Services\TaxSigningService;
 use Modules\Ilm\Models\Customer;
 use Tests\TestCase;
 
@@ -226,7 +226,7 @@ class Tax01Test extends TestCase
             'payload' => json_encode(['invoiceId' => $invoice->invoice_id, 'paymentId' => 'pay_b', 'applied' => '1000', 'customerId' => 'cust_1']),
         ]);
 
-        app(\Modules\Billing\Listeners\TaxEventBridge::class)->handle(new \App\Foundation\Events\OutboxEventPublished($event));
+        app(\Modules\Billing\Tax\Listeners\TaxEventBridge::class)->handle(new \App\Foundation\Events\OutboxEventPublished($event));
 
         $this->assertDatabaseHas('tax_invoice', ['original_invoice_id' => $invoice->invoice_id, 'triggering_event_type' => 'PAYMENT_APPLIED']);
     }

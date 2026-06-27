@@ -2,7 +2,7 @@
 
 namespace Modules\Billing\Tax;
 
-use Modules\Billing\Models\TaxOperatorConfig;
+use Modules\Billing\Tax\Models\TaxOperatorConfig;
 
 /**
  * Resolves the TaxInvoiceSigner for an operator from

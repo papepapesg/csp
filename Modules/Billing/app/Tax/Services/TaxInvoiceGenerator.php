@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Services;
+namespace Modules\Billing\Tax\Services;
 use Modules\Billing\Services\CustomerSnapshotService;
 
 use App\Foundation\Events\DomainEvent;
@@ -8,8 +8,8 @@ use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Models\Invoice;
-use Modules\Billing\Models\TaxInvoice;
-use Modules\Billing\Models\TaxOperatorConfig;
+use Modules\Billing\Tax\Models\TaxInvoice;
+use Modules\Billing\Tax\Models\TaxOperatorConfig;
 use Modules\Catalog\Services\TaxComputeService;
 
 /**
