@@ -1,13 +1,13 @@
 <?php
 
-namespace Modules\Billing\Http\Controllers;
+namespace Modules\Billing\Dunning\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Billing\Models\DunningProgram;
+use Modules\Billing\Dunning\Models\DunningProgram;
 
 /**
  * BIL-04 dunning program catalog admin (R-BIL-04-C-1). Versioned: a new-version call retires

@@ -1,9 +1,9 @@
 <?php
 
-namespace Modules\Billing\Console;
+namespace Modules\Billing\Dunning\Console;
 
 use Illuminate\Console\Command;
-use Modules\Billing\Services\DunningService;
+use Modules\Billing\Dunning\Services\DunningService;
 
 /**
  * Ops safe-correction: drive an account's dunning episode through the EXISTING

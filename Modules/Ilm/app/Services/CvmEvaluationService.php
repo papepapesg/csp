@@ -93,10 +93,10 @@ class CvmEvaluationService
 
     private function liveDunningLevel(string $operator, ?string $accountId): ?int
     {
-        if (! $accountId || ! class_exists(\Modules\Billing\Models\DunningState::class)) {
+        if (! $accountId || ! class_exists(\Modules\Billing\Dunning\Models\DunningState::class)) {
             return null;
         }
-        $state = \Modules\Billing\Models\DunningState::query()->where('operator_code', $operator)->where('account_id', $accountId)->first();
+        $state = \Modules\Billing\Dunning\Models\DunningState::query()->where('operator_code', $operator)->where('account_id', $accountId)->first();
 
         return $state ? (int) $state->current_level : null;
     }

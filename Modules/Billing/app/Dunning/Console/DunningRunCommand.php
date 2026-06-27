@@ -1,9 +1,9 @@
 <?php
 
-namespace Modules\Billing\Console;
+namespace Modules\Billing\Dunning\Console;
 
 use Illuminate\Console\Command;
-use Modules\Billing\Services\DunningService;
+use Modules\Billing\Dunning\Services\DunningService;
 
 /** BIL-04 dunning scanner — scheduled (and on-demand). */
 class DunningRunCommand extends Command

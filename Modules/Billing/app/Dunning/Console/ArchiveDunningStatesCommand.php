@@ -1,9 +1,9 @@
 <?php
 
-namespace Modules\Billing\Console;
+namespace Modules\Billing\Dunning\Console;
 
 use Illuminate\Console\Command;
-use Modules\Billing\Services\DunningService;
+use Modules\Billing\Dunning\Services\DunningService;
 
 /** BIL-04 nightly archive sweep — flags CLEARED dunning states past retention as ARCHIVED (D-4). */
 class ArchiveDunningStatesCommand extends Command

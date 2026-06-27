@@ -1,14 +1,14 @@
 <?php
 
-namespace Modules\Billing\Http\Controllers;
+namespace Modules\Billing\Dunning\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Billing\Models\DunningState;
-use Modules\Billing\Services\DunningService;
+use Modules\Billing\Dunning\Models\DunningState;
+use Modules\Billing\Dunning\Services\DunningService;
 
 /** BIL-04 dunning API. */
 class DunningController extends ApiController

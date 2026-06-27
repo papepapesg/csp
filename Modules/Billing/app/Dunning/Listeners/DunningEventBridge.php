@@ -1,10 +1,10 @@
 <?php
 
-namespace Modules\Billing\Listeners;
+namespace Modules\Billing\Dunning\Listeners;
 
 use App\Foundation\Events\OutboxEventPublished;
 use App\Foundation\Support\Context;
-use Modules\Billing\Services\DunningService;
+use Modules\Billing\Dunning\Services\DunningService;
 use Modules\Subscription\Models\Subscription;
 
 /**

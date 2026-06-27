@@ -1,8 +1,8 @@
 <?php
 
-namespace Modules\Billing\Services;
+namespace Modules\Billing\Dunning\Services;
 
-use Modules\Billing\Models\DunningProgram;
+use Modules\Billing\Dunning\Models\DunningProgram;
 
 /**
  * BIL-04 program resolution (R-BIL-04-C-3). Picks the active (retired_at IS NULL) program

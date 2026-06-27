@@ -1,15 +1,15 @@
 <?php
 
-namespace Modules\Billing\Services;
-use Modules\Billing\Services\DunningProgramResolver;
+namespace Modules\Billing\Dunning\Services;
+use Modules\Billing\Dunning\Services\DunningProgramResolver;
 
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
-use Modules\Billing\Models\DunningProgram;
-use Modules\Billing\Models\DunningState;
+use Modules\Billing\Dunning\Models\DunningProgram;
+use Modules\Billing\Dunning\Models\DunningState;
 use Modules\Billing\Models\Invoice;
 use Modules\Ilm\Services\AccountService;
 use Modules\Subscription\Models\Subscription;

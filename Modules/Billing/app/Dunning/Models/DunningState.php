@@ -1,7 +1,7 @@
 <?php
 
-namespace Modules\Billing\Models;
-use Modules\Billing\Models\DunningProgram;
+namespace Modules\Billing\Dunning\Models;
+use Modules\Billing\Dunning\Models\DunningProgram;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;

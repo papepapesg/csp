@@ -3,7 +3,7 @@
 namespace Modules\Billing\Database\Seeders;
 
 use Illuminate\Database\Seeder;
-use Modules\Billing\Models\DunningProgram;
+use Modules\Billing\Dunning\Models\DunningProgram;
 
 /**
  * BIL-04 dunning program catalog (DD §worked examples). The authoritative operator policy

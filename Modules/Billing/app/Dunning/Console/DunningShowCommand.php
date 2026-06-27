@@ -1,9 +1,9 @@
 <?php
 
-namespace Modules\Billing\Console;
+namespace Modules\Billing\Dunning\Console;
 
 use Illuminate\Console\Command;
-use Modules\Billing\Models\DunningState;
+use Modules\Billing\Dunning\Models\DunningState;
 
 /**
  * Ops review: show one account's live dunning episode (read-only) — the level, status,

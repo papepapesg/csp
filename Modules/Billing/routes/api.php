@@ -4,7 +4,7 @@ use Illuminate\Support\Facades\Route;
 use Modules\Billing\Http\Controllers\AdjustmentController;
 use Modules\Billing\Http\Controllers\BillableEventController;
 use Modules\Billing\Http\Controllers\BulkReversalController;
-use Modules\Billing\Http\Controllers\DunningController;
+use Modules\Billing\Dunning\Http\Controllers\DunningController;
 use Modules\Billing\Http\Controllers\InvoiceController;
 use Modules\Billing\Http\Controllers\PaymentController;
 use Modules\Billing\Http\Controllers\UsageController;
@@ -46,10 +46,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('tax-invoices/{taxInvoice}/cancel/approve', [$tax, 'approveCancel'])->middleware('permission:tax.compliance');
 
     // BIL-04 dunning program catalog (versioned policy)
-    Route::get('dunning-programs', [\Modules\Billing\Http\Controllers\DunningProgramController::class, 'index'])->middleware('permission:invoice.read');
-    Route::post('dunning-programs', [\Modules\Billing\Http\Controllers\DunningProgramController::class, 'store'])->middleware('permission:dunning.admin');
-    Route::get('dunning-programs/{code}', [\Modules\Billing\Http\Controllers\DunningProgramController::class, 'show'])->middleware('permission:invoice.read');
-    Route::post('dunning-programs/{code}/new-version', [\Modules\Billing\Http\Controllers\DunningProgramController::class, 'newVersion'])->middleware('permission:dunning.admin');
+    Route::get('dunning-programs', [\Modules\Billing\Dunning\Http\Controllers\DunningProgramController::class, 'index'])->middleware('permission:invoice.read');
+    Route::post('dunning-programs', [\Modules\Billing\Dunning\Http\Controllers\DunningProgramController::class, 'store'])->middleware('permission:dunning.admin');
+    Route::get('dunning-programs/{code}', [\Modules\Billing\Dunning\Http\Controllers\DunningProgramController::class, 'show'])->middleware('permission:invoice.read');
+    Route::post('dunning-programs/{code}/new-version', [\Modules\Billing\Dunning\Http\Controllers\DunningProgramController::class, 'newVersion'])->middleware('permission:dunning.admin');
     // BIL-02-GEN-01 — Bulk reversal (rule group R; BILLING_ADMIN proposes, FINANCE_HEAD approves)
     Route::get('billing/bulk-reversals', [BulkReversalController::class, 'index'])->middleware('permission:invoice.read');
     Route::post('billing/bulk-reversals/preview', [BulkReversalController::class, 'preview'])->middleware('permission:invoice.manage');

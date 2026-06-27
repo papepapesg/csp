@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Modules\Billing\Tax\Adapters\StubTaxGateway;
 use Modules\Billing\Console\CycleCloseCommand;
-use Modules\Billing\Console\DunningRunCommand;
+use Modules\Billing\Dunning\Console\DunningRunCommand;
 use Modules\Billing\Console\GenerationFailureRetryCommand;
 use Modules\Billing\Console\ProFormaScanCommand;
 use Modules\Billing\Console\RateUsageCommand;
@@ -19,7 +19,7 @@ use Modules\Billing\Tax\Console\TaxSignScanCommand;
 use Modules\Billing\Wallet\Console\WalletExpiryCommand;
 use Modules\Billing\Tax\Contracts\TaxGateway;
 use Modules\Billing\Listeners\ApplyCreditBalanceOnInvoice;
-use Modules\Billing\Listeners\DunningEventBridge;
+use Modules\Billing\Dunning\Listeners\DunningEventBridge;
 use Modules\Billing\Listeners\EvictPlmCatalogCache;
 use Modules\Billing\Listeners\RetryFrozenCycleOnTopup;
 use Modules\Billing\Tax\Listeners\TaxEventBridge;
@@ -63,7 +63,7 @@ class BillingRuntimeProvider extends ServiceProvider
 
         if ($this->app->runningInConsole()) {
             $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, CycleCloseCommand::class, WalletExpiryCommand::class, ProFormaScanCommand::class, TaxSignScanCommand::class, TaxRetryScanCommand::class, GenerationFailureRetryCommand::class,
-                \Modules\Billing\Console\OpsStatusCommand::class, \Modules\Billing\Console\DunningShowCommand::class, \Modules\Billing\Console\DunningFixCommand::class]);
+                \Modules\Billing\Console\OpsStatusCommand::class, \Modules\Billing\Dunning\Console\DunningShowCommand::class, \Modules\Billing\Dunning\Console\DunningFixCommand::class]);
         }
     }
 
