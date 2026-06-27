@@ -1,6 +1,7 @@
 <?php
 
 namespace Modules\Billing\Services;
+use Modules\Billing\Services\CustomerSnapshotService;
 
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;

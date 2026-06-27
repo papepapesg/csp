@@ -1,6 +1,8 @@
 <?php
 
 namespace Modules\Billing\Services;
+use Modules\Billing\Services\TaxInvoiceGenerator;
+use Modules\Billing\Services\TaxSigningService;
 
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Models\TaxInvoice;

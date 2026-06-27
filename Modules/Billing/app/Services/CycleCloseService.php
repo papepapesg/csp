@@ -1,6 +1,10 @@
 <?php
 
 namespace Modules\Billing\Services;
+use Modules\Billing\Services\Charge;
+use Modules\Billing\Services\ChargeComputeService;
+use Modules\Billing\Services\GenerationFailureService;
+use Modules\Billing\Services\InvoiceService;
 
 use Modules\Billing\Wallet\Services\WalletService;
 use App\Foundation\Events\DomainEvent;
