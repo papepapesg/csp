@@ -7,25 +7,19 @@ use App\Foundation\Rules\RuleEngine;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
-use Modules\Billing\Tax\Adapters\StubTaxGateway;
 use Modules\Billing\Invoicing\Console\CycleCloseCommand;
 use Modules\Billing\Dunning\Console\DunningRunCommand;
 use Modules\Billing\Invoicing\Console\GenerationFailureRetryCommand;
 use Modules\Billing\Invoicing\Console\ProFormaScanCommand;
 use Modules\Billing\Mediation\Console\RateUsageCommand;
 use Modules\Billing\Invoicing\Console\RunCycleBillingCommand;
-use Modules\Billing\Tax\Console\TaxRetryScanCommand;
-use Modules\Billing\Tax\Console\TaxSignScanCommand;
-use Modules\Billing\Tax\Contracts\TaxGateway;
 use Modules\Billing\Invoicing\Listeners\ApplyCreditBalanceOnInvoice;
 use Modules\Billing\Dunning\Listeners\DunningEventBridge;
 use Modules\Billing\Mediation\Listeners\EvictPlmCatalogCache;
 use Modules\Billing\Invoicing\Listeners\RetryFrozenCycleOnTopup;
-use Modules\Billing\Tax\Listeners\TaxEventBridge;
 use Modules\Billing\Adjustments\Services\AdjustmentService;
-use Modules\Billing\Tax\TaxSignerRegistry;
 
-/** Binds the tax-fiscalisation gateway (driver via SOPHIX_TAX_DRIVER). */
+/** Billing core runtime wiring (Invoicing + Payments listeners, commands, ADJ rule fallback). */
 class BillingRuntimeProvider extends ServiceProvider
 {
     public function boot(): void
@@ -43,10 +37,6 @@ class BillingRuntimeProvider extends ServiceProvider
         // → suspend/resume dunning; WalletToppedUp → prepaid recovery.
         Event::listen(OutboxEventPublished::class, [DunningEventBridge::class, 'handle']);
 
-        // BIL-02-TAX-01: every payment moment (PaymentApplied / WalletToppedUp /
-        // PaymentReceived) generates a tax invoice when the operator has it enabled.
-        Event::listen(OutboxEventPublished::class, [TaxEventBridge::class, 'handle']);
-
         // ADJ-01 approval routing fallback: when no decision table is deployed
         // for rules.billing.adjustment-approval, derive the same answer from
         // adjustment_limits_config (steps + auto_approve_under threshold).
@@ -61,19 +51,13 @@ class BillingRuntimeProvider extends ServiceProvider
         });
 
         if ($this->app->runningInConsole()) {
-            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, CycleCloseCommand::class, ProFormaScanCommand::class, TaxSignScanCommand::class, TaxRetryScanCommand::class, GenerationFailureRetryCommand::class,
+            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, CycleCloseCommand::class, ProFormaScanCommand::class, GenerationFailureRetryCommand::class,
                 \Modules\Billing\Console\OpsStatusCommand::class, \Modules\Billing\Dunning\Console\DunningShowCommand::class, \Modules\Billing\Dunning\Console\DunningFixCommand::class]);
         }
     }
 
     public function register(): void
     {
-        $this->app->singleton(TaxGateway::class, function () {
-            return match (config('sophix.tax_driver', 'stub')) {
-                default => new StubTaxGateway,
-            };
-        });
-        // BIL-02-TAX-01 signer registry caches initialized signers; keep it a singleton.
-        $this->app->singleton(TaxSignerRegistry::class);
+        // tax gateway + signer registry now live in the BillingTax module.
     }
 }
