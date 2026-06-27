@@ -86,38 +86,11 @@ return new class extends Migration
             $table->decimal('balance', 14, 2)->default(0);
             $table->timestamps();
         });
-
-        // BIL-05 — Wallet (PREPAID subscriptions).
-        Schema::create('wallet', function (Blueprint $table) {
-            $table->string('wallet_id')->primary();            // wlt_...
-            $table->string('subscription_id')->unique();
-            $table->string('account_id')->nullable()->index();
-            $table->string('operator_code')->index();
-            $table->string('currency', 3)->default('KES');
-            $table->decimal('balance', 14, 2)->default(0);
-            $table->string('status')->default('ACTIVE');       // ACTIVE | FROZEN | CLOSED
-            $table->timestamps();
-        });
-
-        // BIL-05 — Wallet transaction ledger.
-        Schema::create('wallet_transaction', function (Blueprint $table) {
-            $table->string('id')->primary();                   // wtx_...
-            $table->string('wallet_id')->index();
-            $table->string('direction');                       // CREDIT | DEBIT
-            $table->string('reason');                          // TOPUP | CYCLE_CHARGE | REFUND | BONUS | CORRECTION | RECOVERY
-            $table->decimal('amount', 14, 2);
-            $table->decimal('balance_after', 14, 2);
-            $table->string('reference')->nullable();
-            $table->timestamps();
-
-            $table->foreign('wallet_id')->references('wallet_id')->on('wallet')->cascadeOnDelete();
-        });
+        // BIL-05 wallet + wallet_transaction moved to the BillingWallet module's migration.
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('wallet_transaction');
-        Schema::dropIfExists('wallet');
         Schema::dropIfExists('account_credit_balance');
         Schema::dropIfExists('payment_invoice_allocation');
         Schema::dropIfExists('payment_ledger');

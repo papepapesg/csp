@@ -8,7 +8,6 @@ use Modules\Billing\Dunning\Http\Controllers\DunningController;
 use Modules\Billing\Invoicing\Http\Controllers\InvoiceController;
 use Modules\Billing\Payments\Http\Controllers\PaymentController;
 use Modules\Billing\Mediation\Http\Controllers\UsageController;
-use Modules\Billing\Wallet\Http\Controllers\WalletController;
 
 /*
 | Billing API (BIL-02 invoicing, BIL-01-PAY-01 payments, BIL-05 wallet).
@@ -74,10 +73,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // BIL-CYCLE-01 — cycle-close run monitor (read-only)
     Route::get('cycle-close-runs', [\Modules\Billing\Invoicing\Http\Controllers\CycleCloseController::class, 'index'])->middleware('permission:invoice.read');
 
-    // BIL-05 — Wallet
-    Route::get('wallets/{subscriptionId}/balance', [WalletController::class, 'balance'])->middleware('permission:wallet.read');
-    Route::post('wallets/{subscriptionId}/topup', [WalletController::class, 'topup'])->middleware(['permission:wallet.manage', 'idempotency']);
-    Route::post('wallets/{subscriptionId}/debit', [WalletController::class, 'debit'])->middleware('permission:wallet.manage');
+    // BIL-05 — Wallet routes now live in the BillingWallet module.
 
     // BIL-02-ADJ-01 — Invoice adjustments (proposal → approval → note application)
     Route::get('adjustments', [AdjustmentController::class, 'index'])->middleware('permission:invoice.read');

@@ -16,7 +16,6 @@ use Modules\Billing\Mediation\Console\RateUsageCommand;
 use Modules\Billing\Invoicing\Console\RunCycleBillingCommand;
 use Modules\Billing\Tax\Console\TaxRetryScanCommand;
 use Modules\Billing\Tax\Console\TaxSignScanCommand;
-use Modules\Billing\Wallet\Console\WalletExpiryCommand;
 use Modules\Billing\Tax\Contracts\TaxGateway;
 use Modules\Billing\Invoicing\Listeners\ApplyCreditBalanceOnInvoice;
 use Modules\Billing\Dunning\Listeners\DunningEventBridge;
@@ -62,7 +61,7 @@ class BillingRuntimeProvider extends ServiceProvider
         });
 
         if ($this->app->runningInConsole()) {
-            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, CycleCloseCommand::class, WalletExpiryCommand::class, ProFormaScanCommand::class, TaxSignScanCommand::class, TaxRetryScanCommand::class, GenerationFailureRetryCommand::class,
+            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, CycleCloseCommand::class, ProFormaScanCommand::class, TaxSignScanCommand::class, TaxRetryScanCommand::class, GenerationFailureRetryCommand::class,
                 \Modules\Billing\Console\OpsStatusCommand::class, \Modules\Billing\Dunning\Console\DunningShowCommand::class, \Modules\Billing\Dunning\Console\DunningFixCommand::class]);
         }
     }
