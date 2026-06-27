@@ -7,7 +7,7 @@ use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
-use Modules\Osr\Models\PurchaseOrder;
+use Modules\Osr\Procurement\Models\PurchaseOrder;
 use Modules\Osr\Models\StockBalance;
 use Modules\Osr\Models\StockMovement;
 use Tests\TestCase;

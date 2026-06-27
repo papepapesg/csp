@@ -1,9 +1,9 @@
 <?php
 
-namespace Modules\Osr\Workflow;
+namespace Modules\Osr\Swap\Workflow;
 
 use Modules\Osr\Models\EquipmentInstance;
-use Modules\Osr\Models\EquipmentSwapRequest;
+use Modules\Osr\Swap\Models\EquipmentSwapRequest;
 use Modules\Osr\Services\EquipmentInstanceService;
 use Modules\Provisioning\Services\ProvisioningService;
 use Modules\Workflow\Contracts\TaskContext;

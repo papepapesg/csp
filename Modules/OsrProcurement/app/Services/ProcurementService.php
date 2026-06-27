@@ -1,14 +1,16 @@
 <?php
 
-namespace Modules\Osr\Services;
+namespace Modules\Osr\Procurement\Services;
+use Modules\Osr\Services\EquipmentInstanceService;
+use Modules\Osr\Services\StockService;
 
 use App\Foundation\Approvals\ApprovalRequest;
 use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
-use Modules\Osr\Models\PurchaseOrder;
-use Modules\Osr\Models\PurchaseOrderLine;
+use Modules\Osr\Procurement\Models\PurchaseOrder;
+use Modules\Osr\Procurement\Models\PurchaseOrderLine;
 
 /**
  * OSR-02 Procurement. Creates purchase orders, approves them, and receives goods —

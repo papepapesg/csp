@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Osr\Models;
+namespace Modules\Osr\Swap\Models;
 
 use App\Foundation\Models\HasPrefixedId;
 use Illuminate\Database\Eloquent\Model;

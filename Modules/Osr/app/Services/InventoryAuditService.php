@@ -1,6 +1,7 @@
 <?php
 
 namespace Modules\Osr\Services;
+use Modules\Osr\Services\StockService;
 
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;

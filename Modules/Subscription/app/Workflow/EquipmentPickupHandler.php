@@ -3,7 +3,7 @@
 namespace Modules\Subscription\Workflow;
 
 use Modules\Osr\Models\EquipmentInstance;
-use Modules\Osr\Services\SwapRequestService;
+use Modules\Osr\Swap\Services\SwapRequestService;
 use Modules\Subscription\Models\Subscription;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;

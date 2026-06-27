@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Osr\Workflow;
+namespace Modules\Osr\Swap\Workflow;
 
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
@@ -8,7 +8,7 @@ use Modules\Billing\Intent\Services\BillingIntentService;
 use Modules\Osr\Events\OsrEvents;
 use Modules\Osr\Models\EquipmentInstance;
 use Modules\Osr\Models\EquipmentSku;
-use Modules\Osr\Models\EquipmentSwapRequest;
+use Modules\Osr\Swap\Models\EquipmentSwapRequest;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
 use Modules\Workflow\Contracts\TaskResult;

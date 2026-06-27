@@ -1,6 +1,7 @@
 <?php
 
 namespace Modules\Osr\Models;
+use Modules\Osr\Models\EquipmentInstanceLifecycleEvent;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;

@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Osr\Http\Controllers;
+namespace Modules\Osr\Procurement\Http\Controllers;
 
 use App\Foundation\Approvals\ApprovalRequest;
 use App\Foundation\Approvals\ApprovalService;
@@ -9,10 +9,10 @@ use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Osr\Models\PurchaseOrder;
+use Modules\Osr\Procurement\Models\PurchaseOrder;
 use Modules\Osr\Models\StockCountSession;
 use Modules\Osr\Services\InventoryAuditService;
-use Modules\Osr\Services\ProcurementService;
+use Modules\Osr\Procurement\Services\ProcurementService;
 
 /** OSR-02 procurement + OSR-05 inventory audit API. */
 class ProcurementController extends ApiController

@@ -2,9 +2,9 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\Osr\Http\Controllers\EquipmentInstanceController;
-use Modules\Osr\Http\Controllers\ProcurementController;
+use Modules\Osr\Procurement\Http\Controllers\ProcurementController;
 use Modules\Osr\Http\Controllers\StockController;
-use Modules\Osr\Http\Controllers\SwapRequestController;
+use Modules\Osr\Swap\Http\Controllers\SwapRequestController;
 
 /*
 | OSR / equipment API (PLM-CFG-06, OSR-01, OSR-INSTANCE-01).

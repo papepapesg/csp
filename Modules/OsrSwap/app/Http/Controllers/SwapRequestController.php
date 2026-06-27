@@ -1,14 +1,14 @@
 <?php
 
-namespace Modules\Osr\Http\Controllers;
+namespace Modules\Osr\Swap\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Osr\Models\EquipmentSwapRequest;
-use Modules\Osr\Services\SwapRequestService;
+use Modules\Osr\Swap\Models\EquipmentSwapRequest;
+use Modules\Osr\Swap\Services\SwapRequestService;
 
 /**
  * OSR-RMA-01 swap-request API. Kind-specific create endpoint per the satellite

@@ -3,14 +3,14 @@
 namespace Modules\Osr\Providers;
 
 use Illuminate\Support\ServiceProvider;
-use Modules\Osr\Workflow\CompleteSwapHandler;
-use Modules\Osr\Workflow\CompleteWithoutRecoveryHandler;
-use Modules\Osr\Workflow\CreateSwapWorkOrderHandler;
-use Modules\Osr\Workflow\FailSwapHandler;
-use Modules\Osr\Workflow\ProvisionSwapHandler;
-use Modules\Osr\Workflow\RecoverSourceHandler;
-use Modules\Osr\Workflow\ReserveSlotHandler;
-use Modules\Osr\Workflow\ValidateSwapEligibilityHandler;
+use Modules\Osr\Swap\Workflow\CompleteSwapHandler;
+use Modules\Osr\Swap\Workflow\CompleteWithoutRecoveryHandler;
+use Modules\Osr\Swap\Workflow\CreateSwapWorkOrderHandler;
+use Modules\Osr\Swap\Workflow\FailSwapHandler;
+use Modules\Osr\Swap\Workflow\ProvisionSwapHandler;
+use Modules\Osr\Swap\Workflow\RecoverSourceHandler;
+use Modules\Osr\Swap\Workflow\ReserveSlotHandler;
+use Modules\Osr\Swap\Workflow\ValidateSwapEligibilityHandler;
 use Modules\Workflow\Engine\TaskRegistry;
 
 /** Registers OSR-RMA-01 swap steps into the workflow toolbox. */

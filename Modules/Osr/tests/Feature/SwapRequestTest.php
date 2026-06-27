@@ -11,7 +11,7 @@ use Laravel\Sanctum\Sanctum;
 use Modules\Osr\Database\Seeders\OsrRmaSeeder;
 use Modules\Osr\Models\EquipmentInstance;
 use Modules\Osr\Models\EquipmentSku;
-use Modules\Osr\Models\EquipmentSwapRequest;
+use Modules\Osr\Swap\Models\EquipmentSwapRequest;
 use Modules\Osr\Models\StockLocation;
 use Tests\TestCase;
 

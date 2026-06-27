@@ -1,13 +1,13 @@
 <?php
 
-namespace Modules\Osr\Services;
+namespace Modules\Osr\Swap\Services;
 
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Id;
 use Modules\Osr\Events\OsrEvents;
-use Modules\Osr\Models\EquipmentSwapRequest;
+use Modules\Osr\Swap\Models\EquipmentSwapRequest;
 use Modules\Workflow\Engine\WorkflowEngine;
 use Modules\Workflow\Models\ProcessInstance;
 use Modules\Workflow\Models\UserTask;

@@ -1,13 +1,13 @@
 <?php
 
-namespace Modules\Osr\Workflow;
+namespace Modules\Osr\Swap\Workflow;
 
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Rules\RuleEngine;
 use Modules\Osr\Events\OsrEvents;
 use Modules\Osr\Models\EquipmentInstance;
-use Modules\Osr\Models\EquipmentSwapRequest;
+use Modules\Osr\Swap\Models\EquipmentSwapRequest;
 use Modules\Osr\Models\StockLocation;
 use Modules\Osr\Services\EquipmentInstanceService;
 use Modules\Osr\Services\StockService;

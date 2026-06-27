@@ -1,10 +1,10 @@
 <?php
 
-namespace Modules\Osr\Workflow;
+namespace Modules\Osr\Swap\Workflow;
 
 use App\Foundation\Rules\RuleEngine;
 use Modules\Osr\Models\EquipmentInstance;
-use Modules\Osr\Models\EquipmentSwapRequest;
+use Modules\Osr\Swap\Models\EquipmentSwapRequest;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;
 use Modules\Workflow\Contracts\TaskResult;
