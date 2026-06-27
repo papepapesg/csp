@@ -11,12 +11,12 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Catalog\Events\CatalogEvents;
 use Modules\Catalog\Listeners\CatalogCacheInvalidator;
-use Modules\Catalog\Models\VoiceDestinationPrefix;
-use Modules\Catalog\Models\VoiceDestinationZone;
-use Modules\Catalog\Models\VoiceTariffBinding;
-use Modules\Catalog\Models\VoiceTariffPlan;
-use Modules\Catalog\Models\VoiceTariffRate;
-use Modules\Catalog\Models\VoiceTimeBand;
+use Modules\Catalog\Rating\Models\VoiceDestinationPrefix;
+use Modules\Catalog\Rating\Models\VoiceDestinationZone;
+use Modules\Catalog\Rating\Models\VoiceTariffBinding;
+use Modules\Catalog\Rating\Models\VoiceTariffPlan;
+use Modules\Catalog\Rating\Models\VoiceTariffRate;
+use Modules\Catalog\Rating\Models\VoiceTimeBand;
 use Modules\Catalog\Support\CatalogCacheKeys;
 use Tests\TestCase;
 

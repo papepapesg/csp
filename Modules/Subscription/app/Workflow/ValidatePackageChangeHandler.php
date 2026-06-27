@@ -3,8 +3,8 @@
 namespace Modules\Subscription\Workflow;
 
 use App\Foundation\Rules\RuleEngine;
-use Modules\Catalog\Models\Package;
-use Modules\Catalog\Models\PackageVersion;
+use Modules\Catalog\Plm\Models\Package;
+use Modules\Catalog\Plm\Models\PackageVersion;
 use Modules\Subscription\Models\Subscription;
 use Modules\Workflow\Contracts\TaskContext;
 use Modules\Workflow\Contracts\TaskHandler;

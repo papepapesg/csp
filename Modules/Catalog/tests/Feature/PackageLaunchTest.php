@@ -9,12 +9,12 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
-use Modules\Catalog\Models\Package;
-use Modules\Catalog\Models\PackageLaunchPlan;
-use Modules\Catalog\Models\PackageService;
-use Modules\Catalog\Models\PackageVersion;
-use Modules\Catalog\Models\Service;
-use Modules\Catalog\Models\ServiceClass;
+use Modules\Catalog\Plm\Models\Package;
+use Modules\Catalog\Plm\Models\PackageLaunchPlan;
+use Modules\Catalog\Plm\Models\PackageService;
+use Modules\Catalog\Plm\Models\PackageVersion;
+use Modules\Catalog\Plm\Models\Service;
+use Modules\Catalog\Plm\Models\ServiceClass;
 use Tests\TestCase;
 
 /**

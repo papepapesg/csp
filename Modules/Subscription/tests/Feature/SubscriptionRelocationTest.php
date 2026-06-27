@@ -8,7 +8,7 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
-use Modules\Catalog\Models\HomePass;
+use Modules\Catalog\Network\Models\HomePass;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Subscription\Models\Subscription;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;

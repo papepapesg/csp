@@ -3,8 +3,8 @@
 namespace Modules\Catalog\Tests\Feature;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Modules\Catalog\Models\UsageTariff;
-use Modules\Catalog\Services\UsageRatingService;
+use Modules\Catalog\Rating\Models\UsageTariff;
+use Modules\Catalog\Rating\Services\UsageRatingService;
 use Tests\TestCase;
 
 /**

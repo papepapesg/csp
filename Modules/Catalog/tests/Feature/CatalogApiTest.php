@@ -12,10 +12,10 @@ use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
 use Modules\Catalog\Database\Seeders\HomePassStatusSeeder;
-use Modules\Catalog\Models\HomePass;
-use Modules\Catalog\Models\HomePassStatusCode;
-use Modules\Catalog\Models\NetworkNode;
-use Modules\Catalog\Models\TechRegion;
+use Modules\Catalog\Network\Models\HomePass;
+use Modules\Catalog\Network\Models\HomePassStatusCode;
+use Modules\Catalog\Network\Models\NetworkNode;
+use Modules\Catalog\Network\Models\TechRegion;
 use Modules\Workforce\Models\Contractor;
 use Tests\TestCase;
 

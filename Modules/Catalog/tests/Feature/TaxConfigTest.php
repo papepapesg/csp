@@ -7,7 +7,7 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Catalog\Database\Seeders\TaxCatalogSeeder;
-use Modules\Catalog\Models\TaxRule;
+use Modules\Catalog\Tax\Models\TaxRule;
 use Tests\TestCase;
 
 /**

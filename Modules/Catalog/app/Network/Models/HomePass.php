@@ -1,0 +1,49 @@
+<?php
+
+namespace Modules\Catalog\Network\Models;
+
+use App\Foundation\Models\HasPrefixedId;
+use App\Foundation\Support\Context;
+use Illuminate\Database\Eloquent\Model;
+
+/**
+ * RLM-CFG-01 HomePass — a serviceable physical premise/address. Reference data
+ * consumed by subscription, fulfillment and work orders (HLD §4).
+ */
+class HomePass extends Model
+{
+    use HasPrefixedId;
+
+    public const STATUS_DRAFT = 'DRAFT';
+
+    public const STATUS_SERVICEABLE = 'SERVICEABLE';
+
+    public const STATUS_RESERVED = 'RESERVED';
+
+    public const STATUS_RETIRED = 'RETIRED';
+
+    protected $table = 'homepass';
+
+    protected string $idPrefix = 'hp';
+
+    protected $guarded = [];
+
+    protected $casts = [
+        'has_been_active' => 'boolean',
+        'has_been_sellable' => 'boolean',
+        'network_nodes' => 'array',
+        'network_path' => 'array',
+        'service_management_endpoints' => 'array',
+        'services_supported' => 'array',
+        // Importable GIS placeholders (EPSG:4326): point coordinates + optional footprint.
+        'geo_lat' => 'float',
+        'geo_lng' => 'float',
+        'geo_footprint' => 'array',
+        'geo_imported_at' => 'datetime',
+    ];
+
+    protected static function booted(): void
+    {
+        static::creating(fn (self $m) => $m->operator_code ??= Context::operatorCode());
+    }
+}

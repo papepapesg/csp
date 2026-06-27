@@ -6,10 +6,10 @@ use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
-use Modules\Catalog\Models\Discount;
-use Modules\Catalog\Models\DiscountAssignment;
-use Modules\Catalog\Models\PromoCampaign;
-use Modules\Catalog\Services\DiscountComputeService;
+use Modules\Catalog\Discount\Models\Discount;
+use Modules\Catalog\Discount\Models\DiscountAssignment;
+use Modules\Catalog\Discount\Models\PromoCampaign;
+use Modules\Catalog\Discount\Services\DiscountComputeService;
 use Tests\TestCase;
 
 class DiscountComputeTest extends TestCase

@@ -4,8 +4,8 @@ namespace Modules\Catalog\Listeners;
 
 use App\Foundation\Approvals\ApprovalRequest;
 use App\Foundation\Events\OutboxEventPublished;
-use Modules\Catalog\Models\HomePass;
-use Modules\Catalog\Services\CatalogService;
+use Modules\Catalog\Network\Models\HomePass;
+use Modules\Catalog\Plm\Services\CatalogService;
 
 /**
  * RLM-CFG-01 R-RLM-CFG-01-H-5 maker-checker: when an EM-CFG-04 approval for a HomePass status

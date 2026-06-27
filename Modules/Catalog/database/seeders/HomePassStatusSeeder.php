@@ -3,7 +3,7 @@
 namespace Modules\Catalog\Database\Seeders;
 
 use Illuminate\Database\Seeder;
-use Modules\Catalog\Models\HomePassStatusCode;
+use Modules\Catalog\Network\Models\HomePassStatusCode;
 
 /**
  * RLM-CFG-01 §1 default HomePass status catalog. A sane starting point any deployment

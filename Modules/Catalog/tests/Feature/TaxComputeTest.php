@@ -7,7 +7,7 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Catalog\Database\Seeders\TaxCatalogSeeder;
-use Modules\Catalog\Services\TaxComputeService;
+use Modules\Catalog\Tax\Services\TaxComputeService;
 use Tests\TestCase;
 
 class TaxComputeTest extends TestCase
@@ -51,10 +51,10 @@ class TaxComputeTest extends TestCase
     {
         // The applicability rule only covers PACKAGE/INTERNET; a SERVICE resolves to null →
         // compute falls back to the service's own default_tax_group_ref (WIK_INTERNET).
-        $class = \Modules\Catalog\Models\ServiceClass::query()->create([
+        $class = \Modules\Catalog\Plm\Models\ServiceClass::query()->create([
             'id' => 'scls_bb', 'operator_code' => 'WIK', 'name' => 'Broadband',
         ]);
-        \Modules\Catalog\Models\Service::query()->create([
+        \Modules\Catalog\Plm\Models\Service::query()->create([
             'id' => 'svc_100', 'operator_code' => 'WIK', 'code' => 'FTTH-100', 'name' => 'FTTH 100',
             'service_class_id' => $class->id, 'default_tax_group_ref' => 'WIK_INTERNET',
         ]);

@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Wallet\Models\Wallet;
 use Modules\Billing\Wallet\Models\WalletTransaction;
-use Modules\Catalog\Models\WalletCatalog;
+use Modules\Catalog\Wallet\Models\WalletCatalog;
 
 /**
  * BIL-05/BIL-06 wallet & top-up engine. Owns the per-customer wallet balance and an

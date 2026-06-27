@@ -4,14 +4,14 @@ namespace Modules\Catalog\Database\Seeders;
 
 use App\Foundation\Support\Context;
 use Illuminate\Database\Seeder;
-use Modules\Catalog\Models\BundleComponent;
-use Modules\Catalog\Models\CommercialBundle;
-use Modules\Catalog\Models\Package;
-use Modules\Catalog\Models\PackageService;
-use Modules\Catalog\Models\PackageVersion;
-use Modules\Catalog\Models\PromoCampaign;
-use Modules\Catalog\Models\Service;
-use Modules\Catalog\Models\ServiceClass;
+use Modules\Catalog\Plm\Models\BundleComponent;
+use Modules\Catalog\Plm\Models\CommercialBundle;
+use Modules\Catalog\Plm\Models\Package;
+use Modules\Catalog\Plm\Models\PackageService;
+use Modules\Catalog\Plm\Models\PackageVersion;
+use Modules\Catalog\Discount\Models\PromoCampaign;
+use Modules\Catalog\Plm\Models\Service;
+use Modules\Catalog\Plm\Models\ServiceClass;
 
 /**
  * Demo catalog dataset (PLM-CFG-01 / SIP-01 / SIP-04). Seeds a small but realistic

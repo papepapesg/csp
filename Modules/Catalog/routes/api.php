@@ -1,19 +1,19 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Modules\Catalog\Http\Controllers\ConfigCatalogController;
-use Modules\Catalog\Http\Controllers\BundleController;
-use Modules\Catalog\Http\Controllers\CampaignController;
-use Modules\Catalog\Http\Controllers\DiscountController;
-use Modules\Catalog\Http\Controllers\HomePassController;
-use Modules\Catalog\Http\Controllers\PackageController;
-use Modules\Catalog\Http\Controllers\PackageLaunchController;
-use Modules\Catalog\Http\Controllers\ServiceClassController;
-use Modules\Catalog\Http\Controllers\ServiceController;
-use Modules\Catalog\Http\Controllers\TaxController;
-use Modules\Catalog\Http\Controllers\TechRegionController;
-use Modules\Catalog\Http\Controllers\VoiceTariffController;
-use Modules\Catalog\Http\Controllers\WalletCatalogController;
+use Modules\Catalog\Plm\Http\Controllers\ConfigCatalogController;
+use Modules\Catalog\Plm\Http\Controllers\BundleController;
+use Modules\Catalog\Discount\Http\Controllers\CampaignController;
+use Modules\Catalog\Discount\Http\Controllers\DiscountController;
+use Modules\Catalog\Network\Http\Controllers\HomePassController;
+use Modules\Catalog\Plm\Http\Controllers\PackageController;
+use Modules\Catalog\Plm\Http\Controllers\PackageLaunchController;
+use Modules\Catalog\Plm\Http\Controllers\ServiceClassController;
+use Modules\Catalog\Plm\Http\Controllers\ServiceController;
+use Modules\Catalog\Tax\Http\Controllers\TaxController;
+use Modules\Catalog\Network\Http\Controllers\TechRegionController;
+use Modules\Catalog\Rating\Http\Controllers\VoiceTariffController;
+use Modules\Catalog\Wallet\Http\Controllers\WalletCatalogController;
 
 /*
 | Catalog & reference-data API (PLM-CFG-01, SIP-01, RLM-CFG-01, ILM-CFG-02).
@@ -62,7 +62,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('tech-regions/{techRegion}', [TechRegionController::class, 'update'])->middleware('permission:catalog.manage');
 
     // RLM-CFG-01 TechContractor / skill / coverage.
-    $tc = \Modules\Catalog\Http\Controllers\TechCoverageController::class;
+    $tc = \Modules\Catalog\Network\Http\Controllers\TechCoverageController::class;
     Route::get('tech-contractor-skills', [$tc, 'skills'])->middleware('permission:catalog.read');
     Route::post('tech-contractor-skills', [$tc, 'storeSkill'])->middleware('permission:catalog.manage');
     Route::get('tech-contractors', [$tc, 'contractors'])->middleware('permission:catalog.read');
@@ -85,11 +85,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('homepass/{homepass}/eligible-contractors', [HomePassController::class, 'eligibleContractors'])->middleware('permission:catalog.read');
 
     // RLM-CFG-01 network_node + house_type reference catalogs.
-    Route::get('network-nodes', [\Modules\Catalog\Http\Controllers\NetworkCatalogController::class, 'nodes'])->middleware('permission:catalog.read');
-    Route::post('network-nodes', [\Modules\Catalog\Http\Controllers\NetworkCatalogController::class, 'storeNode'])->middleware('permission:catalog.manage');
-    Route::post('network-nodes/{networkNode}/retire', [\Modules\Catalog\Http\Controllers\NetworkCatalogController::class, 'retireNode'])->middleware('permission:catalog.manage');
-    Route::get('house-types', [\Modules\Catalog\Http\Controllers\NetworkCatalogController::class, 'houseTypes'])->middleware('permission:catalog.read');
-    Route::post('house-types', [\Modules\Catalog\Http\Controllers\NetworkCatalogController::class, 'storeHouseType'])->middleware('permission:catalog.manage');
+    Route::get('network-nodes', [\Modules\Catalog\Network\Http\Controllers\NetworkCatalogController::class, 'nodes'])->middleware('permission:catalog.read');
+    Route::post('network-nodes', [\Modules\Catalog\Network\Http\Controllers\NetworkCatalogController::class, 'storeNode'])->middleware('permission:catalog.manage');
+    Route::post('network-nodes/{networkNode}/retire', [\Modules\Catalog\Network\Http\Controllers\NetworkCatalogController::class, 'retireNode'])->middleware('permission:catalog.manage');
+    Route::get('house-types', [\Modules\Catalog\Network\Http\Controllers\NetworkCatalogController::class, 'houseTypes'])->middleware('permission:catalog.read');
+    Route::post('house-types', [\Modules\Catalog\Network\Http\Controllers\NetworkCatalogController::class, 'storeHouseType'])->middleware('permission:catalog.manage');
 
     // PLM-CFG-02 tax compute + admin config (rules/groups, effective-dated versioning)
     Route::post('tax/compute', [TaxController::class, 'compute'])->middleware('permission:catalog.read');

@@ -10,7 +10,7 @@ use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Tax\Models\TaxInvoice;
 use Modules\Billing\Tax\Models\TaxOperatorConfig;
-use Modules\Catalog\Services\TaxComputeService;
+use Modules\Catalog\Tax\Services\TaxComputeService;
 
 /**
  * BIL-02-TAX-01 generator (rule group G). Builds a tax invoice from a payment moment — the

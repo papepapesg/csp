@@ -23,9 +23,9 @@ class CatalogServiceProvider extends ModuleServiceProvider
      * @var string[]
      */
     protected array $commands = [
-        \Modules\Catalog\Console\LaunchStatusCommand::class,
-        \Modules\Catalog\Console\LaunchShowCommand::class,
-        \Modules\Catalog\Console\LaunchActivateDueCommand::class,
+        \Modules\Catalog\Plm\Console\LaunchStatusCommand::class,
+        \Modules\Catalog\Plm\Console\LaunchShowCommand::class,
+        \Modules\Catalog\Plm\Console\LaunchActivateDueCommand::class,
     ];
 
     /**

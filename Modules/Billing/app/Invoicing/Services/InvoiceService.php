@@ -14,7 +14,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Invoicing\Models\Invoice;
-use Modules\Catalog\Services\TaxComputeService;
+use Modules\Catalog\Tax\Services\TaxComputeService;
 
 /**
  * BIL-02 invoicing core. Generates invoices from charge lines, computes totals

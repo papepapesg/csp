@@ -4,8 +4,8 @@ namespace Modules\Catalog\Database\Seeders;
 
 use App\Foundation\Support\Id;
 use Illuminate\Database\Seeder;
-use Modules\Catalog\Models\TaxGroup;
-use Modules\Catalog\Models\TaxRule;
+use Modules\Catalog\Tax\Models\TaxGroup;
+use Modules\Catalog\Tax\Models\TaxRule;
 use Modules\Rules\Models\DecisionTable;
 
 /**

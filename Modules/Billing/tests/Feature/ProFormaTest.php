@@ -8,7 +8,7 @@ use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Invoicing\Services\ProFormaService;
-use Modules\Catalog\Models\PackageVersion;
+use Modules\Catalog\Plm\Models\PackageVersion;
 use Modules\Ilm\Models\Customer;
 use Modules\Subscription\Models\Subscription;
 use Tests\TestCase;

@@ -7,9 +7,9 @@ use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
-use Modules\Catalog\Models\Discount;
-use Modules\Catalog\Models\Package;
-use Modules\Catalog\Models\PackageVersion;
+use Modules\Catalog\Discount\Models\Discount;
+use Modules\Catalog\Plm\Models\Package;
+use Modules\Catalog\Plm\Models\PackageVersion;
 use Tests\TestCase;
 
 /**

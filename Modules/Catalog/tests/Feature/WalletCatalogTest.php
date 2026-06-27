@@ -8,9 +8,9 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
-use Modules\Catalog\Models\Service;
-use Modules\Catalog\Models\ServiceClass;
-use Modules\Catalog\Models\WalletCatalog;
+use Modules\Catalog\Plm\Models\Service;
+use Modules\Catalog\Plm\Models\ServiceClass;
+use Modules\Catalog\Wallet\Models\WalletCatalog;
 use Tests\TestCase;
 
 /**

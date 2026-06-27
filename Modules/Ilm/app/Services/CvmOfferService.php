@@ -10,7 +10,7 @@ use App\Foundation\Events\EventBus;
 use App\Foundation\Rules\RuleEngine;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
-use Modules\Catalog\Models\DiscountAssignment;
+use Modules\Catalog\Discount\Models\DiscountAssignment;
 use Modules\Ilm\Events\CvmEvents;
 use Modules\Ilm\Models\CvmActivity;
 use Modules\Ilm\Models\CvmOfferInstance;

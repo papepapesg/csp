@@ -6,7 +6,7 @@ use Modules\Billing\Invoicing\Services\Charge;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Mediation\Models\RatedEvent;
-use Modules\Catalog\Models\PackageVersion;
+use Modules\Catalog\Plm\Models\PackageVersion;
 use Modules\Subscription\Models\Subscription;
 
 /**

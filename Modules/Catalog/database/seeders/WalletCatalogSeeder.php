@@ -4,8 +4,8 @@ namespace Modules\Catalog\Database\Seeders;
 
 use App\Foundation\Support\Id;
 use Illuminate\Database\Seeder;
-use Modules\Catalog\Models\WalletCatalog;
-use Modules\Catalog\Models\WalletType;
+use Modules\Catalog\Wallet\Models\WalletCatalog;
+use Modules\Catalog\Wallet\Models\WalletType;
 
 /**
  * PLM-CFG-03 default seed: the 7 monetary wallet types and a starter set of wallet

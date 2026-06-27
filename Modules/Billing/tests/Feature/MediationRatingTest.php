@@ -9,8 +9,8 @@ use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
 use Modules\Billing\Mediation\Models\RatedEvent;
 use Modules\Billing\Mediation\Models\UsageRecord;
-use Modules\Catalog\Models\UsageTariff;
-use Modules\Catalog\Models\VoiceTariff;
+use Modules\Catalog\Rating\Models\UsageTariff;
+use Modules\Catalog\Rating\Models\VoiceTariff;
 use Tests\TestCase;
 
 class MediationRatingTest extends TestCase

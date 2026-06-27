@@ -3,8 +3,8 @@
 namespace Modules\Catalog\Tests\Feature;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Modules\Catalog\Models\HomePass;
-use Modules\Catalog\Models\TechRegion;
+use Modules\Catalog\Network\Models\HomePass;
+use Modules\Catalog\Network\Models\TechRegion;
 use Tests\TestCase;
 
 /**

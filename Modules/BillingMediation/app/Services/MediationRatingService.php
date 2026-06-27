@@ -10,9 +10,9 @@ use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Mediation\Models\RatedEvent;
 use Modules\Billing\Mediation\Models\UsageRecord;
-use Modules\Catalog\Models\UsageTariff;
-use Modules\Catalog\Models\VoiceTariff;
-use Modules\Catalog\Services\UsageRatingService;
+use Modules\Catalog\Rating\Models\UsageTariff;
+use Modules\Catalog\Rating\Models\VoiceTariff;
+use Modules\Catalog\Rating\Services\UsageRatingService;
 
 /**
  * MED-01 mediation + RAT-01 rating. ingest() deduplicates raw usage by source_ref

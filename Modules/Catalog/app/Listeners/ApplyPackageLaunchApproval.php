@@ -4,8 +4,8 @@ namespace Modules\Catalog\Listeners;
 
 use App\Foundation\Approvals\ApprovalRequest;
 use App\Foundation\Events\OutboxEventPublished;
-use Modules\Catalog\Models\PackageLaunchPlan;
-use Modules\Catalog\Services\PackageLaunchService;
+use Modules\Catalog\Plm\Models\PackageLaunchPlan;
+use Modules\Catalog\Plm\Services\PackageLaunchService;
 
 /**
  * SIP-02 R-SIP-02-05 maker-checker: when an EM-CFG-04 approval for a package launch
