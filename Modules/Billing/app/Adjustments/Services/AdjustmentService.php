@@ -1,7 +1,7 @@
 <?php
 
 namespace Modules\Billing\Adjustments\Services;
-use Modules\Billing\Services\InvoiceService;
+use Modules\Billing\Invoicing\Services\InvoiceService;
 use Modules\Billing\Payments\Services\NoteApplicationService;
 
 use App\Foundation\Approvals\ApprovalRequest;
@@ -16,8 +16,8 @@ use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Adjustments\Models\AdjustmentReasonCode;
 use Modules\Billing\Adjustments\Models\AdjustmentRequest;
-use Modules\Billing\Models\Invoice;
-use Modules\Billing\Models\InvoiceLine;
+use Modules\Billing\Invoicing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\InvoiceLine;
 
 /**
  * BIL-02-ADJ-01 invoice adjustments — the governed proposal → approval →

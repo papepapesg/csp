@@ -2,7 +2,7 @@
 
 namespace Modules\Billing\Tax\Contracts;
 
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 
 /**
  * Tax-authority fiscalisation gateway (BIL-02-TAX-01). Default driver is a stub

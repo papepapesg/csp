@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Services;
+namespace Modules\Billing\Invoicing\Services;
 
 use App\Foundation\Errors\DomainException;
 use Modules\Ilm\Models\Customer;

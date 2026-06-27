@@ -1,10 +1,10 @@
 <?php
 
-namespace Modules\Billing\Console;
+namespace Modules\Billing\Invoicing\Console;
 
 use App\Foundation\Support\Context;
 use Illuminate\Console\Command;
-use Modules\Billing\Services\ProFormaService;
+use Modules\Billing\Invoicing\Services\ProFormaService;
 
 /** BIL-02-GEN-01 Generator 3 — pro-forma pre-cycle scanner (PREPAID, daily). */
 class ProFormaScanCommand extends Command

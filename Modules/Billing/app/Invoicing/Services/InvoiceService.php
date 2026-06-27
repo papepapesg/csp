@@ -1,8 +1,8 @@
 <?php
 
-namespace Modules\Billing\Services;
-use Modules\Billing\Services\Charge;
-use Modules\Billing\Services\CustomerSnapshotService;
+namespace Modules\Billing\Invoicing\Services;
+use Modules\Billing\Invoicing\Services\Charge;
+use Modules\Billing\Invoicing\Services\CustomerSnapshotService;
 
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
@@ -13,7 +13,7 @@ use App\Foundation\Support\Id;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Catalog\Services\TaxComputeService;
 
 /**

@@ -5,7 +5,7 @@ namespace Modules\Billing\Tax\Adapters;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\Log;
 use Modules\Billing\Tax\Contracts\TaxGateway;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 
 /** Stub fiscalisation gateway: returns a fiscal number so flows run end-to-end. */
 class StubTaxGateway implements TaxGateway

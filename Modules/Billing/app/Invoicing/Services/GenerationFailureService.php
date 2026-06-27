@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Services;
+namespace Modules\Billing\Invoicing\Services;
 
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;

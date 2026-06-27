@@ -1,10 +1,10 @@
 <?php
 
-namespace Modules\Billing\Console;
+namespace Modules\Billing\Invoicing\Console;
 
 use App\Foundation\Support\Context;
 use Illuminate\Console\Command;
-use Modules\Billing\Services\CycleBillingService;
+use Modules\Billing\Invoicing\Services\CycleBillingService;
 
 /** BIL-02 cycle billing worker — settles unbilled rated events (invoice or wallet). */
 class RunCycleBillingCommand extends Command

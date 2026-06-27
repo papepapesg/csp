@@ -5,7 +5,7 @@ namespace Modules\Billing\Tests\Feature;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Modules\Billing\Services\CycleCloseService;
+use Modules\Billing\Invoicing\Services\CycleCloseService;
 use Modules\Billing\Mediation\Services\MediationRatingService;
 use Modules\Billing\Wallet\Services\WalletService;
 use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
@@ -127,7 +127,7 @@ class CycleCloseTest extends TestCase
         app(CycleCloseService::class)->scan('WIK');
 
         // TWO invoices: the cyclical fee (Internet+TV wallet) and voice (own wallet).
-        $invoices = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->get();
+        $invoices = \Modules\Billing\Invoicing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->get();
         $this->assertCount(2, $invoices);
         $internet = $invoices->firstWhere('grouping_key_values', 'WALLET_INTERNET');
         $voice = $invoices->firstWhere('grouping_key_values', 'WALLET_VOICE');
@@ -159,7 +159,7 @@ class CycleCloseTest extends TestCase
         $this->assertSame(1, $r['closed']);
 
         // One invoice (SINGLE policy) = 2500 recurring + 1000 usage.
-        $invoice = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
+        $invoice = \Modules\Billing\Invoicing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
         $this->assertEquals(3500.00, $invoice->total_amount);
         $this->assertSame('SINGLE', $invoice->grouping_dimension);
 
@@ -199,7 +199,7 @@ class CycleCloseTest extends TestCase
         $med->ratePending('WIK');
 
         app(CycleCloseService::class)->scan('WIK');
-        $invoice = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
+        $invoice = \Modules\Billing\Invoicing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
         $categories = $invoice->lines()->where('line_type', 'DETAIL')->pluck('service_category_code')->all();
 
         // Subscription fee + DATA usage + VOICE usage = three distinct detail leaves.
@@ -226,7 +226,7 @@ class CycleCloseTest extends TestCase
         $sub = $this->subscription('POSTPAID', $this->pricedPackage(1000));
         app(CycleCloseService::class)->scan('WIK');
 
-        $invoice = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
+        $invoice = \Modules\Billing\Invoicing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
         $recurring = $invoice->lines()->where('service_category_code', 'SUBSCRIPTION')->firstOrFail();
         $this->assertGreaterThan(0, (float) $recurring->tax_amount);
         $this->assertNotEmpty($recurring->tax_breakdown);
@@ -267,7 +267,7 @@ class CycleCloseTest extends TestCase
             ->where('event_type', 'WalletToppedUp')
             ->whereJsonContains('payload->subscriptionId', $sub->subscription_id)
             ->latest('id')->firstOrFail();
-        app(\Modules\Billing\Listeners\RetryFrozenCycleOnTopup::class)
+        app(\Modules\Billing\Invoicing\Listeners\RetryFrozenCycleOnTopup::class)
             ->handle(new \App\Foundation\Events\OutboxEventPublished($topup));
 
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'CycleActivated']);
@@ -296,7 +296,7 @@ class CycleCloseTest extends TestCase
         ]);
 
         app(CycleCloseService::class)->scan('WIK');
-        $invoice = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
+        $invoice = \Modules\Billing\Invoicing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
         // 15/30 of 3000 = 1500.
         $this->assertEquals(1500.00, $invoice->lines()->where('service_category_code', 'SUBSCRIPTION')->first()->subtotal);
     }
@@ -313,7 +313,7 @@ class CycleCloseTest extends TestCase
         $sub = $this->subscription('POSTPAID', $this->pricedPackage(2000));
 
         app(CycleCloseService::class)->scan('WIK');
-        $invoice = \Modules\Billing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
+        $invoice = \Modules\Billing\Invoicing\Models\Invoice::query()->where('subscription_id', $sub->subscription_id)->firstOrFail();
 
         // Snapshot frozen on the invoice.
         $snap = $invoice->customer_snapshot;

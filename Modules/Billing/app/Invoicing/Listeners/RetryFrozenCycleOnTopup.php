@@ -1,10 +1,10 @@
 <?php
 
-namespace Modules\Billing\Listeners;
+namespace Modules\Billing\Invoicing\Listeners;
 
 use App\Foundation\Events\OutboxEventPublished;
 use App\Foundation\Support\Context;
-use Modules\Billing\Services\CycleCloseService;
+use Modules\Billing\Invoicing\Services\CycleCloseService;
 use Modules\Subscription\Models\Subscription;
 
 /**

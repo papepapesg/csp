@@ -4,7 +4,7 @@ namespace Modules\Billing\Tax\Services;
 use Modules\Billing\Tax\Services\TaxInvoiceGenerator;
 use Modules\Billing\Tax\Services\TaxSigningService;
 
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Tax\Models\TaxInvoice;
 use Modules\Billing\Tax\Models\TaxOperatorConfig;
 

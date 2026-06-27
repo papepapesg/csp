@@ -5,9 +5,9 @@ namespace Modules\Billing\Tests\Feature;
 use App\Foundation\Support\Context;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Payments\Models\PaymentLedger;
-use Modules\Billing\Services\InvoiceService;
+use Modules\Billing\Invoicing\Services\InvoiceService;
 use Modules\Billing\Payments\Services\PaymentService;
 use Tests\TestCase;
 
@@ -102,7 +102,7 @@ class PaymentApplicationTest extends TestCase
         $next = $this->invoice(150);
         $event = \App\Foundation\Events\Outbox\OutboxEvent::query()
             ->where('event_type', 'InvoiceGenerated')->whereJsonContains('payload->invoiceId', $next->invoice_id)->firstOrFail();
-        app(\Modules\Billing\Listeners\ApplyCreditBalanceOnInvoice::class)->handle(new \App\Foundation\Events\OutboxEventPublished($event));
+        app(\Modules\Billing\Invoicing\Listeners\ApplyCreditBalanceOnInvoice::class)->handle(new \App\Foundation\Events\OutboxEventPublished($event));
 
         $this->assertSame('PAID', $next->fresh()->status);
     }

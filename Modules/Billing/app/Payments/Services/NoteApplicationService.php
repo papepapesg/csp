@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Payments\Models\AccountCreditBalance;
 use Modules\Billing\Adjustments\Models\AdjustmentRequest;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Payments\Models\NoteApplication;
 use Modules\Billing\Wallet\Models\Wallet;
 

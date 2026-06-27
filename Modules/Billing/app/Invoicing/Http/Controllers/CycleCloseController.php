@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Http\Controllers;
+namespace Modules\Billing\Invoicing\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;

@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Http\Controllers;
+namespace Modules\Billing\Invoicing\Http\Controllers;
 
 use App\Foundation\Documents\DocumentRenderer;
 use App\Foundation\Files\FileObject;
@@ -11,8 +11,8 @@ use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
-use Modules\Billing\Models\Invoice;
-use Modules\Billing\Services\InvoiceService;
+use Modules\Billing\Invoicing\Models\Invoice;
+use Modules\Billing\Invoicing\Services\InvoiceService;
 use Modules\Billing\Tax\Services\TaxService;
 
 /**
@@ -40,14 +40,14 @@ class InvoiceController extends ApiController
     public function show(Invoice $invoice): JsonResponse
     {
         $invoice->load('lines');
-        $details = $invoice->lines->where('line_type', \Modules\Billing\Models\InvoiceLine::DETAIL)->groupBy('parent_summary_line_id');
+        $details = $invoice->lines->where('line_type', \Modules\Billing\Invoicing\Models\InvoiceLine::DETAIL)->groupBy('parent_summary_line_id');
 
         // Header fields stay top-level (back-compat); add the SUMMARY/DETAIL view.
         $payload = $invoice->toArray();
         $payload['grouping'] = ['dimension' => $invoice->grouping_dimension, 'key_values' => $invoice->grouping_key_values];
         $payload['customer_snapshot'] = $invoice->customer_snapshot; // frozen at generation (R-GEN-01-F-6)
         $payload['summary'] = $invoice->lines
-            ->where('line_type', \Modules\Billing\Models\InvoiceLine::SUMMARY)
+            ->where('line_type', \Modules\Billing\Invoicing\Models\InvoiceLine::SUMMARY)
             ->sortBy('sort_order')->values()
             ->map(fn ($line) => [
                 'id' => $line->id,

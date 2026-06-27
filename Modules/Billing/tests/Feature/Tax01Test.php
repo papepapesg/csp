@@ -7,7 +7,7 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Billing\Database\Seeders\TaxConfigSeeder;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Tax\Models\TaxInvoice;
 use Modules\Billing\Tax\Models\TaxOperatorConfig;
 use Modules\Billing\Tax\Services\TaxInvoiceGenerator;

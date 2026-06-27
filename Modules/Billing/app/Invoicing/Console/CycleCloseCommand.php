@@ -1,10 +1,10 @@
 <?php
 
-namespace Modules\Billing\Console;
+namespace Modules\Billing\Invoicing\Console;
 
 use App\Foundation\Support\Context;
 use Illuminate\Console\Command;
-use Modules\Billing\Services\CycleCloseService;
+use Modules\Billing\Invoicing\Services\CycleCloseService;
 
 /**
  * BIL-03 cycle-close scanner (R-BIL-03-E-1). Evaluates each active subscription

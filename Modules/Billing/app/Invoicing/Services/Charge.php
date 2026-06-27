@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Services;
+namespace Modules\Billing\Invoicing\Services;
 
 /**
  * BIL-01 charge — a pre-tax line item the Charging Engine returns for a

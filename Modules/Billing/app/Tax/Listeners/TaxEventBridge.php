@@ -4,7 +4,7 @@ namespace Modules\Billing\Tax\Listeners;
 
 use App\Foundation\Events\OutboxEventPublished;
 use App\Foundation\Support\Context;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Tax\Models\TaxOperatorConfig;
 use Modules\Billing\Tax\Services\TaxInvoiceGenerator;
 

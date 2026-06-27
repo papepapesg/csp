@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Dunning\Models\DunningProgram;
 use Modules\Billing\Dunning\Models\DunningState;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Ilm\Services\AccountService;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Services\OperationFramework;

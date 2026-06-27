@@ -3,7 +3,7 @@
 namespace Modules\Subscription\Workflow;
 
 use App\Foundation\Rules\RuleEngine;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Subscription\Models\Subscription;
 use Modules\Workflow\Contracts\Io;
 use Modules\Workflow\Contracts\TaskContext;

@@ -1,9 +1,9 @@
 <?php
 
-namespace Modules\Billing\Services;
-use Modules\Billing\Services\Charge;
-use Modules\Billing\Services\ChargeComputeService;
-use Modules\Billing\Services\CustomerSnapshotService;
+namespace Modules\Billing\Invoicing\Services;
+use Modules\Billing\Invoicing\Services\Charge;
+use Modules\Billing\Invoicing\Services\ChargeComputeService;
+use Modules\Billing\Invoicing\Services\CustomerSnapshotService;
 
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;

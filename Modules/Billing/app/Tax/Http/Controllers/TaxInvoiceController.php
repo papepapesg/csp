@@ -8,7 +8,7 @@ use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Payments\Models\PaymentLedger;
 use Modules\Billing\Tax\Models\TaxInvoice;
 use Modules\Billing\Tax\Services\TaxInvoiceGenerator;

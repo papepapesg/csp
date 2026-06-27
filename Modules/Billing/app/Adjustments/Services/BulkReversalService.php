@@ -12,7 +12,7 @@ use App\Foundation\Support\Id;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 
 /**
  * BIL-02-GEN-01 rule group R — bulk reversal. When a whole batch is billed with

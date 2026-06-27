@@ -11,7 +11,7 @@ use App\Foundation\Support\Context;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Payments\Models\AccountCreditBalance;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Payments\Models\PaymentLedger;
 use Modules\Subscription\Models\Subscription;
 

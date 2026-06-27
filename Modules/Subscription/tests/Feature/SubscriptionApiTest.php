@@ -8,7 +8,7 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\Rules\Models\DecisionTable;
 use Modules\Subscription\Models\Subscription;

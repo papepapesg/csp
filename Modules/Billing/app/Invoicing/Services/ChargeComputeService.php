@@ -1,7 +1,7 @@
 <?php
 
-namespace Modules\Billing\Services;
-use Modules\Billing\Services\Charge;
+namespace Modules\Billing\Invoicing\Services;
+use Modules\Billing\Invoicing\Services\Charge;
 
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;

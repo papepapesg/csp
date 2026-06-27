@@ -8,9 +8,9 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
-use Modules\Billing\Models\Invoice;
-use Modules\Billing\Services\GenerationFailureService;
-use Modules\Billing\Services\InvoiceService;
+use Modules\Billing\Invoicing\Models\Invoice;
+use Modules\Billing\Invoicing\Services\GenerationFailureService;
+use Modules\Billing\Invoicing\Services\InvoiceService;
 use Tests\TestCase;
 
 /**

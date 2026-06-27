@@ -1,7 +1,7 @@
 <?php
 
-namespace Modules\Billing\Models;
-use Modules\Billing\Models\InvoiceLine;
+namespace Modules\Billing\Invoicing\Models;
+use Modules\Billing\Invoicing\Models\InvoiceLine;
 
 use App\Foundation\Models\HasPrefixedId;
 use Illuminate\Database\Eloquent\Model;

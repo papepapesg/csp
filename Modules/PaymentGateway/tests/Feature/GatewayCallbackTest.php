@@ -6,7 +6,7 @@ use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Payments\Models\PaymentLedger;
 use Modules\Ilm\Models\Customer;
 use Modules\Ilm\Models\CustomerAccount;

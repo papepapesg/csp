@@ -1,7 +1,7 @@
 <?php
 
-namespace Modules\Billing\Services;
-use Modules\Billing\Services\InvoiceService;
+namespace Modules\Billing\Invoicing\Services;
+use Modules\Billing\Invoicing\Services\InvoiceService;
 
 use Modules\Billing\Wallet\Services\WalletService;
 use App\Foundation\Events\DomainEvent;

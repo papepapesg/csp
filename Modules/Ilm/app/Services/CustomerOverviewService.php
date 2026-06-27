@@ -97,7 +97,7 @@ class CustomerOverviewService
 
     private function billing(array $accountIds): array
     {
-        $q = \Modules\Billing\Models\Invoice::query()->whereIn('account_id', $accountIds);
+        $q = \Modules\Billing\Invoicing\Models\Invoice::query()->whereIn('account_id', $accountIds);
 
         return [
             'balanceDue' => (float) (clone $q)->sum('amount_due'),

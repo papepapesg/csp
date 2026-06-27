@@ -1,11 +1,11 @@
 <?php
 
-namespace Modules\Billing\Console;
+namespace Modules\Billing\Invoicing\Console;
 
 use App\Foundation\Support\Context;
 use Illuminate\Console\Command;
-use Modules\Billing\Services\CycleCloseService;
-use Modules\Billing\Services\GenerationFailureService;
+use Modules\Billing\Invoicing\Services\CycleCloseService;
+use Modules\Billing\Invoicing\Services\GenerationFailureService;
 
 /**
  * BIL-02-GEN-01 rule group Q scanner (R-GEN-01-Q-2/Q-3). Re-attempts recoverable

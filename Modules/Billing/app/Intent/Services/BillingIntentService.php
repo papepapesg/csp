@@ -2,7 +2,7 @@
 
 namespace Modules\Billing\Intent\Services;
 use Modules\Billing\Mediation\Services\BillableEventCatalogService;
-use Modules\Billing\Services\InvoiceService;
+use Modules\Billing\Invoicing\Services\InvoiceService;
 
 use Modules\Billing\Wallet\Services\WalletService;
 use App\Foundation\Errors\DomainException;

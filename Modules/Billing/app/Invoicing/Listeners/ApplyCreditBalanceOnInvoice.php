@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Listeners;
+namespace Modules\Billing\Invoicing\Listeners;
 
 use App\Foundation\Events\OutboxEventPublished;
 use App\Foundation\Support\Context;

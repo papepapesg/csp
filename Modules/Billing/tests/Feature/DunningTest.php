@@ -15,7 +15,7 @@ use Modules\Billing\Database\Seeders\DunningPolicySeeder;
 use Modules\Billing\Dunning\Listeners\DunningEventBridge;
 use Modules\Billing\Dunning\Models\DunningProgram;
 use Modules\Billing\Dunning\Models\DunningState;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Dunning\Services\DunningService;
 use Modules\Ilm\Database\Seeders\AccountFlagCatalogSeeder;
 use Modules\Ilm\Models\CustomerAccount;

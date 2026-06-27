@@ -5,7 +5,7 @@ use Modules\Billing\Adjustments\Http\Controllers\AdjustmentController;
 use Modules\Billing\Mediation\Http\Controllers\BillableEventController;
 use Modules\Billing\Adjustments\Http\Controllers\BulkReversalController;
 use Modules\Billing\Dunning\Http\Controllers\DunningController;
-use Modules\Billing\Http\Controllers\InvoiceController;
+use Modules\Billing\Invoicing\Http\Controllers\InvoiceController;
 use Modules\Billing\Payments\Http\Controllers\PaymentController;
 use Modules\Billing\Mediation\Http\Controllers\UsageController;
 use Modules\Billing\Wallet\Http\Controllers\WalletController;
@@ -72,7 +72,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('payments/{payment}/allocate-surplus', [PaymentController::class, 'allocateSurplus'])->middleware('permission:payment.apply');
 
     // BIL-CYCLE-01 — cycle-close run monitor (read-only)
-    Route::get('cycle-close-runs', [\Modules\Billing\Http\Controllers\CycleCloseController::class, 'index'])->middleware('permission:invoice.read');
+    Route::get('cycle-close-runs', [\Modules\Billing\Invoicing\Http\Controllers\CycleCloseController::class, 'index'])->middleware('permission:invoice.read');
 
     // BIL-05 — Wallet
     Route::get('wallets/{subscriptionId}/balance', [WalletController::class, 'balance'])->middleware('permission:wallet.read');
