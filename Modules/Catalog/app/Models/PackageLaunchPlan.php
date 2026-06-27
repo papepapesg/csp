@@ -1,6 +1,8 @@
 <?php
 
 namespace Modules\Catalog\Models;
+use Modules\Catalog\Models\PackageAvailability;
+use Modules\Catalog\Models\PackageLaunchCheck;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;

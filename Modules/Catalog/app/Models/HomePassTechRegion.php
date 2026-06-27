@@ -1,6 +1,8 @@
 <?php
 
 namespace Modules\Catalog\Models;
+use Modules\Catalog\Models\HomePass;
+use Modules\Catalog\Models\TechRegion;
 
 use Illuminate\Database\Eloquent\Model;
 

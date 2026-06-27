@@ -1,6 +1,7 @@
 <?php
 
 namespace Modules\Catalog\Models;
+use Modules\Catalog\Models\HomePass;
 
 use Illuminate\Database\Eloquent\Model;
 

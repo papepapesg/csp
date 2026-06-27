@@ -1,6 +1,10 @@
 <?php
 
 namespace Modules\Catalog\Models;
+use Modules\Catalog\Models\BundleAvailability;
+use Modules\Catalog\Models\BundleComponent;
+use Modules\Catalog\Models\BundleDiscountRule;
+use Modules\Catalog\Models\BundleLaunchCheck;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;

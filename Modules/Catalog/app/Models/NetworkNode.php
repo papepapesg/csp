@@ -1,6 +1,7 @@
 <?php
 
 namespace Modules\Catalog\Models;
+use Modules\Catalog\Models\HomePass;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;

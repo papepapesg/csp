@@ -1,6 +1,8 @@
 <?php
 
 namespace Modules\Catalog\Models;
+use Modules\Catalog\Models\PackageService;
+use Modules\Catalog\Models\PackageVersion;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;

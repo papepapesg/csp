@@ -1,6 +1,10 @@
 <?php
 
 namespace Modules\Catalog\Models;
+use Modules\Catalog\Models\CampaignChannel;
+use Modules\Catalog\Models\CampaignOffer;
+use Modules\Catalog\Models\CampaignParticipation;
+use Modules\Catalog\Models\CampaignTargetRule;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;
