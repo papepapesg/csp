@@ -6,7 +6,7 @@ use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Modules\Billing\Services\CycleBillingService;
-use Modules\Billing\Services\MediationRatingService;
+use Modules\Billing\Mediation\Services\MediationRatingService;
 use Modules\Billing\Wallet\Services\WalletService;
 use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
 use Modules\Subscription\Models\Subscription;

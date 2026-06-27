@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Listeners;
+namespace Modules\Billing\Mediation\Listeners;
 
 use App\Foundation\Cache\SophixCache;
 use App\Foundation\Events\OutboxEventPublished;

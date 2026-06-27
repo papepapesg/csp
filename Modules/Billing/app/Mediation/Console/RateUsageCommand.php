@@ -1,9 +1,9 @@
 <?php
 
-namespace Modules\Billing\Console;
+namespace Modules\Billing\Mediation\Console;
 
 use Illuminate\Console\Command;
-use Modules\Billing\Services\MediationRatingService;
+use Modules\Billing\Mediation\Services\MediationRatingService;
 
 /** RAT-01 offline rating worker — rates all pending mediated usage. */
 class RateUsageCommand extends Command

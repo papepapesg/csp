@@ -9,7 +9,7 @@ use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
-use Modules\Billing\Models\RatedEvent;
+use Modules\Billing\Mediation\Models\RatedEvent;
 use Modules\Subscription\Models\Subscription;
 
 /**

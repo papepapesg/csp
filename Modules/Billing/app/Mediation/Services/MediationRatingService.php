@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Services;
+namespace Modules\Billing\Mediation\Services;
 
 use App\Foundation\Cache\SophixCache;
 use App\Foundation\Events\DomainEvent;
@@ -8,8 +8,8 @@ use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
-use Modules\Billing\Models\RatedEvent;
-use Modules\Billing\Models\UsageRecord;
+use Modules\Billing\Mediation\Models\RatedEvent;
+use Modules\Billing\Mediation\Models\UsageRecord;
 use Modules\Catalog\Models\UsageTariff;
 use Modules\Catalog\Models\VoiceTariff;
 use Modules\Catalog\Services\UsageRatingService;

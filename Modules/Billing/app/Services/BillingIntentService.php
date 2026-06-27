@@ -1,7 +1,7 @@
 <?php
 
 namespace Modules\Billing\Services;
-use Modules\Billing\Services\BillableEventCatalogService;
+use Modules\Billing\Mediation\Services\BillableEventCatalogService;
 use Modules\Billing\Services\InvoiceService;
 
 use Modules\Billing\Wallet\Services\WalletService;
@@ -13,7 +13,7 @@ use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Payments\Models\AccountCreditBalance;
-use Modules\Billing\Models\BillableEvent;
+use Modules\Billing\Mediation\Models\BillableEvent;
 use Modules\Billing\Models\BillingIntent;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Services\SubscriptionService;

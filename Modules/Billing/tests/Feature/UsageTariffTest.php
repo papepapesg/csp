@@ -4,8 +4,8 @@ namespace Modules\Billing\Tests\Feature;
 
 use App\Foundation\Support\Context;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Modules\Billing\Models\RatedEvent;
-use Modules\Billing\Services\MediationRatingService;
+use Modules\Billing\Mediation\Models\RatedEvent;
+use Modules\Billing\Mediation\Services\MediationRatingService;
 use Modules\Catalog\Models\UsageTariff;
 use Tests\TestCase;
 

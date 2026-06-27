@@ -13,7 +13,7 @@ use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
-use Modules\Billing\Models\RatedEvent;
+use Modules\Billing\Mediation\Models\RatedEvent;
 use Modules\Subscription\Models\Subscription;
 
 /**

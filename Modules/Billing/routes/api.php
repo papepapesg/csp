@@ -2,12 +2,12 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\Billing\Adjustments\Http\Controllers\AdjustmentController;
-use Modules\Billing\Http\Controllers\BillableEventController;
+use Modules\Billing\Mediation\Http\Controllers\BillableEventController;
 use Modules\Billing\Adjustments\Http\Controllers\BulkReversalController;
 use Modules\Billing\Dunning\Http\Controllers\DunningController;
 use Modules\Billing\Http\Controllers\InvoiceController;
 use Modules\Billing\Payments\Http\Controllers\PaymentController;
-use Modules\Billing\Http\Controllers\UsageController;
+use Modules\Billing\Mediation\Http\Controllers\UsageController;
 use Modules\Billing\Wallet\Http\Controllers\WalletController;
 
 /*

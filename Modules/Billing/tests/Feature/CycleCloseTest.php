@@ -6,7 +6,7 @@ use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Modules\Billing\Services\CycleCloseService;
-use Modules\Billing\Services\MediationRatingService;
+use Modules\Billing\Mediation\Services\MediationRatingService;
 use Modules\Billing\Wallet\Services\WalletService;
 use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
 use Modules\Catalog\Models\PackageVersion;
@@ -136,7 +136,7 @@ class CycleCloseTest extends TestCase
         $this->assertSame('VOICE', $voice->lines()->where('line_type', 'DETAIL')->first()->service_category_code);
 
         // RAT-01 mark-invoiced: the calls are linked to the VOICE invoice…
-        $this->assertSame(2, \Modules\Billing\Models\RatedEvent::query()->where('invoice_id', $voice->invoice_id)->count());
+        $this->assertSame(2, \Modules\Billing\Mediation\Models\RatedEvent::query()->where('invoice_id', $voice->invoice_id)->count());
 
         // …and the itemized page lists each call: destination, when, duration.
         $this->seed(\Database\Seeders\RbacSeeder::class);

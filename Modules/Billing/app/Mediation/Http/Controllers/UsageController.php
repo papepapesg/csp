@@ -1,15 +1,15 @@
 <?php
 
-namespace Modules\Billing\Http\Controllers;
+namespace Modules\Billing\Mediation\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Billing\Models\RatedEvent;
-use Modules\Billing\Models\UsageRecord;
-use Modules\Billing\Services\MediationRatingService;
+use Modules\Billing\Mediation\Models\RatedEvent;
+use Modules\Billing\Mediation\Models\UsageRecord;
+use Modules\Billing\Mediation\Services\MediationRatingService;
 
 /** MED-01 mediation + RAT-01 rating API. */
 class UsageController extends ApiController

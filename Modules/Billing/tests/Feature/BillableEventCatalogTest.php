@@ -9,7 +9,7 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Billing\Database\Seeders\BillableEventSeeder;
-use Modules\Billing\Models\BillableEvent;
+use Modules\Billing\Mediation\Models\BillableEvent;
 use Modules\Billing\Models\BillingIntent;
 use Modules\Billing\Services\BillingIntentService;
 use Modules\Subscription\Models\Subscription;
