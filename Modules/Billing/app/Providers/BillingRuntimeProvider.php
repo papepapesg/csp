@@ -8,13 +8,11 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Modules\Billing\Invoicing\Console\CycleCloseCommand;
-use Modules\Billing\Dunning\Console\DunningRunCommand;
 use Modules\Billing\Invoicing\Console\GenerationFailureRetryCommand;
 use Modules\Billing\Invoicing\Console\ProFormaScanCommand;
 use Modules\Billing\Mediation\Console\RateUsageCommand;
 use Modules\Billing\Invoicing\Console\RunCycleBillingCommand;
 use Modules\Billing\Invoicing\Listeners\ApplyCreditBalanceOnInvoice;
-use Modules\Billing\Dunning\Listeners\DunningEventBridge;
 use Modules\Billing\Mediation\Listeners\EvictPlmCatalogCache;
 use Modules\Billing\Invoicing\Listeners\RetryFrozenCycleOnTopup;
 use Modules\Billing\Adjustments\Services\AdjustmentService;
@@ -33,10 +31,6 @@ class BillingRuntimeProvider extends ServiceProvider
         // BIL-01-PAY-01 OV-2: a newly issued invoice auto-draws any account credit balance.
         Event::listen(OutboxEventPublished::class, [ApplyCreditBalanceOnInvoice::class, 'handle']);
 
-        // BIL-04: prepaid CyclePaymentMissed → enter dunning; voluntary pause/resume
-        // → suspend/resume dunning; WalletToppedUp → prepaid recovery.
-        Event::listen(OutboxEventPublished::class, [DunningEventBridge::class, 'handle']);
-
         // ADJ-01 approval routing fallback: when no decision table is deployed
         // for rules.billing.adjustment-approval, derive the same answer from
         // adjustment_limits_config (steps + auto_approve_under threshold).
@@ -51,8 +45,8 @@ class BillingRuntimeProvider extends ServiceProvider
         });
 
         if ($this->app->runningInConsole()) {
-            $this->commands([DunningRunCommand::class, RateUsageCommand::class, RunCycleBillingCommand::class, CycleCloseCommand::class, ProFormaScanCommand::class, GenerationFailureRetryCommand::class,
-                \Modules\Billing\Console\OpsStatusCommand::class, \Modules\Billing\Dunning\Console\DunningShowCommand::class, \Modules\Billing\Dunning\Console\DunningFixCommand::class]);
+            $this->commands([RateUsageCommand::class, RunCycleBillingCommand::class, CycleCloseCommand::class, ProFormaScanCommand::class, GenerationFailureRetryCommand::class,
+                \Modules\Billing\Console\OpsStatusCommand::class]);
         }
     }
 

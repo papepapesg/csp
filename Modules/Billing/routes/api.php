@@ -15,29 +15,10 @@ use Modules\Billing\Mediation\Http\Controllers\UsageController;
 */
 
 Route::middleware('auth:sanctum')->group(function () {
-    // BIL-04 dunning
-    Route::get('dunning', [DunningController::class, 'index'])->middleware('permission:invoice.read');
-    Route::get('dunning/pending-termination-review', [DunningController::class, 'pendingTerminationReview'])->middleware('permission:invoice.read');
-    Route::post('dunning/run', [DunningController::class, 'run'])->middleware('permission:invoice.manage');
-    Route::post('dunning/refresh-debt', [DunningController::class, 'refreshDebt'])->middleware('permission:invoice.manage');
-    Route::get('dunning/{account}', [DunningController::class, 'show'])->middleware('permission:invoice.read');
-    Route::get('dunning/{account}/history', [DunningController::class, 'history'])->middleware('permission:invoice.read');
-    Route::post('dunning/{account}/clear', [DunningController::class, 'clear'])->middleware('permission:invoice.manage');
-    Route::post('dunning/{account}/admin-clear', [DunningController::class, 'adminClear'])->middleware('permission:dunning.admin');
-    Route::post('dunning/{account}/clear-without-payment', [DunningController::class, 'clearWithoutPayment'])->middleware('permission:dunning.admin');
-    Route::post('dunning/{account}/advance', [DunningController::class, 'advance'])->middleware('permission:dunning.admin');
-    Route::post('dunning/{account}/hold', [DunningController::class, 'hold'])->middleware('permission:dunning.admin');
-    Route::post('dunning/{account}/confirm-termination', [DunningController::class, 'confirmTermination'])->middleware('permission:dunning.admin');
-    Route::post('dunning/{account}/force-terminate', [DunningController::class, 'forceTerminate'])->middleware('permission:dunning.admin');
-    Route::post('dunning/{account}/extend-review', [DunningController::class, 'extendReview'])->middleware('permission:dunning.admin');
+    // BIL-04 dunning routes now live in the BillingDunning module.
 
     // BIL-02-TAX-01 tax routes now live in the BillingTax module.
 
-    // BIL-04 dunning program catalog (versioned policy)
-    Route::get('dunning-programs', [\Modules\Billing\Dunning\Http\Controllers\DunningProgramController::class, 'index'])->middleware('permission:invoice.read');
-    Route::post('dunning-programs', [\Modules\Billing\Dunning\Http\Controllers\DunningProgramController::class, 'store'])->middleware('permission:dunning.admin');
-    Route::get('dunning-programs/{code}', [\Modules\Billing\Dunning\Http\Controllers\DunningProgramController::class, 'show'])->middleware('permission:invoice.read');
-    Route::post('dunning-programs/{code}/new-version', [\Modules\Billing\Dunning\Http\Controllers\DunningProgramController::class, 'newVersion'])->middleware('permission:dunning.admin');
     // BIL-02-GEN-01 — Bulk reversal (rule group R; BILLING_ADMIN proposes, FINANCE_HEAD approves)
     Route::get('billing/bulk-reversals', [BulkReversalController::class, 'index'])->middleware('permission:invoice.read');
     Route::post('billing/bulk-reversals/preview', [BulkReversalController::class, 'preview'])->middleware('permission:invoice.manage');
