@@ -4,8 +4,8 @@ namespace Modules\Billing\Tests\Feature;
 
 use App\Foundation\Support\Context;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Modules\Billing\Models\Wallet;
-use Modules\Billing\Services\WalletService;
+use Modules\Billing\Wallet\Models\Wallet;
+use Modules\Billing\Wallet\Services\WalletService;
 use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
 use Tests\TestCase;
 

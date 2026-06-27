@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Services;
+namespace Modules\Billing\Wallet\Services;
 
 use App\Foundation\Cache\SophixCache;
 use App\Foundation\Errors\DomainException;
@@ -10,8 +10,8 @@ use App\Foundation\Support\Context;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
-use Modules\Billing\Models\Wallet;
-use Modules\Billing\Models\WalletTransaction;
+use Modules\Billing\Wallet\Models\Wallet;
+use Modules\Billing\Wallet\Models\WalletTransaction;
 use Modules\Catalog\Models\WalletCatalog;
 
 /**

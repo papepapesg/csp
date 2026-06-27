@@ -11,7 +11,7 @@ use Modules\Billing\Database\Seeders\AdjustmentConfigSeeder;
 use Modules\Billing\Models\AdjustmentRequest;
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Services\InvoiceService;
-use Modules\Billing\Services\WalletService;
+use Modules\Billing\Wallet\Services\WalletService;
 use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
 use Tests\TestCase;
 

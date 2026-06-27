@@ -1,10 +1,10 @@
 <?php
 
-namespace Modules\Billing\Console;
+namespace Modules\Billing\Wallet\Console;
 
 use App\Foundation\Support\Context;
 use Illuminate\Console\Command;
-use Modules\Billing\Services\WalletService;
+use Modules\Billing\Wallet\Services\WalletService;
 
 /** BIL-05 / R-W-9 wallet expiry sweep — zeroes expired wallet balances (daily). */
 class WalletExpiryCommand extends Command

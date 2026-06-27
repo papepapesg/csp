@@ -2,6 +2,7 @@
 
 namespace Modules\Billing\Services;
 
+use Modules\Billing\Wallet\Services\WalletService;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
@@ -10,7 +11,7 @@ use Modules\Billing\Models\AccountCreditBalance;
 use Modules\Billing\Models\AdjustmentRequest;
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Models\NoteApplication;
-use Modules\Billing\Models\Wallet;
+use Modules\Billing\Wallet\Models\Wallet;
 
 /**
  * BIL-01-CN-01 note application — actually moves the money once GEN-01 has

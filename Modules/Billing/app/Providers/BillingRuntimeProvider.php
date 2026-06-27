@@ -16,7 +16,7 @@ use Modules\Billing\Console\RateUsageCommand;
 use Modules\Billing\Console\RunCycleBillingCommand;
 use Modules\Billing\Console\TaxRetryScanCommand;
 use Modules\Billing\Console\TaxSignScanCommand;
-use Modules\Billing\Console\WalletExpiryCommand;
+use Modules\Billing\Wallet\Console\WalletExpiryCommand;
 use Modules\Billing\Contracts\TaxGateway;
 use Modules\Billing\Listeners\ApplyCreditBalanceOnInvoice;
 use Modules\Billing\Listeners\DunningEventBridge;

@@ -8,7 +8,7 @@ use Modules\Billing\Http\Controllers\DunningController;
 use Modules\Billing\Http\Controllers\InvoiceController;
 use Modules\Billing\Http\Controllers\PaymentController;
 use Modules\Billing\Http\Controllers\UsageController;
-use Modules\Billing\Http\Controllers\WalletController;
+use Modules\Billing\Wallet\Http\Controllers\WalletController;
 
 /*
 | Billing API (BIL-02 invoicing, BIL-01-PAY-01 payments, BIL-05 wallet).

@@ -2,6 +2,7 @@
 
 namespace Modules\Billing\Services;
 
+use Modules\Billing\Wallet\Services\WalletService;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;

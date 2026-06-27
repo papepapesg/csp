@@ -5,7 +5,7 @@ namespace Modules\Subscription\Listeners;
 use App\Foundation\Events\OutboxEventPublished;
 use Modules\Billing\Models\BillingIntent;
 use Modules\Billing\Services\BillingIntentService;
-use Modules\Billing\Services\WalletService;
+use Modules\Billing\Wallet\Services\WalletService;
 use Modules\Workflow\Engine\WorkflowEngine;
 
 /**

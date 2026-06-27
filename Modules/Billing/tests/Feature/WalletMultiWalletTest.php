@@ -7,7 +7,7 @@ use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
-use Modules\Billing\Services\WalletService;
+use Modules\Billing\Wallet\Services\WalletService;
 use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
 use Tests\TestCase;
 

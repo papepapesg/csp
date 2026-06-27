@@ -1,13 +1,13 @@
 <?php
 
-namespace Modules\Billing\Http\Controllers;
+namespace Modules\Billing\Wallet\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Billing\Models\Wallet;
-use Modules\Billing\Services\WalletService;
+use Modules\Billing\Wallet\Models\Wallet;
+use Modules\Billing\Wallet\Services\WalletService;
 
 /**
  * BIL-05 wallet & top-up API (keyed by subscription).
