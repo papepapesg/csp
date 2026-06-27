@@ -23,7 +23,7 @@ use Modules\Billing\Dunning\Listeners\DunningEventBridge;
 use Modules\Billing\Listeners\EvictPlmCatalogCache;
 use Modules\Billing\Listeners\RetryFrozenCycleOnTopup;
 use Modules\Billing\Tax\Listeners\TaxEventBridge;
-use Modules\Billing\Services\AdjustmentService;
+use Modules\Billing\Adjustments\Services\AdjustmentService;
 use Modules\Billing\Tax\TaxSignerRegistry;
 
 /** Binds the tax-fiscalisation gateway (driver via SOPHIX_TAX_DRIVER). */

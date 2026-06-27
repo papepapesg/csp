@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Services;
+namespace Modules\Billing\Adjustments\Services;
 
 use App\Foundation\Approvals\ApprovalRequest;
 use App\Foundation\Approvals\ApprovalService;

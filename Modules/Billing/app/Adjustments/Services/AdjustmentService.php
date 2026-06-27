@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Services;
+namespace Modules\Billing\Adjustments\Services;
 use Modules\Billing\Services\InvoiceService;
 use Modules\Billing\Payments\Services\NoteApplicationService;
 
@@ -14,8 +14,8 @@ use App\Foundation\Support\Context;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
-use Modules\Billing\Models\AdjustmentReasonCode;
-use Modules\Billing\Models\AdjustmentRequest;
+use Modules\Billing\Adjustments\Models\AdjustmentReasonCode;
+use Modules\Billing\Adjustments\Models\AdjustmentRequest;
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Models\InvoiceLine;
 

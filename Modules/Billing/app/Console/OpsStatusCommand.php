@@ -4,7 +4,7 @@ namespace Modules\Billing\Console;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
-use Modules\Billing\Models\AdjustmentRequest;
+use Modules\Billing\Adjustments\Models\AdjustmentRequest;
 use Modules\Billing\Dunning\Models\DunningState;
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Tax\Models\TaxInvoice;

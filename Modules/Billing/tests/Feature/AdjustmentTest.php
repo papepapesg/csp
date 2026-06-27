@@ -8,7 +8,7 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Billing\Database\Seeders\AdjustmentConfigSeeder;
-use Modules\Billing\Models\AdjustmentRequest;
+use Modules\Billing\Adjustments\Models\AdjustmentRequest;
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Services\InvoiceService;
 use Modules\Billing\Wallet\Services\WalletService;
@@ -241,7 +241,7 @@ class AdjustmentTest extends TestCase
         Sanctum::actingAs($second);
         $this->postJson("/api/adjustments/{$adjustmentId}/approve", ['comment' => 'manager ok'])->assertOk()
             ->assertJsonPath('status', 'APPLIED');
-        $this->assertSame(2, \Modules\Billing\Models\AdjustmentApprovalStep::query()
+        $this->assertSame(2, \Modules\Billing\Adjustments\Models\AdjustmentApprovalStep::query()
             ->where('adjustment_id', $adjustmentId)->where('decision', 'APPROVED')->count());
     }
 

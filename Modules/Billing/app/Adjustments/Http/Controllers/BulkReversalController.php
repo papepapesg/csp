@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Http\Controllers;
+namespace Modules\Billing\Adjustments\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
@@ -8,7 +8,7 @@ use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Modules\Billing\Services\BulkReversalService;
+use Modules\Billing\Adjustments\Services\BulkReversalService;
 
 /** BIL-02-GEN-01 bulk reversal admin API (rule group R; dual-approved). */
 class BulkReversalController extends ApiController

@@ -1,7 +1,7 @@
 <?php
 
-namespace Modules\Billing\Models;
-use Modules\Billing\Models\AdjustmentApprovalStep;
+namespace Modules\Billing\Adjustments\Models;
+use Modules\Billing\Adjustments\Models\AdjustmentApprovalStep;
 use Modules\Billing\Payments\Models\NoteApplication;
 
 use App\Foundation\Models\HasPrefixedId;

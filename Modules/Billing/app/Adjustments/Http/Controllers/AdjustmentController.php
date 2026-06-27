@@ -1,17 +1,17 @@
 <?php
 
-namespace Modules\Billing\Http\Controllers;
+namespace Modules\Billing\Adjustments\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Billing\Models\AdjustmentReasonCode;
-use Modules\Billing\Models\AdjustmentRequest;
+use Modules\Billing\Adjustments\Models\AdjustmentReasonCode;
+use Modules\Billing\Adjustments\Models\AdjustmentRequest;
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Payments\Models\NoteApplication;
-use Modules\Billing\Services\AdjustmentService;
+use Modules\Billing\Adjustments\Services\AdjustmentService;
 
 /**
  * BIL-02-ADJ-01 adjustment API: propose → approve/reject/revise → apply, with

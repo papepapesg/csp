@@ -1,9 +1,9 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Modules\Billing\Http\Controllers\AdjustmentController;
+use Modules\Billing\Adjustments\Http\Controllers\AdjustmentController;
 use Modules\Billing\Http\Controllers\BillableEventController;
-use Modules\Billing\Http\Controllers\BulkReversalController;
+use Modules\Billing\Adjustments\Http\Controllers\BulkReversalController;
 use Modules\Billing\Dunning\Http\Controllers\DunningController;
 use Modules\Billing\Http\Controllers\InvoiceController;
 use Modules\Billing\Payments\Http\Controllers\PaymentController;
