@@ -10,10 +10,8 @@ use Illuminate\Support\ServiceProvider;
 use Modules\Billing\Invoicing\Console\CycleCloseCommand;
 use Modules\Billing\Invoicing\Console\GenerationFailureRetryCommand;
 use Modules\Billing\Invoicing\Console\ProFormaScanCommand;
-use Modules\Billing\Mediation\Console\RateUsageCommand;
 use Modules\Billing\Invoicing\Console\RunCycleBillingCommand;
 use Modules\Billing\Invoicing\Listeners\ApplyCreditBalanceOnInvoice;
-use Modules\Billing\Mediation\Listeners\EvictPlmCatalogCache;
 use Modules\Billing\Invoicing\Listeners\RetryFrozenCycleOnTopup;
 use Modules\Billing\Adjustments\Services\AdjustmentService;
 
@@ -22,9 +20,6 @@ class BillingRuntimeProvider extends ServiceProvider
 {
     public function boot(): void
     {
-        // FOUNDATION_CACHE: evict cached PLM wallet-catalog copies on Wallet* events.
-        Event::listen(OutboxEventPublished::class, [EvictPlmCatalogCache::class, 'handle']);
-
         // BIL-03: a wallet top-up may unfreeze a prepaid cycle that missed payment.
         Event::listen(OutboxEventPublished::class, [RetryFrozenCycleOnTopup::class, 'handle']);
 
@@ -45,7 +40,7 @@ class BillingRuntimeProvider extends ServiceProvider
         });
 
         if ($this->app->runningInConsole()) {
-            $this->commands([RateUsageCommand::class, RunCycleBillingCommand::class, CycleCloseCommand::class, ProFormaScanCommand::class, GenerationFailureRetryCommand::class,
+            $this->commands([RunCycleBillingCommand::class, CycleCloseCommand::class, ProFormaScanCommand::class, GenerationFailureRetryCommand::class,
                 \Modules\Billing\Console\OpsStatusCommand::class]);
         }
     }
