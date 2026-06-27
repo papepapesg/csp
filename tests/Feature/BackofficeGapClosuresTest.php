@@ -52,7 +52,7 @@ class BackofficeGapClosuresTest extends TestCase
 
     public function test_payment_show_returns_allocations_relation(): void
     {
-        $payment = \Modules\Billing\Models\PaymentLedger::query()->create([
+        $payment = \Modules\Billing\Payments\Models\PaymentLedger::query()->create([
             'payment_id' => \App\Foundation\Support\Id::make('pay'), 'operator_code' => 'WIK',
             'account_id' => 'acct_x', 'paid_amount' => 500, 'unallocated_amount' => 0,
             'method' => 'MPESA', 'payment_reference' => 'MPESA-1', 'received_at' => now(),

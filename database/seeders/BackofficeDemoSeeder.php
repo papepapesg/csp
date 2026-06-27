@@ -108,7 +108,7 @@ class BackofficeDemoSeeder extends Seeder
             if (! $activeSub) {
                 return;
             }
-            app(\Modules\Billing\Services\InvoiceService::class)->generate(
+            app(\Modules\Billing\Invoicing\Services\InvoiceService::class)->generate(
                 [
                     'account_id' => $activeSub->account_id,
                     'customer_id' => $activeSub->customer_id,

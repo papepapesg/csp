@@ -82,7 +82,7 @@ class GlobalSearchService
 
     private function invoices(string $like, ?string $op): array
     {
-        return $this->scoped(\Modules\Billing\Models\Invoice::class, $op)
+        return $this->scoped(\Modules\Billing\Invoicing\Models\Invoice::class, $op)
             ->where(fn ($w) => $w->where('legal_invoice_number', 'ilike', $like)->orWhere('invoice_id', 'ilike', $like))
             ->get()->map(fn ($i) => ['id' => $i->invoice_id, 'title' => $i->legal_invoice_number ?? $i->invoice_id, 'subtitle' => $i->status ?? null])->all();
     }

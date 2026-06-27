@@ -6,7 +6,7 @@ use App\Foundation\Support\Id;
 use Database\Seeders\RbacSeeder;
 use Database\Seeders\UssdMenuSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Modules\Billing\Models\Invoice;
+use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Ilm\Models\Customer;
 use Modules\Ilm\Models\CustomerAccount;
 use Tests\TestCase;

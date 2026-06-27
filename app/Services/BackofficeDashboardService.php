@@ -28,7 +28,7 @@ class BackofficeDashboardService
         $counts = [
             'myTasks' => fn () => $this->count(\Modules\Workflow\Models\UserTask::class, $operator, fn ($q) => $q->whereIn('status', ['OPEN', 'CLAIMED'])),
             'kycPending' => fn () => $this->count(\Modules\Ilm\Models\Customer::class, $operator, fn ($q) => $q->where('kyc_status', 'PENDING')),
-            'dunningRisk' => fn () => $this->count(\Modules\Billing\Models\DunningState::class, $operator, fn ($q) => $q->where('current_level', '>', 0)),
+            'dunningRisk' => fn () => $this->count(\Modules\Billing\Dunning\Models\DunningState::class, $operator, fn ($q) => $q->where('current_level', '>', 0)),
             'woBacklog' => fn () => $this->count(\Modules\WorkOrder\Models\WorkOrder::class, $operator, fn ($q) => $q->whereIn('status', ['PENDING', 'ASSIGNED', 'IN_PROGRESS'])),
             'activationFailures' => fn () => $this->count(\Modules\Fulfillment\Models\FulfillmentOrderStep::class, $operator, fn ($q) => $q->where('status', 'FAILED')),
             'stockExceptions' => fn () => $this->count(\Modules\Osr\Models\EquipmentSwapRequest::class, $operator, fn ($q) => $q->whereIn('status', ['FAILED', 'COMPLETED_WITHOUT_RECOVERY'])),
