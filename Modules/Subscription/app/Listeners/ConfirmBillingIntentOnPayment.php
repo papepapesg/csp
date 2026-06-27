@@ -3,8 +3,8 @@
 namespace Modules\Subscription\Listeners;
 
 use App\Foundation\Events\OutboxEventPublished;
-use Modules\Billing\Models\BillingIntent;
-use Modules\Billing\Services\BillingIntentService;
+use Modules\Billing\Intent\Models\BillingIntent;
+use Modules\Billing\Intent\Services\BillingIntentService;
 use Modules\Workflow\Engine\WorkflowEngine;
 
 /**

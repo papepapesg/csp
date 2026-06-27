@@ -5,7 +5,7 @@ namespace Modules\Osr\Workflow;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Id;
-use Modules\Billing\Services\BillingIntentService;
+use Modules\Billing\Intent\Services\BillingIntentService;
 use Modules\Osr\Events\OsrEvents;
 use Modules\Osr\Models\EquipmentInstance;
 use Modules\Osr\Models\EquipmentSku;

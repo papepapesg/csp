@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Models;
+namespace Modules\Billing\Intent\Models;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;
