@@ -1,15 +1,15 @@
 <?php
 
-namespace Modules\WorkOrder\Http\Controllers;
+namespace Modules\WorkOrder\FieldAudit\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\WorkOrder\Models\FieldAuditDiscrepancy;
-use Modules\WorkOrder\Models\FieldAuditTask;
-use Modules\WorkOrder\Services\FieldAuditCampaignService;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditDiscrepancy;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditTask;
+use Modules\WorkOrder\FieldAudit\Services\FieldAuditCampaignService;
 
 /** FA-01/02/03 campaign/task/observation/discrepancy API (the unified field-audit capability). */
 class FieldAuditCampaignController extends ApiController

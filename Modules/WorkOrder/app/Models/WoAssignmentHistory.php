@@ -1,6 +1,7 @@
 <?php
 
 namespace Modules\WorkOrder\Models;
+use Modules\WorkOrder\Models\WorkOrder;
 
 use App\Foundation\Support\Id;
 use Illuminate\Database\Eloquent\Model;

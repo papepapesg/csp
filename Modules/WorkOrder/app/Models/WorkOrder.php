@@ -1,6 +1,10 @@
 <?php
 
 namespace Modules\WorkOrder\Models;
+use Modules\WorkOrder\Models\WoAssignmentHistory;
+use Modules\WorkOrder\Models\WoAttachment;
+use Modules\WorkOrder\Models\WoNote;
+use Modules\WorkOrder\Models\WorkOrderStatusHistory;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;

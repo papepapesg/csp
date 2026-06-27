@@ -8,10 +8,10 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Modules\WorkOrder\Database\Seeders\FieldAuditPolicySeeder;
-use Modules\WorkOrder\Models\FieldAuditDiscrepancy;
-use Modules\WorkOrder\Models\FieldAuditExpectedItem;
-use Modules\WorkOrder\Models\FieldAuditObservation;
-use Modules\WorkOrder\Models\FieldAuditTask;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditDiscrepancy;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditExpectedItem;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditObservation;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditTask;
 use Modules\WorkOrder\Models\WorkOrder;
 use Tests\TestCase;
 

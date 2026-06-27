@@ -1,6 +1,7 @@
 <?php
 
-namespace Modules\WorkOrder\Models;
+namespace Modules\WorkOrder\FieldAudit\Models;
+use Modules\WorkOrder\Models\WorkOrder;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;

@@ -3,7 +3,7 @@
 namespace Modules\WorkOrder\Listeners;
 
 use App\Foundation\Events\OutboxEventPublished;
-use Modules\WorkOrder\Models\FieldAuditTask;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditTask;
 use Modules\WorkOrder\Services\WorkOrderService;
 
 /**

@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\WorkOrder\Services;
+namespace Modules\WorkOrder\FieldAudit\Services;
 
 use App\Foundation\Approvals\ApprovalRequest;
 use App\Foundation\Approvals\ApprovalService;
@@ -10,11 +10,11 @@ use App\Foundation\Rules\RuleEngine;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
-use Modules\WorkOrder\Models\FieldAuditCampaign;
-use Modules\WorkOrder\Models\FieldAuditDiscrepancy;
-use Modules\WorkOrder\Models\FieldAuditExpectedItem;
-use Modules\WorkOrder\Models\FieldAuditObservation;
-use Modules\WorkOrder\Models\FieldAuditTask;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditCampaign;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditDiscrepancy;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditExpectedItem;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditObservation;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditTask;
 
 /**
  * FA-01/02/03 unified field-audit capability (one capability, audit_type-driven). Builds a

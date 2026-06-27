@@ -1,14 +1,14 @@
 <?php
 
-namespace Modules\WorkOrder\Http\Controllers;
+namespace Modules\WorkOrder\FieldAudit\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\WorkOrder\Models\FieldAudit;
-use Modules\WorkOrder\Services\FieldAuditService;
+use Modules\WorkOrder\FieldAudit\Models\FieldAudit;
+use Modules\WorkOrder\FieldAudit\Services\FieldAuditService;
 
 /** FA-01/02/03 field-audit API. */
 class FieldAuditController extends ApiController

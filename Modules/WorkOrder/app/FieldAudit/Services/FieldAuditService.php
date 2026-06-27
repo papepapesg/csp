@@ -1,13 +1,13 @@
 <?php
 
-namespace Modules\WorkOrder\Services;
+namespace Modules\WorkOrder\FieldAudit\Services;
 
 use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Rules\RuleEngine;
 use App\Foundation\Support\Id;
-use Modules\WorkOrder\Models\FieldAudit;
+use Modules\WorkOrder\FieldAudit\Models\FieldAudit;
 
 /**
  * FA-01/02/03 field-audit lifecycle. schedule() creates the audit; submitFindings()

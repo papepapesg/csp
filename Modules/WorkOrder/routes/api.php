@@ -1,8 +1,8 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Modules\WorkOrder\Http\Controllers\FieldAuditCampaignController;
-use Modules\WorkOrder\Http\Controllers\FieldAuditController;
+use Modules\WorkOrder\FieldAudit\Http\Controllers\FieldAuditCampaignController;
+use Modules\WorkOrder\FieldAudit\Http\Controllers\FieldAuditController;
 use Modules\WorkOrder\Http\Controllers\WorkOrderController;
 
 /*

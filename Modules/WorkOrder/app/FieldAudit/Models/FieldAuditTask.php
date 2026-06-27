@@ -1,6 +1,10 @@
 <?php
 
-namespace Modules\WorkOrder\Models;
+namespace Modules\WorkOrder\FieldAudit\Models;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditDiscrepancy;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditExpectedItem;
+use Modules\WorkOrder\FieldAudit\Models\FieldAuditObservation;
+use Modules\WorkOrder\Models\WorkOrder;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;
