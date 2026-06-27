@@ -2,7 +2,7 @@
 
 namespace Modules\Billing\Models;
 use Modules\Billing\Models\AdjustmentApprovalStep;
-use Modules\Billing\Models\NoteApplication;
+use Modules\Billing\Payments\Models\NoteApplication;
 
 use App\Foundation\Models\HasPrefixedId;
 use Illuminate\Database\Eloquent\Model;

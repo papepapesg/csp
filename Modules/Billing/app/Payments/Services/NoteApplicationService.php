@@ -1,16 +1,16 @@
 <?php
 
-namespace Modules\Billing\Services;
+namespace Modules\Billing\Payments\Services;
 
 use Modules\Billing\Wallet\Services\WalletService;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
-use Modules\Billing\Models\AccountCreditBalance;
+use Modules\Billing\Payments\Models\AccountCreditBalance;
 use Modules\Billing\Models\AdjustmentRequest;
 use Modules\Billing\Models\Invoice;
-use Modules\Billing\Models\NoteApplication;
+use Modules\Billing\Payments\Models\NoteApplication;
 use Modules\Billing\Wallet\Models\Wallet;
 
 /**

@@ -1,7 +1,7 @@
 <?php
 
-namespace Modules\Billing\Models;
-use Modules\Billing\Models\PaymentAllocation;
+namespace Modules\Billing\Payments\Models;
+use Modules\Billing\Payments\Models\PaymentAllocation;
 
 use App\Foundation\Models\HasPrefixedId;
 use Illuminate\Database\Eloquent\Model;

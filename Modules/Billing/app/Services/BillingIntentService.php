@@ -12,7 +12,7 @@ use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
-use Modules\Billing\Models\AccountCreditBalance;
+use Modules\Billing\Payments\Models\AccountCreditBalance;
 use Modules\Billing\Models\BillableEvent;
 use Modules\Billing\Models\BillingIntent;
 use Modules\Subscription\Models\Subscription;

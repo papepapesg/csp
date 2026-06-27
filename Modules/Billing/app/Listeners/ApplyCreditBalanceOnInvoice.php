@@ -4,7 +4,7 @@ namespace Modules\Billing\Listeners;
 
 use App\Foundation\Events\OutboxEventPublished;
 use App\Foundation\Support\Context;
-use Modules\Billing\Services\PaymentService;
+use Modules\Billing\Payments\Services\PaymentService;
 
 /**
  * BIL-01-PAY-01 R-PAY-01-OV-2: when GEN-01 issues an invoice for an account that

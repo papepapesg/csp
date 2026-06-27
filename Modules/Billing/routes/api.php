@@ -6,7 +6,7 @@ use Modules\Billing\Http\Controllers\BillableEventController;
 use Modules\Billing\Http\Controllers\BulkReversalController;
 use Modules\Billing\Dunning\Http\Controllers\DunningController;
 use Modules\Billing\Http\Controllers\InvoiceController;
-use Modules\Billing\Http\Controllers\PaymentController;
+use Modules\Billing\Payments\Http\Controllers\PaymentController;
 use Modules\Billing\Http\Controllers\UsageController;
 use Modules\Billing\Wallet\Http\Controllers\WalletController;
 

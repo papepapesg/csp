@@ -4,7 +4,7 @@ namespace Modules\PaymentGateway\Services;
 
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
-use Modules\Billing\Services\PaymentService;
+use Modules\Billing\Payments\Services\PaymentService;
 use Modules\Ilm\Models\CustomerAccount;
 use Modules\PaymentGateway\Events\PaymentGatewayEvents;
 use Modules\PaymentGateway\Models\PaymentGatewayCallback;

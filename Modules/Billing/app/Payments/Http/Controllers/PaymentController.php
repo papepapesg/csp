@@ -1,14 +1,14 @@
 <?php
 
-namespace Modules\Billing\Http\Controllers;
+namespace Modules\Billing\Payments\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Billing\Models\PaymentLedger;
-use Modules\Billing\Services\PaymentService;
+use Modules\Billing\Payments\Models\PaymentLedger;
+use Modules\Billing\Payments\Services\PaymentService;
 
 /**
  * BIL-01-PAY-01 payment application API.

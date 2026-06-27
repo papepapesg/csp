@@ -6,9 +6,9 @@ use App\Foundation\Support\Context;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Models\Invoice;
-use Modules\Billing\Models\PaymentLedger;
+use Modules\Billing\Payments\Models\PaymentLedger;
 use Modules\Billing\Services\InvoiceService;
-use Modules\Billing\Services\PaymentService;
+use Modules\Billing\Payments\Services\PaymentService;
 use Tests\TestCase;
 
 /** BIL-01-PAY-01 payment application: idempotency, allocation policy, overpayment, reversal. */

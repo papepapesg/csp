@@ -8,7 +8,7 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
-use Modules\Billing\Services\PaymentService;
+use Modules\Billing\Payments\Services\PaymentService;
 use Modules\Catalog\Models\Package;
 use Modules\Catalog\Models\PackageVersion;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;

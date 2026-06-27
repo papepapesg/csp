@@ -2,7 +2,7 @@
 
 namespace Modules\Billing\Services;
 use Modules\Billing\Services\InvoiceService;
-use Modules\Billing\Services\NoteApplicationService;
+use Modules\Billing\Payments\Services\NoteApplicationService;
 
 use App\Foundation\Approvals\ApprovalRequest;
 use App\Foundation\Approvals\ApprovalService;

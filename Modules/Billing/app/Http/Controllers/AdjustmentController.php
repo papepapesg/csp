@@ -10,7 +10,7 @@ use Illuminate\Http\Request;
 use Modules\Billing\Models\AdjustmentReasonCode;
 use Modules\Billing\Models\AdjustmentRequest;
 use Modules\Billing\Models\Invoice;
-use Modules\Billing\Models\NoteApplication;
+use Modules\Billing\Payments\Models\NoteApplication;
 use Modules\Billing\Services\AdjustmentService;
 
 /**

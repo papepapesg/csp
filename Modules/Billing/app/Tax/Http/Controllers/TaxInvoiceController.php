@@ -9,7 +9,7 @@ use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Billing\Models\Invoice;
-use Modules\Billing\Models\PaymentLedger;
+use Modules\Billing\Payments\Models\PaymentLedger;
 use Modules\Billing\Tax\Models\TaxInvoice;
 use Modules\Billing\Tax\Services\TaxInvoiceGenerator;
 use Modules\Billing\Tax\Services\TaxSigningService;
