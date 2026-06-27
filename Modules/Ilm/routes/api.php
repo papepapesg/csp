@@ -4,7 +4,7 @@ use Illuminate\Support\Facades\Route;
 use Modules\Ilm\Http\Controllers\CustomerAccountController;
 use Modules\Ilm\Http\Controllers\CustomerController;
 use Modules\Ilm\Http\Controllers\CustomerSubResourceController;
-use Modules\Ilm\Http\Controllers\CvmController;
+use Modules\Ilm\Cvm\Http\Controllers\CvmController;
 use Modules\Ilm\Http\Controllers\KycController;
 
 /*

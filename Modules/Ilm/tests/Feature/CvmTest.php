@@ -10,10 +10,10 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Modules\Ilm\Database\Seeders\CvmPolicySeeder;
 use Modules\Ilm\Models\Customer;
-use Modules\Ilm\Models\CvmActivity;
-use Modules\Ilm\Models\CvmOfferInstance;
-use Modules\Ilm\Services\CvmEvaluationService;
-use Modules\Ilm\Services\CvmOfferService;
+use Modules\Ilm\Cvm\Models\CvmActivity;
+use Modules\Ilm\Cvm\Models\CvmOfferInstance;
+use Modules\Ilm\Cvm\Services\CvmEvaluationService;
+use Modules\Ilm\Cvm\Services\CvmOfferService;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
 use Tests\TestCase;
 

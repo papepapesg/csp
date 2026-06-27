@@ -1,6 +1,7 @@
 <?php
 
 namespace Modules\Ilm\Models;
+use Modules\Ilm\Models\Customer;
 
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;

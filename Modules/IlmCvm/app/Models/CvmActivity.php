@@ -1,6 +1,7 @@
 <?php
 
-namespace Modules\Ilm\Models;
+namespace Modules\Ilm\Cvm\Models;
+use Modules\Ilm\Cvm\Models\CvmOfferInstance;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;

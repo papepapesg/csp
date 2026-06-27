@@ -5,7 +5,7 @@ namespace Modules\Ilm\Providers;
 use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
 use Modules\Ilm\Listeners\ApplySubStatusOnApproval;
-use Modules\Ilm\Listeners\ResumeCvmOfferOnApproval;
+use Modules\Ilm\Cvm\Listeners\ResumeCvmOfferOnApproval;
 
 class EventServiceProvider extends ServiceProvider
 {

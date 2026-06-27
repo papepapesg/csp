@@ -1,6 +1,11 @@
 <?php
 
 namespace Modules\Ilm\Models;
+use Modules\Ilm\Models\ContactMethod;
+use Modules\Ilm\Models\CustomerAccount;
+use Modules\Ilm\Models\CustomerInteraction;
+use Modules\Ilm\Models\CustomerNote;
+use Modules\Ilm\Models\KycApproval;
 
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;

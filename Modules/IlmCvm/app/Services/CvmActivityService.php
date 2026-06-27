@@ -1,14 +1,14 @@
 <?php
 
-namespace Modules\Ilm\Services;
+namespace Modules\Ilm\Cvm\Services;
 
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Modules\Ilm\Events\CvmEvents;
-use Modules\Ilm\Models\CvmActivity;
-use Modules\Ilm\Models\CvmOutcome;
+use Modules\Ilm\Cvm\Models\CvmActivity;
+use Modules\Ilm\Cvm\Models\CvmOutcome;
 use Modules\Ilm\Models\CustomerInteraction;
 
 /**

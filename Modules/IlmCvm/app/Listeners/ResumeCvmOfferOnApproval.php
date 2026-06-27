@@ -1,11 +1,11 @@
 <?php
 
-namespace Modules\Ilm\Listeners;
+namespace Modules\Ilm\Cvm\Listeners;
 
 use App\Foundation\Approvals\ApprovalRequest;
 use App\Foundation\Events\OutboxEventPublished;
-use Modules\Ilm\Models\CvmOfferInstance;
-use Modules\Ilm\Services\CvmOfferService;
+use Modules\Ilm\Cvm\Models\CvmOfferInstance;
+use Modules\Ilm\Cvm\Services\CvmOfferService;
 
 /**
  * EM-03 / EM-CFG-04 §4 maker-checker resume: a high-value retention offer parks in

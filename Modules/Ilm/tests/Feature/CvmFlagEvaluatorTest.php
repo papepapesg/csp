@@ -8,7 +8,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Modules\Ilm\Database\Seeders\AccountFlagCatalogSeeder;
 use Modules\Ilm\Models\CustomerAccount;
 use Modules\Ilm\Services\AccountService;
-use Modules\Ilm\Services\CvmFlagEvaluatorService;
+use Modules\Ilm\Cvm\Services\CvmFlagEvaluatorService;
 use Modules\Rules\Models\DecisionTable;
 use Tests\TestCase;
 

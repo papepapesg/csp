@@ -1,6 +1,7 @@
 <?php
 
-namespace Modules\Ilm\Services;
+namespace Modules\Ilm\Cvm\Services;
+use Modules\Ilm\Cvm\Services\CvmActivityService;
 
 use App\Foundation\Approvals\ApprovalRequest;
 use App\Foundation\Approvals\ApprovalService;
@@ -12,9 +13,9 @@ use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Modules\Catalog\Discount\Models\DiscountAssignment;
 use Modules\Ilm\Events\CvmEvents;
-use Modules\Ilm\Models\CvmActivity;
-use Modules\Ilm\Models\CvmOfferInstance;
-use Modules\Ilm\Models\CvmOutcome;
+use Modules\Ilm\Cvm\Models\CvmActivity;
+use Modules\Ilm\Cvm\Models\CvmOfferInstance;
+use Modules\Ilm\Cvm\Models\CvmOutcome;
 
 /**
  * EM-03 offer lifecycle (DD §5.3/5.4). Proposing an offer routes high-value retention discounts

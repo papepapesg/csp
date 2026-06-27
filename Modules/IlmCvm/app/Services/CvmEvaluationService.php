@@ -1,14 +1,15 @@
 <?php
 
-namespace Modules\Ilm\Services;
+namespace Modules\Ilm\Cvm\Services;
+use Modules\Ilm\Cvm\Services\CvmActivityService;
 
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Rules\RuleEngine;
 use App\Foundation\Support\Context;
 use Modules\Ilm\Events\CvmEvents;
-use Modules\Ilm\Models\CvmSegmentMembership;
-use Modules\Ilm\Models\CvmSignalProfile;
+use Modules\Ilm\Cvm\Models\CvmSegmentMembership;
+use Modules\Ilm\Cvm\Models\CvmSignalProfile;
 
 /**
  * EM-03 evaluation (DD §3, §5.1). Refreshes a customer's signal profile from the supplied

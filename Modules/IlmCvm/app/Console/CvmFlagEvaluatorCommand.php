@@ -1,10 +1,10 @@
 <?php
 
-namespace Modules\Ilm\Console;
+namespace Modules\Ilm\Cvm\Console;
 
 use App\Foundation\Support\Context;
 use Illuminate\Console\Command;
-use Modules\Ilm\Services\CvmFlagEvaluatorService;
+use Modules\Ilm\Cvm\Services\CvmFlagEvaluatorService;
 
 /** EM-03 / CVM daily flag-evaluator worker (rule-driven retention/risk flags). */
 class CvmFlagEvaluatorCommand extends Command

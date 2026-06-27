@@ -1,19 +1,19 @@
 <?php
 
-namespace Modules\Ilm\Http\Controllers;
+namespace Modules\Ilm\Cvm\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Ilm\Models\CvmActivity;
-use Modules\Ilm\Models\CvmOfferInstance;
-use Modules\Ilm\Models\CvmSegmentMembership;
-use Modules\Ilm\Models\CvmSignalProfile;
-use Modules\Ilm\Services\CvmActivityService;
-use Modules\Ilm\Services\CvmEvaluationService;
-use Modules\Ilm\Services\CvmOfferService;
+use Modules\Ilm\Cvm\Models\CvmActivity;
+use Modules\Ilm\Cvm\Models\CvmOfferInstance;
+use Modules\Ilm\Cvm\Models\CvmSegmentMembership;
+use Modules\Ilm\Cvm\Models\CvmSignalProfile;
+use Modules\Ilm\Cvm\Services\CvmActivityService;
+use Modules\Ilm\Cvm\Services\CvmEvaluationService;
+use Modules\Ilm\Cvm\Services\CvmOfferService;
 
 /** EM-03 CVM: evaluate customers, manage retention/recovery activities, propose + accept offers. */
 class CvmController extends ApiController
