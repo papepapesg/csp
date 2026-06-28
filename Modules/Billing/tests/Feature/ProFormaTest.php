@@ -64,8 +64,10 @@ class ProFormaTest extends TestCase
         app(ProFormaService::class)->generate($sub);
         $old = DB::table('pro_forma')->where('subscription_id', $sub->subscription_id)->where('status', 'ACTIVE')->first();
 
-        // Advance the cycle so a fresh pro forma is generated, superseding the old one.
-        $sub->update(['current_cycle_end' => now()->addMonth()->addDays(3)]);
+        // Advance the cycle a full month off the PRIOR cycle end (not off "now"), so the
+        // two cycle ends always land in different calendar months — the idempotency_cycle_key
+        // is keyed on Y_m, so anchoring off "now" near a month boundary could collide.
+        $sub->update(['current_cycle_end' => Carbon::parse($sub->current_cycle_end)->addMonth()]);
         app(ProFormaService::class)->generate($sub->refresh());
 
         $new = DB::table('pro_forma')->where('subscription_id', $sub->subscription_id)->where('status', 'ACTIVE')->first();
