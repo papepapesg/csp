@@ -50,7 +50,11 @@ class ApprovalService
                 ->orderByRaw('action is null') // prefer action-specific
                 ->first();
 
-            $needsApproval = $def
+            // A process may declare itself auto-approving (config.auto_approve): the request is still
+            // CREATED, recorded and emitted by the engine as AUTO_APPROVED — there is no local bypass
+            // anywhere. This is how a "no human approval needed" tier stays inside the one engine.
+            $autoApprove = $def && ($def->config['auto_approve'] ?? false);
+            $needsApproval = ! $autoApprove && $def
                 && ($def->threshold_amount === null || ($amount !== null && $amount >= (float) $def->threshold_amount));
 
             $chain = $needsApproval ? $this->resolveChain($def) : [];

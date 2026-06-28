@@ -51,12 +51,17 @@ class AdjustmentConfigSeeder extends Seeder
 
             // Pre-authored approval PROCESSES (tiers) the rules engine selects between. Roles are
             // open — route permission (adjustment.approve) gates WHO; the engine enforces the
-            // distinct-approver quorum. AUTO needs no process (it auto-approves on propose).
+            // distinct-approver quorum.
             ApprovalDefinition::defineChain($operator, 'ADJUSTMENT', 'SINGLE', [
                 ['name' => 'Adjustment approval', 'approver_kind' => 'ROLE', 'approver_roles' => [], 'required_approvals' => 1],
             ]);
             ApprovalDefinition::defineChain($operator, 'ADJUSTMENT', 'DUAL', [
                 ['name' => 'Adjustment dual control', 'approver_kind' => 'ROLE', 'approver_roles' => [], 'required_approvals' => 2],
+            ]);
+            // AUTO is a real process too — no local bypass. It carries no stages; the engine records the
+            // request as AUTO_APPROVED (config.auto_approve) so EVERY adjustment passes through EM-CFG-04.
+            ApprovalDefinition::defineChain($operator, 'ADJUSTMENT', 'AUTO', [], [
+                'config' => ['auto_approve' => true],
             ]);
         }
 

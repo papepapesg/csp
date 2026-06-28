@@ -127,7 +127,6 @@ class AdjustmentService
             // The rules engine names the pre-authored approval PROCESS to use (the ADJUSTMENT
             // approval_definition's action). Legacy tables that return only stepsRequired are mapped.
             $process = (string) ($routing['approvalProcess'] ?? $this->processForSteps($stepsRequired));
-            $autoApprove = $limitBreach === null && ($process === 'AUTO' || $stepsRequired === 0);
 
             $adjustment = AdjustmentRequest::query()->create([
                 'operator_code' => $operator,
@@ -156,27 +155,42 @@ class AdjustmentService
 
             $this->emit($adjustment, BillingEvents::ADJUSTMENT_PROPOSED);
 
-            if ($autoApprove) {
-                // The rules engine answered zero steps: approve + apply in-line,
-                // with an audit step naming the deciding rule.
-                $adjustment->approvalSteps()->create([
-                    'step_no' => 1, 'decision' => 'APPROVED', 'decided_by' => 'SYSTEM:AUTO_APPROVE',
-                    'comment' => 'Zero-step routing by '.($routing['ruleId'] ?? 'approval policy')
-                        .(isset($routing['decisionCode']) ? " ({$routing['decisionCode']})" : ''),
-                    'decided_at' => now(),
-                ]);
-
-                return $this->approveAndApply($adjustment);
+            // A limit-blocked proposal stays PROPOSED; its gate opens when /override-limit lifts the block.
+            if ($limitBreach !== null) {
+                return $adjustment;
             }
 
-            // Human approval is needed and the proposal is not limit-blocked: open the EM-CFG-04 gate now.
-            // (A limit-blocked proposal stays PROPOSED; the gate opens when /override-limit lifts the block.)
-            if ($limitBreach === null) {
-                $this->openApprovalGate($adjustment);
-            }
-
-            return $adjustment;
+            // EVERY non-blocked proposal goes through the EM-CFG-04 engine — including AUTO, which
+            // resolves the ADJUSTMENT/AUTO process the engine records as AUTO_APPROVED. No local bypass.
+            return $this->openGateAndMaybeApply($adjustment, $routing);
         });
+    }
+
+    /**
+     * Open the EM-CFG-04 gate for the process pinned on the proposal and act on the engine's answer:
+     * an AUTO (or below-threshold) process comes back already approved BY THE ENGINE — we mirror that
+     * single decision onto the adjustment audit and apply. A real chain comes back PENDING, so we wait
+     * for approve(). This is the only place a proposal enters approval — AUTO included, no exceptions.
+     *
+     * @param  array<string,mixed>  $routing
+     */
+    private function openGateAndMaybeApply(AdjustmentRequest $adjustment, array $routing = []): AdjustmentRequest
+    {
+        $gate = $this->openApprovalGate($adjustment);
+
+        if (in_array($gate->status, [ApprovalRequest::AUTO_APPROVED, ApprovalRequest::APPROVED], true)) {
+            $adjustment->approvalSteps()->create([
+                'step_no' => $adjustment->approvalSteps()->count() + 1,
+                'decision' => 'APPROVED', 'decided_by' => 'SYSTEM:AUTO_APPROVE',
+                'comment' => 'Auto-approved by the '.($adjustment->approval_process ?: 'approval').' process'
+                    .(isset($routing['ruleId']) ? " (rule {$routing['ruleId']})" : ''),
+                'decided_at' => now(),
+            ]);
+
+            return $this->approveAndApply($adjustment);
+        }
+
+        return $adjustment->refresh();
     }
 
     /** Map a legacy stepsRequired count to a pre-authored process tier. */
@@ -309,9 +323,10 @@ class AdjustmentService
                 'step_no' => $adjustment->approvalSteps()->count() + 1,
                 'decision' => 'LIMIT_OVERRIDDEN', 'decided_by' => $decidedBy, 'decided_at' => now(),
             ]);
-            // The breach is lifted: now open the EM-CFG-04 gate (it was withheld while blocked).
+            // The breach is lifted: enter approval through the one engine entry point (it was withheld
+            // while blocked). If the pinned process auto-approves, this applies in-line; else it gates.
             if (! $this->approvalGate($adjustment)) {
-                $this->openApprovalGate($adjustment);
+                return $this->openGateAndMaybeApply($adjustment);
             }
 
             return $adjustment;
