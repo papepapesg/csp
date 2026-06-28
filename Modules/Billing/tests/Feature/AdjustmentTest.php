@@ -74,6 +74,10 @@ class AdjustmentTest extends TestCase
         $this->assertDatabaseHas('note_application_ledger', ['note_id' => $noteId, 'target_kind' => 'INVOICE', 'target_id' => $invoice->invoice_id, 'applied_amount' => 2500.00, 'status' => 'APPLIED']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'CreditNoteIssued']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'CreditNoteApplied']);
+
+        // Finance: the reason's GL account (DISPUTE_RESOLVED credit) flows reason → request → ledger.
+        $this->assertDatabaseHas('adjustment_request', ['adjustment_id' => $adjustmentId, 'gl_code' => '4000-REVENUE-ADJ-CR']);
+        $this->assertDatabaseHas('note_application_ledger', ['note_id' => $noteId, 'gl_code' => '4000-REVENUE-ADJ-CR']);
     }
 
     public function test_credit_note_surplus_goes_to_account_credit_balance(): void

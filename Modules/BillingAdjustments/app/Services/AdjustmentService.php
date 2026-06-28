@@ -144,6 +144,7 @@ class AdjustmentService
                 'amount' => $amount,
                 'currency' => $currency,
                 'reason_code' => $reason->code,
+                'gl_code' => $reason->glFor($direction),
                 'justification' => $data['justification'] ?? null,
                 'status' => $limitBreach ? AdjustmentRequest::PROPOSED : AdjustmentRequest::PENDING_APPROVAL,
                 'failure_reason' => $limitBreach,

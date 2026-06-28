@@ -16,14 +16,15 @@ use Modules\Rules\Models\DecisionTable;
  */
 class AdjustmentConfigSeeder extends Seeder
 {
+    // direction + the GL posting account per direction (finance reconciliation).
     private const REASONS = [
-        ['code' => 'DISPUTE_RESOLVED', 'description' => 'Dispute resolved in customer\'s favor', 'direction' => 'CREDIT'],
-        ['code' => 'BILLING_ERROR_CORRECTION', 'description' => 'Correction of a billing error', 'direction' => 'ANY'],
-        ['code' => 'SLA_COMPENSATION', 'description' => 'SLA-driven service credit', 'direction' => 'CREDIT'],
-        ['code' => 'GOODWILL_CREDIT', 'description' => 'Goodwill / retention gesture', 'direction' => 'CREDIT'],
-        ['code' => 'UNDER_BILLING_CORRECTION', 'description' => 'Charge omitted from the original invoice', 'direction' => 'DEBIT'],
-        ['code' => 'LATE_FEE', 'description' => 'Late fee added to a paid invoice', 'direction' => 'DEBIT'],
-        ['code' => 'OVER_CREDIT_RECOVERY', 'description' => 'Recovery of a previously over-issued credit', 'direction' => 'DEBIT'],
+        ['code' => 'DISPUTE_RESOLVED', 'description' => 'Dispute resolved in customer\'s favor', 'direction' => 'CREDIT', 'credit_gl_code' => '4000-REVENUE-ADJ-CR', 'debit_gl_code' => null],
+        ['code' => 'BILLING_ERROR_CORRECTION', 'description' => 'Correction of a billing error', 'direction' => 'ANY', 'credit_gl_code' => '4010-BILLING-ERR-CR', 'debit_gl_code' => '4011-BILLING-ERR-DR'],
+        ['code' => 'SLA_COMPENSATION', 'description' => 'SLA-driven service credit', 'direction' => 'CREDIT', 'credit_gl_code' => '5200-SLA-COMPENSATION', 'debit_gl_code' => null],
+        ['code' => 'GOODWILL_CREDIT', 'description' => 'Goodwill / retention gesture', 'direction' => 'CREDIT', 'credit_gl_code' => '5210-GOODWILL', 'debit_gl_code' => null],
+        ['code' => 'UNDER_BILLING_CORRECTION', 'description' => 'Charge omitted from the original invoice', 'direction' => 'DEBIT', 'credit_gl_code' => null, 'debit_gl_code' => '4100-UNDERBILL-RECOVERY'],
+        ['code' => 'LATE_FEE', 'description' => 'Late fee added to a paid invoice', 'direction' => 'DEBIT', 'credit_gl_code' => null, 'debit_gl_code' => '4200-LATE-FEE-REVENUE'],
+        ['code' => 'OVER_CREDIT_RECOVERY', 'description' => 'Recovery of a previously over-issued credit', 'direction' => 'DEBIT', 'credit_gl_code' => null, 'debit_gl_code' => '4300-OVER-CREDIT-RECOVERY'],
     ];
 
     public function run(): void

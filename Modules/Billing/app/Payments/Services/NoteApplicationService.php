@@ -207,6 +207,7 @@ class NoteApplicationService
             'operator_code' => $adjustment->operator_code,
             'note_amount' => (float) $note->total_amount,
             'currency' => $note->currency,
+            'gl_code' => $adjustment->gl_code, // finance posting account (reason × direction)
             'target_kind' => $targetKind,
             'target_id' => $targetId,
             'applied_amount' => $applied,

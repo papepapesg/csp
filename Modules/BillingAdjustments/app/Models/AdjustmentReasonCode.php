@@ -24,4 +24,10 @@ class AdjustmentReasonCode extends Model
             ->where('active', true)
             ->first();
     }
+
+    /** The GL posting account for a given adjustment direction (CREDIT/DEBIT). */
+    public function glFor(string $direction): ?string
+    {
+        return $direction === 'CREDIT' ? $this->credit_gl_code : $this->debit_gl_code;
+    }
 }
