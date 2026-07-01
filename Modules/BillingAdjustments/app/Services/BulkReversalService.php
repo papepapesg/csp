@@ -143,7 +143,7 @@ class BulkReversalService
         DB::transaction(function () use ($invoice, $batchId) {
             $invoice->update([
                 'status' => Invoice::VOID,
-                'cancel_reason_code' => 'BULK_REVERSAL',
+                'cancel_reason_code' => BulkReversalBatch::CANCEL_REASON,
                 'cancel_batch_id' => $batchId,
                 'amount_due' => 0,
             ]);
@@ -152,7 +152,7 @@ class BulkReversalService
             $this->events->publish(new DomainEvent(
                 type: BillingEvents::INVOICE_CANCELLED,
                 topic: BillingEvents::TOPIC,
-                payload: ['invoiceId' => $invoice->invoice_id, 'accountId' => $invoice->account_id, 'cancelBatchId' => $batchId, 'reasonCode' => 'BULK_REVERSAL'],
+                payload: ['invoiceId' => $invoice->invoice_id, 'accountId' => $invoice->account_id, 'cancelBatchId' => $batchId, 'reasonCode' => BulkReversalBatch::CANCEL_REASON],
                 aggregateType: 'Invoice',
                 aggregateId: $invoice->invoice_id,
             ));

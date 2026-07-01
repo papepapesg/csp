@@ -29,6 +29,9 @@ class BulkReversalBatch extends Model
     /** EM-CFG-04 entity type of the batch's dual-control gate. */
     public const ENTITY_TYPE = 'BULK_REVERSAL';
 
+    /** cancel_reason_code stamped on every invoice this batch voids (cancel provenance). */
+    public const CANCEL_REASON = 'BULK_REVERSAL';
+
     protected $table = 'bulk_reversal_batch';
 
     protected $primaryKey = 'batch_id';

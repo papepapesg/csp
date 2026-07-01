@@ -5,6 +5,7 @@ namespace Modules\Billing\Console;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Adjustments\Models\AdjustmentRequest;
+use Modules\Billing\Adjustments\Models\BulkReversalBatch;
 use Modules\Billing\Dunning\Models\DunningState;
 use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Tax\Models\TaxInvoice;
@@ -34,7 +35,7 @@ class OpsStatusCommand extends Command
             ['Dunning: recovery failed', $scope(DunningState::query())->where('status', DunningState::STATUS_RECOVERY_FAILED)->count()],
             ['Adjustments awaiting approval', $scope(AdjustmentRequest::query())->whereIn('status', [AdjustmentRequest::PENDING_APPROVAL, AdjustmentRequest::PROPOSED])->count()],
             ['Adjustments: application failed', $scope(AdjustmentRequest::query())->where('status', AdjustmentRequest::APPLICATION_FAILED)->count()],
-            ['Bulk reversals awaiting approval', $scope(DB::table('bulk_reversal_batch'))->where('status', 'PENDING_APPROVAL')->count()],
+            ['Bulk reversals awaiting approval', $scope(BulkReversalBatch::query())->where('status', BulkReversalBatch::PENDING_APPROVAL)->count()],
             ['Tax invoices: signing failed', $scope(TaxInvoice::query())->where('status', 'SIGNING_FAILED')->count()],
             ['Invoice-generation failures (pending retry)', $scope(DB::table('generation_failure_queue'))->where('status', 'PENDING_RETRY')->count()],
         ];

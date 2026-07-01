@@ -177,7 +177,7 @@ class NoteApplicationService
         $before = (float) $wallet->balance;
 
         if ($noteType === 'CREDIT') {
-            $this->wallets->credit($wallet, $amount, 'CREDIT_NOTE', $note->invoice_id);
+            $this->wallets->credit($wallet, $amount, Invoice::CREDIT_NOTE, $note->invoice_id);
         } else {
             // A debit note never makes the wallet negative: insufficient balance
             // FAILS the application; admin decides next step (R-CN-01-FA-1).
@@ -185,7 +185,7 @@ class NoteApplicationService
                 return $this->fail($note, $adjustment, $noteType, NoteApplication::TARGET_WALLET,
                     $walletCode, $amount, $before, 'WALLET_INSUFFICIENT_BALANCE');
             }
-            $this->wallets->debit($wallet, $amount, 'DEBIT_NOTE', $note->invoice_id);
+            $this->wallets->debit($wallet, $amount, Invoice::DEBIT_NOTE, $note->invoice_id);
         }
 
         $after = (float) Wallet::query()->whereKey($wallet->wallet_id)->value('balance');
