@@ -158,7 +158,12 @@ class BulkReversalService
         return ['batch_id' => $batchId, 'cancelled' => $cancelled, 'failed' => $failed];
     }
 
-    /** Raise the single-stage dual-control gate; roles are open (route permission gates WHO), SoD on. */
+    /**
+     * Raise the dual-control gate against the PRE-AUTHORED BULK_REVERSAL process (seeded per operator),
+     * exactly like every other gate on the platform — no inline chain. The engine resolves the definition
+     * by entity_type; roles are open (route permission gates WHO); allow_requester=false + the proposer as
+     * requester is the SoD anchor that makes it maker-checker.
+     */
     private function openReversalGate(string $batchId, string $operator, ?string $requestedBy): ApprovalRequest
     {
         return $this->approvals->request([
@@ -166,13 +171,6 @@ class BulkReversalService
             'entity_type' => 'BULK_REVERSAL',
             'entity_ref' => $batchId,
             'requested_by' => $requestedBy,
-            'stages' => [[
-                'name' => 'Bulk reversal approval',
-                'approver_kind' => 'ROLE',
-                'approver_roles' => [],
-                'required_approvals' => 1,
-                'allow_requester' => false,
-            ]],
         ]);
     }
 

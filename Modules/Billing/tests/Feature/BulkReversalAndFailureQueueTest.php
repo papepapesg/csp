@@ -8,6 +8,7 @@ use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
+use Modules\Billing\Database\Seeders\AdjustmentConfigSeeder;
 use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Invoicing\Services\GenerationFailureService;
 use Modules\Billing\Invoicing\Services\InvoiceService;
@@ -25,6 +26,9 @@ class BulkReversalAndFailureQueueTest extends TestCase
     {
         parent::setUp();
         $this->seed(RbacSeeder::class);
+        // The bulk-reversal dual-control gate is definition-first (BULK_REVERSAL approval_definition),
+        // resolved by the engine — the same seeder every operator runs in DatabaseSeeder.
+        $this->seed(AdjustmentConfigSeeder::class);
         Context::setOperatorCode('WIK');
     }
 

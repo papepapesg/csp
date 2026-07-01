@@ -63,6 +63,13 @@ class AdjustmentConfigSeeder extends Seeder
             ApprovalDefinition::defineChain($operator, 'ADJUSTMENT', 'AUTO', [], [
                 'config' => ['auto_approve' => true],
             ]);
+
+            // GEN-01 rule group R — bulk reversal dual control. Definition-first, like every other gate:
+            // one approval by someone OTHER than the proposer (allow_requester=false is the SoD anchor).
+            // The service no longer hand-rolls this chain inline; it resolves this process by entity_type.
+            ApprovalDefinition::defineChain($operator, 'BULK_REVERSAL', null, [
+                ['name' => 'Bulk reversal approval', 'approver_kind' => 'ROLE', 'approver_roles' => [], 'required_approvals' => 1, 'allow_requester' => false],
+            ]);
         }
 
         // Approval routing as a GLOBAL decision table (FIRST hit). Operators
