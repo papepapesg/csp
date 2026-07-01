@@ -8,9 +8,9 @@ use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
-use App\Foundation\Support\Id;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Modules\Billing\Adjustments\Models\BulkReversalBatch;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Invoicing\Models\Invoice;
 
@@ -24,11 +24,12 @@ use Modules\Billing\Invoicing\Models\Invoice;
  * (cancel + InvoiceCancelled, protected states rejected). Each cancellation is
  * its own transaction; partial failures are visible per invoice (R-GEN-01-R-3/5).
  *
- * The dual-control gate runs on the EM-CFG-04 engine (the platform-wide approval
- * mechanism): propose() raises a BULK_REVERSAL request with the proposer as
- * requester, and the engine's separation-of-duties rule — not a hand-rolled
- * check — refuses an approval/rejection by that same person (surfaced as the
- * existing DUAL_CONTROL_REQUIRED code). Route permission still gates who may act.
+ * The dual-control gate is definition-first on the EM-CFG-04 engine: propose()
+ * opens a gate against the pre-authored BULK_REVERSAL process (seeded per
+ * operator) with the proposer as requester, and the engine's separation-of-
+ * duties rule — not a hand-rolled check — refuses a decision by that same
+ * person (surfaced as the established DUAL_CONTROL_REQUIRED code). Route
+ * permission still gates who may act.
  */
 class BulkReversalService
 {
@@ -56,39 +57,35 @@ class BulkReversalService
     }
 
     /** Create the PENDING_APPROVAL batch (BILLING_ADMIN proposes, R-GEN-01-R-1/2). */
-    public function propose(array $scope, ?string $proposedBy, bool $reIssue = false, ?string $notes = null): string
+    public function propose(array $scope, ?string $proposedBy, bool $reIssue = false, ?string $notes = null): BulkReversalBatch
     {
         $operator = $scope['operator_code'] ?? Context::operatorCode();
         $preview = $this->preview($scope, $operator);
-        $batchId = Id::make('brb');
 
-        DB::table('bulk_reversal_batch')->insert([
-            'batch_id' => $batchId,
+        $batch = BulkReversalBatch::query()->create([
             'operator_code' => $operator,
             'invoice_type' => $scope['invoice_type'] ?? null,
             'date_from' => $scope['date_from'] ?? null,
             'date_to' => $scope['date_to'] ?? null,
-            'filters' => isset($scope['filters']) ? json_encode($scope['filters']) : null,
+            'filters' => $scope['filters'] ?? null,
             're_issue' => $reIssue,
-            'status' => 'PENDING_APPROVAL',
+            'status' => BulkReversalBatch::PENDING_APPROVAL,
             'invoices_in_scope' => $preview['eligible'],
             'proposed_by' => $proposedBy,
             'notes' => $notes,
-            'created_at' => now(), 'updated_at' => now(),
         ]);
 
         // Open the EM-CFG-04 dual-control gate with the proposer as requester (SoD anchor).
-        $this->openReversalGate($batchId, $operator, $proposedBy);
+        $this->openReversalGate($batch);
 
-        return $batchId;
+        return $batch;
     }
 
     public function reject(string $batchId, ?User $by): void
     {
-        $this->assertStatus($batchId, 'PENDING_APPROVAL');
-        $this->decideGate($batchId, false, $by); // a rejection is a control decision too: requester ≠ decider
-        DB::table('bulk_reversal_batch')->where('batch_id', $batchId)
-            ->update(['status' => 'REJECTED', 'approved_by' => $this->actorRef($by), 'updated_at' => now()]);
+        $batch = $this->assertStatus($batchId, BulkReversalBatch::PENDING_APPROVAL);
+        $this->decideGate($batch, false, $by); // a rejection is a control decision too: requester ≠ decider
+        $batch->update(['status' => BulkReversalBatch::REJECTED, 'approved_by' => $this->actorRef($by)]);
     }
 
     /**
@@ -97,40 +94,22 @@ class BulkReversalService
      */
     public function approveAndExecute(string $batchId, ?User $approver): array
     {
-        $batch = $this->assertStatus($batchId, 'PENDING_APPROVAL');
-        $this->decideGate($batchId, true, $approver); // engine enforces requester ≠ approver
+        $batch = $this->assertStatus($batchId, BulkReversalBatch::PENDING_APPROVAL);
+        $this->decideGate($batch, true, $approver); // engine enforces requester ≠ approver
 
-        DB::table('bulk_reversal_batch')->where('batch_id', $batchId)->update([
-            'status' => 'IN_PROGRESS', 'approved_by' => $this->actorRef($approver), 'started_at' => now(), 'updated_at' => now(),
+        $batch->update([
+            'status' => BulkReversalBatch::IN_PROGRESS,
+            'approved_by' => $this->actorRef($approver),
+            'started_at' => now(),
         ]);
 
-        $scope = ['operator_code' => $batch->operator_code, 'invoice_type' => $batch->invoice_type,
-            'date_from' => $batch->date_from, 'date_to' => $batch->date_to,
-            'filters' => $batch->filters ? json_decode($batch->filters, true) : null];
-
         $cancelled = $failed = $reIssued = 0;
-        foreach ($this->scopeQuery($scope, $batch->operator_code)->get() as $invoice) {
+        foreach ($this->scopeQuery($batch->scope(), $batch->operator_code)->get() as $invoice) {
             if ($this->protectedReason($invoice) !== null) {
                 continue; // protected invoices are out of scope at execute time too
             }
             try {
-                DB::transaction(function () use ($invoice, $batchId) {
-                    $invoice->update([
-                        'status' => Invoice::VOID,
-                        'cancel_reason_code' => 'BULK_REVERSAL',
-                        'cancel_batch_id' => $batchId,
-                        'amount_due' => 0,
-                    ]);
-                    // R-GEN-01-R-3: BIL-01 reverses outstanding, BIL-04 stops dunning,
-                    // DD_NOT-01 notifies — all via the cancellation event.
-                    $this->events->publish(new DomainEvent(
-                        type: BillingEvents::INVOICE_CANCELLED,
-                        topic: BillingEvents::TOPIC,
-                        payload: ['invoiceId' => $invoice->invoice_id, 'accountId' => $invoice->account_id, 'cancelBatchId' => $batchId, 'reasonCode' => 'BULK_REVERSAL'],
-                        aggregateType: 'Invoice',
-                        aggregateId: $invoice->invoice_id,
-                    ));
-                });
+                $this->cancelInvoice($invoice, $batch->batch_id);
                 $cancelled++;
                 // Re-issue (R-GEN-01-R-3 re_issue=true) is left to the owning
                 // generator with fresh inputs; tracked but not auto-run here.
@@ -139,53 +118,73 @@ class BulkReversalService
             }
         }
 
-        DB::table('bulk_reversal_batch')->where('batch_id', $batchId)->update([
-            'status' => $failed > 0 ? 'PARTIALLY_FAILED' : 'COMPLETED',
+        $batch->update([
+            'status' => $failed > 0 ? BulkReversalBatch::PARTIALLY_FAILED : BulkReversalBatch::COMPLETED,
             'invoices_cancelled' => $cancelled,
             'invoices_re_issued' => $reIssued,
             'invoices_failed' => $failed,
-            'completed_at' => now(), 'updated_at' => now(),
+            'completed_at' => now(),
         ]);
 
         $this->events->publish(new DomainEvent(
             type: BillingEvents::BULK_REVERSAL_COMPLETED,
             topic: BillingEvents::TOPIC,
-            payload: ['batchId' => $batchId, 'cancelled' => $cancelled, 'failed' => $failed],
+            payload: ['batchId' => $batch->batch_id, 'cancelled' => $cancelled, 'failed' => $failed],
             aggregateType: 'BulkReversalBatch',
-            aggregateId: $batchId,
+            aggregateId: $batch->batch_id,
         ));
 
-        return ['batch_id' => $batchId, 'cancelled' => $cancelled, 'failed' => $failed];
+        return ['batch_id' => $batch->batch_id, 'cancelled' => $cancelled, 'failed' => $failed];
     }
 
+    /** One invoice cancelled in its own transaction (R-GEN-01-R-3: partial failures stay visible). */
+    private function cancelInvoice(Invoice $invoice, string $batchId): void
+    {
+        DB::transaction(function () use ($invoice, $batchId) {
+            $invoice->update([
+                'status' => Invoice::VOID,
+                'cancel_reason_code' => 'BULK_REVERSAL',
+                'cancel_batch_id' => $batchId,
+                'amount_due' => 0,
+            ]);
+            // R-GEN-01-R-3: BIL-01 reverses outstanding, BIL-04 stops dunning,
+            // DD_NOT-01 notifies — all via the cancellation event.
+            $this->events->publish(new DomainEvent(
+                type: BillingEvents::INVOICE_CANCELLED,
+                topic: BillingEvents::TOPIC,
+                payload: ['invoiceId' => $invoice->invoice_id, 'accountId' => $invoice->account_id, 'cancelBatchId' => $batchId, 'reasonCode' => 'BULK_REVERSAL'],
+                aggregateType: 'Invoice',
+                aggregateId: $invoice->invoice_id,
+            ));
+        });
+    }
+
+    // ── Approval gate (EM-CFG-04) ────────────────────────────────────────────
+
     /**
-     * Raise the dual-control gate against the PRE-AUTHORED BULK_REVERSAL process (seeded per operator),
-     * exactly like every other gate on the platform — no inline chain. The engine resolves the definition
-     * by entity_type; roles are open (route permission gates WHO); allow_requester=false + the proposer as
-     * requester is the SoD anchor that makes it maker-checker.
+     * Raise the dual-control gate against the PRE-AUTHORED BULK_REVERSAL process (seeded per
+     * operator), exactly like every other gate on the platform — no inline chain. Roles are open
+     * (route permission gates WHO); allow_requester=false + the proposer as requester is the SoD
+     * anchor that makes it maker-checker.
      */
-    private function openReversalGate(string $batchId, string $operator, ?string $requestedBy): ApprovalRequest
+    private function openReversalGate(BulkReversalBatch $batch): ApprovalRequest
     {
         return $this->approvals->request([
-            'operator_code' => $operator,
-            'entity_type' => 'BULK_REVERSAL',
-            'entity_ref' => $batchId,
-            'requested_by' => $requestedBy,
+            'operator_code' => $batch->operator_code,
+            'entity_type' => BulkReversalBatch::ENTITY_TYPE,
+            'entity_ref' => $batch->batch_id,
+            'requested_by' => $batch->proposed_by,
         ]);
     }
 
     /**
      * Record the decision on the batch's gate. The engine's SoD refusal (the requester cannot decide
-     * their own batch) is re-surfaced as the established DUAL_CONTROL_REQUIRED code. A legacy batch with
-     * no gate (pre-engine) gets one lazily, anchored on its recorded proposer.
+     * their own batch) is re-surfaced as the established DUAL_CONTROL_REQUIRED code. A legacy batch
+     * with no gate (pre-engine) gets one lazily, anchored on its recorded proposer.
      */
-    private function decideGate(string $batchId, bool $approve, ?User $actor): void
+    private function decideGate(BulkReversalBatch $batch, bool $approve, ?User $actor): void
     {
-        $gate = $this->reversalGate($batchId);
-        if (! $gate) {
-            $batch = DB::table('bulk_reversal_batch')->where('batch_id', $batchId)->first();
-            $gate = $this->openReversalGate($batchId, $batch->operator_code, $batch->proposed_by);
-        }
+        $gate = $this->reversalGate($batch->batch_id) ?? $this->openReversalGate($batch);
         try {
             $this->approvals->decide($gate, $approve, $actor);
         } catch (DomainException $e) {
@@ -200,17 +199,13 @@ class BulkReversalService
     private function reversalGate(string $batchId): ?ApprovalRequest
     {
         return ApprovalRequest::query()
-            ->where('entity_type', 'BULK_REVERSAL')
+            ->where('entity_type', BulkReversalBatch::ENTITY_TYPE)
             ->where('entity_ref', $batchId)
             ->where('status', ApprovalRequest::PENDING)
             ->latest('created_at')->first();
     }
 
-    /** Stable string handle for the deciding user, for the batch's approved_by audit column. */
-    private function actorRef(?User $actor): ?string
-    {
-        return $actor?->uid ?? $actor?->email;
-    }
+    // ── Scope & guards ───────────────────────────────────────────────────────
 
     private function scopeQuery(array $scope, string $operator)
     {
@@ -226,16 +221,16 @@ class BulkReversalService
     private function protectedReason(Invoice $invoice): ?string
     {
         return match (true) {
-            $invoice->type === 'TAX' => 'SIGNED_TAX_INVOICE',
+            $invoice->type === Invoice::TAX => 'SIGNED_TAX_INVOICE',
             $invoice->status === Invoice::VOID => 'ALREADY_CANCELLED',
             Invoice::query()->where('original_invoice_id', $invoice->invoice_id)->exists() => 'HAS_LINKED_NOTES',
             default => null,
         };
     }
 
-    private function assertStatus(string $batchId, string $expected): object
+    private function assertStatus(string $batchId, string $expected): BulkReversalBatch
     {
-        $batch = DB::table('bulk_reversal_batch')->where('batch_id', $batchId)->first();
+        $batch = BulkReversalBatch::query()->find($batchId);
         if (! $batch) {
             throw DomainException::notFound('Bulk reversal batch not found.');
         }
@@ -244,5 +239,11 @@ class BulkReversalService
         }
 
         return $batch;
+    }
+
+    /** Stable string handle for the deciding user, for the batch's approved_by audit column. */
+    private function actorRef(?User $actor): ?string
+    {
+        return $actor?->uid ?? $actor?->email;
     }
 }

@@ -1,12 +1,11 @@
 <?php
 
 namespace Modules\Billing\Adjustments\Models;
-use Modules\Billing\Adjustments\Models\AdjustmentApprovalStep;
-use Modules\Billing\Payments\Models\NoteApplication;
 
 use App\Foundation\Models\HasPrefixedId;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Modules\Billing\Payments\Models\NoteApplication;
 
 /**
  * BIL-02-ADJ-01 adjustment proposal. A governed request to issue a credit or
@@ -23,6 +22,7 @@ class AdjustmentRequest extends Model
 {
     use HasPrefixedId;
 
+    // Lifecycle statuses.
     public const PROPOSED = 'PROPOSED';
 
     public const PENDING_APPROVAL = 'PENDING_APPROVAL';
@@ -37,9 +37,38 @@ class AdjustmentRequest extends Model
 
     public const APPLICATION_FAILED = 'APPLICATION_FAILED';
 
+    /** Statuses still open for an approval decision. */
+    public const OPEN_STATUSES = [self::PROPOSED, self::PENDING_APPROVAL];
+
+    // Directions.
     public const CREDIT = 'CREDIT';
 
     public const DEBIT = 'DEBIT';
+
+    // Scopes (R-ADJ-01-P-3).
+    public const FULL = 'FULL';
+
+    public const LINE = 'LINE';
+
+    public const AMOUNT = 'AMOUNT';
+
+    // Billing modes.
+    public const POSTPAID = 'POSTPAID';
+
+    public const PREPAID = 'PREPAID';
+
+    /** EM-CFG-04 entity type of every adjustment approval gate. */
+    public const ENTITY_TYPE = 'ADJUSTMENT';
+
+    // Pre-authored approval process tiers (approval_definition actions the rules engine selects).
+    public const PROCESS_AUTO = 'AUTO';
+
+    public const PROCESS_SINGLE = 'SINGLE';
+
+    public const PROCESS_DUAL = 'DUAL';
+
+    /** failure_reason set while the proposal breaches the operator limits (lifted by /override-limit). */
+    public const LIMIT_EXCEEDED = 'ADJUSTMENT_LIMIT_EXCEEDED';
 
     protected $table = 'adjustment_request';
 
@@ -68,5 +97,22 @@ class AdjustmentRequest extends Model
     public function applications(): HasMany
     {
         return $this->hasMany(NoteApplication::class, 'adjustment_request_id', 'adjustment_id');
+    }
+
+    /** Append one decision to the human-readable audit timeline (step_no auto-sequenced). */
+    public function logStep(string $decision, ?string $decidedBy, ?string $comment = null): AdjustmentApprovalStep
+    {
+        return $this->approvalSteps()->create([
+            'step_no' => $this->approvalSteps()->count() + 1,
+            'decision' => $decision,
+            'decided_by' => $decidedBy,
+            'comment' => $comment,
+            'decided_at' => now(),
+        ]);
+    }
+
+    public function isLimitBlocked(): bool
+    {
+        return $this->failure_reason === self::LIMIT_EXCEEDED && ! $this->limit_overridden;
     }
 }

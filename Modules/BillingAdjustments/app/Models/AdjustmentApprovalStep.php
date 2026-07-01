@@ -9,6 +9,18 @@ use Illuminate\Database\Eloquent\Model;
  */
 class AdjustmentApprovalStep extends Model
 {
+    // Decisions recorded on the timeline (approvals AND the non-approval events).
+    public const APPROVED = 'APPROVED';
+
+    public const REJECTED = 'REJECTED';
+
+    public const REVISION_REQUESTED = 'REVISION_REQUESTED';
+
+    public const LIMIT_OVERRIDDEN = 'LIMIT_OVERRIDDEN';
+
+    /** decided_by handle when the engine auto-approves (no human actor). */
+    public const SYSTEM_AUTO = 'SYSTEM:AUTO_APPROVE';
+
     protected $table = 'adjustment_approval_step';
 
     protected $guarded = [];

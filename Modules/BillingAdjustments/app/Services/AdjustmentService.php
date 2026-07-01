@@ -1,8 +1,6 @@
 <?php
 
 namespace Modules\Billing\Adjustments\Services;
-use Modules\Billing\Invoicing\Services\InvoiceService;
-use Modules\Billing\Payments\Services\NoteApplicationService;
 
 use App\Foundation\Approvals\ApprovalDefinition;
 use App\Foundation\Approvals\ApprovalRequest;
@@ -14,36 +12,42 @@ use App\Foundation\Rules\RuleEngine;
 use App\Foundation\Support\Context;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
-use Modules\Billing\Events\BillingEvents;
+use Modules\Billing\Adjustments\Models\AdjustmentApprovalStep;
 use Modules\Billing\Adjustments\Models\AdjustmentReasonCode;
 use Modules\Billing\Adjustments\Models\AdjustmentRequest;
+use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Invoicing\Models\InvoiceLine;
+use Modules\Billing\Invoicing\Services\InvoiceService;
+use Modules\Billing\Payments\Models\NoteApplication;
+use Modules\Billing\Payments\Services\NoteApplicationService;
 
 /**
  * BIL-02-ADJ-01 invoice adjustments — the governed proposal → approval →
  * application pipeline for credit and debit notes. Nobody edits an invoice in
  * place: an agent PROPOSES an adjustment (scoped FULL / LINE / AMOUNT, with a
- * mandatory operator reason code, guarded by adjustment_limits_config); the
- * operator's approval policy decides; on approval GEN-01 issues the
- * CREDIT_NOTE / DEBIT_NOTE invoice and BIL-01-CN-01 applies it.
+ * mandatory operator reason code); on approval GEN-01 issues the CREDIT_NOTE /
+ * DEBIT_NOTE invoice and BIL-01-CN-01 applies it.
  *
- * Approval ROUTING is a rules-engine decision: the
- * `rules.billing.adjustment-approval` package (operator-overridable decision
- * table) receives the proposal facts and answers {stepsRequired} — 0 means
- * auto-approve, N means N audited approval steps. The decision (and the rule
- * that made it) is PINNED on the proposal at filing time. When no table is
- * deployed, a registered fallback derives the same answer from
- * adjustment_limits_config (steps + auto_approve_under threshold).
+ * Approval is definition-first on the EM-CFG-04 engine, in two layers:
  *
- * The N approval steps themselves run on the EM-CFG-04 engine — the one approval
- * mechanism used platform-wide — rather than a bespoke counter. The rules engine
- * answers HOW MANY (stepsRequired); the proposal raises an ADJUSTMENT
- * ApprovalRequest carrying a single stage with that quorum, and the engine
- * enforces it with DISTINCT approvers (one person cannot fill a dual-control on
- * their own). Route permission (`adjustment.approve`) still gates WHO may act;
- * the engine adds the quorum + distinct-approver integrity on top. The
- * adjustment_approval_step rows remain the human-readable adjustment audit
+ *  1. ROUTING — the `rules.billing.adjustment-approval` decision table
+ *     (operator-overridable) receives the proposal facts and names the
+ *     pre-authored approval PROCESS to use: the action of an ADJUSTMENT
+ *     approval_definition (PROCESS_AUTO / PROCESS_SINGLE / PROCESS_DUAL, or any
+ *     operator-authored chain such as a multi-stage executive sign-off). The
+ *     decision and the rule that made it are PINNED on the proposal.
+ *
+ *  2. GATING — every non-blocked proposal opens an engine gate against that
+ *     process. The engine owns the chain (stages, quorum, distinct approvers,
+ *     SoD); AUTO is a real process too, recorded by the engine as
+ *     AUTO_APPROVED. There is no local approval path.
+ *
+ * Operator guard-rails (max per request / per customer-period, and the
+ * auto-approve threshold the routing fallback uses) live in the config bag of
+ * the BASE ADJUSTMENT process row (action = null) — config on the process row,
+ * not a separate table. Route permission (`adjustment.approve`) gates WHO may
+ * act; adjustment_approval_step keeps the human-readable audit timeline
  * (including the non-approval events: limit override, revision, auto-approve).
  */
 class AdjustmentService
@@ -73,32 +77,20 @@ class AdjustmentService
             if (! $reason) {
                 throw DomainException::ruleRejected('UNKNOWN_REASON_CODE', "Reason code '{$data['reason_code']}' is not in the operator catalog.");
             }
-            if ($reason->direction !== 'ANY' && $reason->direction !== $direction) {
+            if (! $reason->allows($direction)) {
                 throw DomainException::ruleRejected('REASON_DIRECTION_MISMATCH', "Reason '{$reason->code}' does not justify {$direction} adjustments.");
             }
 
             // Parent invoice: required for FULL/LINE scope and for all POSTPAID
             // debit notes (a debit is always tied to a source invoice).
             $parent = null;
-            $billingMode = $data['billing_mode'] ?? 'POSTPAID';
+            $billingMode = $data['billing_mode'] ?? AdjustmentRequest::POSTPAID;
             if (! empty($data['parent_invoice_id'])) {
-                $parent = Invoice::query()->find($data['parent_invoice_id']);
-                if (! $parent) {
-                    throw DomainException::notFound('Parent invoice not found.');
-                }
-                if ($parent->type === 'TAX') {
-                    throw DomainException::ruleRejected('CANNOT_ADJUST_TAX_INVOICE', 'A signed tax invoice cannot be adjusted; adjust the commercial invoice.');
-                }
-                if (in_array($parent->type, [Invoice::CREDIT_NOTE, Invoice::DEBIT_NOTE], true)) {
-                    throw DomainException::ruleRejected('CANNOT_ADJUST_NOTE', 'A credit/debit note cannot itself be adjusted.');
-                }
-                if ($parent->status === Invoice::VOID) {
-                    throw DomainException::ruleRejected('INVOICE_NOT_APPLIABLE', 'A cancelled invoice cannot be adjusted.');
-                }
+                $parent = $this->adjustableParent((string) $data['parent_invoice_id']);
                 $billingMode = $parent->billing_mode ?? $billingMode;
-            } elseif (in_array($scope, ['FULL', 'LINE'], true)) {
+            } elseif (in_array($scope, [AdjustmentRequest::FULL, AdjustmentRequest::LINE], true)) {
                 throw DomainException::ruleRejected('PARENT_INVOICE_REQUIRED', "Scope {$scope} requires a parent invoice.");
-            } elseif ($direction === AdjustmentRequest::DEBIT && $billingMode !== 'PREPAID') {
+            } elseif ($direction === AdjustmentRequest::DEBIT && $billingMode !== AdjustmentRequest::PREPAID) {
                 throw DomainException::ruleRejected('PARENT_INVOICE_REQUIRED', 'A postpaid debit note is always tied to a source invoice.');
             }
 
@@ -106,12 +98,11 @@ class AdjustmentService
             [$amount, $lineRef, $categoryCode] = $this->determineAmount($scope, $data, $parent);
             $currency = $parent?->currency ?? ($data['currency'] ?? 'KES');
 
-            // Limits (adjustment_limits_config) — flagged on the proposal; an
-            // explicit /override-limit (approver permission) lifts the block.
+            // Operator guard-rails — a breach parks the proposal until /override-limit lifts it.
             $limitBreach = $this->checkLimits($operator, $data['customer_id'] ?? $parent?->customer_id, $amount);
 
-            // Approval routing: the rules engine decides (operator-overridable
-            // decision table; config-derived fallback when none is deployed).
+            // Approval routing: the rules engine names the pre-authored process
+            // (operator-overridable decision table; config-derived fallback when none is deployed).
             $routing = $this->rules->evaluate(self::APPROVAL_RULE_SET, [
                 'operatorCode' => $operator,
                 'direction' => $direction,
@@ -124,8 +115,7 @@ class AdjustmentService
                 'limitBreached' => $limitBreach !== null,
             ]);
             $stepsRequired = max(0, (int) ($routing['stepsRequired'] ?? 1));
-            // The rules engine names the pre-authored approval PROCESS to use (the ADJUSTMENT
-            // approval_definition's action). Legacy tables that return only stepsRequired are mapped.
+            // Legacy tables that answer only stepsRequired are mapped onto the standard tiers.
             $process = (string) ($routing['approvalProcess'] ?? $this->processForSteps($stepsRequired));
 
             $adjustment = AdjustmentRequest::query()->create([
@@ -160,100 +150,28 @@ class AdjustmentService
                 return $adjustment;
             }
 
-            // EVERY non-blocked proposal goes through the EM-CFG-04 engine — including AUTO, which
-            // resolves the ADJUSTMENT/AUTO process the engine records as AUTO_APPROVED. No local bypass.
             return $this->openGateAndMaybeApply($adjustment, $routing);
         });
-    }
-
-    /**
-     * Open the EM-CFG-04 gate for the process pinned on the proposal and act on the engine's answer:
-     * an AUTO (or below-threshold) process comes back already approved BY THE ENGINE — we mirror that
-     * single decision onto the adjustment audit and apply. A real chain comes back PENDING, so we wait
-     * for approve(). This is the only place a proposal enters approval — AUTO included, no exceptions.
-     *
-     * @param  array<string,mixed>  $routing
-     */
-    private function openGateAndMaybeApply(AdjustmentRequest $adjustment, array $routing = []): AdjustmentRequest
-    {
-        $gate = $this->openApprovalGate($adjustment);
-
-        if (in_array($gate->status, [ApprovalRequest::AUTO_APPROVED, ApprovalRequest::APPROVED], true)) {
-            $adjustment->approvalSteps()->create([
-                'step_no' => $adjustment->approvalSteps()->count() + 1,
-                'decision' => 'APPROVED', 'decided_by' => 'SYSTEM:AUTO_APPROVE',
-                'comment' => 'Auto-approved by the '.($adjustment->approval_process ?: 'approval').' process'
-                    .(isset($routing['ruleId']) ? " (rule {$routing['ruleId']})" : ''),
-                'decided_at' => now(),
-            ]);
-
-            return $this->approveAndApply($adjustment);
-        }
-
-        return $adjustment->refresh();
-    }
-
-    /** Map a legacy stepsRequired count to a pre-authored process tier. */
-    private function processForSteps(int $steps): string
-    {
-        return match (true) {
-            $steps <= 0 => 'AUTO',
-            $steps === 1 => 'SINGLE',
-            default => 'DUAL',
-        };
-    }
-
-    /**
-     * Raise the gate against the PRE-AUTHORED ADJUSTMENT process the rules engine selected
-     * (the approval_definition action pinned on the proposal). No inline stages — the chain
-     * (quorum, roles, SoD) comes from that definition, consistent with every other approval flow.
-     * requested_by is null so SoD never blocks a legitimate approver; the stage's distinct-approver
-     * quorum is what stops one person self-clearing a multi-approval gate.
-     */
-    private function openApprovalGate(AdjustmentRequest $adjustment): ApprovalRequest
-    {
-        return $this->approvals->request([
-            'operator_code' => $adjustment->operator_code,
-            'entity_type' => 'ADJUSTMENT',
-            'action' => $adjustment->approval_process ?: 'SINGLE',
-            'entity_ref' => $adjustment->adjustment_id,
-            'amount' => (float) $adjustment->amount,
-            'requested_by' => null,
-        ]);
-    }
-
-    /** The open EM-CFG-04 gate for this adjustment, if one has been raised. */
-    private function approvalGate(AdjustmentRequest $adjustment): ?ApprovalRequest
-    {
-        return ApprovalRequest::query()
-            ->where('entity_type', 'ADJUSTMENT')
-            ->where('entity_ref', $adjustment->adjustment_id)
-            ->where('status', ApprovalRequest::PENDING)
-            ->latest('created_at')->first();
     }
 
     public function approve(AdjustmentRequest $adjustment, ?User $actor = null, ?string $comment = null): AdjustmentRequest
     {
         return DB::transaction(function () use ($adjustment, $actor, $comment) {
             $this->assertOpenForDecision($adjustment);
-            if ($adjustment->failure_reason === 'ADJUSTMENT_LIMIT_EXCEEDED' && ! $adjustment->limit_overridden) {
+            if ($adjustment->isLimitBlocked()) {
                 throw DomainException::ruleRejected('LIMIT_OVERRIDE_REQUIRED', 'This proposal breaches the operator adjustment limits; override the limit first.', nextAction: 'OVERRIDE_LIMIT');
             }
 
-            // The EM-CFG-04 gate owns the count + the distinct-approver rule: this records one approval
-            // on the current stage and tells us whether the quorum is now met. A second approval by the
-            // SAME person is refused (DUPLICATE_STAGE_APPROVER) — that is the dual-control guarantee.
+            // The EM-CFG-04 gate owns the chain: this records one approval on the current stage and
+            // tells us whether the process is now cleared. A second approval by the SAME person is
+            // refused by the engine (DUPLICATE_STAGE_APPROVER) — that is the dual-control guarantee.
             $gate = $this->approvalGate($adjustment) ?? $this->openApprovalGate($adjustment);
             $gate = $this->approvals->decide($gate, true, $actor, $comment);
 
-            $adjustment->approvalSteps()->create([
-                'step_no' => $adjustment->approvalSteps()->count() + 1,
-                'decision' => 'APPROVED', 'decided_by' => $this->actorRef($actor),
-                'comment' => $comment, 'decided_at' => now(),
-            ]);
+            $adjustment->logStep(AdjustmentApprovalStep::APPROVED, $this->actorRef($actor), $comment);
 
             if ($gate->status !== ApprovalRequest::APPROVED) {
-                return $adjustment->refresh(); // multi-step: the gate still needs another distinct approver
+                return $adjustment->refresh(); // the chain still needs further approvals
             }
 
             return $this->approveAndApply($adjustment);
@@ -269,10 +187,7 @@ class AdjustmentService
             if ($gate = $this->approvalGate($adjustment)) {
                 $this->approvals->decide($gate, false, $actor, $comment);
             }
-            $adjustment->approvalSteps()->create([
-                'step_no' => $adjustment->approvalSteps()->count() + 1,
-                'decision' => 'REJECTED', 'decided_by' => $this->actorRef($actor), 'comment' => $comment, 'decided_at' => now(),
-            ]);
+            $adjustment->logStep(AdjustmentApprovalStep::REJECTED, $this->actorRef($actor), $comment);
             $adjustment->update(['status' => AdjustmentRequest::REJECTED]);
             $this->emit($adjustment, BillingEvents::ADJUSTMENT_REJECTED);
 
@@ -280,19 +195,10 @@ class AdjustmentService
         });
     }
 
-    /** Stable string handle for the deciding user, for the human-readable adjustment audit. */
-    private function actorRef(?User $actor): ?string
-    {
-        return $actor?->uid ?? $actor?->email;
-    }
-
     public function requestRevision(AdjustmentRequest $adjustment, ?string $decidedBy = null, ?string $comment = null): AdjustmentRequest
     {
         $this->assertOpenForDecision($adjustment);
-        $adjustment->approvalSteps()->create([
-            'step_no' => $adjustment->approvalSteps()->count() + 1,
-            'decision' => 'REVISION_REQUESTED', 'decided_by' => $decidedBy, 'comment' => $comment, 'decided_at' => now(),
-        ]);
+        $adjustment->logStep(AdjustmentApprovalStep::REVISION_REQUESTED, $decidedBy, $comment);
         $adjustment->update(['status' => AdjustmentRequest::PROPOSED]);
 
         return $adjustment;
@@ -310,21 +216,20 @@ class AdjustmentService
     /** Approver lifts a limit breach so the proposal may enter approval. */
     public function overrideLimit(AdjustmentRequest $adjustment, ?string $decidedBy = null): AdjustmentRequest
     {
-        if ($adjustment->failure_reason !== 'ADJUSTMENT_LIMIT_EXCEEDED') {
+        if ($adjustment->failure_reason !== AdjustmentRequest::LIMIT_EXCEEDED) {
             throw DomainException::conflict('This proposal has no limit breach to override.');
         }
+
         return DB::transaction(function () use ($adjustment, $decidedBy) {
             $adjustment->update([
                 'limit_overridden' => true,
                 'failure_reason' => null,
                 'status' => AdjustmentRequest::PENDING_APPROVAL,
             ]);
-            $adjustment->approvalSteps()->create([
-                'step_no' => $adjustment->approvalSteps()->count() + 1,
-                'decision' => 'LIMIT_OVERRIDDEN', 'decided_by' => $decidedBy, 'decided_at' => now(),
-            ]);
+            $adjustment->logStep(AdjustmentApprovalStep::LIMIT_OVERRIDDEN, $decidedBy);
+
             // The breach is lifted: enter approval through the one engine entry point (it was withheld
-            // while blocked). If the pinned process auto-approves, this applies in-line; else it gates.
+            // while blocked).
             if (! $this->approvalGate($adjustment)) {
                 return $this->openGateAndMaybeApply($adjustment);
             }
@@ -346,6 +251,75 @@ class AdjustmentService
             return $this->applyNote($adjustment, $note);
         });
     }
+
+    // ── Approval gate (EM-CFG-04) ────────────────────────────────────────────
+
+    /**
+     * Open the gate for the process pinned on the proposal and act on the engine's answer: an
+     * auto-approving process comes back approved BY THE ENGINE — we mirror that single decision onto
+     * the audit timeline and apply. A real chain comes back PENDING, so we wait for approve().
+     * This is the only place a proposal enters approval — AUTO included, no exceptions.
+     *
+     * @param  array<string,mixed>  $routing
+     */
+    private function openGateAndMaybeApply(AdjustmentRequest $adjustment, array $routing = []): AdjustmentRequest
+    {
+        $gate = $this->openApprovalGate($adjustment);
+
+        if (in_array($gate->status, [ApprovalRequest::AUTO_APPROVED, ApprovalRequest::APPROVED], true)) {
+            $adjustment->logStep(
+                AdjustmentApprovalStep::APPROVED,
+                AdjustmentApprovalStep::SYSTEM_AUTO,
+                'Auto-approved by the '.($adjustment->approval_process ?: 'approval').' process'
+                    .(isset($routing['ruleId']) ? " (rule {$routing['ruleId']})" : ''),
+            );
+
+            return $this->approveAndApply($adjustment);
+        }
+
+        return $adjustment->refresh();
+    }
+
+    /**
+     * Raise the gate against the PRE-AUTHORED ADJUSTMENT process the rules engine selected (the
+     * approval_definition action pinned on the proposal). No inline stages — the chain (quorum,
+     * roles, SoD) comes from that definition, consistent with every other approval flow.
+     * requested_by is null so SoD never blocks a legitimate approver; the stage's distinct-approver
+     * quorum is what stops one person self-clearing a multi-approval gate.
+     */
+    private function openApprovalGate(AdjustmentRequest $adjustment): ApprovalRequest
+    {
+        return $this->approvals->request([
+            'operator_code' => $adjustment->operator_code,
+            'entity_type' => AdjustmentRequest::ENTITY_TYPE,
+            'action' => $adjustment->approval_process ?: AdjustmentRequest::PROCESS_SINGLE,
+            'entity_ref' => $adjustment->adjustment_id,
+            'amount' => (float) $adjustment->amount,
+            'requested_by' => null,
+        ]);
+    }
+
+    /** The open EM-CFG-04 gate for this adjustment, if one has been raised. */
+    private function approvalGate(AdjustmentRequest $adjustment): ?ApprovalRequest
+    {
+        return ApprovalRequest::query()
+            ->where('entity_type', AdjustmentRequest::ENTITY_TYPE)
+            ->where('entity_ref', $adjustment->adjustment_id)
+            ->where('status', ApprovalRequest::PENDING)
+            ->latest('created_at')->first();
+    }
+
+    /** Map a legacy stepsRequired count to a pre-authored process tier. */
+    private function processForSteps(int $steps): string
+    {
+        return match (true) {
+            $steps <= 0 => AdjustmentRequest::PROCESS_AUTO,
+            $steps === 1 => AdjustmentRequest::PROCESS_SINGLE,
+            default => AdjustmentRequest::PROCESS_DUAL,
+        };
+    }
+
+    // ── Application (GEN-01 note → CN-01 money movement) ─────────────────────
 
     /** APPROVED → issue the note document (GEN-01) → apply it (CN-01). */
     private function approveAndApply(AdjustmentRequest $adjustment): AdjustmentRequest
@@ -377,11 +351,33 @@ class AdjustmentService
     {
         $result = $this->noteApplication->apply($note, $adjustment);
 
-        $adjustment->update($result['status'] === 'APPLIED'
+        $adjustment->update($result['status'] === NoteApplication::APPLIED
             ? ['status' => AdjustmentRequest::APPLIED, 'failure_reason' => null, 'applied_at' => now()]
             : ['status' => AdjustmentRequest::APPLICATION_FAILED, 'failure_reason' => $result['failure_reason']]);
 
         return $adjustment->refresh();
+    }
+
+    // ── Proposal validation ──────────────────────────────────────────────────
+
+    /** The parent must exist and be adjustable: not a signed tax invoice, not a note, not cancelled. */
+    private function adjustableParent(string $invoiceId): Invoice
+    {
+        $parent = Invoice::query()->find($invoiceId);
+        if (! $parent) {
+            throw DomainException::notFound('Parent invoice not found.');
+        }
+        if ($parent->type === Invoice::TAX) {
+            throw DomainException::ruleRejected('CANNOT_ADJUST_TAX_INVOICE', 'A signed tax invoice cannot be adjusted; adjust the commercial invoice.');
+        }
+        if (in_array($parent->type, [Invoice::CREDIT_NOTE, Invoice::DEBIT_NOTE], true)) {
+            throw DomainException::ruleRejected('CANNOT_ADJUST_NOTE', 'A credit/debit note cannot itself be adjusted.');
+        }
+        if ($parent->status === Invoice::VOID) {
+            throw DomainException::ruleRejected('INVOICE_NOT_APPLIABLE', 'A cancelled invoice cannot be adjusted.');
+        }
+
+        return $parent;
     }
 
     /**
@@ -393,11 +389,11 @@ class AdjustmentService
      */
     private function determineAmount(string $scope, array $data, ?Invoice $parent): array
     {
-        if ($scope === 'FULL') {
+        if ($scope === AdjustmentRequest::FULL) {
             return [round((float) $parent->total_amount, 2), null, $data['service_category_code'] ?? null];
         }
 
-        if ($scope === 'LINE') {
+        if ($scope === AdjustmentRequest::LINE) {
             $line = InvoiceLine::query()->whereKey($data['line_ref'] ?? null)
                 ->where('invoice_id', $parent->invoice_id)->first();
             if (! $line) {
@@ -425,21 +421,23 @@ class AdjustmentService
     }
 
     /**
-     * Returns the breach code, or null when within the operator's limits. Limits live on the BASE
-     * ADJUSTMENT approval process (the approval_definition action=null, config bag) — EM-CFG-04
+     * Returns the breach code, or null when within the operator's limits. Limits live in the config
+     * bag of the BASE ADJUSTMENT process row (approval_definition, action = null) — EM-CFG-04
      * "config on the process row", not a separate per-operator table.
      */
     private function checkLimits(string $operator, ?string $customerId, float $amount): ?string
     {
         $config = ApprovalDefinition::query()
-            ->where('operator_code', $operator)->where('entity_type', 'ADJUSTMENT')->whereNull('action')
+            ->where('operator_code', $operator)
+            ->where('entity_type', AdjustmentRequest::ENTITY_TYPE)
+            ->whereNull('action')
             ->first()?->config;
         if (! $config) {
             return null;
         }
 
         if (($config['max_per_request'] ?? null) !== null && $amount > (float) $config['max_per_request']) {
-            return 'ADJUSTMENT_LIMIT_EXCEEDED';
+            return AdjustmentRequest::LIMIT_EXCEEDED;
         }
 
         if (($config['max_per_customer_period'] ?? null) !== null && $customerId) {
@@ -450,18 +448,26 @@ class AdjustmentService
                 ->where('created_at', '>=', now()->subDays((int) ($config['period_days'] ?? 30)))
                 ->sum('amount');
             if ($windowTotal + $amount > (float) $config['max_per_customer_period']) {
-                return 'ADJUSTMENT_LIMIT_EXCEEDED';
+                return AdjustmentRequest::LIMIT_EXCEEDED;
             }
         }
 
         return null;
     }
 
+    // ── Shared helpers ───────────────────────────────────────────────────────
+
     private function assertOpenForDecision(AdjustmentRequest $adjustment): void
     {
-        if (! in_array($adjustment->status, [AdjustmentRequest::PROPOSED, AdjustmentRequest::PENDING_APPROVAL], true)) {
+        if (! in_array($adjustment->status, AdjustmentRequest::OPEN_STATUSES, true)) {
             throw DomainException::conflict("Adjustment is {$adjustment->status}; no further decisions are possible.");
         }
+    }
+
+    /** Stable string handle for the deciding user, for the human-readable adjustment audit. */
+    private function actorRef(?User $actor): ?string
+    {
+        return $actor?->uid ?? $actor?->email;
     }
 
     private function emit(AdjustmentRequest $adjustment, string $type): void

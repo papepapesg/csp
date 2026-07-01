@@ -3,6 +3,7 @@
 namespace Modules\Billing\Adjustments\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Modules\Billing\Adjustments\Models\AdjustmentRequest;
 
 /**
  * BIL-02-ADJ-01 operator reason-code catalog — every adjustment must reference
@@ -10,6 +11,9 @@ use Illuminate\Database\Eloquent\Model;
  */
 class AdjustmentReasonCode extends Model
 {
+    /** Reason direction that justifies both CREDIT and DEBIT adjustments. */
+    public const ANY = 'ANY';
+
     protected $table = 'adjustment_reason_code';
 
     protected $guarded = [];
@@ -28,6 +32,12 @@ class AdjustmentReasonCode extends Model
     /** The GL posting account for a given adjustment direction (CREDIT/DEBIT). */
     public function glFor(string $direction): ?string
     {
-        return $direction === 'CREDIT' ? $this->credit_gl_code : $this->debit_gl_code;
+        return $direction === AdjustmentRequest::CREDIT ? $this->credit_gl_code : $this->debit_gl_code;
+    }
+
+    /** Does this reason justify an adjustment in the given direction? */
+    public function allows(string $direction): bool
+    {
+        return $this->direction === self::ANY || $this->direction === $direction;
     }
 }

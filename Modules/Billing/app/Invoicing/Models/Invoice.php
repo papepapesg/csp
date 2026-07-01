@@ -35,6 +35,9 @@ class Invoice extends Model
 
     public const DEBIT_NOTE = 'DEBIT_NOTE';
 
+    /** Signed fiscal document (TAX-01) — immutable, never adjusted or reversed. */
+    public const TAX = 'TAX';
+
     protected $table = 'invoice';
 
     protected $primaryKey = 'invoice_id';
