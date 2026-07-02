@@ -20,6 +20,18 @@ use Tests\TestCase;
  * approval, note issuance and application across POSTPAID invoices (with
  * surplus to the account credit balance) and PREPAID wallets (insufficient
  * balance fails, /retry-application after top-up succeeds).
+ *
+ * Reading the events in these tests — issuance and application are two
+ * distinct stages, hence two distinct events:
+ *  - CreditNoteIssued / DebitNoteIssued  → GEN-01 created the note DOCUMENT
+ *    (an invoice row, type CREDIT_NOTE/DEBIT_NOTE, with its own legal number).
+ *    No money has moved yet.
+ *  - CreditNoteApplied / DebitNoteApplied → CN-01 MOVED THE MONEY (one event
+ *    per ledger row: parent outstanding reduced, wallet credited/debited, or
+ *    surplus to the account credit balance).
+ * They can diverge: a note can be issued while its application FAILS (e.g.
+ * insufficient wallet) and is retried later — which is exactly why the two
+ * stages are observable separately.
  */
 class AdjustmentTest extends TestCase
 {
@@ -45,6 +57,20 @@ class AdjustmentTest extends TestCase
         );
     }
 
+    /**
+     * EXPECTATION — the happy path, end to end.
+     * Given a postpaid invoice of 2,500 fully outstanding,
+     * when an agent proposes a FULL credit adjustment (reason DISPUTE_RESOLVED)
+     * and one approver approves it (routing: SINGLE),
+     * then:
+     *  - the proposal waits in PENDING_APPROVAL with the amount taken from the parent total;
+     *  - on approval a CREDIT_NOTE invoice is ISSUED against the parent, carrying its own
+     *    CN-… legal number (event: CreditNoteIssued — the document exists, no money moved);
+     *  - the note is then APPLIED: the parent's outstanding drops to zero and the parent
+     *    becomes PAID, recorded as one ledger row (event: CreditNoteApplied — money moved);
+     *  - the reason's GL account flows reason → adjustment request → application ledger,
+     *    so finance can reconcile the credit end to end.
+     */
     public function test_full_credit_adjustment_issues_credit_note_and_clears_parent_outstanding(): void
     {
         $invoice = $this->postpaidInvoice(2500);
@@ -72,14 +98,23 @@ class AdjustmentTest extends TestCase
         // Parent outstanding cleared; one ledger row, fully applied.
         $this->assertDatabaseHas('invoice', ['invoice_id' => $invoice->invoice_id, 'amount_due' => 0.00, 'status' => 'PAID']);
         $this->assertDatabaseHas('note_application_ledger', ['note_id' => $noteId, 'target_kind' => 'INVOICE', 'target_id' => $invoice->invoice_id, 'applied_amount' => 2500.00, 'status' => 'APPLIED']);
-        $this->assertDatabaseHas('outbox_events', ['event_type' => 'CreditNoteIssued']);
-        $this->assertDatabaseHas('outbox_events', ['event_type' => 'CreditNoteApplied']);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'CreditNoteIssued']);   // document created
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'CreditNoteApplied']);  // money moved
 
         // Finance: the reason's GL account (DISPUTE_RESOLVED credit) flows reason → request → ledger.
         $this->assertDatabaseHas('adjustment_request', ['adjustment_id' => $adjustmentId, 'gl_code' => '4000-REVENUE-ADJ-CR']);
         $this->assertDatabaseHas('note_application_ledger', ['note_id' => $noteId, 'gl_code' => '4000-REVENUE-ADJ-CR']);
     }
 
+    /**
+     * EXPECTATION — a credit larger than the debt never over-credits the invoice.
+     * Given a postpaid invoice with 1,000 outstanding,
+     * when a 1,500 AMOUNT-scope credit adjustment is approved,
+     * then the application SPLITS into two ledger rows in one transaction:
+     *  - 1,000 clears the invoice (capped at its outstanding),
+     *  - the 500 surplus lands on the account credit balance (available for
+     *    future invoices), never as a negative amount_due.
+     */
     public function test_credit_note_surplus_goes_to_account_credit_balance(): void
     {
         $invoice = $this->postpaidInvoice(1000, 'acc_surplus', 'cust_surplus');
@@ -101,6 +136,15 @@ class AdjustmentTest extends TestCase
         $this->assertDatabaseHas('account_credit_balance', ['account_id' => 'acc_surplus', 'balance' => 500.00]);
     }
 
+    /**
+     * EXPECTATION — a debit note makes a settled invoice payable again.
+     * Given a postpaid invoice already PAID in full (800),
+     * when a 600 DEBIT adjustment (late fee) is approved — debits always need
+     * a human, whatever the amount —
+     * then the invoice's outstanding grows to 600 and its status drops from
+     * PAID back to PARTIALLY_PAID, and both stages are observable:
+     * DebitNoteIssued (document) then DebitNoteApplied (outstanding grew).
+     */
     public function test_debit_note_reopens_a_paid_invoice(): void
     {
         $invoice = $this->postpaidInvoice(800, 'acc_debit', 'cust_debit');
@@ -122,6 +166,13 @@ class AdjustmentTest extends TestCase
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'DebitNoteApplied']);
     }
 
+    /**
+     * EXPECTATION — prepaid adjustments target the wallet, not an invoice.
+     * Given a prepaid subscription (no invoice at all),
+     * when a 600 goodwill CREDIT adjustment is approved,
+     * then the customer's default money wallet is credited 600 and the
+     * application ledger records the wallet as the target.
+     */
     public function test_prepaid_credit_note_credits_the_wallet(): void
     {
         $res = $this->postJson('/api/adjustments', [
@@ -139,6 +190,16 @@ class AdjustmentTest extends TestCase
         $this->assertDatabaseHas('note_application_ledger', ['target_kind' => 'WALLET', 'target_id' => 'MONEY_KES', 'applied_amount' => 600.00, 'status' => 'APPLIED']);
     }
 
+    /**
+     * EXPECTATION — issuance and application are separate stages that can diverge.
+     * Given a prepaid wallet holding only 300,
+     * when a 1,000 DEBIT adjustment is approved,
+     * then the note is ISSUED but its application FAILS (the wallet is never
+     * driven negative): status APPLICATION_FAILED, a FAILED ledger row, and the
+     * dedicated DebitNoteApplicationFailed alert event — while the balance stays 300.
+     * When the customer tops up 900 and an admin retries the application,
+     * then it APPLIES and the wallet ends at 200 (300 + 900 − 1,000).
+     */
     public function test_prepaid_debit_note_fails_on_insufficient_wallet_then_retry_succeeds_after_topup(): void
     {
         $wallets = app(WalletService::class);
@@ -169,6 +230,18 @@ class AdjustmentTest extends TestCase
         $this->assertDatabaseHas('wallet', ['subscription_id' => 'sub_prepaid_debit', 'balance' => 200.00]);
     }
 
+    /**
+     * EXPECTATION — operator guard-rails park oversized proposals; every outcome is audited.
+     * Given the operator's max_per_request limit is 50,000,
+     * when an 80,000 credit is proposed,
+     * then the proposal parks as limit-breached (no approval gate yet) and any
+     * approve attempt is refused with LIMIT_OVERRIDE_REQUIRED.
+     * When an approver explicitly overrides the limit,
+     * then the proposal enters PENDING_APPROVAL like any other.
+     * When it is then rejected,
+     * then the rejection lands in the audit timeline, the request closes,
+     * and no further decisions are accepted (409).
+     */
     public function test_limits_block_until_overridden_and_rejection_is_audited(): void
     {
         $invoice = $this->postpaidInvoice(80000, 'acc_big', 'cust_big'); // above max_per_request 50000
@@ -196,6 +269,14 @@ class AdjustmentTest extends TestCase
         $this->postJson("/api/adjustments/{$adjustmentId}/approve")->assertStatus(409);
     }
 
+    /**
+     * EXPECTATION — proposals are validated against operator config and fiscal law.
+     * When a proposal cites a reason code that is not in the operator catalog,
+     * then it is refused (UNKNOWN_REASON_CODE) — reasons are config, not free text.
+     * When a proposal targets a signed TAX invoice,
+     * then it is refused (CANNOT_ADJUST_TAX_INVOICE) — the fiscal document is
+     * immutable; the commercial invoice is what gets adjusted.
+     */
     public function test_validation_unknown_reason_and_tax_invoice_protection(): void
     {
         // Unknown reason code is rejected against the operator catalog.
@@ -216,6 +297,16 @@ class AdjustmentTest extends TestCase
         ], ['Idempotency-Key' => 'adj-tax'])->assertStatus(422)->assertJsonPath('errorCode', 'CANNOT_ADJUST_TAX_INVOICE');
     }
 
+    /**
+     * EXPECTATION — big credits take the DUAL process, enforced by the approval engine.
+     * Given a 25,000 credit proposal (≥ 20,000 → routing rule R-ADJ-APPR-4
+     * selects the DUAL process; the deciding rule is pinned on the proposal),
+     * then one approval is NOT enough — the proposal stays PENDING_APPROVAL;
+     * and the SAME person approving a second time is refused by the engine
+     * (DUPLICATE_STAGE_APPROVER) — dual control means two DISTINCT humans;
+     * and only a second, different approver clears the gate, after which the
+     * note is issued + applied and both approvals sit in the audit timeline.
+     */
     public function test_approval_routing_is_a_rules_engine_decision_dual_control_for_large_credits(): void
     {
         // 25000 ≥ 20000 → R-ADJ-APPR-4 (DUAL_CONTROL): two audited approvals.
@@ -249,6 +340,14 @@ class AdjustmentTest extends TestCase
             ->where('adjustment_id', $adjustmentId)->where('decision', 'APPROVED')->count());
     }
 
+    /**
+     * EXPECTATION — approval routing is operator-overridable configuration, not code.
+     * Given WIK deploys its own version of the adjustment-approval rule set
+     * ("every credit auto-approves"),
+     * when a 5,000 credit is proposed (the GLOBAL table would demand one approval),
+     * then WIK's table wins: the proposal auto-approves and applies immediately,
+     * and the WIK rule's id is pinned on the proposal as the deciding rule.
+     */
     public function test_operator_scoped_rule_table_overrides_the_global_routing(): void
     {
         // WIK deploys its own version of the rule set: every credit auto-approves.
@@ -275,6 +374,15 @@ class AdjustmentTest extends TestCase
             ->assertJsonPath('approval_rule_id', 'R-WIK-ADJ-1');
     }
 
+    /**
+     * EXPECTATION — small credits flow without friction, but never off the books.
+     * Given a 400 credit proposal (under the 500 auto-approve threshold → the
+     * AUTO process, which the approval engine itself records as auto-approved),
+     * then the proposal applies immediately in the same request, with a
+     * SYSTEM:AUTO_APPROVE step in the audit timeline — auto ≠ unaudited.
+     * And the issued note is readable via GET /api/credit-notes/{id},
+     * returning the document together with its application ledger.
+     */
     public function test_small_credit_auto_approves_under_threshold_and_note_is_readable(): void
     {
         $invoice = $this->postpaidInvoice(400, 'acc_auto', 'cust_auto');
