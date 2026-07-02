@@ -213,11 +213,15 @@ class AdjustmentTest extends TestCase
      * EXPECTATION — issuance and application are separate stages that can diverge.
      * Given a prepaid wallet holding only 300,
      * when a 1,000 DEBIT adjustment is approved,
-     * then the note is ISSUED but its application FAILS (the wallet is never
-     * driven negative): status APPLICATION_FAILED, a FAILED ledger row, and the
-     * dedicated DebitNoteApplicationFailed alert event — while the balance stays 300.
+     * then the note document IS issued (DebitNoteIssued, face value 1,000) but
+     * its application FAILS (the wallet is never driven negative): status
+     * APPLICATION_FAILED, a FAILED ledger row, the dedicated
+     * DebitNoteApplicationFailed alert — and NO DebitNoteApplied event yet,
+     * while the balance stays 300. Issued-without-Applied is the divergence
+     * this whole two-event design exists for.
      * When the customer tops up 900 and an admin retries the application,
-     * then it APPLIES and the wallet ends at 200 (300 + 900 − 1,000).
+     * then the SAME persisted note applies (no re-issue): DebitNoteApplied
+     * finally fires and the wallet ends at 200 (300 + 900 − 1,000).
      */
     public function test_prepaid_debit_note_fails_on_insufficient_wallet_then_retry_succeeds_after_topup(): void
     {
@@ -235,18 +239,25 @@ class AdjustmentTest extends TestCase
         $adjustmentId = $res->json('adjustment_id');
 
         // The wallet only holds 300: application FAILS, wallet never goes negative.
-        $this->postJson("/api/adjustments/{$adjustmentId}/approve")->assertOk()
+        $approved = $this->postJson("/api/adjustments/{$adjustmentId}/approve")->assertOk()
             ->assertJsonPath('status', 'APPLICATION_FAILED')
             ->assertJsonPath('failure_reason', 'WALLET_INSUFFICIENT_BALANCE');
         $this->assertDatabaseHas('wallet', ['subscription_id' => 'sub_prepaid_debit', 'balance' => 300.00]);
         $this->assertDatabaseHas('note_application_ledger', ['target_kind' => 'WALLET', 'status' => 'FAILED', 'failure_reason' => 'WALLET_INSUFFICIENT_BALANCE']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'DebitNoteApplicationFailed']);
 
-        // Customer tops up; admin retries — now it applies.
+        // The stages diverge HERE: the note document IS issued (that's what retry re-applies
+        // later), but nothing is applied yet — Issued without Applied.
+        $this->assertDatabaseHas('invoice', ['invoice_id' => $approved->json('note_invoice_id'), 'type' => 'DEBIT_NOTE', 'total_amount' => 1000.00, 'amount_due' => 0.00, 'status' => 'ISSUED']);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'DebitNoteIssued']);
+        $this->assertDatabaseMissing('outbox_events', ['event_type' => 'DebitNoteApplied']);
+
+        // Customer tops up; admin retries — now it applies (same persisted note, no re-issue).
         $wallets->credit($wallet->refresh(), 900, 'TOPUP');
         $this->postJson("/api/adjustments/{$adjustmentId}/retry-application")->assertOk()
             ->assertJsonPath('status', 'APPLIED');
         $this->assertDatabaseHas('wallet', ['subscription_id' => 'sub_prepaid_debit', 'balance' => 200.00]);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'DebitNoteApplied']);
     }
 
     /**
