@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Tests\Feature;
+namespace Modules\Billing\Wallet\Tests\Feature;
 
 use App\Foundation\Support\Context;
 use App\Models\User;
@@ -31,6 +31,12 @@ class WalletMultiWalletTest extends TestCase
         Context::setOperatorCode('WIK');
     }
 
+    /**
+     * EXPECTATION — one subscription, several isolated purses.
+     * A triple-play subscription tops up MONEY_KES and VOICE_KES separately;
+     * voice usage drains only VOICE_KES and the cycle charge only MONEY_KES —
+     * two wallet rows, two ledgers, no cross-contamination.
+     */
     public function test_one_subscription_holds_internet_tv_and_voice_wallets_independently(): void
     {
         $sub = 'sub_triple_play_1';
@@ -52,6 +58,11 @@ class WalletMultiWalletTest extends TestCase
         $this->assertDatabaseHas('wallet', ['subscription_id' => $sub, 'wallet_code' => 'VOICE_KES', 'balance' => 180.00]);
     }
 
+    /**
+     * EXPECTATION — the catalog decides drain order, not the caller.
+     * At charge time eligible wallets are ordered by charging_precedence
+     * (lower first): VOICE_KES (90) drains before MONEY_KES (100).
+     */
     public function test_charge_time_selection_orders_wallets_by_precedence(): void
     {
         $sub = 'sub_triple_play_2';
@@ -65,6 +76,11 @@ class WalletMultiWalletTest extends TestCase
         $this->assertSame(['VOICE_KES', 'MONEY_KES'], $ordered);
     }
 
+    /**
+     * EXPECTATION — applicability filters wallets by the subscription's mode.
+     * A POSTPAID charge may not touch a PREPAID_ONLY wallet: only wallets whose
+     * catalog applicability allows the mode are eligible at charge time.
+     */
     public function test_postpaid_only_filtering_excludes_prepaid_wallets(): void
     {
         $sub = 'sub_postpaid_1';
@@ -77,6 +93,11 @@ class WalletMultiWalletTest extends TestCase
         $this->assertSame(['DEPOSIT_KES'], $codes);
     }
 
+    /**
+     * EXPECTATION — one-shot credits stay one-shot (R-W-11).
+     * A wallet the catalog marks refillable=false (promo credit) refuses
+     * top-ups with WALLET_NOT_REFILLABLE.
+     */
     public function test_non_refillable_wallet_rejects_topup(): void
     {
         $sub = 'sub_promo_1';
@@ -85,6 +106,11 @@ class WalletMultiWalletTest extends TestCase
             ->assertStatus(422)->assertJsonPath('errorCode', 'WALLET_NOT_REFILLABLE');
     }
 
+    /**
+     * EXPECTATION — the PLM-CFG-03 catalog is the source of truth for what
+     * wallets exist: an unknown walletRef is refused (UNKNOWN_WALLET_REF),
+     * never silently created.
+     */
     public function test_unknown_wallet_ref_is_rejected(): void
     {
         $sub = 'sub_x';

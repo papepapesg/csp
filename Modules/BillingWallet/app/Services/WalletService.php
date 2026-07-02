@@ -83,7 +83,7 @@ class WalletService
                 'customer_id' => $customerId,
                 'currency' => $catalog->currency,
                 'balance' => 0,
-                'status' => 'ACTIVE',
+                'status' => Wallet::ACTIVE,
             ],
         );
     }
@@ -102,7 +102,7 @@ class WalletService
 
         return Wallet::query()
             ->where('subscription_id', $subscriptionId)
-            ->where('status', 'ACTIVE')
+            ->where('status', Wallet::ACTIVE)
             ->get()
             ->filter(fn (Wallet $w) => $catalog->has($w->wallet_code)
                 && $catalog[$w->wallet_code]->appliesToBillingMode($billingMode))
@@ -167,7 +167,7 @@ class WalletService
             ->where('balance', '>', 0)
             ->get()
             ->each(function (Wallet $wallet) use (&$expired) {
-                $this->post($wallet, 'DEBIT', (float) $wallet->balance, 'EXPIRY', 'wallet-expiry');
+                $this->post($wallet, WalletTransaction::DEBIT, (float) $wallet->balance, WalletTransaction::REASON_EXPIRY, 'wallet-expiry');
                 $wallet->update(['expires_at' => null]);
                 $expired++;
             });
@@ -175,10 +175,10 @@ class WalletService
         return $expired;
     }
 
-    public function credit(Wallet $wallet, float $amount, string $reason = 'TOPUP', ?string $reference = null): WalletTransaction
+    public function credit(Wallet $wallet, float $amount, string $reason = WalletTransaction::REASON_TOPUP, ?string $reference = null): WalletTransaction
     {
         // R-W-11: a non-refillable wallet rejects top-ups (one-shot promo/bonus credits).
-        if ($reason === 'TOPUP') {
+        if ($reason === WalletTransaction::REASON_TOPUP) {
             $catalog = $this->catalogEntry((string) $wallet->operator_code, (string) $wallet->wallet_code);
             if ($catalog && ! $catalog->refillable) {
                 throw DomainException::ruleRejected(
@@ -192,10 +192,10 @@ class WalletService
             }
         }
 
-        return $this->post($wallet, 'CREDIT', $amount, $reason, $reference);
+        return $this->post($wallet, WalletTransaction::CREDIT, $amount, $reason, $reference);
     }
 
-    public function debit(Wallet $wallet, float $amount, string $reason = 'CYCLE_CHARGE', ?string $reference = null): WalletTransaction
+    public function debit(Wallet $wallet, float $amount, string $reason = WalletTransaction::REASON_CYCLE_CHARGE, ?string $reference = null): WalletTransaction
     {
         if ((float) $wallet->balance < $amount) {
             throw DomainException::ruleRejected(
@@ -205,7 +205,7 @@ class WalletService
             );
         }
 
-        return $this->post($wallet, 'DEBIT', $amount, $reason, $reference);
+        return $this->post($wallet, WalletTransaction::DEBIT, $amount, $reason, $reference);
     }
 
     private function post(Wallet $wallet, string $direction, float $amount, string $reason, ?string $reference): WalletTransaction
@@ -216,7 +216,7 @@ class WalletService
 
         return DB::transaction(function () use ($wallet, $direction, $amount, $reason, $reference) {
             $wallet = Wallet::query()->whereKey($wallet->wallet_id)->lockForUpdate()->first();
-            $newBalance = (float) $wallet->balance + ($direction === 'CREDIT' ? $amount : -$amount);
+            $newBalance = (float) $wallet->balance + ($direction === WalletTransaction::CREDIT ? $amount : -$amount);
             $wallet->update(['balance' => $newBalance]);
 
             $txn = $wallet->transactions()->create([
@@ -228,8 +228,8 @@ class WalletService
             ]);
 
             $type = match (true) {
-                $reason === 'TOPUP' => BillingEvents::WALLET_TOPPED_UP,
-                $direction === 'CREDIT' => BillingEvents::WALLET_CREDITED,
+                $reason === WalletTransaction::REASON_TOPUP => BillingEvents::WALLET_TOPPED_UP,
+                $direction === WalletTransaction::CREDIT => BillingEvents::WALLET_CREDITED,
                 default => BillingEvents::WALLET_DEBITED,
             };
 

@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Tests\Feature;
+namespace Modules\Billing\Wallet\Tests\Feature;
 
 use App\Foundation\Support\Context;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -21,6 +21,13 @@ class WalletExpiryAndPointsTest extends TestCase
         $this->seed(WalletCatalogSeeder::class);
     }
 
+    /**
+     * EXPECTATION — expiring wallets live on a validity window the top-up starts.
+     * Given a catalog wallet that expires (LOYALTY_POINTS_KES, 365 days),
+     * when it is topped up, then expires_at is (re)set;
+     * when the validity passes and the daily sweep runs, then the balance is
+     * zeroed by an EXPIRY debit on the ledger — expired value is never spendable.
+     */
     public function test_topup_to_an_expiring_wallet_sets_validity_and_sweep_zeroes_it(): void
     {
         $svc = app(WalletService::class);
@@ -36,6 +43,13 @@ class WalletExpiryAndPointsTest extends TestCase
         $this->assertDatabaseHas('wallet_transaction', ['wallet_id' => $wallet->wallet_id, 'reason' => 'EXPIRY']);
     }
 
+    /**
+     * EXPECTATION — points are currency at charge time (R-W-15).
+     * Given 10,000 points at 0.01 KES/point (= 100 KES of value),
+     * when a 30 KES charge settles from wallets,
+     * then the charge is valued in CURRENCY but debited in POINTS:
+     * 30 / 0.01 = 3,000 points leave the wallet, 7,000 remain.
+     */
     public function test_points_wallet_is_valued_and_debited_in_points_at_charge(): void
     {
         $svc = app(WalletService::class);

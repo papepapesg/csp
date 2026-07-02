@@ -7,6 +7,7 @@ use App\Foundation\Http\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Billing\Wallet\Models\Wallet;
+use Modules\Billing\Wallet\Models\WalletTransaction;
 use Modules\Billing\Wallet\Services\WalletService;
 
 /**
@@ -47,7 +48,7 @@ class WalletController extends ApiController
         ]);
 
         $wallet = $this->wallets->ensureWallet($subscriptionId, $this->walletCode($request));
-        $txn = $this->wallets->credit($wallet, (float) $data['amount'], 'TOPUP', $data['reference'] ?? null);
+        $txn = $this->wallets->credit($wallet, (float) $data['amount'], WalletTransaction::REASON_TOPUP, $data['reference'] ?? null);
 
         return ApiResponse::created($txn);
     }
@@ -63,7 +64,7 @@ class WalletController extends ApiController
         ]);
 
         $wallet = $this->wallets->ensureWallet($subscriptionId, $this->walletCode($request));
-        $txn = $this->wallets->debit($wallet, (float) $data['amount'], $data['reason'] ?? 'CYCLE_CHARGE', $data['reference'] ?? null);
+        $txn = $this->wallets->debit($wallet, (float) $data['amount'], $data['reason'] ?? WalletTransaction::REASON_CYCLE_CHARGE, $data['reference'] ?? null);
 
         return ApiResponse::item($txn);
     }
