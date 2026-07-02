@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Tests\Feature;
+namespace Modules\Billing\Intent\Tests\Feature;
 
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Support\Context;
@@ -8,8 +8,8 @@ use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
-use Modules\Billing\Database\Seeders\BillableEventSeeder;
-use Modules\Billing\Mediation\Models\BillableEvent;
+use Modules\Billing\Intent\Database\Seeders\BillableEventSeeder;
+use Modules\Billing\Intent\Models\BillableEvent;
 use Modules\Billing\Intent\Models\BillingIntent;
 use Modules\Billing\Intent\Services\BillingIntentService;
 use Modules\Subscription\Models\Subscription;

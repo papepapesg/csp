@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Mediation\Services;
+namespace Modules\Billing\Intent\Services;
 
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
@@ -8,8 +8,8 @@ use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
 use Illuminate\Support\Collection;
 use Modules\Billing\Events\BillingEvents;
-use Modules\Billing\Mediation\Models\BillableEvent;
-use Modules\Billing\Mediation\Models\BillableEventCategory;
+use Modules\Billing\Intent\Models\BillableEvent;
+use Modules\Billing\Intent\Models\BillableEventCategory;
 
 /**
  * BIL-CFG-01 BillableEvent catalog administration + the runtime resolution

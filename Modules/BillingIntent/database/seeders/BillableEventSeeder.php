@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Database\Seeders;
+namespace Modules\Billing\Intent\Database\Seeders;
 
 use App\Foundation\Support\Id;
 use Illuminate\Database\Seeder;

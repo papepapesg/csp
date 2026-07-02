@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Mediation\Models;
+namespace Modules\Billing\Intent\Models;
 
 use App\Foundation\Models\HasPrefixedId;
 use Illuminate\Database\Eloquent\Model;

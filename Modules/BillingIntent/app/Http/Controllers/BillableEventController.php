@@ -1,15 +1,15 @@
 <?php
 
-namespace Modules\Billing\Mediation\Http\Controllers;
+namespace Modules\Billing\Intent\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Billing\Mediation\Models\BillableEvent;
-use Modules\Billing\Mediation\Models\BillableEventCategory;
-use Modules\Billing\Mediation\Services\BillableEventCatalogService;
+use Modules\Billing\Intent\Models\BillableEvent;
+use Modules\Billing\Intent\Models\BillableEventCategory;
+use Modules\Billing\Intent\Services\BillableEventCatalogService;
 
 /**
  * BIL-CFG-01 BillableEvent catalog admin API (DD §4): CRUD + DRAFT→ACTIVE→RETIRED
