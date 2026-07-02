@@ -91,8 +91,9 @@ class AdjustmentTest extends TestCase
         $this->assertSame('APPLIED', $approved->json('status'));
         $noteId = $approved->json('note_invoice_id');
 
-        // The note is a CREDIT_NOTE invoice with its own CN legal number.
-        $this->assertDatabaseHas('invoice', ['invoice_id' => $noteId, 'type' => 'CREDIT_NOTE', 'original_invoice_id' => $invoice->invoice_id, 'status' => 'ISSUED']);
+        // The note is a CREDIT_NOTE invoice with its own CN legal number: face value 2500
+        // (total_amount, what the document asserts), amount_due 0 (a note is never a receivable).
+        $this->assertDatabaseHas('invoice', ['invoice_id' => $noteId, 'type' => 'CREDIT_NOTE', 'original_invoice_id' => $invoice->invoice_id, 'status' => 'ISSUED', 'total_amount' => 2500.00, 'amount_due' => 0.00]);
         $this->assertStringStartsWith('CN-WIK-', Invoice::query()->find($noteId)->legal_invoice_number);
 
         // Parent outstanding cleared; one ledger row, fully applied.
@@ -162,9 +163,10 @@ class AdjustmentTest extends TestCase
 
         $approved = $this->postJson('/api/adjustments/'.$res->json('adjustment_id').'/approve')->assertOk();
 
-        // The debit note is a document of its own: DN legal number, never a receivable itself.
+        // The debit note is a document of its own: DN legal number, face value 600 —
+        // and never a receivable itself (amount_due stays 0; the PARENT carries the debt).
         $noteId = $approved->json('note_invoice_id');
-        $this->assertDatabaseHas('invoice', ['invoice_id' => $noteId, 'type' => 'DEBIT_NOTE', 'original_invoice_id' => $invoice->invoice_id, 'status' => 'ISSUED', 'amount_due' => 0.00]);
+        $this->assertDatabaseHas('invoice', ['invoice_id' => $noteId, 'type' => 'DEBIT_NOTE', 'original_invoice_id' => $invoice->invoice_id, 'status' => 'ISSUED', 'total_amount' => 600.00, 'amount_due' => 0.00]);
         $this->assertStringStartsWith('DN-WIK-', Invoice::query()->find($noteId)->legal_invoice_number);
 
         // Outstanding grows on the PARENT; the PAID invoice becomes payable again (R-CN-01-AP-2).
