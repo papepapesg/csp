@@ -90,6 +90,36 @@ class BillableEventCatalogTest extends TestCase
             'trigger_type' => 'EXTERNAL_PAYMENT', 'pay_first_required' => false,
             'state_callback' => ['transitionCode' => 'RECONNECT_AFTER_FEE', 'targetStatus' => 'ACTIVE'],
         ], ['Idempotency-Key' => 'bev-cb'])->assertStatus(422)->assertJsonPath('errorCode', 'PAY_FIRST_REQUIRED_FOR_STATE_CALLBACK');
+
+        // A state callback is validated at AUTHORING time — it fires deep inside a payment
+        // confirmation, where a bad target would silently corrupt the subscription status.
+        // The transitionCode (audit label of the gated SUB-LM transition) is mandatory…
+        $this->postJson('/api/billing/billable-events', [
+            'code' => 'CB_NO_TRANSITION', 'description' => 'x', 'category_code' => 'RECONNECTION_FEE',
+            'trigger_type' => 'EXTERNAL_PAYMENT', 'pay_first_required' => true,
+            'state_callback' => ['targetStatus' => 'ACTIVE'],
+        ], ['Idempotency-Key' => 'bev-cb-notrans'])->assertStatus(422)->assertJsonPath('errorCode', 'STATE_CALLBACK_TRANSITION_REQUIRED');
+
+        // …and the targetStatus must be a real SUB-LM rest state (typos rejected here, not at pay time).
+        $this->postJson('/api/billing/billable-events', [
+            'code' => 'CB_BAD_TARGET', 'description' => 'x', 'category_code' => 'RECONNECTION_FEE',
+            'trigger_type' => 'EXTERNAL_PAYMENT', 'pay_first_required' => true,
+            'state_callback' => ['transitionCode' => 'RECONNECT_AFTER_FEE', 'targetStatus' => 'AKTIVE'],
+        ], ['Idempotency-Key' => 'bev-cb-badtarget'])->assertStatus(422)->assertJsonPath('errorCode', 'STATE_CALLBACK_TARGET_INVALID');
+
+        // A PENDING_* transition marker is not a rest state — a callback cannot park a subscription mid-transition.
+        $this->postJson('/api/billing/billable-events', [
+            'code' => 'CB_TRANSIENT_TARGET', 'description' => 'x', 'category_code' => 'RECONNECTION_FEE',
+            'trigger_type' => 'EXTERNAL_PAYMENT', 'pay_first_required' => true,
+            'state_callback' => ['transitionCode' => 'RECONNECT_AFTER_FEE', 'targetStatus' => 'PENDING_ACTIVATION'],
+        ], ['Idempotency-Key' => 'bev-cb-transient'])->assertStatus(422)->assertJsonPath('errorCode', 'STATE_CALLBACK_TARGET_INVALID');
+
+        // A well-formed callback (known transition label + rest-state target) is accepted.
+        $this->postJson('/api/billing/billable-events', [
+            'code' => 'CB_VALID', 'description' => 'x', 'category_code' => 'RECONNECTION_FEE',
+            'trigger_type' => 'EXTERNAL_PAYMENT', 'pay_first_required' => true,
+            'state_callback' => ['transitionCode' => 'RECONNECT_AFTER_FEE', 'targetStatus' => 'ACTIVE'],
+        ], ['Idempotency-Key' => 'bev-cb-valid'])->assertCreated();
     }
 
     public function test_billing_intent_is_validated_against_the_catalog(): void

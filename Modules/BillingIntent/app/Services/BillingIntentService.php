@@ -257,6 +257,12 @@ class BillingIntentService
         if (! $target || ! $intent->subscription_id) {
             return;
         }
+        // Defense in depth: authoring validates the callback (STATE_CALLBACK_TARGET_INVALID),
+        // but a legacy/hand-edited snapshot must never corrupt a subscription's status here,
+        // mid-settlement — skip the transition rather than write an unknown state.
+        if (! in_array($target, Subscription::REST_STATUSES, true)) {
+            return;
+        }
         $subscription = Subscription::query()->find($intent->subscription_id);
         if (! $subscription || $subscription->status_code === $target) {
             return;

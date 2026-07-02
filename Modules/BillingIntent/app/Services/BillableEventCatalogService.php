@@ -10,6 +10,7 @@ use Illuminate\Support\Collection;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Intent\Models\BillableEvent;
 use Modules\Billing\Intent\Models\BillableEventCategory;
+use Modules\Subscription\Models\Subscription;
 
 /**
  * BIL-CFG-01 BillableEvent catalog administration + the runtime resolution
@@ -181,6 +182,21 @@ class BillableEventCatalogService
         // charge, so pay_first_required must be true.
         if (! empty($data['state_callback']) && array_key_exists('pay_first_required', $data) && ! $data['pay_first_required']) {
             throw DomainException::ruleRejected('PAY_FIRST_REQUIRED_FOR_STATE_CALLBACK', 'An event with a state_callback must be pay-first.');
+        }
+
+        // A state callback is validated HERE, at authoring time — applyStateCallback runs deep
+        // inside a payment confirmation, where a typo'd target would silently corrupt the
+        // subscription's status. transitionCode is the mandatory audit label of the SUB-LM
+        // transition the charge gates; targetStatus must be a real SUB-LM REST state.
+        if (! empty($data['state_callback'])) {
+            $callback = $data['state_callback'];
+            if (! is_array($callback) || empty($callback['transitionCode']) || ! is_string($callback['transitionCode'])) {
+                throw DomainException::ruleRejected('STATE_CALLBACK_TRANSITION_REQUIRED', 'state_callback must carry a transitionCode naming the SUB-LM transition it gates.');
+            }
+            $target = $callback['targetStatus'] ?? null;
+            if (! is_string($target) || ! in_array($target, Subscription::REST_STATUSES, true)) {
+                throw DomainException::ruleRejected('STATE_CALLBACK_TARGET_INVALID', 'state_callback.targetStatus must be a SUB-LM rest state ('.implode(', ', Subscription::REST_STATUSES).').');
+            }
         }
 
         // R-BIL-CFG-01-B-7: category must be an ACTIVE row of the SAME operator.

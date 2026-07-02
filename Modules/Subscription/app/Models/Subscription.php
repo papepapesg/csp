@@ -52,6 +52,16 @@ class Subscription extends Model
 
     public const RETIRED = 'RETIRED';
 
+    /**
+     * SUB-LM-01 REST states — statuses a subscription settles in (not PENDING_*
+     * transition markers). The only legal targets for an externally-driven
+     * transition such as a BIL-01 state callback.
+     */
+    public const REST_STATUSES = [
+        self::CREATED, self::ACTIVE, self::SUSPENDED, self::PAUSED,
+        self::RESTRICTED, self::TERMINATED, self::RETIRED,
+    ];
+
     protected $table = 'subscription';
 
     protected $primaryKey = 'subscription_id';
