@@ -141,7 +141,9 @@ class AdjustmentTest extends TestCase
      * Given a postpaid invoice already PAID in full (800),
      * when a 600 DEBIT adjustment (late fee) is approved — debits always need
      * a human, whatever the amount —
-     * then the invoice's outstanding grows to 600 and its status drops from
+     * then a DEBIT_NOTE invoice of its own is issued (DN-… legal number,
+     * status ISSUED, amount_due 0 — the note itself is never a receivable),
+     * the PARENT's outstanding grows to 600 and its status drops from
      * PAID back to PARTIALLY_PAID, and both stages are observable:
      * DebitNoteIssued (document) then DebitNoteApplied (outstanding grew).
      */
@@ -158,9 +160,14 @@ class AdjustmentTest extends TestCase
             'reason_code' => 'LATE_FEE',
         ], ['Idempotency-Key' => 'adj-debit-1'])->assertCreated()->assertJsonPath('status', 'PENDING_APPROVAL');
 
-        $this->postJson('/api/adjustments/'.$res->json('adjustment_id').'/approve')->assertOk();
+        $approved = $this->postJson('/api/adjustments/'.$res->json('adjustment_id').'/approve')->assertOk();
 
-        // Outstanding grows; the PAID invoice becomes payable again (R-CN-01-AP-2).
+        // The debit note is a document of its own: DN legal number, never a receivable itself.
+        $noteId = $approved->json('note_invoice_id');
+        $this->assertDatabaseHas('invoice', ['invoice_id' => $noteId, 'type' => 'DEBIT_NOTE', 'original_invoice_id' => $invoice->invoice_id, 'status' => 'ISSUED', 'amount_due' => 0.00]);
+        $this->assertStringStartsWith('DN-WIK-', Invoice::query()->find($noteId)->legal_invoice_number);
+
+        // Outstanding grows on the PARENT; the PAID invoice becomes payable again (R-CN-01-AP-2).
         $this->assertDatabaseHas('invoice', ['invoice_id' => $invoice->invoice_id, 'amount_due' => 600.00, 'status' => 'PARTIALLY_PAID']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'DebitNoteIssued']);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'DebitNoteApplied']);
