@@ -2,6 +2,7 @@
 
 namespace Modules\Subscription\Services;
 
+use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
@@ -93,6 +94,16 @@ class SubscriptionService
      */
     public function transitionStatus(Subscription $subscription, string $status, array $extra = [], ?string $eventType = null): Subscription
     {
+        // SUB-LM-01 transition map: refuse illegal jumps at the single write point,
+        // whoever the caller is (workflow handler, dunning, a BIL-01 state callback).
+        // The canonical rule this guards: TERMINATED never resurrects.
+        if (! Subscription::canTransition($subscription->status_code, $status)) {
+            throw DomainException::ruleRejected(
+                'TRANSITION_NOT_ALLOWED',
+                "SUB-LM-01: {$subscription->status_code} → {$status} is not a legal transition.",
+            );
+        }
+
         return DB::transaction(function () use ($subscription, $status, $extra, $eventType) {
             // Committing to a rest state clears the transient transition marker.
             $attrs = array_merge([

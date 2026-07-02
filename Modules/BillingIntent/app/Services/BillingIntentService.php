@@ -267,6 +267,12 @@ class BillingIntentService
         if (! $subscription || $subscription->status_code === $target) {
             return;
         }
+        // SUB-LM-01 transition map: an illegal jump (e.g. a reconnection fee paid AFTER the
+        // subscription was terminated) withholds the transition — TERMINATED never resurrects.
+        // The settlement itself stands; only the gated state change is skipped.
+        if (! Subscription::canTransition($subscription->status_code, $target)) {
+            return;
+        }
         app(SubscriptionService::class)->transitionStatus($subscription, $target);
     }
 

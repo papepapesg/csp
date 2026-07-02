@@ -192,4 +192,30 @@ class BillableEventCatalogTest extends TestCase
         $this->assertSame(Subscription::ACTIVE, $sub->refresh()->status_code);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionActivated']);
     }
+
+    public function test_paid_state_callback_never_resurrects_a_terminated_subscription(): void
+    {
+        // The subscription was TERMINATED while its reconnection fee sat unpaid.
+        $sub = Subscription::query()->create([
+            'operator_code' => 'WIK', 'customer_id' => 'cust_dead', 'account_id' => 'acc_dead',
+            'homepass_id' => 'hp_dead', 'package_ref' => 'pkg_dead', 'status_code' => Subscription::TERMINATED,
+            'billing_mode' => 'POSTPAID',
+        ]);
+
+        BillableEvent::query()->where('operator_code', 'WIK')->where('code', 'RECONNECTION_FEE_AFTER_DUNNING')
+            ->update([
+                'status' => BillableEvent::ACTIVE, 'pay_first_required' => true,
+                'state_callback' => ['transitionCode' => 'RECONNECT_AFTER_FEE', 'targetStatus' => 'ACTIVE'],
+            ]);
+        $intent = app(BillingIntentService::class)->emit([
+            'subscription_id' => $sub->subscription_id, 'account_id' => 'acc_dead',
+            'intent_type' => 'RECONNECTION_FEE_AFTER_DUNNING', 'amount' => 500,
+        ]);
+
+        // The late payment confirms the CHARGE, but the SUB-LM-01 transition map withholds
+        // the gated transition: TERMINATED never resurrects. Settlement stands; status doesn't move.
+        app(BillingIntentService::class)->confirm($intent->refresh());
+        $this->assertSame(BillingIntent::CONFIRMED, $intent->refresh()->status);
+        $this->assertSame(Subscription::TERMINATED, $sub->refresh()->status_code);
+    }
 }

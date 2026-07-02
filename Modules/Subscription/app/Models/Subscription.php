@@ -62,6 +62,50 @@ class Subscription extends Model
         self::RESTRICTED, self::TERMINATED, self::RETIRED,
     ];
 
+    /**
+     * SUB-LM-01 transition map: the legal COMMIT targets from each state.
+     * transitionStatus() enforces it — a caller cannot drive an illegal jump
+     * (the canonical one: TERMINATED never resurrects to ACTIVE; it only
+     * archives to RETIRED). PENDING_* rows list where that in-flight operation
+     * may land: its commit state(s), plus ACTIVE/prior when the operation
+     * aborts back. Compensation paths that RESTORE a snapshotted prior status
+     * (OperationFramework rollback, operation timeout) intentionally bypass
+     * transitionStatus and this map.
+     */
+    public const TRANSITIONS = [
+        self::CREATED => [self::ACTIVE, self::TERMINATED],
+        self::PENDING_ACTIVATION => [self::ACTIVE, self::TERMINATED],
+        self::ACTIVE => [self::SUSPENDED, self::PAUSED, self::RESTRICTED, self::TERMINATED],
+        self::PENDING_PAUSE => [self::SUSPENDED, self::PAUSED, self::ACTIVE],
+        self::PENDING_RESUME => [self::ACTIVE, self::SUSPENDED],
+        self::PENDING_SUSPEND_NP => [self::SUSPENDED, self::ACTIVE],
+        self::SUSPENDED => [self::ACTIVE, self::RESTRICTED, self::TERMINATED],
+        self::PAUSED => [self::ACTIVE, self::SUSPENDED, self::TERMINATED],
+        self::RESTRICTED => [self::ACTIVE, self::SUSPENDED, self::TERMINATED],
+        self::PENDING_UPGRADE => [self::ACTIVE],
+        self::PENDING_DOWNGRADE => [self::ACTIVE],
+        self::PENDING_RELOCATION => [self::ACTIVE],
+        self::PENDING_MIGRATION => [self::ACTIVE],
+        self::PENDING_TERMINATION => [self::TERMINATED, self::ACTIVE],
+        self::TERMINATED => [self::RETIRED],
+        self::RETIRED => [],
+    ];
+
+    /**
+     * Is `to` a legal commit from `from`? Same-state re-commits are allowed
+     * (idempotency), as is any move from a state the map does not know
+     * (legacy/imported rows must not brick).
+     */
+    public static function canTransition(?string $from, string $to): bool
+    {
+        if ($from === null || $from === $to) {
+            return true;
+        }
+        $allowed = self::TRANSITIONS[$from] ?? null;
+
+        return $allowed === null || in_array($to, $allowed, true);
+    }
+
     protected $table = 'subscription';
 
     protected $primaryKey = 'subscription_id';
