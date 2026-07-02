@@ -179,8 +179,11 @@ class AdjustmentTest extends TestCase
      * EXPECTATION — prepaid adjustments target the wallet, not an invoice.
      * Given a prepaid subscription (no invoice at all),
      * when a 600 goodwill CREDIT adjustment is approved,
-     * then the customer's default money wallet is credited 600 and the
-     * application ledger records the wallet as the target.
+     * then the SAME two-stage pipeline runs as for postpaid: a CREDIT_NOTE
+     * document is issued (face value 600, no parent to reference —
+     * original_invoice_id null; CreditNoteIssued), and its application
+     * credits the customer's default money wallet by 600, recorded in the
+     * ledger with the wallet as target (CreditNoteApplied).
      */
     public function test_prepaid_credit_note_credits_the_wallet(): void
     {
@@ -192,11 +195,18 @@ class AdjustmentTest extends TestCase
             'reason_code' => 'GOODWILL_CREDIT',
         ], ['Idempotency-Key' => 'adj-prepaid-credit'])->assertCreated();
 
-        $this->postJson('/api/adjustments/'.$res->json('adjustment_id').'/approve')->assertOk()
+        $approved = $this->postJson('/api/adjustments/'.$res->json('adjustment_id').'/approve')->assertOk()
             ->assertJsonPath('status', 'APPLIED');
+
+        // Same document model as postpaid — just no parent invoice to reference.
+        $this->assertDatabaseHas('invoice', ['invoice_id' => $approved->json('note_invoice_id'), 'type' => 'CREDIT_NOTE', 'original_invoice_id' => null, 'total_amount' => 600.00, 'amount_due' => 0.00]);
 
         $this->assertDatabaseHas('wallet', ['subscription_id' => 'sub_prepaid_adj', 'wallet_code' => 'MONEY_KES', 'balance' => 600.00]);
         $this->assertDatabaseHas('note_application_ledger', ['target_kind' => 'WALLET', 'target_id' => 'MONEY_KES', 'applied_amount' => 600.00, 'status' => 'APPLIED']);
+
+        // Both pipeline stages are observable on the prepaid path too.
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'CreditNoteIssued']);
+        $this->assertDatabaseHas('outbox_events', ['event_type' => 'CreditNoteApplied']);
     }
 
     /**
