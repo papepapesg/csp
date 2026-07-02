@@ -31,6 +31,9 @@ class Invoice extends Model
     /** Note documents (CREDIT_NOTE / DEBIT_NOTE) are never receivables. */
     public const ISSUED = 'ISSUED';
 
+    /** Ordinary commercial invoice — the default type. */
+    public const STANDARD = 'STANDARD';
+
     public const CREDIT_NOTE = 'CREDIT_NOTE';
 
     public const DEBIT_NOTE = 'DEBIT_NOTE';

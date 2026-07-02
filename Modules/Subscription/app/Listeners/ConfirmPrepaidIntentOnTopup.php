@@ -36,7 +36,7 @@ class ConfirmPrepaidIntentOnTopup
 
         BillingIntent::query()
             ->where('subscription_id', $subscriptionId)
-            ->where('settlement_channel', 'WALLET')
+            ->where('settlement_channel', BillingIntent::CHANNEL_WALLET)
             ->where('status', BillingIntent::PENDING)
             ->get()
             ->each(function (BillingIntent $intent) use ($subscriptionId) {

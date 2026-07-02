@@ -1,10 +1,7 @@
 <?php
 
 namespace Modules\Billing\Intent\Services;
-use Modules\Billing\Mediation\Services\BillableEventCatalogService;
-use Modules\Billing\Invoicing\Services\InvoiceService;
 
-use Modules\Billing\Wallet\Services\WalletService;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
@@ -12,19 +9,37 @@ use App\Foundation\Support\Context;
 use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
-use Modules\Billing\Payments\Models\AccountCreditBalance;
-use Modules\Billing\Mediation\Models\BillableEvent;
 use Modules\Billing\Intent\Models\BillingIntent;
+use Modules\Billing\Invoicing\Models\Invoice;
+use Modules\Billing\Invoicing\Services\InvoiceService;
+use Modules\Billing\Mediation\Models\BillableEvent;
+use Modules\Billing\Mediation\Services\BillableEventCatalogService;
+use Modules\Billing\Payments\Models\AccountCreditBalance;
+use Modules\Billing\Wallet\Services\WalletService;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Services\SubscriptionService;
 
 /**
  * BIL-01 billable-event intent service. A subscription operation calls emit() in
- * its commit window; the service records the intent and, for a positive
- * chargeable amount, raises a fee/proration invoice. Pay-first intents stay
- * PENDING until the invoice is settled (the workflow parks on AWAITING_PAYMENT);
- * non-pay-first or zero/credit intents auto-CONFIRM so the flow proceeds. A credit
- * (negative amount, e.g. downgrade proration / deposit refund) posts account credit.
+ * its commit window; the service records the intent and settles its money side
+ * through ONE of the channels:
+ *
+ *  - NONE    zero amount, or the catalog's applicability excludes this billing
+ *            mode (R-B-5 skip) — nothing to charge, CONFIRMED immediately;
+ *  - WALLET  prepaid charge — debit the wallet inline (CONFIRMED) or, when the
+ *            balance is short, park PENDING until a top-up settles it
+ *            (ConfirmPrepaidIntentOnTopup);
+ *  - INVOICE postpaid charge — raise a fee/proration invoice; pay-first intents
+ *            stay PENDING until it is paid (ConfirmBillingIntentOnPayment),
+ *            others proceed as CHARGED;
+ *  - CREDIT  negative amount (downgrade proration / deposit refund) — posted to
+ *            the account credit balance, CONFIRMED immediately.
+ *
+ * BIL-CFG-01: when the operator governs intents through the BillableEvent
+ * catalog, the intent must resolve to an ACTIVE event; sign policy (R-AS-*) is
+ * enforced, the event's pay_first_required is the default gate, and its
+ * state_callback (the SUB-LM transition the charge gates) is snapshotted on the
+ * intent to fire once settlement confirms (R-BIL-01-SC-1).
  */
 class BillingIntentService
 {
@@ -42,47 +57,15 @@ class BillingIntentService
     {
         return DB::transaction(function () use ($data) {
             $amount = round((float) ($data['amount'] ?? 0), 2);
-            $billingMode = $data['billing_mode'] ?? 'POSTPAID';
+            $billingMode = $data['billing_mode'] ?? BillingIntent::POSTPAID;
             $operator = $data['operator_code'] ?? Context::operatorCode();
             $payFirst = (bool) ($data['pay_first'] ?? false) && $amount > 0;
 
-            // BIL-CFG-01: when the operator governs intents through the
-            // BillableEvent catalog, the intent must resolve to an ACTIVE event;
-            // applicability skips (R-B-5) and sign policy (R-AS-*) are enforced.
-            $skipCharge = false;
-            $stateCallback = null;
-            if ($this->catalog->operatorHasCatalog($operator)) {
-                $matched = $this->catalog->resolve($operator, (string) $data['intent_type'], $billingMode);
-                if ($matched->isEmpty()) {
-                    $any = $this->catalog->resolve($operator, (string) $data['intent_type'], 'PREPAID')
-                        ->merge($this->catalog->resolve($operator, (string) $data['intent_type'], 'POSTPAID'));
-                    if ($any->isEmpty()) {
-                        throw DomainException::ruleRejected(
-                            'UNKNOWN_BILLABLE_EVENT',
-                            "Intent '{$data['intent_type']}' does not resolve to an ACTIVE BillableEvent for this operator.",
-                        );
-                    }
-                    // Event exists but its applicability excludes this billing mode
-                    // (e.g. PREPAID_ONLY against a postpaid subscription): skip, don't fail.
-                    $skipCharge = true;
-                } else {
-                    /** @var BillableEvent $event */
-                    $event = $matched->first();
-                    if ($event->amount_sign_policy === 'POSITIVE_ONLY' && $amount < 0) {
-                        throw DomainException::ruleRejected('AMOUNT_SIGN_VIOLATION', "BillableEvent {$event->code} is POSITIVE_ONLY; a negative amount is not allowed.");
-                    }
-                    if ($event->amount_sign_policy === 'NEGATIVE_ONLY' && $amount > 0) {
-                        throw DomainException::ruleRejected('AMOUNT_SIGN_VIOLATION', "BillableEvent {$event->code} is NEGATIVE_ONLY; a positive amount is not allowed.");
-                    }
-                    // The event's pay_first_required is the default when the
-                    // workflow config did not say otherwise.
-                    if (! array_key_exists('pay_first', $data)) {
-                        $payFirst = $event->pay_first_required && $amount > 0;
-                    }
-                    // R-BIL-01-SC-1: snapshot the SUB-LM transition this event gates so it
-                    // fires once the charge settles (possibly on a later payment confirmation).
-                    $stateCallback = $event->state_callback;
-                }
+            $policy = $this->catalogPolicy($operator, (string) $data['intent_type'], $billingMode, $amount);
+            if ($policy['pay_first_default'] !== null && ! array_key_exists('pay_first', $data)) {
+                // The event's pay_first_required is the default when the
+                // workflow config did not say otherwise.
+                $payFirst = $policy['pay_first_default'] && $amount > 0;
             }
 
             $intent = BillingIntent::query()->create([
@@ -95,44 +78,11 @@ class BillingIntentService
                 'currency' => $data['currency'] ?? 'KES',
                 'pay_first' => $payFirst,
                 'status' => BillingIntent::PENDING,
-                'settlement_channel' => 'NONE',
-                'state_callback' => $stateCallback,
+                'settlement_channel' => BillingIntent::CHANNEL_NONE,
+                'state_callback' => $policy['state_callback'],
             ]);
 
-            if ($skipCharge) {
-                // BIL-CFG-01 R-B-5: the event's applicability excludes this billing
-                // mode — the intent is acknowledged without charging.
-                $intent->update(['status' => BillingIntent::CONFIRMED, 'confirmed_at' => now()]);
-            } elseif ($amount > 0 && $billingMode === 'PREPAID') {
-                // Prepaid: charge the customer's prepaid wallet (PLM-CFG-03) instead of
-                // raising an invoice. If the balance covers it, settle inline and the
-                // operation proceeds; if not, stay PENDING (pay-first) so the flow parks
-                // on AWAITING_PAYMENT until a top-up settles it (ConfirmPrepaidIntentOnTopup).
-                $result = $this->wallets->settleFromWallets($data['subscription_id'], $amount, $data['intent_type'], $operator, $data['operation_id'] ?? null);
-                if ($result['settled']) {
-                    $intent->update(['settlement_channel' => 'WALLET', 'status' => BillingIntent::CONFIRMED, 'confirmed_at' => now()]);
-                } else {
-                    $intent->update(['settlement_channel' => 'WALLET', 'pay_first' => true, 'status' => BillingIntent::PENDING]);
-                }
-            } elseif ($amount > 0 && ! empty($data['account_id'])) {
-                // Postpaid: raise a fee/proration invoice (BIL-01).
-                $invoice = $this->invoices->generate(
-                    ['account_id' => $data['account_id'], 'subscription_id' => $data['subscription_id'], 'type' => 'STANDARD'],
-                    [['description' => $data['description'] ?? $data['intent_type'], 'quantity' => 1, 'unit_price' => $amount]],
-                );
-                $intent->update(['invoice_id' => $invoice->invoice_id, 'settlement_channel' => 'INVOICE', 'status' => $payFirst ? BillingIntent::PENDING : BillingIntent::CHARGED]);
-            } elseif ($amount < 0 && ! empty($data['account_id'])) {
-                // Credit/refund: post to account credit balance.
-                $credit = AccountCreditBalance::query()->firstOrNew(['account_id' => $data['account_id']]);
-                $credit->operator_code = $intent->operator_code;
-                $credit->currency = $intent->currency;
-                $credit->balance = (float) ($credit->balance ?? 0) + abs($amount);
-                $credit->save();
-                $intent->update(['settlement_channel' => 'CREDIT', 'status' => BillingIntent::CONFIRMED, 'confirmed_at' => now()]);
-            } else {
-                // Zero amount: nothing to gate.
-                $intent->update(['status' => BillingIntent::CONFIRMED, 'confirmed_at' => now()]);
-            }
+            $this->settle($intent, $data, $amount, $billingMode, $operator, $payFirst, $policy['skip_charge']);
 
             $this->emitEvent($intent, 'SubscriptionBillingIntentEmitted');
 
@@ -160,11 +110,145 @@ class BillingIntentService
         return $intent;
     }
 
+    // ── Catalog governance (BIL-CFG-01) ─────────────────────────────────────
+
+    /**
+     * Resolve the operator's BillableEvent policy for this intent. Without a catalog
+     * everything passes untouched. With one: an unknown event is refused; an event whose
+     * applicability excludes this billing mode yields a charge SKIP (R-B-5 — acknowledge,
+     * don't fail); a matched event enforces its sign policy and contributes its pay-first
+     * default and state callback.
+     *
+     * @return array{skip_charge: bool, pay_first_default: ?bool, state_callback: ?array}
+     */
+    private function catalogPolicy(string $operator, string $intentType, string $billingMode, float $amount): array
+    {
+        $none = ['skip_charge' => false, 'pay_first_default' => null, 'state_callback' => null];
+
+        if (! $this->catalog->operatorHasCatalog($operator)) {
+            return $none;
+        }
+
+        $matched = $this->catalog->resolve($operator, $intentType, $billingMode);
+        if ($matched->isEmpty()) {
+            $any = $this->catalog->resolve($operator, $intentType, BillingIntent::PREPAID)
+                ->merge($this->catalog->resolve($operator, $intentType, BillingIntent::POSTPAID));
+            if ($any->isEmpty()) {
+                throw DomainException::ruleRejected(
+                    'UNKNOWN_BILLABLE_EVENT',
+                    "Intent '{$intentType}' does not resolve to an ACTIVE BillableEvent for this operator.",
+                );
+            }
+
+            // Event exists but its applicability excludes this billing mode
+            // (e.g. PREPAID_ONLY against a postpaid subscription): skip, don't fail.
+            return ['skip_charge' => true, 'pay_first_default' => null, 'state_callback' => null];
+        }
+
+        /** @var BillableEvent $event */
+        $event = $matched->first();
+        if ($event->amount_sign_policy === BillableEvent::POSITIVE_ONLY && $amount < 0) {
+            throw DomainException::ruleRejected('AMOUNT_SIGN_VIOLATION', "BillableEvent {$event->code} is POSITIVE_ONLY; a negative amount is not allowed.");
+        }
+        if ($event->amount_sign_policy === BillableEvent::NEGATIVE_ONLY && $amount > 0) {
+            throw DomainException::ruleRejected('AMOUNT_SIGN_VIOLATION', "BillableEvent {$event->code} is NEGATIVE_ONLY; a positive amount is not allowed.");
+        }
+
+        return [
+            'skip_charge' => false,
+            'pay_first_default' => (bool) $event->pay_first_required,
+            // R-BIL-01-SC-1: snapshot the SUB-LM transition this event gates so it
+            // fires once the charge settles (possibly on a later payment confirmation).
+            'state_callback' => $event->state_callback,
+        ];
+    }
+
+    // ── Settlement channels ──────────────────────────────────────────────────
+
+    /** Route the intent's money side to its settlement channel (see the class docblock). */
+    private function settle(BillingIntent $intent, array $data, float $amount, string $billingMode, string $operator, bool $payFirst, bool $skipCharge): void
+    {
+        if ($skipCharge) {
+            // BIL-CFG-01 R-B-5: the event's applicability excludes this billing
+            // mode — the intent is acknowledged without charging.
+            $intent->update(['status' => BillingIntent::CONFIRMED, 'confirmed_at' => now()]);
+
+            return;
+        }
+
+        if ($amount > 0 && $billingMode === BillingIntent::PREPAID) {
+            $this->settleFromWallet($intent, $data, $amount, $operator);
+
+            return;
+        }
+
+        if ($amount > 0 && ! empty($data['account_id'])) {
+            $this->chargeInvoice($intent, $data, $amount, $payFirst);
+
+            return;
+        }
+
+        if ($amount < 0 && ! empty($data['account_id'])) {
+            $this->postAccountCredit($intent, $data, $amount);
+
+            return;
+        }
+
+        // Zero amount: nothing to gate.
+        $intent->update(['status' => BillingIntent::CONFIRMED, 'confirmed_at' => now()]);
+    }
+
+    /**
+     * Prepaid: charge the customer's prepaid wallet (PLM-CFG-03) instead of raising an
+     * invoice. If the balance covers it, settle inline and the operation proceeds; if
+     * not, stay PENDING (pay-first) so the flow parks on AWAITING_PAYMENT until a
+     * top-up settles it (ConfirmPrepaidIntentOnTopup).
+     */
+    private function settleFromWallet(BillingIntent $intent, array $data, float $amount, string $operator): void
+    {
+        $result = $this->wallets->settleFromWallets($data['subscription_id'], $amount, $data['intent_type'], $operator, $data['operation_id'] ?? null);
+
+        $intent->update($result['settled']
+            ? ['settlement_channel' => BillingIntent::CHANNEL_WALLET, 'status' => BillingIntent::CONFIRMED, 'confirmed_at' => now()]
+            : ['settlement_channel' => BillingIntent::CHANNEL_WALLET, 'pay_first' => true, 'status' => BillingIntent::PENDING]);
+    }
+
+    /** Postpaid: raise a fee/proration invoice (BIL-01); pay-first keeps the gate closed until it is paid. */
+    private function chargeInvoice(BillingIntent $intent, array $data, float $amount, bool $payFirst): void
+    {
+        $invoice = $this->invoices->generate(
+            ['account_id' => $data['account_id'], 'subscription_id' => $data['subscription_id'], 'type' => Invoice::STANDARD],
+            [['description' => $data['description'] ?? $data['intent_type'], 'quantity' => 1, 'unit_price' => $amount]],
+        );
+
+        $intent->update([
+            'invoice_id' => $invoice->invoice_id,
+            'settlement_channel' => BillingIntent::CHANNEL_INVOICE,
+            'status' => $payFirst ? BillingIntent::PENDING : BillingIntent::CHARGED,
+        ]);
+    }
+
+    /** Credit/refund (negative amount, e.g. downgrade proration / deposit refund): post to account credit. */
+    private function postAccountCredit(BillingIntent $intent, array $data, float $amount): void
+    {
+        $credit = AccountCreditBalance::query()->firstOrNew(['account_id' => $data['account_id']]);
+        $credit->operator_code = $intent->operator_code;
+        $credit->currency = $intent->currency;
+        $credit->balance = (float) ($credit->balance ?? 0) + abs($amount);
+        $credit->save();
+
+        $intent->update(['settlement_channel' => BillingIntent::CHANNEL_CREDIT, 'status' => BillingIntent::CONFIRMED, 'confirmed_at' => now()]);
+    }
+
+    // ── Settlement side effects ──────────────────────────────────────────────
+
     /**
      * R-BIL-01-SC-1: a matched BillableEvent may pin a state_callback {transitionCode,
      * targetStatus}. Once its charge settles, BIL-01 drives the SUB-LM-01 transition it
      * gates (e.g. a paid reconnection fee flips SUSPENDED_NP back to ACTIVE). Idempotent:
-     * a subscription already at the target status is left untouched.
+     * a subscription already at the target status is left untouched. SubscriptionService
+     * is resolved lazily — Subscription workflows call into BIL-01, so a constructor
+     * dependency would be circular.
      */
     private function applyStateCallback(BillingIntent $intent): void
     {

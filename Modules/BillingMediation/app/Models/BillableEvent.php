@@ -25,7 +25,14 @@ class BillableEvent extends Model
 
     public const TRIGGER_TYPES = ['SAGA_INTENT', 'LIFECYCLE_EVENT', 'ADMIN_ACTION', 'CUSTOMER_PURCHASE', 'EXTERNAL_PAYMENT', 'SCHEDULED'];
 
-    public const SIGN_POLICIES = ['POSITIVE_ONLY', 'NEGATIVE_ONLY', 'SIGNED'];
+    // Signed-amount semantics (R-AS-*).
+    public const POSITIVE_ONLY = 'POSITIVE_ONLY';
+
+    public const NEGATIVE_ONLY = 'NEGATIVE_ONLY';
+
+    public const SIGNED = 'SIGNED';
+
+    public const SIGN_POLICIES = [self::POSITIVE_ONLY, self::NEGATIVE_ONLY, self::SIGNED];
 
     public const APPLICABILITIES = ['PREPAID_ONLY', 'POSTPAID_ONLY', 'ANY'];
 
