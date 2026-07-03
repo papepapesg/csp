@@ -6,7 +6,7 @@ use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
-use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletTypeSeeder;
 use Tests\TestCase;
 
 class BillingApiTest extends TestCase
@@ -17,7 +17,7 @@ class BillingApiTest extends TestCase
     {
         parent::setUp();
         $this->seed(RbacSeeder::class);
-        $this->seed(WalletCatalogSeeder::class); // PLM-CFG-03 wallet catalog (MONEY_KES, VOICE_KES, …)
+        $this->seed(WalletTypeSeeder::class); // PLM-CFG-03 wallet catalog (MONEY, VOICE, …)
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('BILLING_LEAD');
         Sanctum::actingAs($user);

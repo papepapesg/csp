@@ -8,7 +8,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Modules\Billing\Invoicing\Services\CycleBillingService;
 use Modules\Billing\Mediation\Services\MediationRatingService;
 use Modules\Billing\Wallet\Services\WalletService;
-use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletTypeSeeder;
 use Modules\Subscription\Models\Subscription;
 use Tests\TestCase;
 
@@ -60,9 +60,9 @@ class CycleBillingTest extends TestCase
 
     public function test_prepaid_cycle_billing_drains_the_wallet(): void
     {
-        $this->seed(WalletCatalogSeeder::class);
+        $this->seed(WalletTypeSeeder::class);
         $sub = $this->subscription('PREPAID');
-        $wallet = app(WalletService::class)->ensureWallet($sub, 'MONEY_KES', 'a1', 'c1');
+        $wallet = app(WalletService::class)->ensureWallet($sub, 'MONEY', 'a1', 'c1');
         app(WalletService::class)->credit($wallet, 1500, 'TOPUP');
         $this->rateUsage($sub, 'cdr-2');
 
@@ -70,16 +70,16 @@ class CycleBillingTest extends TestCase
         $this->assertSame(1, $r['billed']);
 
         // 1500 - 1000 usage = 500; no invoice for a prepaid subscription.
-        $this->assertDatabaseHas('wallet', ['subscription_id' => $sub, 'wallet_code' => 'MONEY_KES', 'balance' => 500.00]);
+        $this->assertDatabaseHas('wallet', ['subscription_id' => $sub, 'wallet_code' => 'MONEY', 'balance' => 500.00]);
         $this->assertDatabaseMissing('invoice', ['subscription_id' => $sub]);
         $this->assertDatabaseHas('rated_event', ['subscription_id' => $sub, 'billed' => true]);
     }
 
     public function test_prepaid_with_insufficient_balance_leaves_events_unbilled(): void
     {
-        $this->seed(WalletCatalogSeeder::class);
+        $this->seed(WalletTypeSeeder::class);
         $sub = $this->subscription('PREPAID');
-        $wallet = app(WalletService::class)->ensureWallet($sub, 'MONEY_KES', 'a1', 'c1');
+        $wallet = app(WalletService::class)->ensureWallet($sub, 'MONEY', 'a1', 'c1');
         app(WalletService::class)->credit($wallet, 400, 'TOPUP'); // < 1000 usage
         $this->rateUsage($sub, 'cdr-3');
 

@@ -10,7 +10,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Catalog\Plm\Models\AdjustmentType;
 use Modules\Catalog\Rating\Models\VoiceTariff;
-use Modules\Billing\Wallet\Models\WalletType;
 
 /**
  * Generic CRUD for the simple operator-scoped PLM config catalogs (wallet,
@@ -21,7 +20,6 @@ class ConfigCatalogController extends ApiController
 {
     /** catalog key -> [model class, id prefix, validation rules] */
     private const CATALOGS = [
-        'wallet-types' => [WalletType::class, 'wtyp', ['currency' => ['nullable', 'string', 'size:3'], 'allow_negative' => ['nullable', 'boolean'], 'auto_debit' => ['nullable', 'boolean']]],
         'adjustment-types' => [AdjustmentType::class, 'atyp', ['direction' => ['required', 'in:CREDIT,DEBIT'], 'requires_approval' => ['nullable', 'boolean'], 'gl_code' => ['nullable', 'string'], 'taxable' => ['nullable', 'boolean']]],
         'voice-tariffs' => [VoiceTariff::class, 'vtar', ['destination' => ['required', 'in:ONNET,OFFNET,INTERNATIONAL'], 'rate_per_min' => ['nullable', 'numeric'], 'setup_fee' => ['nullable', 'numeric'], 'min_charge_seconds' => ['nullable', 'integer']]],
         // equipment-types consolidated into OSR equipment_sku (the owner). Manage SKUs via OSR /api/equipment-skus.

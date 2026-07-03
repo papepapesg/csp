@@ -23,7 +23,7 @@ class WalletController extends ApiController
         return $request->query('walletCode', $request->input('walletCode', WalletService::DEFAULT_WALLET_CODE));
     }
 
-    /** GET /api/wallets/{subscriptionId}/balance?walletCode=MONEY_KES */
+    /** GET /api/wallets/{subscriptionId}/balance?walletCode=MONEY */
     public function balance(Request $request, string $subscriptionId): JsonResponse
     {
         $wallet = $this->wallets->ensureWallet($subscriptionId, $this->walletCode($request));

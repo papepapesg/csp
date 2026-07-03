@@ -8,7 +8,6 @@ use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
 use Modules\Catalog\Events\CatalogEvents;
 use Modules\Catalog\Plm\Models\Service;
-use Modules\Billing\Wallet\Models\WalletCatalog;
 use Modules\Billing\Wallet\Models\WalletType;
 
 /**
@@ -16,20 +15,17 @@ use Modules\Billing\Wallet\Models\WalletType;
  * with the R-PLM-CFG-03-W validation rules enforced at the service boundary
  * (no workflow, no Camunda). Mirrors the Drools rule IDs as error codes.
  */
-class WalletCatalogService
+class WalletTypeService
 {
-    /** ISO 4217 codes the deployment transacts in (R-W-4). */
-    private const CURRENCIES = ['KES', 'TZS', 'UGX', 'XOF', 'USD'];
-
     public function __construct(private readonly EventBus $events) {}
 
     /** @param array<string,mixed> $data */
-    public function create(array $data): WalletCatalog
+    public function create(array $data): WalletType
     {
         $this->validate($data);
 
         return DB::transaction(function () use ($data) {
-            $wallet = WalletCatalog::query()->create($data + ['status' => WalletCatalog::STATUS_DRAFT]);
+            $wallet = WalletType::query()->create($data + ['status' => WalletType::STATUS_DRAFT]);
             $this->emit(CatalogEvents::WALLET_CREATED, $wallet);
 
             return $wallet;
@@ -37,11 +33,11 @@ class WalletCatalogService
     }
 
     /** @param array<string,mixed> $data */
-    public function update(WalletCatalog $wallet, array $data): WalletCatalog
+    public function update(WalletType $wallet, array $data): WalletType
     {
         // R-W-2/5/6/7/11: immutable fields cannot change once any Service references it.
         if ($this->isReferenced($wallet)) {
-            foreach (['code', 'currency', 'decimal_precision', 'applicability', 'refillable'] as $immutable) {
+            foreach (['code', 'unit', 'decimal_precision', 'applicability', 'refillable'] as $immutable) {
                 if (array_key_exists($immutable, $data) && (string) $data[$immutable] !== (string) $wallet->{$immutable}) {
                     throw new DomainException('IMMUTABLE_FIELD', "Field {$immutable} is immutable once the wallet is referenced.", 422);
                 }
@@ -58,15 +54,15 @@ class WalletCatalogService
     }
 
     /** DRAFT → ACTIVE (R-W-14). Re-validates the create rules defensively. */
-    public function activate(WalletCatalog $wallet): WalletCatalog
+    public function activate(WalletType $wallet): WalletType
     {
-        if ($wallet->status !== WalletCatalog::STATUS_DRAFT) {
+        if ($wallet->status !== WalletType::STATUS_DRAFT) {
             throw new DomainException('CONFLICT', 'Only a DRAFT wallet can be activated.', 409);
         }
         $this->validate($wallet->getAttributes(), $wallet);
 
         return DB::transaction(function () use ($wallet) {
-            $wallet->update(['status' => WalletCatalog::STATUS_ACTIVE]);
+            $wallet->update(['status' => WalletType::STATUS_ACTIVE]);
             $this->emit(CatalogEvents::WALLET_ACTIVATED, $wallet);
 
             return $wallet->refresh();
@@ -74,9 +70,9 @@ class WalletCatalogService
     }
 
     /** ACTIVE → RETIRED (R-W-12): blocked while any Service references the wallet. */
-    public function retire(WalletCatalog $wallet): WalletCatalog
+    public function retire(WalletType $wallet): WalletType
     {
-        if ($wallet->status !== WalletCatalog::STATUS_ACTIVE) {
+        if ($wallet->status !== WalletType::STATUS_ACTIVE) {
             throw new DomainException('CONFLICT', 'Only an ACTIVE wallet can be retired.', 409);
         }
         if ($this->isReferenced($wallet)) {
@@ -84,7 +80,7 @@ class WalletCatalogService
         }
 
         return DB::transaction(function () use ($wallet) {
-            $wallet->update(['status' => WalletCatalog::STATUS_RETIRED, 'retired_at' => now()]);
+            $wallet->update(['status' => WalletType::STATUS_RETIRED, 'retired_at' => now()]);
             $this->emit(CatalogEvents::WALLET_RETIRED, $wallet);
 
             return $wallet->refresh();
@@ -92,7 +88,7 @@ class WalletCatalogService
     }
 
     /** True when any Service points its default_wallet_ref at this wallet's code (R-W-12). */
-    private function isReferenced(WalletCatalog $wallet): bool
+    private function isReferenced(WalletType $wallet): bool
     {
         return Service::query()
             ->where('operator_code', $wallet->operator_code)
@@ -103,31 +99,26 @@ class WalletCatalogService
     /**
      * @param  array<string,mixed>  $data
      */
-    private function validate(array $data, ?WalletCatalog $existing = null): void
+    private function validate(array $data, ?WalletType $existing = null): void
     {
         $operator = $data['operator_code'] ?? $existing?->operator_code ?? \App\Foundation\Support\Context::operatorCode();
         $code = $data['code'] ?? $existing?->code;
 
         // R-W-1: code unique within the operator catalog.
         if ($code !== null) {
-            $dupe = WalletCatalog::query()->where('operator_code', $operator)->where('code', $code)
-                ->when($existing, fn ($q) => $q->where('wallet_catalog_id', '!=', $existing->wallet_catalog_id))
+            $dupe = WalletType::query()->where('operator_code', $operator)->where('code', $code)
+                ->when($existing, fn ($q) => $q->where('wallet_type_id', '!=', $existing->wallet_type_id))
                 ->exists();
             if ($dupe) {
                 throw new DomainException('R-PLM-CFG-03-W-1', "Wallet code {$code} already exists in the catalog.", 422);
             }
         }
 
-        // R-W-3: wallet_type_code must reference an existing wallet_type.
-        $typeCode = $data['wallet_type_code'] ?? $existing?->wallet_type_code;
-        if ($typeCode !== null && ! WalletType::query()->where('operator_code', $operator)->where('code', $typeCode)->exists()) {
-            throw new DomainException('R-PLM-CFG-03-W-3', "Wallet type {$typeCode} does not exist.", 422);
-        }
-
-        // R-W-4: currency must be a known ISO 4217 code.
-        $currency = $data['currency'] ?? $existing?->currency;
-        if ($currency !== null && ! in_array($currency, self::CURRENCIES, true)) {
-            throw new DomainException('R-PLM-CFG-03-W-4', "Currency {$currency} is not a valid ISO 4217 code.", 422);
+        // R-W-3: unit is the balance semantics — currency or points. (Currency itself is
+        // DEPLOYMENT config, operator_config.currency_code — never a catalog field.)
+        $unit = $data['unit'] ?? $existing?->unit ?? WalletType::UNIT_CURRENCY;
+        if (! in_array($unit, [WalletType::UNIT_CURRENCY, WalletType::UNIT_POINTS], true)) {
+            throw new DomainException('R-PLM-CFG-03-W-3', "unit must be 'currency' or 'points'.", 422);
         }
 
         // R-W-6: decimal_precision in [0, 4].
@@ -137,8 +128,8 @@ class WalletCatalogService
         }
 
         // R-W-7: applicability enum.
-        $applicability = $data['applicability'] ?? $existing?->applicability ?? WalletCatalog::ANY;
-        if (! in_array($applicability, [WalletCatalog::PREPAID_ONLY, WalletCatalog::POSTPAID_ONLY, WalletCatalog::ANY], true)) {
+        $applicability = $data['applicability'] ?? $existing?->applicability ?? WalletType::ANY;
+        if (! in_array($applicability, [WalletType::PREPAID_ONLY, WalletType::POSTPAID_ONLY, WalletType::ANY], true)) {
             throw new DomainException('R-PLM-CFG-03-W-7', 'applicability must be PREPAID_ONLY, POSTPAID_ONLY, or ANY.', 422);
         }
 
@@ -151,29 +142,27 @@ class WalletCatalogService
 
         // R-W-15: points_to_currency_rate required (>0) for points-unit wallets, null otherwise.
         $rate = $data['points_to_currency_rate'] ?? $existing?->points_to_currency_rate;
-        $unit = $typeCode ? optional(WalletType::query()->where('operator_code', $operator)->where('code', $typeCode)->first())->unit : null;
-        if ($unit === 'points') {
+        if ($unit === WalletType::UNIT_POINTS) {
             if ($rate === null || (float) $rate <= 0) {
-                throw new DomainException('R-PLM-CFG-03-W-15', "points_to_currency_rate (positive) is required when wallet_type.unit='points'.", 422);
+                throw new DomainException('R-PLM-CFG-03-W-15', "points_to_currency_rate (positive) is required when unit='points'.", 422);
             }
-        } elseif ($unit === 'currency' && $rate !== null) {
-            throw new DomainException('R-PLM-CFG-03-W-15', "points_to_currency_rate must be null when wallet_type.unit='currency'.", 422);
+        } elseif ($rate !== null) {
+            throw new DomainException('R-PLM-CFG-03-W-15', "points_to_currency_rate must be null when unit='currency'.", 422);
         }
     }
 
-    private function emit(string $type, WalletCatalog $wallet): void
+    private function emit(string $type, WalletType $wallet): void
     {
         $this->events->publish(new DomainEvent(
             type: $type,
             topic: CatalogEvents::TOPIC,
             payload: [
-                'walletCatalogId' => $wallet->wallet_catalog_id, 'code' => $wallet->code,
-                'walletTypeCode' => $wallet->wallet_type_code, 'currency' => $wallet->currency,
-                'applicability' => $wallet->applicability, 'chargingPrecedence' => $wallet->charging_precedence,
-                'status' => $wallet->status,
+                'walletTypeId' => $wallet->wallet_type_id, 'code' => $wallet->code,
+                'unit' => $wallet->unit, 'applicability' => $wallet->applicability,
+                'chargingPrecedence' => $wallet->charging_precedence, 'status' => $wallet->status,
             ],
             aggregateType: 'Wallet',
-            aggregateId: $wallet->wallet_catalog_id,
+            aggregateId: $wallet->wallet_type_id,
         ));
     }
 }

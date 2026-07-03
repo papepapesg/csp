@@ -1,7 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Modules\Billing\Wallet\Http\Controllers\WalletCatalogController;
+use Modules\Billing\Wallet\Http\Controllers\WalletTypeController;
 use Modules\Billing\Wallet\Http\Controllers\WalletController;
 
 /*
@@ -14,10 +14,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // PLM-CFG-03 wallet catalog (the rich `wallet` entity: applicability, precedence,
     // lifecycle) — authored here, in the module that enforces it at charge time.
-    Route::get('wallet-catalog', [WalletCatalogController::class, 'index'])->middleware('permission:catalog.read');
-    Route::post('wallet-catalog', [WalletCatalogController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
-    Route::get('wallet-catalog/{wallet}', [WalletCatalogController::class, 'show'])->middleware('permission:catalog.read');
-    Route::patch('wallet-catalog/{wallet}', [WalletCatalogController::class, 'update'])->middleware('permission:catalog.manage');
-    Route::post('wallet-catalog/{wallet}/activate', [WalletCatalogController::class, 'activate'])->middleware('permission:catalog.manage');
-    Route::post('wallet-catalog/{wallet}/retire', [WalletCatalogController::class, 'retire'])->middleware('permission:catalog.manage');
+    Route::get('wallet-types', [WalletTypeController::class, 'index'])->middleware('permission:catalog.read');
+    Route::post('wallet-types', [WalletTypeController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
+    Route::get('wallet-types/{wallet}', [WalletTypeController::class, 'show'])->middleware('permission:catalog.read');
+    Route::patch('wallet-types/{wallet}', [WalletTypeController::class, 'update'])->middleware('permission:catalog.manage');
+    Route::post('wallet-types/{wallet}/activate', [WalletTypeController::class, 'activate'])->middleware('permission:catalog.manage');
+    Route::post('wallet-types/{wallet}/retire', [WalletTypeController::class, 'retire'])->middleware('permission:catalog.manage');
 });

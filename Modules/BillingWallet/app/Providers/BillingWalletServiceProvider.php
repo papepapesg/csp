@@ -24,7 +24,7 @@ class BillingWalletServiceProvider extends ServiceProvider
     {
         $this->loadMigrationsFrom(dirname(__DIR__, 2).'/database/migrations');
 
-        // FOUNDATION_CACHE: evict the cached wallet-catalog copies this module's
+        // FOUNDATION_CACHE: evict the cached wallet-types copies this module's
         // WalletService keeps when a catalog row changes.
         Event::listen(OutboxEventPublished::class, [EvictPlmCatalogCache::class, 'handle']);
 

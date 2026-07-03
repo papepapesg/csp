@@ -61,7 +61,7 @@ class GatewayCallbackTest extends TestCase
     {
         // PAY-GW-01 §3: a prepaid subscription's gateway money is a wallet top-up
         // (BIL-05), not an invoice payment.
-        $this->seed(\Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder::class);
+        $this->seed(\Modules\Billing\Wallet\Database\Seeders\WalletTypeSeeder::class);
         $customer = Customer::factory()->create();
         $account = CustomerAccount::query()->create([
             'customer_id' => $customer->customer_id, 'service_address' => 'X', 'payment_account_number' => 'PB-PREPAID',
@@ -78,7 +78,7 @@ class GatewayCallbackTest extends TestCase
 
         // Money landed in the wallet (BIL-05). The receipt is still audited in
         // payment_ledger (status APPLIED), but NOT in account_credit_balance.
-        $this->assertDatabaseHas('wallet', ['subscription_id' => $sub->subscription_id, 'wallet_code' => 'MONEY_KES', 'balance' => 500.00]);
+        $this->assertDatabaseHas('wallet', ['subscription_id' => $sub->subscription_id, 'wallet_code' => 'MONEY', 'balance' => 500.00]);
         $this->assertDatabaseHas('payment_ledger', ['account_id' => $account->account_id, 'status' => 'APPLIED']);
         $this->assertDatabaseMissing('account_credit_balance', ['account_id' => $account->account_id]);
     }

@@ -11,7 +11,7 @@ use Modules\Billing\Database\Seeders\DunningPolicySeeder;
 use Modules\Billing\Database\Seeders\InvoiceGroupingSeeder;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
 use Modules\Catalog\Database\Seeders\TaxCatalogSeeder;
-use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletTypeSeeder;
 use Modules\Fulfillment\Database\Seeders\FulfillmentFlowSeeder;
 use Modules\Ilm\Database\Seeders\AccountFlagCatalogSeeder;
 use Modules\Ilm\Database\Seeders\CvmPolicySeeder;
@@ -53,7 +53,7 @@ class DatabaseSeeder extends Seeder
             DecisionTableSeeder::class,
             CatalogPolicySeeder::class,
             \Modules\Catalog\Database\Seeders\HomePassStatusSeeder::class,
-            WalletCatalogSeeder::class,
+            WalletTypeSeeder::class,
             TaxCatalogSeeder::class,
             DunningPolicySeeder::class,
             AdjustmentConfigSeeder::class,

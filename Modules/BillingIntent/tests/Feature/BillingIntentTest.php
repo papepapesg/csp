@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\DB;
 use Modules\Billing\Intent\Models\BillingIntent;
 use Modules\Billing\Intent\Services\BillingIntentService;
 use Modules\Billing\Wallet\Services\WalletService;
-use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletTypeSeeder;
 use Tests\TestCase;
 
 /**
@@ -35,7 +35,7 @@ class BillingIntentTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->seed(WalletCatalogSeeder::class); // MONEY_KES wallet definitions for the prepaid channel
+        $this->seed(WalletTypeSeeder::class); // MONEY wallet definitions for the prepaid channel
         Context::setOperatorCode('WIK');
     }
 
@@ -129,14 +129,14 @@ class BillingIntentTest extends TestCase
     public function test_prepaid_charge_settles_inline_from_the_wallet(): void
     {
         $wallets = app(WalletService::class);
-        $wallets->credit($wallets->ensureWallet('sub_pp_ok', 'MONEY_KES'), 500, 'TOPUP');
+        $wallets->credit($wallets->ensureWallet('sub_pp_ok', 'MONEY'), 500, 'TOPUP');
 
         $intent = $this->emit(['subscription_id' => 'sub_pp_ok', 'billing_mode' => 'PREPAID', 'amount' => 200]);
 
         $this->assertSame(BillingIntent::CONFIRMED, $intent->status);
         $this->assertSame(BillingIntent::CHANNEL_WALLET, $intent->settlement_channel);
         $this->assertNull($intent->invoice_id);
-        $this->assertDatabaseHas('wallet', ['subscription_id' => 'sub_pp_ok', 'wallet_code' => 'MONEY_KES', 'balance' => 300.00]);
+        $this->assertDatabaseHas('wallet', ['subscription_id' => 'sub_pp_ok', 'wallet_code' => 'MONEY', 'balance' => 300.00]);
     }
 
     /**
@@ -151,7 +151,7 @@ class BillingIntentTest extends TestCase
     public function test_prepaid_charge_parks_pending_when_the_wallet_is_short(): void
     {
         $wallets = app(WalletService::class);
-        $wallets->credit($wallets->ensureWallet('sub_pp_short', 'MONEY_KES'), 100, 'TOPUP');
+        $wallets->credit($wallets->ensureWallet('sub_pp_short', 'MONEY'), 100, 'TOPUP');
 
         $intent = $this->emit(['subscription_id' => 'sub_pp_short', 'billing_mode' => 'PREPAID', 'amount' => 400]);
 

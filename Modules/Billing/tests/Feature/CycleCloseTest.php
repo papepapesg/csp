@@ -8,7 +8,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Modules\Billing\Invoicing\Services\CycleCloseService;
 use Modules\Billing\Mediation\Services\MediationRatingService;
 use Modules\Billing\Wallet\Services\WalletService;
-use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletTypeSeeder;
 use Modules\Catalog\Plm\Models\PackageVersion;
 use Modules\Subscription\Models\Subscription;
 use Tests\TestCase;
@@ -248,10 +248,10 @@ class CycleCloseTest extends TestCase
 
     public function test_prepaid_close_debits_wallet_then_freezes_on_shortfall_until_topup(): void
     {
-        $this->seed(WalletCatalogSeeder::class);
+        $this->seed(WalletTypeSeeder::class);
         $sub = $this->subscription('PREPAID', $this->pricedPackage(1200));
         $wallets = app(WalletService::class);
-        $wallet = $wallets->ensureWallet($sub->subscription_id, 'MONEY_KES', 'a1', 'c1');
+        $wallet = $wallets->ensureWallet($sub->subscription_id, 'MONEY', 'a1', 'c1');
         $wallets->credit($wallet, 500, 'TOPUP'); // short of 1200
 
         // Boundary can't be paid → frozen (no advance), CyclePaymentMissed.

@@ -6,7 +6,7 @@ use App\Foundation\Support\Context;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Modules\Billing\Wallet\Models\Wallet;
 use Modules\Billing\Wallet\Services\WalletService;
-use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletTypeSeeder;
 use Tests\TestCase;
 
 /** BIL-05 / PLM-CFG-03: wallet expiry sweep (R-W-9) + points redemption at charge (R-W-15). */
@@ -18,12 +18,12 @@ class WalletExpiryAndPointsTest extends TestCase
     {
         parent::setUp();
         Context::setOperatorCode('WIK');
-        $this->seed(WalletCatalogSeeder::class);
+        $this->seed(WalletTypeSeeder::class);
     }
 
     /**
      * EXPECTATION — expiring wallets live on a validity window the top-up starts.
-     * Given a catalog wallet that expires (LOYALTY_POINTS_KES, 365 days),
+     * Given a catalog wallet that expires (LOYALTY_POINTS, 365 days),
      * when it is topped up, then expires_at is (re)set;
      * when the validity passes and the daily sweep runs, then the balance is
      * zeroed by an EXPIRY debit on the ledger — expired value is never spendable.
@@ -31,8 +31,8 @@ class WalletExpiryAndPointsTest extends TestCase
     public function test_topup_to_an_expiring_wallet_sets_validity_and_sweep_zeroes_it(): void
     {
         $svc = app(WalletService::class);
-        // LOYALTY_POINTS_KES expires after 365 days and is refillable.
-        $wallet = $svc->ensureWallet('sub_1', 'LOYALTY_POINTS_KES');
+        // LOYALTY_POINTS expires after 365 days and is refillable.
+        $wallet = $svc->ensureWallet('sub_1', 'LOYALTY_POINTS');
         $svc->credit($wallet, 500, 'TOPUP');
         $this->assertNotNull($wallet->fresh()->expires_at);
 
@@ -54,7 +54,7 @@ class WalletExpiryAndPointsTest extends TestCase
     {
         $svc = app(WalletService::class);
         // 10,000 points at 0.01 KES/point = 100.00 KES of value.
-        $points = $svc->ensureWallet('sub_2', 'LOYALTY_POINTS_KES');
+        $points = $svc->ensureWallet('sub_2', 'LOYALTY_POINTS');
         $svc->credit($points, 10000, 'TOPUP');
 
         // A 30 KES charge settles from points: 30 / 0.01 = 3000 points debited.

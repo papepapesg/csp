@@ -109,8 +109,8 @@ class PaymentApplicationTest extends TestCase
 
     public function test_ov3_wallet_topup_overflow_credits_the_wallet(): void
     {
-        $this->seed(\Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder::class);
-        DB::table('payment_config')->insert(['operator_code' => 'WIK', 'allocation_policy' => 'FIFO_DUE_DATE', 'overpayment_policy' => 'WALLET_TOPUP', 'overpayment_overflow_wallet_ref' => 'MONEY_KES', 'created_at' => now(), 'updated_at' => now()]);
+        $this->seed(\Modules\Billing\Wallet\Database\Seeders\WalletTypeSeeder::class);
+        DB::table('payment_config')->insert(['operator_code' => 'WIK', 'allocation_policy' => 'FIFO_DUE_DATE', 'overpayment_policy' => 'WALLET_TOPUP', 'overpayment_overflow_wallet_ref' => 'MONEY', 'created_at' => now(), 'updated_at' => now()]);
         \Modules\Subscription\Models\Subscription::query()->create([
             'subscription_id' => \App\Foundation\Support\Id::make('sub'), 'customer_id' => 'c1', 'account_id' => 'acc_w',
             'operator_code' => 'WIK', 'homepass_id' => 'h1', 'package_ref' => 'p', 'status_code' => 'ACTIVE', 'billing_mode' => 'POSTPAID', 'currency' => 'KES',
@@ -120,7 +120,7 @@ class PaymentApplicationTest extends TestCase
         // Pay 500 against a 200 invoice → 300 surplus routes to the overflow wallet.
         app(PaymentService::class)->receiveAndApply(['account_id' => 'acc_w', 'paid_amount' => 500, 'method' => 'MPESA', 'payment_reference' => 'ov3', 'target_invoice_id' => $inv->invoice_id]);
 
-        $this->assertDatabaseHas('wallet', ['account_id' => 'acc_w', 'wallet_code' => 'MONEY_KES', 'balance' => 300.00]);
+        $this->assertDatabaseHas('wallet', ['account_id' => 'acc_w', 'wallet_code' => 'MONEY', 'balance' => 300.00]);
         $this->assertDatabaseMissing('account_credit_balance', ['account_id' => 'acc_w']);
     }
 

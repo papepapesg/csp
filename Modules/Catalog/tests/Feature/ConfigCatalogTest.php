@@ -23,7 +23,6 @@ class ConfigCatalogTest extends TestCase
 
     public function test_config_catalogs_crud(): void
     {
-        $this->postJson('/api/config/wallet-types', ['code' => 'MAIN', 'name' => 'Main wallet', 'currency' => 'KES'])->assertCreated();
         $this->postJson('/api/config/adjustment-types', ['code' => 'GOODWILL', 'name' => 'Goodwill credit', 'direction' => 'CREDIT'])->assertCreated();
         $this->postJson('/api/config/voice-tariffs', ['code' => 'ONNET_STD', 'name' => 'On-net', 'destination' => 'ONNET', 'rate_per_min' => 2.5])->assertCreated();
         // equipment models live in OSR (equipment_sku), not this config registry.

@@ -4,6 +4,7 @@ namespace Modules\Billing\Wallet\Services;
 
 use App\Foundation\Cache\SophixCache;
 use App\Foundation\Errors\DomainException;
+use App\Foundation\Models\OperatorConfig;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
@@ -12,19 +13,19 @@ use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Wallet\Models\Wallet;
 use Modules\Billing\Wallet\Models\WalletTransaction;
-use Modules\Billing\Wallet\Models\WalletCatalog;
+use Modules\Billing\Wallet\Models\WalletType;
 
 /**
  * BIL-05/BIL-06 wallet & top-up engine. Owns the per-customer wallet balance and an
  * append-only transaction ledger. A subscription may hold several wallets, one per
- * PLM-CFG-03 catalog `walletRef` (MONEY_KES, VOICE_KES, …); behaviour (currency,
+ * PLM-CFG-03 catalog `walletRef` (MONEY, VOICE, …); behaviour (currency,
  * applicability, charging precedence, refillability) comes from the catalog — this
  * service applies those rules to the customer's balance.
  */
 class WalletService
 {
     /** Default money wallet code convention when a caller does not name one. */
-    public const DEFAULT_WALLET_CODE = 'MONEY_KES';
+    public const DEFAULT_WALLET_CODE = 'MONEY';
 
     public function __construct(
         private readonly EventBus $events,
@@ -36,24 +37,24 @@ class WalletService
      * (`sophix:plm:wallet:{operator}:{code}`, 24h TTL; Wallet* catalog events evict via
      * EvictPlmCatalogCache). PostgreSQL stays the source of truth; this module owns it.
      */
-    private function catalogEntry(string $operator, string $code): ?WalletCatalog
+    private function catalogEntry(string $operator, string $code): ?WalletType
     {
         $attrs = $this->cache->remember('plm', 'wallet', "{$operator}:{$code}", SophixCache::TTL_CATALOG,
-            fn () => WalletCatalog::activeByCode($operator, $code)?->getAttributes());
+            fn () => WalletType::activeByCode($operator, $code)?->getAttributes());
 
-        return $attrs ? WalletCatalog::hydrate([$attrs])->first() : null;
+        return $attrs ? WalletType::hydrate([$attrs])->first() : null;
     }
 
     /** Cached ACTIVE catalog set for the operator (used by charge-time selection). */
     private function catalogSet(string $operator): Collection
     {
-        $rows = $this->cache->remember('plm', 'wallet-catalog', $operator, SophixCache::TTL_CATALOG,
-            fn () => WalletCatalog::query()
+        $rows = $this->cache->remember('plm', 'wallet-types', $operator, SophixCache::TTL_CATALOG,
+            fn () => WalletType::query()
                 ->where('operator_code', $operator)
-                ->where('status', WalletCatalog::STATUS_ACTIVE)
+                ->where('status', WalletType::STATUS_ACTIVE)
                 ->get()->map->getAttributes()->all());
 
-        return WalletCatalog::hydrate($rows ?? [])->keyBy('code');
+        return WalletType::hydrate($rows ?? [])->keyBy('code');
     }
 
     /**
@@ -81,7 +82,9 @@ class WalletService
                 'operator_code' => Context::operatorCode(),
                 'account_id' => $accountId,
                 'customer_id' => $customerId,
-                'currency' => $catalog->currency,
+                // One deployment, one currency: stamped from operator config, never from the type.
+                'currency' => OperatorConfig::forOperator(Context::operatorCode())?->currency_code
+                    ?? config('sophix.default_currency', 'KES'),
                 'balance' => 0,
                 'status' => Wallet::ACTIVE,
             ],
@@ -127,7 +130,8 @@ class WalletService
 
         // R-W-15: a points wallet's CURRENCY value is balance × points_to_currency_rate;
         // a currency wallet's value is its balance. Settlement works in currency.
-        $rateOf = fn (Wallet $w) => (float) ($catalog[$w->wallet_code]->points_to_currency_rate ?? 0) ?: null;
+        $rateOf = fn (Wallet $w) => $catalog[$w->wallet_code]->isPoints()
+            ? (float) $catalog[$w->wallet_code]->points_to_currency_rate : null;
         $valueOf = fn (Wallet $w) => ($r = $rateOf($w)) ? (float) $w->balance * $r : (float) $w->balance;
 
         $available = (float) $wallets->sum($valueOf);

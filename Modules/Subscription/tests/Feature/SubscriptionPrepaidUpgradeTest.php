@@ -10,7 +10,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
 use Modules\Billing\Wallet\Services\WalletService;
-use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletTypeSeeder;
 use Modules\Catalog\Plm\Models\Package;
 use Modules\Catalog\Plm\Models\PackageVersion;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;
@@ -33,7 +33,7 @@ class SubscriptionPrepaidUpgradeTest extends TestCase
         $this->seed(RbacSeeder::class);
         $this->seed(ProcessDefinitionSeeder::class);
         $this->seed(DecisionTableSeeder::class);
-        $this->seed(WalletCatalogSeeder::class);
+        $this->seed(WalletTypeSeeder::class);
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('SUPER_ADMIN');
         Sanctum::actingAs($user);
@@ -70,7 +70,7 @@ class SubscriptionPrepaidUpgradeTest extends TestCase
     private function fundWallet(string $sub, float $amount): void
     {
         $wallets = app(WalletService::class);
-        $wallet = $wallets->ensureWallet($sub, 'MONEY_KES', 'a1', 'c1');
+        $wallet = $wallets->ensureWallet($sub, 'MONEY', 'a1', 'c1');
         $wallets->credit($wallet, $amount, 'TOPUP');
     }
 
@@ -88,7 +88,7 @@ class SubscriptionPrepaidUpgradeTest extends TestCase
         $this->assertSame($tgt, $fresh->package_ref);                 // upgrade committed
         $this->assertSame('ACTIVE', $fresh->status_code);
         // Charged to the wallet (not an invoice): balance 2000 - 1500 = 500.
-        $this->assertDatabaseHas('wallet', ['subscription_id' => $sub, 'wallet_code' => 'MONEY_KES', 'balance' => 500.00]);
+        $this->assertDatabaseHas('wallet', ['subscription_id' => $sub, 'wallet_code' => 'MONEY', 'balance' => 500.00]);
         $this->assertDatabaseHas('billing_intent', ['subscription_id' => $sub, 'intent_type' => 'PRORATION', 'settlement_channel' => 'WALLET', 'status' => 'CONFIRMED']);
         $this->assertDatabaseMissing('invoice', ['subscription_id' => $sub]); // no fee invoice raised
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionUpgraded']);
@@ -110,7 +110,7 @@ class SubscriptionPrepaidUpgradeTest extends TestCase
         $this->assertDatabaseHas('billing_intent', ['subscription_id' => $sub, 'settlement_channel' => 'WALLET', 'status' => 'PENDING']);
 
         // Top up the wallet -> WalletToppedUp -> listener settles the intent + resumes.
-        $this->postJson("/api/wallets/{$sub}/topup", ['amount' => 2000, 'walletCode' => 'MONEY_KES'], ['Idempotency-Key' => 'tp-q'])->assertCreated();
+        $this->postJson("/api/wallets/{$sub}/topup", ['amount' => 2000, 'walletCode' => 'MONEY'], ['Idempotency-Key' => 'tp-q'])->assertCreated();
         Artisan::call('sophix:outbox:dispatch');
         $this->drain(); // fulfilment -> commit
 
@@ -118,7 +118,7 @@ class SubscriptionPrepaidUpgradeTest extends TestCase
         $this->assertSame($tgt, $fresh->package_ref);
         $this->assertSame('ACTIVE', $fresh->status_code);
         // 500 + 2000 - 1500 = 1000 left.
-        $this->assertDatabaseHas('wallet', ['subscription_id' => $sub, 'wallet_code' => 'MONEY_KES', 'balance' => 1000.00]);
+        $this->assertDatabaseHas('wallet', ['subscription_id' => $sub, 'wallet_code' => 'MONEY', 'balance' => 1000.00]);
         $this->assertDatabaseHas('billing_intent', ['subscription_id' => $sub, 'status' => 'CONFIRMED']);
     }
 }

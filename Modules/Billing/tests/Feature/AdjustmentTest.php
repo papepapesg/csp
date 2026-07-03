@@ -12,7 +12,7 @@ use Modules\Billing\Adjustments\Models\AdjustmentRequest;
 use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Invoicing\Services\InvoiceService;
 use Modules\Billing\Wallet\Services\WalletService;
-use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletTypeSeeder;
 use Tests\TestCase;
 
 /**
@@ -42,7 +42,7 @@ class AdjustmentTest extends TestCase
         parent::setUp();
         $this->seed(RbacSeeder::class);
         $this->seed(AdjustmentConfigSeeder::class);
-        $this->seed(WalletCatalogSeeder::class);
+        $this->seed(WalletTypeSeeder::class);
         $user = User::factory()->create(['operator_code' => 'WIK']);
         $user->assignRole('BILLING_LEAD'); // adjustment.create + adjustment.approve
         Sanctum::actingAs($user);
@@ -201,8 +201,8 @@ class AdjustmentTest extends TestCase
         // Same document model as postpaid — just no parent invoice to reference.
         $this->assertDatabaseHas('invoice', ['invoice_id' => $approved->json('note_invoice_id'), 'type' => 'CREDIT_NOTE', 'original_invoice_id' => null, 'total_amount' => 600.00, 'amount_due' => 0.00]);
 
-        $this->assertDatabaseHas('wallet', ['subscription_id' => 'sub_prepaid_adj', 'wallet_code' => 'MONEY_KES', 'balance' => 600.00]);
-        $this->assertDatabaseHas('note_application_ledger', ['target_kind' => 'WALLET', 'target_id' => 'MONEY_KES', 'applied_amount' => 600.00, 'status' => 'APPLIED']);
+        $this->assertDatabaseHas('wallet', ['subscription_id' => 'sub_prepaid_adj', 'wallet_code' => 'MONEY', 'balance' => 600.00]);
+        $this->assertDatabaseHas('note_application_ledger', ['target_kind' => 'WALLET', 'target_id' => 'MONEY', 'applied_amount' => 600.00, 'status' => 'APPLIED']);
 
         // Both pipeline stages are observable on the prepaid path too.
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'CreditNoteIssued']);
@@ -226,7 +226,7 @@ class AdjustmentTest extends TestCase
     public function test_prepaid_debit_note_fails_on_insufficient_wallet_then_retry_succeeds_after_topup(): void
     {
         $wallets = app(WalletService::class);
-        $wallet = $wallets->ensureWallet('sub_prepaid_debit', 'MONEY_KES');
+        $wallet = $wallets->ensureWallet('sub_prepaid_debit', 'MONEY');
         $wallets->credit($wallet, 300, 'TOPUP');
 
         $res = $this->postJson('/api/adjustments', [

@@ -7,32 +7,32 @@ use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Billing\Wallet\Models\WalletCatalog;
-use Modules\Billing\Wallet\Services\WalletCatalogService;
+use Modules\Billing\Wallet\Models\WalletType;
+use Modules\Billing\Wallet\Services\WalletTypeService;
 
 /**
  * PLM-CFG-03 wallet catalog API — CRUD + DRAFT→ACTIVE→RETIRED lifecycle. Reads
  * require catalog.read; writes require catalog.manage (the WALLET_ADMIN role maps
  * onto catalog.manage in the local RBAC).
  */
-class WalletCatalogController extends ApiController
+class WalletTypeController extends ApiController
 {
-    public function __construct(private readonly WalletCatalogService $wallets) {}
+    public function __construct(private readonly WalletTypeService $wallets) {}
 
     public function index(Request $request): JsonResponse
     {
         $params = $this->pageParams($request);
-        $page = WalletCatalog::query()
+        $page = WalletType::query()
             ->where('operator_code', $request->query('operatorCode', Context::operatorCode()))
             ->when($request->query('status'), fn ($q, $s) => $q->where('status', $s))
-            ->when($request->query('walletTypeCode'), fn ($q, $t) => $q->where('wallet_type_code', $t))
+            ->when($request->query('unit'), fn ($q, $u) => $q->where('unit', $u))
             ->orderBy('charging_precedence')
             ->paginate(perPage: $params['size'], page: $params['page'] + 1);
 
         return ApiResponse::paginated($page);
     }
 
-    public function show(WalletCatalog $wallet): JsonResponse
+    public function show(WalletType $wallet): JsonResponse
     {
         return ApiResponse::item($wallet);
     }
@@ -42,8 +42,7 @@ class WalletCatalogController extends ApiController
         $data = $request->validate([
             'code' => ['required', 'string', 'max:64'],
             'description' => ['required', 'string', 'max:255'],
-            'wallet_type_code' => ['required', 'string', 'max:64'],
-            'currency' => ['required', 'string', 'size:3'],
+            'unit' => ['nullable', 'in:currency,points'],
             'decimal_precision' => ['nullable', 'integer', 'min:0', 'max:4'],
             'applicability' => ['nullable', 'in:PREPAID_ONLY,POSTPAID_ONLY,ANY'],
             'expires' => ['sometimes', 'boolean'],
@@ -56,7 +55,7 @@ class WalletCatalogController extends ApiController
         return ApiResponse::created($this->wallets->create($data));
     }
 
-    public function update(Request $request, WalletCatalog $wallet): JsonResponse
+    public function update(Request $request, WalletType $wallet): JsonResponse
     {
         $data = $request->validate([
             'description' => ['sometimes', 'string', 'max:255'],
@@ -71,12 +70,12 @@ class WalletCatalogController extends ApiController
         return ApiResponse::item($this->wallets->update($wallet, $data));
     }
 
-    public function activate(WalletCatalog $wallet): JsonResponse
+    public function activate(WalletType $wallet): JsonResponse
     {
         return ApiResponse::item($this->wallets->activate($wallet));
     }
 
-    public function retire(WalletCatalog $wallet): JsonResponse
+    public function retire(WalletType $wallet): JsonResponse
     {
         return ApiResponse::item($this->wallets->retire($wallet));
     }

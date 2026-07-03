@@ -24,7 +24,7 @@ use Modules\Catalog\Plm\Models\PackageVersion;
 use Modules\Catalog\Plm\Models\PackageVersionCutover;
 use Modules\Catalog\Plm\Models\Service;
 use Modules\Catalog\Tax\Models\TaxGroup;
-use Modules\Billing\Wallet\Models\WalletCatalog;
+use Modules\Billing\Wallet\Models\WalletType;
 use Modules\Catalog\Support\CatalogCacheKeys;
 
 /**
@@ -164,9 +164,9 @@ class PackageLaunchService
                 ];
 
                 $walletRef = $package->default_wallet_ref;
-                $walletOk = $walletRef === null || WalletCatalog::query()
+                $walletOk = $walletRef === null || WalletType::query()
                     ->where('operator_code', $operator)->where('code', $walletRef)
-                    ->where('status', WalletCatalog::STATUS_ACTIVE)->exists();
+                    ->where('status', WalletType::STATUS_ACTIVE)->exists();
                 $checks[] = [
                     'check_code' => 'WALLET_VALID',
                     'check_status' => $walletOk ? PackageLaunchCheck::STATUS_PASS : PackageLaunchCheck::STATUS_FAIL,
