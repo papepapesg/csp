@@ -170,6 +170,82 @@ class WalletService
         return ['settled' => true, 'debited' => $amount, 'available' => $available];
     }
 
+    // ── Allowances (in-kind bundles: DATA/SMS/VOICE) ─────────────────────────
+
+    /**
+     * Grant an allowance bundle in-kind (e.g. +5000 units of a DATA wallet),
+     * (re)starting its expiry window. Not a money top-up — emits WalletCredited,
+     * so it never settles a pending money intent.
+     */
+    public function grantAllowance(string $subscriptionId, string $walletCode, float $units, ?string $accountId = null, ?string $customerId = null, ?string $reference = null): WalletTransaction
+    {
+        $wallet = $this->ensureWallet($subscriptionId, $walletCode, $accountId, $customerId);
+        $catalog = $this->catalogEntry((string) $wallet->operator_code, $walletCode);
+        if ($catalog && $catalog->expires && $catalog->expiry_period_days) {
+            $wallet->update(['expires_at' => now()->addDays((int) $catalog->expiry_period_days)]);
+        }
+
+        return $this->post($wallet, WalletTransaction::CREDIT, $units, WalletTransaction::REASON_ALLOWANCE_GRANT, $reference);
+    }
+
+    /**
+     * Total remaining allowance units a subscription holds for a CDR usage type
+     * (summed across ACTIVE ALLOWANCE wallets whose type covers it). The rating
+     * engine deducts this before charging overage.
+     */
+    public function allowanceBalanceFor(string $subscriptionId, string $usageType, ?string $operator = null): float
+    {
+        $operator ??= Context::operatorCode();
+
+        return (float) $this->coveringAllowanceWallets($subscriptionId, $usageType, $operator)
+            ->sum(fn (Wallet $w) => (float) $w->balance);
+    }
+
+    /**
+     * Debit up to `units` of a usage type across the subscription's covering ALLOWANCE
+     * wallets, draining by charging_precedence. Returns units actually consumed
+     * (≤ available) — callers pass the engine's allowanceConsumedUnits, so it fully drains.
+     */
+    public function consumeAllowance(string $subscriptionId, string $usageType, float $units, ?string $operator = null, ?string $reference = null): float
+    {
+        $operator ??= Context::operatorCode();
+        $remaining = max(0.0, $units);
+        if ($remaining <= 0.0) {
+            return 0.0;
+        }
+
+        $consumed = 0.0;
+        foreach ($this->coveringAllowanceWallets($subscriptionId, $usageType, $operator) as $wallet) {
+            if ($remaining <= 0.0000001) {
+                break;
+            }
+            $take = min($remaining, (float) $wallet->balance);
+            if ($take <= 0) {
+                continue;
+            }
+            $this->post($wallet, WalletTransaction::DEBIT, $take, WalletTransaction::REASON_ALLOWANCE_USE, $reference);
+            $consumed += $take;
+            $remaining -= $take;
+        }
+
+        return round($consumed, 6);
+    }
+
+    /** @return Collection<int,Wallet> ACTIVE allowance wallets covering the usage type, by precedence. */
+    private function coveringAllowanceWallets(string $subscriptionId, string $usageType, string $operator): Collection
+    {
+        $catalog = $this->catalogSet($operator);
+
+        return Wallet::query()
+            ->where('subscription_id', $subscriptionId)
+            ->where('status', Wallet::ACTIVE)
+            ->where('balance', '>', 0)
+            ->get()
+            ->filter(fn (Wallet $w) => $catalog->has($w->wallet_code) && $catalog[$w->wallet_code]->coversUsage($usageType))
+            ->sortBy(fn (Wallet $w) => $catalog[$w->wallet_code]->charging_precedence)
+            ->values();
+    }
+
     /**
      * R-W-9 expiry sweep: zero the balance of any expiring wallet past its
      * expires_at. Returns the number of wallets expired.

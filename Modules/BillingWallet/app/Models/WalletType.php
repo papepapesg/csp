@@ -63,6 +63,7 @@ class WalletType extends Model
     protected $guarded = [];
 
     protected $casts = [
+        'covered_usage_types' => 'array',
         'decimal_precision' => 'integer',
         'expires' => 'boolean',
         'expiry_period_days' => 'integer',
@@ -99,6 +100,12 @@ class WalletType extends Model
     public function isAllowance(): bool
     {
         return $this->role === self::ROLE_ALLOWANCE;
+    }
+
+    /** R-W-16: does this allowance bundle burn for the given CDR usage type? */
+    public function coversUsage(string $usageType): bool
+    {
+        return $this->isAllowance() && in_array($usageType, $this->covered_usage_types ?? [], true);
     }
 
     /** Resolve an ACTIVE wallet type by its walletRef code, or null. */

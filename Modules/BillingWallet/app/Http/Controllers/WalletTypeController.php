@@ -43,7 +43,9 @@ class WalletTypeController extends ApiController
             'code' => ['required', 'string', 'max:64'],
             'description' => ['required', 'string', 'max:255'],
             'role' => ['nullable', 'in:SETTLEMENT,DEPOSIT,ALLOWANCE'],
-            'unit' => ['nullable', 'in:currency,points'],
+            'unit' => ['nullable', 'string', 'max:32'], // currency|points, or an ALLOWANCE measure (DATA/SMS/VOICE)
+            'covered_usage_types' => ['nullable', 'array'],
+            'covered_usage_types.*' => ['string', 'max:32'],
             'decimal_precision' => ['nullable', 'integer', 'min:0', 'max:4'],
             'expires' => ['sometimes', 'boolean'],
             'expiry_period_days' => ['nullable', 'integer', 'min:1'],

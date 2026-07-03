@@ -10,6 +10,7 @@ use App\Foundation\Support\Id;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Mediation\Models\RatedEvent;
 use Modules\Billing\Mediation\Models\UsageRecord;
+use Modules\Billing\Wallet\Services\WalletService;
 use Modules\Catalog\Rating\Models\UsageTariff;
 use Modules\Catalog\Rating\Models\VoiceTariff;
 use Modules\Catalog\Rating\Services\UsageRatingService;
@@ -30,6 +31,7 @@ class MediationRatingService
         private readonly EventBus $events,
         private readonly SophixCache $cache,
         private readonly UsageRatingService $usage,
+        private readonly WalletService $wallets,
     ) {}
 
     /**
@@ -84,7 +86,17 @@ class MediationRatingService
     public function rate(UsageRecord $record): RatedEvent
     {
         return DB::transaction(function () use ($record) {
-            [$rate, $amount, $tariffCode] = $this->price($record);
+            [$rate, $amount, $tariffCode, $allowanceConsumed] = $this->price($record);
+
+            // R-W-16: burn the in-kind allowance the engine said was covered; only the
+            // overage (already priced into $amount) bills. Prepaid or postpaid — the
+            // allowance is consumed first regardless of settlement mode.
+            if ($allowanceConsumed > 0 && $record->subscription_id) {
+                $this->wallets->consumeAllowance(
+                    (string) $record->subscription_id, $record->usage_type, $allowanceConsumed,
+                    $record->operator_code, 'rated-usage:'.$record->usage_id,
+                );
+            }
 
             $event = RatedEvent::query()->create([
                 'rated_id' => Id::make('rat'),
@@ -109,7 +121,7 @@ class MediationRatingService
         });
     }
 
-    /** @return array{0:float,1:float,2:?string} [rate, amount, tariffCode] */
+    /** @return array{0:float,1:float,2:?string,3:float} [rate, amount, tariffCode, allowanceConsumedUnits] */
     private function price(UsageRecord $record): array
     {
         if ($record->usage_type === 'VOICE') {
@@ -125,24 +137,26 @@ class MediationRatingService
             $seconds = max((float) $record->quantity, (float) ($tariff->min_charge_seconds ?? 0));
             $amount = $setup + ($seconds / 60) * $rate;
 
-            return [$rate, $amount, $tariff->code ?? null];
+            return [$rate, $amount, $tariff->code ?? null, 0.0]; // voice allowance: follow-up
         }
         // DATA / SMS (and any future metered type) → the generic usage rating engine
         // (reservation/pulse + allowance + fees + policy). Falls back to the flat default
         // only when the operator has not configured a usage_tariff row.
+        $remainingAllowance = $record->subscription_id
+            ? $this->wallets->allowanceBalanceFor((string) $record->subscription_id, $record->usage_type, $record->operator_code)
+            : 0.0;
         $rated = $this->usage->rate([
             'operatorCode' => $record->operator_code,
             'usageType' => $record->usage_type,
             'quantity' => (float) $record->quantity,
-            // allowance balance is owned by Billing; once wired it passes remaining units here.
-            'remainingAllowanceUnits' => (float) ($record->remaining_allowance_units ?? 0),
+            'remainingAllowanceUnits' => $remainingAllowance, // wired from the Billing allowance wallet
         ]);
         if ($rated['resolved']) {
-            return [$rated['rate'], $rated['amount'], $rated['tariffCode']];
+            return [$rated['rate'], $rated['amount'], $rated['tariffCode'], (float) ($rated['allowanceConsumedUnits'] ?? 0)];
         }
 
         $default = $record->usage_type === 'DATA' ? self::DATA_RATE_PER_MB : self::SMS_RATE;
 
-        return [$default, (float) $record->quantity * $default, $record->usage_type.'_FLAT'];
+        return [$default, (float) $record->quantity * $default, $record->usage_type.'_FLAT', 0.0];
     }
 }

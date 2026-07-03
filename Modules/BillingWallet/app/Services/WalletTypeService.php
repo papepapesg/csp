@@ -124,6 +124,22 @@ class WalletTypeService
             throw new DomainException('R-PLM-CFG-03-W-7', 'role must be SETTLEMENT, DEPOSIT, or ALLOWANCE.', 422);
         }
 
+        // R-W-16: an ALLOWANCE wallet counts a usage MEASURE (not money/points) and must
+        // declare the CDR usage types it burns for; a money/points wallet must not.
+        $covered = $data['covered_usage_types'] ?? $existing?->covered_usage_types;
+        if ($role === WalletType::ROLE_ALLOWANCE) {
+            if (in_array($unit, [WalletType::UNIT_CURRENCY, WalletType::UNIT_POINTS], true)) {
+                throw new DomainException('R-PLM-CFG-03-W-16', "An ALLOWANCE wallet's unit must be a usage measure (e.g. DATA/SMS/VOICE), not currency or points.", 422);
+            }
+            if (empty($covered) || ! is_array($covered)) {
+                throw new DomainException('R-PLM-CFG-03-W-16', 'An ALLOWANCE wallet must declare covered_usage_types.', 422);
+            }
+        } elseif (! empty($covered)) {
+            throw new DomainException('R-PLM-CFG-03-W-16', 'covered_usage_types is only valid on an ALLOWANCE wallet.', 422);
+        } elseif (! in_array($unit, [WalletType::UNIT_CURRENCY, WalletType::UNIT_POINTS], true)) {
+            throw new DomainException('R-PLM-CFG-03-W-3', "A non-allowance wallet's unit must be 'currency' or 'points'.", 422);
+        }
+
         // R-W-6: decimal_precision in [0, 4].
         $precision = (int) ($data['decimal_precision'] ?? $existing?->decimal_precision ?? 2);
         if ($precision < 0 || $precision > 4) {

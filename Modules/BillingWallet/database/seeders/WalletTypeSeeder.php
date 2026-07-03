@@ -20,16 +20,17 @@ class WalletTypeSeeder extends Seeder
     {
         $operator = config('sophix.default_operator', 'WIK');
 
-        // [code, description, role, unit, precedence, refillable, expires, expiryDays, pointsRate, decimals]
+        // [code, description, role, unit, precedence, refillable, expires, expiryDays, pointsRate, decimals, coveredUsage]
         $types = [
-            ['PROMO', 'Promotional credit (one-shot)', 'SETTLEMENT', 'currency', 50, false, true, 90, null, 2],   // spent first (expires)
-            ['LOYALTY_POINTS', 'Loyalty points', 'SETTLEMENT', 'points', 60, true, true, 365, 0.01, 0],           // points → currency at 0.01
-            ['BONUS', 'Operator-granted credit', 'SETTLEMENT', 'currency', 80, false, false, null, null, 2],
-            ['VOICE', 'Phone usage wallet', 'SETTLEMENT', 'currency', 90, true, false, null, null, 2],
-            ['MONEY', 'Customer top-up balance (Internet+TV settlement)', 'SETTLEMENT', 'currency', 100, true, false, null, null, 2],
-            ['DEPOSIT', 'Refundable deposit (held, refunded at termination)', 'DEPOSIT', 'currency', 200, true, false, null, null, 2],
+            ['DATA_BUNDLE', 'Included data allowance (MB)', 'ALLOWANCE', 'DATA', 10, true, true, 30, null, 0, ['DATA']], // burns for DATA usage, monthly
+            ['PROMO', 'Promotional credit (one-shot)', 'SETTLEMENT', 'currency', 50, false, true, 90, null, 2, null],    // spent first (expires)
+            ['LOYALTY_POINTS', 'Loyalty points', 'SETTLEMENT', 'points', 60, true, true, 365, 0.01, 0, null],            // points → currency at 0.01
+            ['BONUS', 'Operator-granted credit', 'SETTLEMENT', 'currency', 80, false, false, null, null, 2, null],
+            ['VOICE', 'Phone usage wallet', 'SETTLEMENT', 'currency', 90, true, false, null, null, 2, null],
+            ['MONEY', 'Customer top-up balance (Internet+TV settlement)', 'SETTLEMENT', 'currency', 100, true, false, null, null, 2, null],
+            ['DEPOSIT', 'Refundable deposit (held, refunded at termination)', 'DEPOSIT', 'currency', 200, true, false, null, null, 2, null],
         ];
-        foreach ($types as [$code, $description, $role, $unit, $precedence, $refillable, $expires, $expiryDays, $rate, $decimals]) {
+        foreach ($types as [$code, $description, $role, $unit, $precedence, $refillable, $expires, $expiryDays, $rate, $decimals, $covered]) {
             WalletType::query()->updateOrCreate(
                 ['operator_code' => $operator, 'code' => $code],
                 [
@@ -37,6 +38,7 @@ class WalletTypeSeeder extends Seeder
                     'description' => $description,
                     'role' => $role,
                     'unit' => $unit,
+                    'covered_usage_types' => $covered,
                     'decimal_precision' => $decimals,
                     'charging_precedence' => $precedence,
                     'refillable' => $refillable,

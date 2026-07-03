@@ -29,6 +29,12 @@ class WalletTransaction extends Model
     /** Balance zeroed by the R-W-9 expiry sweep. */
     public const REASON_EXPIRY = 'EXPIRY';
 
+    /** Allowance bundle granted in-kind (e.g. +5GB), not a money top-up. */
+    public const REASON_ALLOWANCE_GRANT = 'ALLOWANCE_GRANT';
+
+    /** Allowance consumed in-kind by rated usage (overage bills separately). */
+    public const REASON_ALLOWANCE_USE = 'ALLOWANCE_USE';
+
     protected $table = 'wallet_transaction';
 
     protected string $idPrefix = 'wtx';
