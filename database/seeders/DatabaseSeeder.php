@@ -11,7 +11,7 @@ use Modules\Billing\Database\Seeders\DunningPolicySeeder;
 use Modules\Billing\Database\Seeders\InvoiceGroupingSeeder;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
 use Modules\Catalog\Database\Seeders\TaxCatalogSeeder;
-use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
 use Modules\Fulfillment\Database\Seeders\FulfillmentFlowSeeder;
 use Modules\Ilm\Database\Seeders\AccountFlagCatalogSeeder;
 use Modules\Ilm\Database\Seeders\CvmPolicySeeder;

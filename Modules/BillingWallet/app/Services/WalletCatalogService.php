@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Catalog\Wallet\Services;
+namespace Modules\Billing\Wallet\Services;
 
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
@@ -8,8 +8,8 @@ use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
 use Modules\Catalog\Events\CatalogEvents;
 use Modules\Catalog\Plm\Models\Service;
-use Modules\Catalog\Wallet\Models\WalletCatalog;
-use Modules\Catalog\Wallet\Models\WalletType;
+use Modules\Billing\Wallet\Models\WalletCatalog;
+use Modules\Billing\Wallet\Models\WalletType;
 
 /**
  * PLM-CFG-03 wallet catalog admin — pure CRUD + DRAFT→ACTIVE→RETIRED lifecycle

@@ -10,7 +10,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Sanctum\Sanctum;
 use Modules\Billing\Wallet\Services\WalletService;
-use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
 use Modules\Catalog\Plm\Models\Package;
 use Modules\Catalog\Plm\Models\PackageVersion;
 use Modules\Rules\Database\Seeders\DecisionTableSeeder;

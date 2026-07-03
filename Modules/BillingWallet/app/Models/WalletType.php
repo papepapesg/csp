@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Catalog\Wallet\Models;
+namespace Modules\Billing\Wallet\Models;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;

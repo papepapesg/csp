@@ -24,7 +24,7 @@ use Modules\Catalog\Plm\Models\PackageVersion;
 use Modules\Catalog\Plm\Models\PackageVersionCutover;
 use Modules\Catalog\Plm\Models\Service;
 use Modules\Catalog\Tax\Models\TaxGroup;
-use Modules\Catalog\Wallet\Models\WalletCatalog;
+use Modules\Billing\Wallet\Models\WalletCatalog;
 use Modules\Catalog\Support\CatalogCacheKeys;
 
 /**

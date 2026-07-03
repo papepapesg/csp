@@ -8,7 +8,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Modules\Billing\Invoicing\Services\CycleCloseService;
 use Modules\Billing\Mediation\Services\MediationRatingService;
 use Modules\Billing\Wallet\Services\WalletService;
-use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
 use Modules\Catalog\Plm\Models\PackageVersion;
 use Modules\Subscription\Models\Subscription;
 use Tests\TestCase;

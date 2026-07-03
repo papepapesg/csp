@@ -13,9 +13,9 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Modules\Billing\Wallet\Services\WalletService;
-use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
-use Modules\Catalog\Wallet\Models\WalletCatalog;
-use Modules\Catalog\Wallet\Services\WalletCatalogService;
+use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Models\WalletCatalog;
+use Modules\Billing\Wallet\Services\WalletCatalogService;
 use Tests\TestCase;
 
 /**

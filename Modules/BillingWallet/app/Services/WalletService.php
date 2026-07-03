@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\DB;
 use Modules\Billing\Events\BillingEvents;
 use Modules\Billing\Wallet\Models\Wallet;
 use Modules\Billing\Wallet\Models\WalletTransaction;
-use Modules\Catalog\Wallet\Models\WalletCatalog;
+use Modules\Billing\Wallet\Models\WalletCatalog;
 
 /**
  * BIL-05/BIL-06 wallet & top-up engine. Owns the per-customer wallet balance and an
@@ -32,9 +32,9 @@ class WalletService
     ) {}
 
     /**
-     * FOUNDATION_CACHE consumer read: Billing does not own the PLM wallet catalog, so
-     * the hot per-charge lookup is cache-aside (`sophix:plm:wallet:{operator}:{code}`,
-     * 24h TTL; Wallet* events evict). PostgreSQL stays the source of truth.
+     * FOUNDATION_CACHE hot-path read: the per-charge catalog lookup is cache-aside
+     * (`sophix:plm:wallet:{operator}:{code}`, 24h TTL; Wallet* catalog events evict via
+     * EvictPlmCatalogCache). PostgreSQL stays the source of truth; this module owns it.
      */
     private function catalogEntry(string $operator, string $code): ?WalletCatalog
     {

@@ -109,7 +109,7 @@ class PaymentApplicationTest extends TestCase
 
     public function test_ov3_wallet_topup_overflow_credits_the_wallet(): void
     {
-        $this->seed(\Modules\Catalog\Database\Seeders\WalletCatalogSeeder::class);
+        $this->seed(\Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder::class);
         DB::table('payment_config')->insert(['operator_code' => 'WIK', 'allocation_policy' => 'FIFO_DUE_DATE', 'overpayment_policy' => 'WALLET_TOPUP', 'overpayment_overflow_wallet_ref' => 'MONEY_KES', 'created_at' => now(), 'updated_at' => now()]);
         \Modules\Subscription\Models\Subscription::query()->create([
             'subscription_id' => \App\Foundation\Support\Id::make('sub'), 'customer_id' => 'c1', 'account_id' => 'acc_w',

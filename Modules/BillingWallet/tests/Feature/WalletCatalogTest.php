@@ -1,16 +1,16 @@
 <?php
 
-namespace Modules\Catalog\Tests\Feature;
+namespace Modules\Billing\Wallet\Tests\Feature;
 
 use App\Foundation\Support\Id;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
-use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
 use Modules\Catalog\Plm\Models\Service;
 use Modules\Catalog\Plm\Models\ServiceClass;
-use Modules\Catalog\Wallet\Models\WalletCatalog;
+use Modules\Billing\Wallet\Models\WalletCatalog;
 use Tests\TestCase;
 
 /**

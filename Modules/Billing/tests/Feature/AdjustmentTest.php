@@ -12,7 +12,7 @@ use Modules\Billing\Adjustments\Models\AdjustmentRequest;
 use Modules\Billing\Invoicing\Models\Invoice;
 use Modules\Billing\Invoicing\Services\InvoiceService;
 use Modules\Billing\Wallet\Services\WalletService;
-use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
 use Tests\TestCase;
 
 /**

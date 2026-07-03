@@ -10,7 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Catalog\Plm\Models\AdjustmentType;
 use Modules\Catalog\Rating\Models\VoiceTariff;
-use Modules\Catalog\Wallet\Models\WalletType;
+use Modules\Billing\Wallet\Models\WalletType;
 
 /**
  * Generic CRUD for the simple operator-scoped PLM config catalogs (wallet,

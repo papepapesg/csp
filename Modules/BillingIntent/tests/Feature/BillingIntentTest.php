@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\DB;
 use Modules\Billing\Intent\Models\BillingIntent;
 use Modules\Billing\Intent\Services\BillingIntentService;
 use Modules\Billing\Wallet\Services\WalletService;
-use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
 use Tests\TestCase;
 
 /**

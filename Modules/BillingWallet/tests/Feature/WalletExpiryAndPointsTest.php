@@ -6,7 +6,7 @@ use App\Foundation\Support\Context;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Modules\Billing\Wallet\Models\Wallet;
 use Modules\Billing\Wallet\Services\WalletService;
-use Modules\Catalog\Database\Seeders\WalletCatalogSeeder;
+use Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder;
 use Tests\TestCase;
 
 /** BIL-05 / PLM-CFG-03: wallet expiry sweep (R-W-9) + points redemption at charge (R-W-15). */

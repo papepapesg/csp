@@ -1,14 +1,14 @@
 <?php
 
-namespace Modules\Catalog\Wallet\Http\Controllers;
+namespace Modules\Billing\Wallet\Http\Controllers;
 
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Modules\Catalog\Wallet\Models\WalletCatalog;
-use Modules\Catalog\Wallet\Services\WalletCatalogService;
+use Modules\Billing\Wallet\Models\WalletCatalog;
+use Modules\Billing\Wallet\Services\WalletCatalogService;
 
 /**
  * PLM-CFG-03 wallet catalog API — CRUD + DRAFT→ACTIVE→RETIRED lifecycle. Reads

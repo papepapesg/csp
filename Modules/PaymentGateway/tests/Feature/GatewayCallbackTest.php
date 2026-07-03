@@ -61,7 +61,7 @@ class GatewayCallbackTest extends TestCase
     {
         // PAY-GW-01 §3: a prepaid subscription's gateway money is a wallet top-up
         // (BIL-05), not an invoice payment.
-        $this->seed(\Modules\Catalog\Database\Seeders\WalletCatalogSeeder::class);
+        $this->seed(\Modules\Billing\Wallet\Database\Seeders\WalletCatalogSeeder::class);
         $customer = Customer::factory()->create();
         $account = CustomerAccount::query()->create([
             'customer_id' => $customer->customer_id, 'service_address' => 'X', 'payment_account_number' => 'PB-PREPAID',

@@ -13,7 +13,6 @@ use Modules\Catalog\Plm\Http\Controllers\ServiceController;
 use Modules\Catalog\Tax\Http\Controllers\TaxController;
 use Modules\Catalog\Network\Http\Controllers\TechRegionController;
 use Modules\Catalog\Rating\Http\Controllers\VoiceTariffController;
-use Modules\Catalog\Wallet\Http\Controllers\WalletCatalogController;
 
 /*
 | Catalog & reference-data API (PLM-CFG-01, SIP-01, RLM-CFG-01, ILM-CFG-02).
@@ -144,14 +143,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('discount-assignments/effective', [DiscountController::class, 'effective'])->middleware('permission:catalog.read');
     Route::post('discount-assignments/{discountAssignment}/cancel', [DiscountController::class, 'cancelAssignment'])->middleware('permission:catalog.manage');
     Route::post('discount-assignments/{discountAssignment}/approval-outcome', [DiscountController::class, 'approvalOutcome'])->middleware('permission:catalog.manage');
-
-    // PLM-CFG-03 wallet catalog (the rich `wallet` entity: applicability, precedence, lifecycle)
-    Route::get('wallet-catalog', [WalletCatalogController::class, 'index'])->middleware('permission:catalog.read');
-    Route::post('wallet-catalog', [WalletCatalogController::class, 'store'])->middleware(['permission:catalog.manage', 'idempotency']);
-    Route::get('wallet-catalog/{wallet}', [WalletCatalogController::class, 'show'])->middleware('permission:catalog.read');
-    Route::patch('wallet-catalog/{wallet}', [WalletCatalogController::class, 'update'])->middleware('permission:catalog.manage');
-    Route::post('wallet-catalog/{wallet}/activate', [WalletCatalogController::class, 'activate'])->middleware('permission:catalog.manage');
-    Route::post('wallet-catalog/{wallet}/retire', [WalletCatalogController::class, 'retire'])->middleware('permission:catalog.manage');
 
     // SIP-04 commercial bundles (launch lifecycle + availability + migration paths)
     Route::get('commercial-bundles', [BundleController::class, 'index'])->middleware('permission:catalog.read');
