@@ -18,9 +18,11 @@ use Modules\Billing\Wallet\Models\WalletType;
 /**
  * BIL-05/BIL-06 wallet & top-up engine. Owns the per-customer wallet balance and an
  * append-only transaction ledger. A subscription may hold several wallets, one per
- * PLM-CFG-03 catalog `walletRef` (MONEY, VOICE, …); behaviour (currency,
- * applicability, charging precedence, refillability) comes from the catalog — this
- * service applies those rules to the customer's balance.
+ * PLM-CFG-03 catalog `walletRef` (MONEY, VOICE, …); behaviour (unit, applicability,
+ * charging precedence, refillability, expiry) comes from the catalog — this service
+ * applies those rules to the customer's balance. Currency is NOT catalog behaviour:
+ * it is deployment config (operator_config.currency_code), stamped onto the wallet
+ * instance at creation — one operator, one currency, no exceptions.
  */
 class WalletService
 {
@@ -59,8 +61,9 @@ class WalletService
 
     /**
      * Resolve (or create) the ledger row for a (subscription, walletRef). The
-     * walletRef must resolve to an ACTIVE PLM-CFG-03 catalog entry — the catalog is
-     * the source of truth for what wallets exist and their currency (R-W-3).
+     * walletRef must resolve to an ACTIVE PLM-CFG-03 catalog entry (R-W-3) — the
+     * catalog is the source of truth for what wallets exist; the CURRENCY stamped
+     * on a new instance comes from operator_config, not from the catalog entry.
      */
     public function ensureWallet(
         string $subscriptionId,
