@@ -169,7 +169,7 @@ class NoteApplicationService
             (string) $adjustment->subscription_id, $walletCode, $adjustment->account_id, $adjustment->customer_id,
         );
 
-        if ($wallet->currency !== $note->currency) {
+        if ($this->wallets->deploymentCurrency($adjustment->operator_code) !== $note->currency) {
             return $this->fail($note, $adjustment, $noteType, NoteApplication::TARGET_WALLET,
                 $walletCode, $amount, (float) $wallet->balance, 'CURRENCY_MISMATCH');
         }

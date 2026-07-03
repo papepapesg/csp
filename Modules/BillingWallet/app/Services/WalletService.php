@@ -18,11 +18,11 @@ use Modules\Billing\Wallet\Models\WalletType;
 /**
  * BIL-05/BIL-06 wallet & top-up engine. Owns the per-customer wallet balance and an
  * append-only transaction ledger. A subscription may hold several wallets, one per
- * PLM-CFG-03 catalog `walletRef` (MONEY, VOICE, …); behaviour (unit, applicability,
- * charging precedence, refillability, expiry) comes from the catalog — this service
- * applies those rules to the customer's balance. Currency is NOT catalog behaviour:
- * it is deployment config (operator_config.currency_code), stamped onto the wallet
- * instance at creation — one operator, one currency, no exceptions.
+ * PLM-CFG-03 catalog `walletRef` (MONEY, VOICE, …); behaviour (role, unit, charging
+ * precedence, refillability, expiry) comes from the catalog — this service applies
+ * those rules to the customer's balance. Only SETTLEMENT-role wallets are drained to
+ * settle charges. Currency is NOT catalog OR instance data: it is deployment config
+ * (operator_config.currency_code), derived on read — one operator, one currency.
  */
 class WalletService
 {
@@ -85,9 +85,6 @@ class WalletService
                 'operator_code' => Context::operatorCode(),
                 'account_id' => $accountId,
                 'customer_id' => $customerId,
-                // One deployment, one currency: stamped from operator config, never from the type.
-                'currency' => OperatorConfig::forOperator(Context::operatorCode())?->currency_code
-                    ?? config('sophix.default_currency', 'KES'),
                 'balance' => 0,
                 'status' => Wallet::ACTIVE,
             ],
@@ -95,13 +92,26 @@ class WalletService
     }
 
     /**
-     * Charge-time wallet selection (PLM-CFG-03 §charging): the eligible ACTIVE
-     * wallets the subscription holds, filtered by `applicability` against the
-     * billing mode and ordered by `charging_precedence` (lower applied first).
+     * The deployment currency (operator_config.currency_code) — the single currency
+     * money wallets transact in. Derived, never stored on the type or the instance.
+     */
+    public function deploymentCurrency(?string $operator = null): string
+    {
+        $operator ??= Context::operatorCode();
+
+        return OperatorConfig::forOperator($operator)?->currency_code ?? config('sophix.default_currency', 'KES');
+    }
+
+    /**
+     * Charge-time wallet selection (PLM-CFG-03 §charging): the subscription's ACTIVE
+     * SETTLEMENT wallets (the only role that drains to settle charges — a DEPOSIT is
+     * held, an ALLOWANCE is consumed by usage), ordered by `charging_precedence`
+     * (lower applied first). This is why "postpaid can't settle from a wallet" needs
+     * no flag: a postpaid subscription simply holds no settlement wallet here.
      *
      * @return Collection<int,Wallet>
      */
-    public function resolveChargingWallets(string $subscriptionId, string $billingMode = 'PREPAID', ?string $operator = null): Collection
+    public function resolveChargingWallets(string $subscriptionId, ?string $operator = null): Collection
     {
         $operator ??= Context::operatorCode();
         $catalog = $this->catalogSet($operator); // cache-aside (FOUNDATION_CACHE)
@@ -111,7 +121,7 @@ class WalletService
             ->where('status', Wallet::ACTIVE)
             ->get()
             ->filter(fn (Wallet $w) => $catalog->has($w->wallet_code)
-                && $catalog[$w->wallet_code]->appliesToBillingMode($billingMode))
+                && $catalog[$w->wallet_code]->isSettlement())
             ->sortBy(fn (Wallet $w) => $catalog[$w->wallet_code]->charging_precedence)
             ->values();
     }
@@ -128,7 +138,7 @@ class WalletService
     {
         $operator ??= Context::operatorCode();
         $amount = round($amount, 2);
-        $wallets = $this->resolveChargingWallets($subscriptionId, 'PREPAID', $operator);
+        $wallets = $this->resolveChargingWallets($subscriptionId, $operator);
         $catalog = $this->catalogSet($operator);
 
         // R-W-15: a points wallet's CURRENCY value is balance × points_to_currency_rate;

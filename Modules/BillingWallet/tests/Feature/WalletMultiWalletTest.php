@@ -70,27 +70,27 @@ class WalletMultiWalletTest extends TestCase
         $svc->ensureWallet($sub, 'MONEY'); // precedence 100
         $svc->ensureWallet($sub, 'VOICE'); // precedence 90
 
-        $ordered = $svc->resolveChargingWallets($sub, 'PREPAID')->pluck('wallet_code')->all();
+        $ordered = $svc->resolveChargingWallets($sub)->pluck('wallet_code')->all();
 
         // Lower precedence first: VOICE drains before MONEY.
         $this->assertSame(['VOICE', 'MONEY'], $ordered);
     }
 
     /**
-     * EXPECTATION — applicability filters wallets by the subscription's mode.
-     * A POSTPAID charge may not touch a PREPAID_ONLY wallet: only wallets whose
-     * catalog applicability allows the mode are eligible at charge time.
+     * EXPECTATION — only SETTLEMENT wallets are drained to settle charges.
+     * A subscription holding both a MONEY (SETTLEMENT) and a DEPOSIT (held) wallet
+     * exposes only MONEY to the charging path — a deposit is security, never spent
+     * at cycle. Role decides this, not a prepaid/postpaid applicability flag.
      */
-    public function test_postpaid_only_filtering_excludes_prepaid_wallets(): void
+    public function test_only_settlement_wallets_are_charge_sources(): void
     {
-        $sub = 'sub_postpaid_1';
+        $sub = 'sub_settle_1';
         $svc = app(WalletService::class);
-        $svc->ensureWallet($sub, 'MONEY');   // PREPAID_ONLY
-        $svc->ensureWallet($sub, 'DEPOSIT'); // applicability ANY
+        $svc->ensureWallet($sub, 'MONEY');   // role SETTLEMENT
+        $svc->ensureWallet($sub, 'DEPOSIT'); // role DEPOSIT — held, not a charge source
 
-        // A POSTPAID subscription cannot charge the prepaid-only money wallet.
-        $codes = $svc->resolveChargingWallets($sub, 'POSTPAID')->pluck('wallet_code')->all();
-        $this->assertSame(['DEPOSIT'], $codes);
+        $codes = $svc->resolveChargingWallets($sub)->pluck('wallet_code')->all();
+        $this->assertSame(['MONEY'], $codes);
     }
 
     /**

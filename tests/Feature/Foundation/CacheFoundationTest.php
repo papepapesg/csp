@@ -41,10 +41,10 @@ class CacheFoundationTest extends TestCase
     {
         $wallets = app(WalletService::class);
 
-        // First read caches the catalog entry (sophix:plm:wallet:WIK:MONEY); the wallet's
-        // currency comes from operator config (deployment currency), never from the type.
-        $a = $wallets->ensureWallet('sub_cache_a', 'MONEY');
-        $this->assertSame('KES', $a->currency);
+        // First read caches the catalog entry (sophix:plm:wallet:WIK:MONEY). The wallet
+        // carries no currency column — currency is the deployment's (operator config).
+        $wallets->ensureWallet('sub_cache_a', 'MONEY');
+        $this->assertSame('KES', $wallets->deploymentCurrency('WIK'));
 
         // Retire the type directly in the source (bypassing events): the cached copy still
         // serves — a new wallet can still be opened. TTL is the safety net.
@@ -71,19 +71,19 @@ class CacheFoundationTest extends TestCase
         $wallets->ensureWallet('sub_evt', 'MONEY');
         $wallets->ensureWallet('sub_evt', 'VOICE');
         $this->assertSame(['VOICE', 'MONEY'],
-            $wallets->resolveChargingWallets('sub_evt', 'PREPAID')->pluck('wallet_code')->all());
+            $wallets->resolveChargingWallets('sub_evt')->pluck('wallet_code')->all());
 
         // PLM reorders precedence (MONEY now first). Before the event is dispatched,
         // the consumer still serves its cached copy…
         $money = WalletType::query()->where('operator_code', 'WIK')->where('code', 'MONEY')->firstOrFail();
         $svc->update($money, ['charging_precedence' => 10]);
         $this->assertSame(['VOICE', 'MONEY'],
-            $wallets->resolveChargingWallets('sub_evt', 'PREPAID')->pluck('wallet_code')->all());
+            $wallets->resolveChargingWallets('sub_evt')->pluck('wallet_code')->all());
 
         // …until WalletUpdated flows through the outbox and evicts (§9 lazy evict).
         Artisan::call('sophix:outbox:dispatch');
         $this->assertSame(['MONEY', 'VOICE'],
-            $wallets->resolveChargingWallets('sub_evt', 'PREPAID')->pluck('wallet_code')->all());
+            $wallets->resolveChargingWallets('sub_evt')->pluck('wallet_code')->all());
     }
 
     public function test_store_failure_is_a_miss_not_a_business_failure(): void

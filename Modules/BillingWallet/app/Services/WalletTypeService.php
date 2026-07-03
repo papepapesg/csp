@@ -37,7 +37,7 @@ class WalletTypeService
     {
         // R-W-2/5/6/7/11: immutable fields cannot change once any Service references it.
         if ($this->isReferenced($wallet)) {
-            foreach (['code', 'unit', 'decimal_precision', 'applicability', 'refillable'] as $immutable) {
+            foreach (['code', 'role', 'unit', 'decimal_precision', 'refillable'] as $immutable) {
                 if (array_key_exists($immutable, $data) && (string) $data[$immutable] !== (string) $wallet->{$immutable}) {
                     throw new DomainException('IMMUTABLE_FIELD', "Field {$immutable} is immutable once the wallet is referenced.", 422);
                 }
@@ -114,23 +114,20 @@ class WalletTypeService
             }
         }
 
-        // R-W-3: unit is the balance semantics — currency or points. (Currency itself is
-        // DEPLOYMENT config, operator_config.currency_code — never a catalog field.)
+        // R-W-3: unit is the balance semantics — currency, points, or a usage measure.
+        // (Currency itself is DEPLOYMENT config, operator_config.currency_code — never here.)
         $unit = $data['unit'] ?? $existing?->unit ?? WalletType::UNIT_CURRENCY;
-        if (! in_array($unit, [WalletType::UNIT_CURRENCY, WalletType::UNIT_POINTS], true)) {
-            throw new DomainException('R-PLM-CFG-03-W-3', "unit must be 'currency' or 'points'.", 422);
+
+        // R-W-7: role is what the wallet is FOR — the charging path only drains SETTLEMENT.
+        $role = $data['role'] ?? $existing?->role ?? WalletType::ROLE_SETTLEMENT;
+        if (! in_array($role, WalletType::ROLES, true)) {
+            throw new DomainException('R-PLM-CFG-03-W-7', 'role must be SETTLEMENT, DEPOSIT, or ALLOWANCE.', 422);
         }
 
         // R-W-6: decimal_precision in [0, 4].
         $precision = (int) ($data['decimal_precision'] ?? $existing?->decimal_precision ?? 2);
         if ($precision < 0 || $precision > 4) {
             throw new DomainException('R-PLM-CFG-03-W-6', 'decimal_precision must be between 0 and 4.', 422);
-        }
-
-        // R-W-7: applicability enum.
-        $applicability = $data['applicability'] ?? $existing?->applicability ?? WalletType::ANY;
-        if (! in_array($applicability, [WalletType::PREPAID_ONLY, WalletType::POSTPAID_ONLY, WalletType::ANY], true)) {
-            throw new DomainException('R-PLM-CFG-03-W-7', 'applicability must be PREPAID_ONLY, POSTPAID_ONLY, or ANY.', 422);
         }
 
         // R-W-9: expiry_period_days required (positive) when expires = true.
@@ -158,7 +155,7 @@ class WalletTypeService
             topic: CatalogEvents::TOPIC,
             payload: [
                 'walletTypeId' => $wallet->wallet_type_id, 'code' => $wallet->code,
-                'unit' => $wallet->unit, 'applicability' => $wallet->applicability,
+                'role' => $wallet->role, 'unit' => $wallet->unit,
                 'chargingPrecedence' => $wallet->charging_precedence, 'status' => $wallet->status,
             ],
             aggregateType: 'Wallet',

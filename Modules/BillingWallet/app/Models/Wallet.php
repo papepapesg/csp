@@ -9,8 +9,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 /**
  * BIL-05 wallet for PREPAID subscriptions. A subscription may hold several —
  * one per PLM-CFG-03 wallet type (MONEY, VOICE, points…); the type governs
- * behaviour (refillability, charging precedence, expiry), the currency is
- * stamped from operator_config at creation, this row holds the balance.
+ * behaviour (role, refillability, charging precedence, expiry); this row just
+ * holds the balance. No currency column — money wallets transact in the
+ * deployment currency (operator_config), derived on read.
  *
  * @property string $wallet_id
  * @property string $balance

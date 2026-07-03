@@ -32,7 +32,7 @@ class WalletController extends ApiController
             'walletId' => $wallet->wallet_id,
             'subscriptionId' => $wallet->subscription_id,
             'walletCode' => $wallet->wallet_code,
-            'currency' => $wallet->currency,
+            'currency' => $this->wallets->deploymentCurrency($wallet->operator_code),
             'balance' => $wallet->balance,
             'status' => $wallet->status,
         ]);

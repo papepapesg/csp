@@ -20,24 +20,24 @@ class WalletTypeSeeder extends Seeder
     {
         $operator = config('sophix.default_operator', 'WIK');
 
-        // [code, description, unit, applicability, precedence, refillable, expires, expiryDays, pointsRate, decimals]
+        // [code, description, role, unit, precedence, refillable, expires, expiryDays, pointsRate, decimals]
         $types = [
-            ['PROMO', 'Promotional credit (one-shot)', 'currency', 'PREPAID_ONLY', 50, false, true, 90, null, 2],   // spent first (expires)
-            ['LOYALTY_POINTS', 'Loyalty points', 'points', 'ANY', 60, true, true, 365, 0.01, 0],                    // points → currency at 0.01
-            ['BONUS', 'Operator-granted credit', 'currency', 'PREPAID_ONLY', 80, false, false, null, null, 2],
-            ['VOICE', 'Phone usage wallet', 'currency', 'PREPAID_ONLY', 90, true, false, null, null, 2],
-            ['MONEY', 'Customer top-up balance (Internet+TV settlement)', 'currency', 'PREPAID_ONLY', 100, true, false, null, null, 2],
-            ['DEPOSIT', 'Refundable deposit', 'currency', 'ANY', 200, true, false, null, null, 2],                  // held, both billing modes
+            ['PROMO', 'Promotional credit (one-shot)', 'SETTLEMENT', 'currency', 50, false, true, 90, null, 2],   // spent first (expires)
+            ['LOYALTY_POINTS', 'Loyalty points', 'SETTLEMENT', 'points', 60, true, true, 365, 0.01, 0],           // points → currency at 0.01
+            ['BONUS', 'Operator-granted credit', 'SETTLEMENT', 'currency', 80, false, false, null, null, 2],
+            ['VOICE', 'Phone usage wallet', 'SETTLEMENT', 'currency', 90, true, false, null, null, 2],
+            ['MONEY', 'Customer top-up balance (Internet+TV settlement)', 'SETTLEMENT', 'currency', 100, true, false, null, null, 2],
+            ['DEPOSIT', 'Refundable deposit (held, refunded at termination)', 'DEPOSIT', 'currency', 200, true, false, null, null, 2],
         ];
-        foreach ($types as [$code, $description, $unit, $applicability, $precedence, $refillable, $expires, $expiryDays, $rate, $decimals]) {
+        foreach ($types as [$code, $description, $role, $unit, $precedence, $refillable, $expires, $expiryDays, $rate, $decimals]) {
             WalletType::query()->updateOrCreate(
                 ['operator_code' => $operator, 'code' => $code],
                 [
                     'wallet_type_id' => Id::make('wtyp'),
                     'description' => $description,
+                    'role' => $role,
                     'unit' => $unit,
                     'decimal_precision' => $decimals,
-                    'applicability' => $applicability,
                     'charging_precedence' => $precedence,
                     'refillable' => $refillable,
                     'expires' => $expires,

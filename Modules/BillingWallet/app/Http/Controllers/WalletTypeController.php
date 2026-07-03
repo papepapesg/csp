@@ -42,9 +42,9 @@ class WalletTypeController extends ApiController
         $data = $request->validate([
             'code' => ['required', 'string', 'max:64'],
             'description' => ['required', 'string', 'max:255'],
+            'role' => ['nullable', 'in:SETTLEMENT,DEPOSIT,ALLOWANCE'],
             'unit' => ['nullable', 'in:currency,points'],
             'decimal_precision' => ['nullable', 'integer', 'min:0', 'max:4'],
-            'applicability' => ['nullable', 'in:PREPAID_ONLY,POSTPAID_ONLY,ANY'],
             'expires' => ['sometimes', 'boolean'],
             'expiry_period_days' => ['nullable', 'integer', 'min:1'],
             'charging_precedence' => ['nullable', 'integer', 'min:0'],
@@ -59,7 +59,6 @@ class WalletTypeController extends ApiController
     {
         $data = $request->validate([
             'description' => ['sometimes', 'string', 'max:255'],
-            'applicability' => ['sometimes', 'in:PREPAID_ONLY,POSTPAID_ONLY,ANY'],
             'expires' => ['sometimes', 'boolean'],
             'expiry_period_days' => ['nullable', 'integer', 'min:1'],
             'charging_precedence' => ['sometimes', 'integer', 'min:0'],

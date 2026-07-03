@@ -19,7 +19,8 @@ return new class extends Migration
             $table->string('subscription_id')->unique();
             $table->string('account_id')->nullable()->index();
             $table->string('operator_code')->index();
-            $table->string('currency', 3)->default('KES');
+            // No currency column: money wallets transact in the deployment currency
+            // (operator_config.currency_code); allowance wallets have no currency at all.
             $table->decimal('balance', 14, 2)->default(0);
             $table->string('status')->default('ACTIVE');       // ACTIVE | FROZEN | CLOSED
             $table->timestamps();

@@ -35,8 +35,9 @@ class WalletTypeTest extends TestCase
 
     public function test_seed_provides_money_and_voice_wallets(): void
     {
-        $this->assertDatabaseHas('wallet_type', ['code' => 'MONEY', 'applicability' => 'PREPAID_ONLY', 'charging_precedence' => 100, 'status' => 'ACTIVE']);
-        $this->assertDatabaseHas('wallet_type', ['code' => 'VOICE', 'charging_precedence' => 90, 'status' => 'ACTIVE']);
+        $this->assertDatabaseHas('wallet_type', ['code' => 'MONEY', 'role' => 'SETTLEMENT', 'charging_precedence' => 100, 'status' => 'ACTIVE']);
+        $this->assertDatabaseHas('wallet_type', ['code' => 'VOICE', 'role' => 'SETTLEMENT', 'charging_precedence' => 90, 'status' => 'ACTIVE']);
+        $this->assertDatabaseHas('wallet_type', ['code' => 'DEPOSIT', 'role' => 'DEPOSIT', 'status' => 'ACTIVE']);
         // List is ordered by precedence.
         $this->getJson('/api/wallet-types')->assertOk();
     }
@@ -48,8 +49,8 @@ class WalletTypeTest extends TestCase
     public function test_create_then_activate_a_wallet(): void
     {
         $res = $this->postJson('/api/wallet-types', [
-            'code' => 'BONUS2', 'description' => 'Second bonus wallet', 'unit' => 'currency',
-            'applicability' => 'PREPAID_ONLY', 'charging_precedence' => 70, 'refillable' => false,
+            'code' => 'BONUS2', 'description' => 'Second bonus wallet', 'role' => 'SETTLEMENT', 'unit' => 'currency',
+            'charging_precedence' => 70, 'refillable' => false,
         ], ['Idempotency-Key' => 'w-create'])->assertCreated()->assertJsonPath('status', 'DRAFT');
 
         $id = $res->json('wallet_type_id');

@@ -9,10 +9,11 @@ use Illuminate\Support\Facades\Schema;
  * per-customer balance; that ledger is BIL-06, kept in `wallet`). Each entry is
  * referenced by Service / Package / Discount defs via its `code` (the
  * cross-module `walletRef`). The catalog declares what wallets exist and how
- * they behave: unit (currency | points), which billing modes may use them
- * (`applicability`), the order they are charged in (`charging_precedence`),
- * expiry, refill, and the points→currency conversion. Lifecycle DRAFT → ACTIVE
- * → RETIRED (R-W-14).
+ * they behave: `role` (SETTLEMENT — drains to settle prepaid charges; DEPOSIT —
+ * held security, refunded; ALLOWANCE — in-kind units consumed by usage), `unit`
+ * (currency | points | a usage measure), the order settlement wallets drain in
+ * (`charging_precedence`), expiry, refill, and points→currency conversion.
+ * Lifecycle DRAFT → ACTIVE → RETIRED (R-W-14).
  *
  * Deliberately currency-free: a deployment transacts in ONE currency
  * (operator_config.currency_code), stamped onto the wallet instance at creation
@@ -29,9 +30,9 @@ return new class extends Migration
             $table->string('operator_code')->index();
             $table->string('code');                                   // walletRef, e.g. MONEY (R-W-1)
             $table->string('description');
-            $table->string('unit')->default('currency');             // currency | points (R-W-15)
+            $table->string('role')->default('SETTLEMENT');            // SETTLEMENT | DEPOSIT | ALLOWANCE (R-W-7)
+            $table->string('unit')->default('currency');             // currency | points | usage measure (R-W-15)
             $table->unsignedTinyInteger('decimal_precision')->default(2); // 0..4 (R-W-6)
-            $table->string('applicability')->default('ANY');          // PREPAID_ONLY | POSTPAID_ONLY | ANY (R-W-7)
             $table->boolean('expires')->default(false);               // R-W-9
             $table->unsignedInteger('expiry_period_days')->nullable(); // required when expires (R-W-9)
             $table->unsignedInteger('charging_precedence')->default(100); // lower applied first (R-W-10)

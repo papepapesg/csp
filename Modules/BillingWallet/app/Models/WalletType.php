@@ -8,19 +8,26 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * PLM-CFG-03 wallet type — THE single wallet catalog level: defines a wallet a
- * customer can hold (code = the walletRef Services reference) and how it
- * behaves at charging time (unit, applicability, precedence, refillability,
- * expiry, points valuation).
+ * customer can hold (code = the walletRef Services reference) and how it behaves
+ * (role, unit, precedence, refillability, expiry, points valuation).
+ *
+ * `role` is the primary axis — it answers "what is this wallet FOR", which
+ * subsumes the old prepaid/postpaid `applicability` guessing:
+ *   SETTLEMENT  a spendable balance that drains to settle prepaid charges
+ *               (unit currency or points). The only role the charging path
+ *               selects — so "postpaid can't settle from a wallet" is expressed
+ *               by there being no settlement wallet on that path, not a flag.
+ *   DEPOSIT     a held security balance — refunded, never charged at cycle.
+ *   ALLOWANCE   in-kind units (DATA/SMS/VOICE) consumed by usage; overage bills.
  *
  * Deliberately currency-free: a deployment transacts in ONE currency
- * (operator_config.currency_code) and wallet instances are stamped with it at
- * creation — a catalog row cannot introduce a second currency, and codes are
- * currency-neutral (MONEY, not a per-currency MONEY_XXX). The per-customer balance lives in
- * the wallet/wallet_transaction ledger, not here.
+ * (operator_config.currency_code); nothing here (or on the wallet instance)
+ * carries currency, and codes are currency-neutral (MONEY, not MONEY_KES). The
+ * per-customer balance lives in the wallet/wallet_transaction ledger, not here.
  *
  * @property string $code
- * @property string $unit           currency | points
- * @property string $applicability  PREPAID_ONLY | POSTPAID_ONLY | ANY
+ * @property string $role   SETTLEMENT | DEPOSIT | ALLOWANCE
+ * @property string $unit   currency | points | usage measure
  * @property int $charging_precedence
  */
 class WalletType extends Model
@@ -33,11 +40,14 @@ class WalletType extends Model
 
     public const STATUS_RETIRED = 'RETIRED';
 
-    public const PREPAID_ONLY = 'PREPAID_ONLY';
+    // Roles (R-W-7): what the wallet is FOR.
+    public const ROLE_SETTLEMENT = 'SETTLEMENT';
 
-    public const POSTPAID_ONLY = 'POSTPAID_ONLY';
+    public const ROLE_DEPOSIT = 'DEPOSIT';
 
-    public const ANY = 'ANY';
+    public const ROLE_ALLOWANCE = 'ALLOWANCE';
+
+    public const ROLES = [self::ROLE_SETTLEMENT, self::ROLE_DEPOSIT, self::ROLE_ALLOWANCE];
 
     // Units (R-W-15): what the balance counts.
     public const UNIT_CURRENCY = 'currency';
@@ -79,15 +89,16 @@ class WalletType extends Model
         return $this->unit === self::UNIT_POINTS;
     }
 
-    /** R-W-7: can a subscription on this billing mode charge against this wallet? */
-    public function appliesToBillingMode(string $billingMode): bool
+    /** R-W-7: a spendable balance the charging path drains to settle prepaid charges. */
+    public function isSettlement(): bool
     {
-        return match ($this->applicability) {
-            self::ANY => true,
-            self::PREPAID_ONLY => $billingMode === 'PREPAID',
-            self::POSTPAID_ONLY => $billingMode === 'POSTPAID',
-            default => false,
-        };
+        return $this->role === self::ROLE_SETTLEMENT;
+    }
+
+    /** An in-kind allowance (DATA/SMS/VOICE) consumed by usage; overage bills. */
+    public function isAllowance(): bool
+    {
+        return $this->role === self::ROLE_ALLOWANCE;
     }
 
     /** Resolve an ACTIVE wallet type by its walletRef code, or null. */
