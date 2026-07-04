@@ -23,10 +23,19 @@ class DunningProgram extends Model
     public const PREPAID = 'PREPAID';
     public const PREPAYMENT = 'PREPAYMENT';
 
+    /** The billing modes a program may target — the single source of truth for validation. */
+    public const BILLING_MODES = [self::POSTPAID, self::PREPAID, self::PREPAYMENT];
+
     public const WARNING_ONLY = 'WARNING_ONLY';
     public const RESTRICTION_ADD = 'RESTRICTION_ADD';
     public const SUSPEND_NP = 'SUSPEND_NP';
     public const TERMINATION = 'TERMINATION';
+
+    /**
+     * The closed, actionable set a level's action_workflow_intent may be — the single source of
+     * truth. applyLevelAction() branches on exactly these; authoring validates against this list.
+     */
+    public const INTENTS = [self::WARNING_ONLY, self::RESTRICTION_ADD, self::SUSPEND_NP, self::TERMINATION];
 
     protected $table = 'dunning_program';
 

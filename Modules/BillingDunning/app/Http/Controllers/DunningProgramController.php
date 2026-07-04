@@ -7,6 +7,7 @@ use App\Foundation\Http\ApiResponse;
 use App\Foundation\Support\Context;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Modules\Billing\Dunning\Models\DunningProgram;
 
 /**
@@ -76,11 +77,11 @@ class DunningProgramController extends ApiController
         return $request->validate([
             'code' => [$partial ? 'sometimes' : 'required', 'string', 'max:64'],
             'description' => ['nullable', 'string'],
-            'billing_mode' => [$req, 'in:POSTPAID,PREPAID,PREPAYMENT'],
+            'billing_mode' => [$req, Rule::in(DunningProgram::BILLING_MODES)],
             'level_definitions' => [$req, 'array', 'min:1'],
             'level_definitions.*.level' => ['required_with:level_definitions', 'integer'],
             'level_definitions.*.grace_period_days' => ['required_with:level_definitions', 'integer', 'min:0'],
-            'level_definitions.*.action_workflow_intent' => ['required_with:level_definitions', 'in:WARNING_ONLY,RESTRICTION_ADD,SUSPEND_NP,TERMINATION'],
+            'level_definitions.*.action_workflow_intent' => ['required_with:level_definitions', Rule::in(DunningProgram::INTENTS)],
             'pre_termination_review_required' => ['nullable', 'boolean'],
         ]);
     }

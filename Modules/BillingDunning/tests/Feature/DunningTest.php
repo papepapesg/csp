@@ -199,6 +199,25 @@ class DunningTest extends TestCase
     }
 
     /**
+     * EXPECTATION — a level's action is a closed, cataloged set, enforced at authoring.
+     * action_workflow_intent must be one of the four DunningProgram::INTENTS the engine
+     * knows how to act on; an unknown intent is rejected (422), never stored to fail
+     * silently at escalation time. A valid intent authors cleanly.
+     */
+    public function test_unknown_action_intent_is_rejected_at_authoring(): void
+    {
+        $this->postJson('/api/dunning-programs', [
+            'code' => 'wik_bad_intent', 'billing_mode' => 'POSTPAID',
+            'level_definitions' => [['level' => 1, 'grace_period_days' => 7, 'action_workflow_intent' => 'NUKE_ACCOUNT']],
+        ])->assertStatus(422);
+
+        $this->postJson('/api/dunning-programs', [
+            'code' => 'wik_ok_intent', 'billing_mode' => 'POSTPAID',
+            'level_definitions' => [['level' => 1, 'grace_period_days' => 7, 'action_workflow_intent' => 'WARNING_ONLY']],
+        ])->assertCreated();
+    }
+
+    /**
      * EXPECTATION — a policy edit is a NEW version; in-flight episodes keep the old.
      * Publishing a new program version retires v1 and activates v2, but an episode
      * that entered under v1 stays pinned to v1 — its escalation finishes under the
