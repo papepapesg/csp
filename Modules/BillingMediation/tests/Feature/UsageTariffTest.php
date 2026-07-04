@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Tests\Feature;
+namespace Modules\Billing\Mediation\Tests\Feature;
 
 use App\Foundation\Support\Context;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -32,6 +32,10 @@ class UsageTariffTest extends TestCase
         return RatedEvent::query()->where('operator_code', 'WIK')->latest('created_at')->firstOrFail();
     }
 
+    /**
+     * EXPECTATION — the operator's usage_tariff is the source of truth for the rate.
+     * With a DATA tariff of 0.75/MB configured, 100 MB rates at 75 — not the flat 0.50 default.
+     */
     public function test_configured_data_rate_overrides_the_default(): void
     {
         UsageTariff::query()->create(['operator_code' => 'WIK', 'usage_type' => 'DATA', 'rate_per_unit' => 0.75, 'unit' => 'MB']);
@@ -41,6 +45,11 @@ class UsageTariffTest extends TestCase
         $this->assertSame('75.0000', (string) $rated->amount); // 100 MB * 0.75, not the 0.50 default
     }
 
+    /**
+     * EXPECTATION — no configured tariff falls back to the built-in flat default.
+     * With no SMS tariff authored, 10 SMS rate at the 1.00 default (= 10) — rating never
+     * fails for an un-priced type, it just uses the safety-net rate.
+     */
     public function test_falls_back_to_default_when_no_tariff_configured(): void
     {
         $rated = $this->rate('SMS', 10, 'cdr-sms');

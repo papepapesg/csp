@@ -6,10 +6,22 @@ use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;
 use Illuminate\Database\Eloquent\Model;
 
-/** MED-01 / RAT-01 — usage_record. */
+/** MED-01 / RAT-01 — a mediated CDR (raw usage), rated into a RatedEvent. */
 class UsageRecord extends Model
 {
     use HasPrefixedId;
+
+    // Lifecycle: ingested RECEIVED, then priced to RATED.
+    public const STATUS_RECEIVED = 'RECEIVED';
+
+    public const STATUS_RATED = 'RATED';
+
+    // Usage types the rating engine knows how to price.
+    public const TYPE_VOICE = 'VOICE';
+
+    public const TYPE_DATA = 'DATA';
+
+    public const TYPE_SMS = 'SMS';
 
     protected $table = 'usage_record';
 

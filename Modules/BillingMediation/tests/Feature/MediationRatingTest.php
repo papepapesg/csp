@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Tests\Feature;
+namespace Modules\Billing\Mediation\Tests\Feature;
 
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
@@ -13,6 +13,12 @@ use Modules\Catalog\Rating\Models\UsageTariff;
 use Modules\Catalog\Rating\Models\VoiceTariff;
 use Tests\TestCase;
 
+/**
+ * MED-01 mediation + RAT-01 rating — raw CDR intake (idempotent on source_ref) and pricing
+ * into immutable rated_event rows BIL-01 later bills. Voice prices from the PLM-CFG-07
+ * voice_tariff by destination; DATA/SMS go through the generic usage-tariff engine, falling
+ * back to a flat default only when no tariff is configured.
+ */
 class MediationRatingTest extends TestCase
 {
     use RefreshDatabase;
@@ -26,6 +32,13 @@ class MediationRatingTest extends TestCase
         Sanctum::actingAs($user);
     }
 
+    /**
+     * EXPECTATION — CDR intake is idempotent; rating prices by type.
+     * Ingesting usage dedupes on source_ref (a replayed CDR is a duplicate, not a
+     * second charge); the rating worker then prices voice from the per-minute
+     * voice_tariff (120s = 12.00) and data at the flat default (100MB = 50.00),
+     * each an immutable rated_event, and emits UsageRated.
+     */
     public function test_ingest_dedupes_and_rates_voice_and_data(): void
     {
         VoiceTariff::query()->create([
@@ -55,6 +68,12 @@ class MediationRatingTest extends TestCase
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'UsageRated']);
     }
 
+    /**
+     * EXPECTATION — a configured usage_tariff overrides the flat default.
+     * When the operator has authored a rich DATA tariff, rating routes through the
+     * generic usage engine (reservation/pulse + allowance) instead of the built-in
+     * flat rate: 100 MB × 2.0 = 200, tagged DATA_TARIFF.
+     */
     public function test_data_uses_the_generic_usage_tariff_when_configured(): void
     {
         // A configured rich tariff routes DATA through the generic engine (not the flat default).

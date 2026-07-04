@@ -1,7 +1,6 @@
 <?php
 
 namespace Modules\Billing\Mediation\Models;
-use Modules\Billing\Mediation\Models\UsageRecord;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;

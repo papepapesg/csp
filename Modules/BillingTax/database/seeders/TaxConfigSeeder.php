@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Database\Seeders;
+namespace Modules\Billing\Tax\Database\Seeders;
 
 use Illuminate\Database\Seeder;
 use Modules\Billing\Tax\Models\TaxOperatorConfig;

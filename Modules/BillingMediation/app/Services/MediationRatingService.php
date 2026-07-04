@@ -59,7 +59,7 @@ class MediationRatingService
                 'quantity' => (float) $r['quantity'],
                 'source_ref' => $r['source_ref'],
                 'occurred_at' => $r['occurred_at'] ?? now(),
-                'status' => 'RECEIVED',
+                'status' => UsageRecord::STATUS_RECEIVED,
                 'raw' => $r['raw'] ?? null,
             ]);
             $ingested++;
@@ -73,7 +73,7 @@ class MediationRatingService
     {
         $operator ??= Context::operatorCode();
         $rated = 0;
-        UsageRecord::query()->where('operator_code', $operator)->where('status', 'RECEIVED')->chunkById(500, function ($records) use (&$rated) {
+        UsageRecord::query()->where('operator_code', $operator)->where('status', UsageRecord::STATUS_RECEIVED)->chunkById(500, function ($records) use (&$rated) {
             foreach ($records as $record) {
                 $this->rate($record);
                 $rated++;
@@ -107,7 +107,7 @@ class MediationRatingService
                 'rate' => $rate,
                 'amount' => round($amount, 4),
             ]);
-            $record->update(['status' => 'RATED']);
+            $record->update(['status' => UsageRecord::STATUS_RATED]);
 
             $this->events->publish(new DomainEvent(
                 type: 'UsageRated',
@@ -124,7 +124,7 @@ class MediationRatingService
     /** @return array{0:float,1:float,2:?string,3:float} [rate, amount, tariffCode, allowanceConsumedUnits] */
     private function price(UsageRecord $record): array
     {
-        if ($record->usage_type === 'VOICE') {
+        if ($record->usage_type === UsageRecord::TYPE_VOICE) {
             // FOUNDATION_CACHE pricing read (1h TTL): rating consumes the PLM tariff
             // catalogs cache-aside; PostgreSQL stays the source of truth.
             $dest = $record->destination ?? 'ONNET';
@@ -155,7 +155,7 @@ class MediationRatingService
             return [$rated['rate'], $rated['amount'], $rated['tariffCode'], (float) ($rated['allowanceConsumedUnits'] ?? 0)];
         }
 
-        $default = $record->usage_type === 'DATA' ? self::DATA_RATE_PER_MB : self::SMS_RATE;
+        $default = $record->usage_type === UsageRecord::TYPE_DATA ? self::DATA_RATE_PER_MB : self::SMS_RATE;
 
         return [$default, (float) $record->quantity * $default, $record->usage_type.'_FLAT', 0.0];
     }

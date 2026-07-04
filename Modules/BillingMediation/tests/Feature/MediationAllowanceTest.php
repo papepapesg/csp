@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Tests\Feature;
+namespace Modules\Billing\Mediation\Tests\Feature;
 
 use App\Foundation\Support\Context;
 use Illuminate\Foundation\Testing\RefreshDatabase;
