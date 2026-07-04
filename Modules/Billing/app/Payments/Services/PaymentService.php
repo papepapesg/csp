@@ -3,6 +3,7 @@
 namespace Modules\Billing\Payments\Services;
 use Modules\Billing\Dunning\Services\DunningService;
 
+use Modules\Billing\Wallet\Models\WalletTransaction;
 use Modules\Billing\Wallet\Services\WalletService;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
@@ -82,7 +83,7 @@ class PaymentService
             // PREPAID path (AL-3): credit the wallet, done.
             if ($prepaid) {
                 $wallet = $this->wallets->ensureWallet($prepaid->subscription_id, WalletService::DEFAULT_WALLET_CODE, $data['account_id'], $prepaid->customer_id);
-                $this->wallets->credit($wallet, $amount, 'TOPUP', $reference);
+                $this->wallets->credit($wallet, $amount, WalletTransaction::MOVEMENT_TOPUP, $reference);
                 $payment->update(['unallocated_amount' => 0, 'status' => 'APPLIED']);
 
                 return $payment->refresh()->load('allocations');
@@ -285,7 +286,7 @@ class PaymentService
                 ->whereNotIn('status_code', [Subscription::TERMINATED])->first();
             if ($sub) {
                 $wallet = $this->wallets->ensureWallet($sub->subscription_id, $config->overpayment_overflow_wallet_ref, $accountId, $sub->customer_id);
-                $this->wallets->credit($wallet, $remaining, 'TOPUP', 'overpayment:'.$payment->payment_id);
+                $this->wallets->credit($wallet, $remaining, WalletTransaction::MOVEMENT_TOPUP, 'overpayment:'.$payment->payment_id);
                 $payment->update(['unallocated_amount' => 0, 'status' => $remaining >= $amount ? 'APPLIED' : 'APPLIED']);
 
                 return;

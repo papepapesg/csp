@@ -31,7 +31,12 @@ return new class extends Migration
             $table->string('id')->primary();                   // wtx_...
             $table->string('wallet_id')->index();
             $table->string('direction');                       // CREDIT | DEBIT
-            $table->string('reason');                          // TOPUP | CYCLE_CHARGE | REFUND | BONUS | CORRECTION | RECOVERY
+            // The CATALOGED, actionable classification — the closed set the code branches on
+            // (event emitted, refillability, expiry). Callers pass a constant; API callers never set it.
+            $table->string('movement_type');                   // TOPUP | CHARGE | CREDIT | ALLOWANCE_GRANT | ALLOWANCE_USE | EXPIRY
+            // Free descriptive audit label — the ORIGINATING code (intent_type, note type, a
+            // usage label). Nothing branches on it. Nullable when self-described by the movement.
+            $table->string('reason')->nullable();
             $table->decimal('amount', 14, 2);
             $table->decimal('balance_after', 14, 2);
             $table->string('reference')->nullable();

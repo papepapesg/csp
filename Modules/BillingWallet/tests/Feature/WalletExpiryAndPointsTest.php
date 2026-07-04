@@ -40,7 +40,7 @@ class WalletExpiryAndPointsTest extends TestCase
         Wallet::query()->whereKey($wallet->wallet_id)->update(['expires_at' => now()->subDay()]);
         $this->assertSame(1, $svc->expireBalances('WIK'));
         $this->assertEquals(0, (float) $wallet->fresh()->balance);
-        $this->assertDatabaseHas('wallet_transaction', ['wallet_id' => $wallet->wallet_id, 'reason' => 'EXPIRY']);
+        $this->assertDatabaseHas('wallet_transaction', ['wallet_id' => $wallet->wallet_id, 'movement_type' => 'EXPIRY']);
     }
 
     /**

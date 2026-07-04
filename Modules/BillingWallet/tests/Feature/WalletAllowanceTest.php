@@ -83,7 +83,7 @@ class WalletAllowanceTest extends TestCase
         $this->assertEqualsWithDelta(3000.0, $consumed, 0.001);
         $this->assertEqualsWithDelta(2000.0, $wallets->allowanceBalanceFor('sub_al', 'DATA'), 0.001);
 
-        $this->assertDatabaseHas('wallet_transaction', ['reason' => 'ALLOWANCE_USE', 'direction' => 'DEBIT', 'amount' => 3000.00]);
+        $this->assertDatabaseHas('wallet_transaction', ['movement_type' => 'ALLOWANCE_USE', 'direction' => 'DEBIT', 'amount' => 3000.00]);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'WalletCredited']);   // the grant
         $this->assertDatabaseMissing('outbox_events', ['event_type' => 'WalletToppedUp']); // never a top-up
     }

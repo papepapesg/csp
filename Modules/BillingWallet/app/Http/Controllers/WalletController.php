@@ -48,7 +48,7 @@ class WalletController extends ApiController
         ]);
 
         $wallet = $this->wallets->ensureWallet($subscriptionId, $this->walletCode($request));
-        $txn = $this->wallets->credit($wallet, (float) $data['amount'], WalletTransaction::REASON_TOPUP, $data['reference'] ?? null);
+        $txn = $this->wallets->credit($wallet, (float) $data['amount'], WalletTransaction::MOVEMENT_TOPUP, $data['reference'] ?? null);
 
         return ApiResponse::created($txn);
     }
@@ -64,7 +64,9 @@ class WalletController extends ApiController
         ]);
 
         $wallet = $this->wallets->ensureWallet($subscriptionId, $this->walletCode($request));
-        $txn = $this->wallets->debit($wallet, (float) $data['amount'], $data['reason'] ?? WalletTransaction::REASON_CYCLE_CHARGE, $data['reference'] ?? null);
+        // The endpoint can never set the cataloged movement — a debit is always a CHARGE; the
+        // caller's free text is only the descriptive reason. So TOPUP can't be injected here.
+        $txn = $this->wallets->debit($wallet, (float) $data['amount'], WalletTransaction::MOVEMENT_CHARGE, $data['reference'] ?? null, $data['reason'] ?? null);
 
         return ApiResponse::item($txn);
     }

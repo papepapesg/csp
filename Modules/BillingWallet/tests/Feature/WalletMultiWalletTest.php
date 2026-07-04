@@ -117,4 +117,23 @@ class WalletMultiWalletTest extends TestCase
         $this->postJson("/api/wallets/{$sub}/topup", ['amount' => 50, 'walletCode' => 'NOT_A_WALLET'], ['Idempotency-Key' => 'tp-x'])
             ->assertStatus(422)->assertJsonPath('errorCode', 'UNKNOWN_WALLET_REF');
     }
+
+    /**
+     * EXPECTATION — the cataloged movement can't be injected through the free reason.
+     * The /debit endpoint fixes the movement to CHARGE; a caller passing reason=TOPUP
+     * gets a CHARGE row with TOPUP as a mere descriptive label, and NO WalletToppedUp
+     * (which would otherwise wrongly resume a parked prepaid intent).
+     */
+    public function test_debit_endpoint_cannot_inject_a_topup_movement(): void
+    {
+        $sub = 'sub_inject';
+        $this->postJson("/api/wallets/{$sub}/topup", ['amount' => 500, 'walletCode' => 'MONEY'], ['Idempotency-Key' => 'inj-tp'])->assertCreated();
+
+        $this->postJson("/api/wallets/{$sub}/debit", ['amount' => 100, 'reason' => 'TOPUP', 'walletCode' => 'MONEY'])
+            ->assertOk()->assertJsonPath('balance_after', '400.00');
+        $this->assertDatabaseHas('wallet_transaction', ['direction' => 'DEBIT', 'movement_type' => 'CHARGE', 'reason' => 'TOPUP']);
+
+        // Exactly one WalletToppedUp — from the genuine top-up, not the debit.
+        $this->assertSame(1, \Illuminate\Support\Facades\DB::table('outbox_events')->where('event_type', 'WalletToppedUp')->count());
+    }
 }

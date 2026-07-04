@@ -53,7 +53,7 @@ class MediationAllowanceTest extends TestCase
 
         $this->assertSame('0.0000', (string) $rated->amount);
         $this->assertEqualsWithDelta(2000.0, $wallets->allowanceBalanceFor('sub_in', 'DATA'), 0.001);
-        $this->assertDatabaseHas('wallet_transaction', ['reason' => 'ALLOWANCE_USE', 'amount' => 3000.00]);
+        $this->assertDatabaseHas('wallet_transaction', ['movement_type' => 'ALLOWANCE_USE', 'amount' => 3000.00]);
     }
 
     /**

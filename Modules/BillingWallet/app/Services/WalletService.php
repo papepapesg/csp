@@ -163,7 +163,7 @@ class WalletService
                 continue;
             }
             // Points wallets are debited in points (currency ÷ rate).
-            $this->debit($wallet, $rate ? round($takeCurrency / $rate, 4) : round($takeCurrency, 2), $reason, $reference);
+            $this->debit($wallet, $rate ? round($takeCurrency / $rate, 4) : round($takeCurrency, 2), WalletTransaction::MOVEMENT_CHARGE, $reference, $reason);
             $remaining -= $takeCurrency;
         }
 
@@ -185,7 +185,7 @@ class WalletService
             $wallet->update(['expires_at' => now()->addDays((int) $catalog->expiry_period_days)]);
         }
 
-        return $this->post($wallet, WalletTransaction::CREDIT, $units, WalletTransaction::REASON_ALLOWANCE_GRANT, $reference);
+        return $this->post($wallet, WalletTransaction::CREDIT, $units, WalletTransaction::MOVEMENT_ALLOWANCE_GRANT, null, $reference);
     }
 
     /**
@@ -223,7 +223,7 @@ class WalletService
             if ($take <= 0) {
                 continue;
             }
-            $this->post($wallet, WalletTransaction::DEBIT, $take, WalletTransaction::REASON_ALLOWANCE_USE, $reference);
+            $this->post($wallet, WalletTransaction::DEBIT, $take, WalletTransaction::MOVEMENT_ALLOWANCE_USE, null, $reference);
             $consumed += $take;
             $remaining -= $take;
         }
@@ -260,7 +260,7 @@ class WalletService
             ->where('balance', '>', 0)
             ->get()
             ->each(function (Wallet $wallet) use (&$expired) {
-                $this->post($wallet, WalletTransaction::DEBIT, (float) $wallet->balance, WalletTransaction::REASON_EXPIRY, 'wallet-expiry');
+                $this->post($wallet, WalletTransaction::DEBIT, (float) $wallet->balance, WalletTransaction::MOVEMENT_EXPIRY, null, 'wallet-expiry');
                 $wallet->update(['expires_at' => null]);
                 $expired++;
             });
@@ -268,11 +268,16 @@ class WalletService
         return $expired;
     }
 
-    public function credit(Wallet $wallet, float $amount, string $reason = WalletTransaction::REASON_TOPUP, ?string $reference = null): WalletTransaction
+    /**
+     * Credit a wallet. `$movementType` is the cataloged classification (defaults to a money
+     * TOPUP); `$reason` is the free originating label. Refillability + expiry restart apply
+     * only to a TOPUP — never triggered by a descriptive reason string.
+     */
+    public function credit(Wallet $wallet, float $amount, string $movementType = WalletTransaction::MOVEMENT_TOPUP, ?string $reference = null, ?string $reason = null): WalletTransaction
     {
-        // R-W-11: a non-refillable wallet rejects top-ups (one-shot promo/bonus credits).
-        if ($reason === WalletTransaction::REASON_TOPUP) {
+        if ($movementType === WalletTransaction::MOVEMENT_TOPUP) {
             $catalog = $this->catalogEntry((string) $wallet->operator_code, (string) $wallet->wallet_code);
+            // R-W-11: a non-refillable wallet rejects top-ups (one-shot promo/bonus credits).
             if ($catalog && ! $catalog->refillable) {
                 throw DomainException::ruleRejected(
                     'WALLET_NOT_REFILLABLE',
@@ -285,10 +290,11 @@ class WalletService
             }
         }
 
-        return $this->post($wallet, WalletTransaction::CREDIT, $amount, $reason, $reference);
+        return $this->post($wallet, WalletTransaction::CREDIT, $amount, $movementType, $reason, $reference);
     }
 
-    public function debit(Wallet $wallet, float $amount, string $reason = WalletTransaction::REASON_CYCLE_CHARGE, ?string $reference = null): WalletTransaction
+    /** Debit a wallet. `$movementType` is the cataloged classification; `$reason` the free label. */
+    public function debit(Wallet $wallet, float $amount, string $movementType = WalletTransaction::MOVEMENT_CHARGE, ?string $reference = null, ?string $reason = null): WalletTransaction
     {
         if ((float) $wallet->balance < $amount) {
             throw DomainException::ruleRejected(
@@ -298,30 +304,33 @@ class WalletService
             );
         }
 
-        return $this->post($wallet, WalletTransaction::DEBIT, $amount, $reason, $reference);
+        return $this->post($wallet, WalletTransaction::DEBIT, $amount, $movementType, $reason, $reference);
     }
 
-    private function post(Wallet $wallet, string $direction, float $amount, string $reason, ?string $reference): WalletTransaction
+    private function post(Wallet $wallet, string $direction, float $amount, string $movementType, ?string $reason, ?string $reference): WalletTransaction
     {
         if ($amount <= 0) {
             throw DomainException::ruleRejected('INVALID_AMOUNT', 'Amount must be positive.');
         }
 
-        return DB::transaction(function () use ($wallet, $direction, $amount, $reason, $reference) {
+        return DB::transaction(function () use ($wallet, $direction, $amount, $movementType, $reason, $reference) {
             $wallet = Wallet::query()->whereKey($wallet->wallet_id)->lockForUpdate()->first();
             $newBalance = (float) $wallet->balance + ($direction === WalletTransaction::CREDIT ? $amount : -$amount);
             $wallet->update(['balance' => $newBalance]);
 
             $txn = $wallet->transactions()->create([
                 'direction' => $direction,
+                'movement_type' => $movementType,
                 'reason' => $reason,
                 'amount' => $amount,
                 'balance_after' => $newBalance,
                 'reference' => $reference,
             ]);
 
+            // Event keyed on the cataloged movement (guarded by direction), never on the free reason:
+            // only a genuine TOPUP resumes parked prepaid intents.
             $type = match (true) {
-                $reason === WalletTransaction::REASON_TOPUP => BillingEvents::WALLET_TOPPED_UP,
+                $movementType === WalletTransaction::MOVEMENT_TOPUP && $direction === WalletTransaction::CREDIT => BillingEvents::WALLET_TOPPED_UP,
                 $direction === WalletTransaction::CREDIT => BillingEvents::WALLET_CREDITED,
                 default => BillingEvents::WALLET_DEBITED,
             };
@@ -329,7 +338,7 @@ class WalletService
             $this->events->publish(new DomainEvent(
                 type: $type,
                 topic: BillingEvents::TOPIC,
-                payload: ['walletId' => $wallet->wallet_id, 'walletCode' => $wallet->wallet_code, 'subscriptionId' => $wallet->subscription_id, 'amount' => (string) $amount, 'balance' => (string) $newBalance, 'reason' => $reason],
+                payload: ['walletId' => $wallet->wallet_id, 'walletCode' => $wallet->wallet_code, 'subscriptionId' => $wallet->subscription_id, 'amount' => (string) $amount, 'balance' => (string) $newBalance, 'movementType' => $movementType, 'reason' => $reason],
                 aggregateType: 'Wallet',
                 aggregateId: $wallet->wallet_id,
             ));
