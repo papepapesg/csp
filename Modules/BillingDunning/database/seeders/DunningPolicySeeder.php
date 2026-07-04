@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Database\Seeders;
+namespace Modules\Billing\Dunning\Database\Seeders;
 
 use Illuminate\Database\Seeder;
 use Modules\Billing\Dunning\Models\DunningProgram;

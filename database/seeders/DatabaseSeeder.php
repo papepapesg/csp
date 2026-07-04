@@ -7,7 +7,7 @@ use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Modules\Billing\Database\Seeders\AdjustmentConfigSeeder;
 use Modules\Billing\Intent\Database\Seeders\BillableEventSeeder;
-use Modules\Billing\Database\Seeders\DunningPolicySeeder;
+use Modules\Billing\Dunning\Database\Seeders\DunningPolicySeeder;
 use Modules\Billing\Database\Seeders\InvoiceGroupingSeeder;
 use Modules\Catalog\Database\Seeders\CatalogPolicySeeder;
 use Modules\Catalog\Database\Seeders\TaxCatalogSeeder;

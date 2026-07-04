@@ -1,6 +1,6 @@
 <?php
 
-namespace Modules\Billing\Tests\Feature;
+namespace Modules\Billing\Dunning\Tests\Feature;
 
 use App\Foundation\Events\Outbox\OutboxEvent;
 use App\Foundation\Events\OutboxEventPublished;
@@ -11,7 +11,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
-use Modules\Billing\Database\Seeders\DunningPolicySeeder;
+use Modules\Billing\Dunning\Database\Seeders\DunningPolicySeeder;
 use Modules\Billing\Dunning\Listeners\DunningEventBridge;
 use Modules\Billing\Dunning\Models\DunningProgram;
 use Modules\Billing\Dunning\Models\DunningState;
@@ -26,6 +26,15 @@ use Modules\Subscription\Models\Subscription;
 use Modules\Workflow\Database\Seeders\ProcessDefinitionSeeder;
 use Tests\TestCase;
 
+/**
+ * BIL-04 Dunning Engine — the per-subscription escalation state machine driven by
+ * the versioned dunning_program catalog. The scanner advances one level per pass
+ * at each level's grace period (WARNING → RESTRICTED → SUSPENDED → review →
+ * TERMINATED), firing that level's workflow action; payment/top-up retreats or
+ * clears it. The program version is pinned at entry, so policy edits never disturb
+ * an in-flight episode. BIL-04 orchestrates; the restrict/suspend/terminate money
+ * and lifecycle mutations live in their owning modules.
+ */
 class DunningTest extends TestCase
 {
     use RefreshDatabase;
@@ -52,6 +61,11 @@ class DunningTest extends TestCase
         ]);
     }
 
+    /**
+     * EXPECTATION — overdue debt enters dunning at level 1.
+     * An account with a past-due invoice, scanned, advances 0 → 1 (WARNING) and
+     * emits DunningStageAdvanced — the event NOT-01 turns into the customer notice.
+     */
     public function test_scan_advances_level_zero_to_warning(): void
     {
         $this->overdueInvoice('acct_w');
@@ -62,6 +76,13 @@ class DunningTest extends TestCase
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'DunningStageAdvanced']);
     }
 
+    /**
+     * EXPECTATION — reaching the SUSPEND level suspends the service.
+     * An episode sitting at RESTRICTED past its grace advances to SUSPENDED, whose
+     * action fires the SUB-WF suspend-for-non-payment flow: the subscription goes
+     * SUSPENDED and SubscriptionSuspendedForNonPayment is emitted. BIL-04 orchestrates;
+     * the lifecycle module does the actual suspend.
+     */
     public function test_escalation_to_suspend_triggers_subscription_suspension(): void
     {
         $subId = $this->postJson('/api/subscriptions', [
@@ -84,6 +105,11 @@ class DunningTest extends TestCase
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionSuspendedForNonPayment']);
     }
 
+    /**
+     * EXPECTATION — an account risk flag escalates faster (R-ILM-F-3).
+     * With an affects_dunning flag (NPD) set, the level grace window is waived: the
+     * scan advances even though no grace time has elapsed.
+     */
     public function test_dunning_accelerant_flag_waives_grace(): void
     {
         // R-ILM-F-3: an NPD (affects_dunning) flag escalates past the level-1 grace window.
@@ -108,6 +134,11 @@ class DunningTest extends TestCase
         $this->assertDatabaseHas('dunning_state', ['account_id' => 'acct_npd', 'current_level' => 2]);
     }
 
+    /**
+     * EXPECTATION — escalation is monotonic, one level per pass (D-2).
+     * However overdue, a first scan advances only 0 → 1, never jumping ahead — and
+     * pins the program version at entry (R-BIL-04-C-1).
+     */
     public function test_advance_is_monotonic_never_skips_a_level(): void
     {
         // Even with the grace clock long elapsed at entry, the engine advances exactly one
@@ -120,6 +151,12 @@ class DunningTest extends TestCase
         $this->assertDatabaseHas('dunning_state', ['account_id' => 'acct_m', 'dunning_program_ref' => 'WIK_postpaid_standard', 'dunning_program_version' => 1]);
     }
 
+    /**
+     * EXPECTATION — clearing debt reverses the applied actions and archives.
+     * An episode at RESTRICTED (with a dunning-applied restriction), once cleared,
+     * removes that restriction, drops to level 0 / CLEARED, and snapshots into the
+     * archive (D-4 — the live row is never hard-deleted).
+     */
     public function test_level2_recovery_removes_restriction_and_archives_on_clear(): void
     {
         // A single-restriction program keeps the SUB-WF RESTRICT (one-in-flight) serialization
@@ -161,6 +198,12 @@ class DunningTest extends TestCase
         $this->assertDatabaseHas('dunning_state_archive', ['account_id' => 'acct_r2', 'archive_reason' => 'CLEARED_FULLY_PAID']);
     }
 
+    /**
+     * EXPECTATION — a policy edit is a NEW version; in-flight episodes keep the old.
+     * Publishing a new program version retires v1 and activates v2, but an episode
+     * that entered under v1 stays pinned to v1 — its escalation finishes under the
+     * policy in effect when it began (R-BIL-04-C-1).
+     */
     public function test_program_new_version_retires_prior_and_pins_inflight(): void
     {
         // An in-flight episode on v1.
@@ -179,6 +222,11 @@ class DunningTest extends TestCase
         $this->assertDatabaseHas('dunning_state', ['account_id' => 'acct_v1', 'dunning_program_version' => 1]);
     }
 
+    /**
+     * EXPECTATION — prepaid enters dunning on a missed cycle, not an overdue invoice.
+     * A CyclePaymentMissed event enters the prepaid account at level 1 with the
+     * CYCLE_PAYMENT_MISSED trigger — the prepaid mirror of the postpaid overdue scan.
+     */
     public function test_prepaid_cycle_payment_missed_enters_dunning(): void
     {
         $sub = Subscription::query()->create([
@@ -197,6 +245,12 @@ class DunningTest extends TestCase
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'SubscriptionEnteredDunning']);
     }
 
+    /**
+     * EXPECTATION — termination is gated by a review window, then an admin confirm.
+     * Reaching the TERMINATION level does not auto-terminate: the episode parks in
+     * PENDING_TERMINATION_REVIEW (emitting the pending event). Only an admin
+     * confirm-termination advances it to level 4.
+     */
     public function test_termination_requires_review_then_admin_confirm(): void
     {
         DB::table('dunning_config')->insert(['operator_code' => 'WIK', 'pre_termination_review_required' => true, 'review_window_hours' => 72, 'created_at' => now(), 'updated_at' => now()]);
@@ -215,6 +269,11 @@ class DunningTest extends TestCase
         $this->assertDatabaseHas('dunning_state', ['account_id' => 'acct_t', 'status' => 'ACTIVE', 'current_level' => 4]);
     }
 
+    /**
+     * EXPECTATION — a voluntary pause freezes dunning.
+     * Pausing sets the episode SUSPENDED_BY_PAUSE; a subsequent scan does not advance
+     * it — the debt is parked, not escalated, while the customer is paused.
+     */
     public function test_voluntary_pause_suspends_dunning(): void
     {
         DunningState::query()->create(['operator_code' => 'WIK', 'account_id' => 'acct_v', 'current_level' => 1, 'entered_level_at' => now(), 'status' => 'ACTIVE']);
@@ -227,6 +286,11 @@ class DunningTest extends TestCase
         $this->assertDatabaseHas('dunning_state', ['account_id' => 'acct_v', 'current_level' => 1, 'status' => 'SUSPENDED_BY_PAUSE']);
     }
 
+    /**
+     * EXPECTATION — payment settles the debt and clears dunning end to end.
+     * Paying the overdue balance clears the episode (status CLEARED, level 0) and
+     * emits DunningCleared — the payment path drives the recovery, no manual step.
+     */
     public function test_payment_clears_dunning(): void
     {
         $this->overdueInvoice('acct_p', 500);

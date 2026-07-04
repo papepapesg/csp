@@ -1,7 +1,6 @@
 <?php
 
 namespace Modules\Billing\Dunning\Services;
-use Modules\Billing\Dunning\Services\DunningProgramResolver;
 
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
@@ -97,7 +96,7 @@ class DunningService
         }
         $state->outstanding_debt_amount = $debt;
         $state->outstanding_debt_currency = $subscription?->currency ?? 'KES';
-        $state->triggering_event_type ??= 'INVOICE_OVERDUE';
+        $state->triggering_event_type ??= DunningState::TRIGGER_INVOICE_OVERDUE;
         $state->last_scanned_at = now();
         $state->next_evaluation_at = now()->addDay(); // E-2
 
@@ -180,7 +179,7 @@ class DunningService
             'billing_mode' => $billingMode,
             'dunning_program_ref' => $program->code,
             'dunning_program_version' => $program->version,
-            'triggering_event_type' => 'CYCLE_PAYMENT_MISSED',
+            'triggering_event_type' => DunningState::TRIGGER_CYCLE_PAYMENT_MISSED,
             'triggering_event_ref' => $cycleRef,
             'current_level' => DunningState::LEVEL_WARNING,
             'entered_level_at' => now(),
@@ -192,7 +191,7 @@ class DunningService
             'last_scanned_at' => now(),
         ])->save();
 
-        $this->events->publish($this->stateEvent(BillingEvents::SUBSCRIPTION_ENTERED_DUNNING, $state, ['triggeringEventType' => 'CYCLE_PAYMENT_MISSED', 'debt' => (string) $debt]));
+        $this->events->publish($this->stateEvent(BillingEvents::SUBSCRIPTION_ENTERED_DUNNING, $state, ['triggeringEventType' => DunningState::TRIGGER_CYCLE_PAYMENT_MISSED, 'debt' => (string) $debt]));
         $this->applyLevelAction($program, DunningState::LEVEL_WARNING, $subscription, $state);
     }
 
@@ -262,7 +261,7 @@ class DunningService
                 ));
             }
             if ($intent === DunningProgram::TERMINATION) {
-                $this->archive($state, 'TERMINATED');
+                $this->archive($state, DunningState::ARCHIVE_TERMINATED);
             }
         }
     }
@@ -352,21 +351,21 @@ class DunningService
 
     public function adminClear(string $accountId, ?string $actor = null): void
     {
-        $this->clear($accountId, 'ADMIN_CLEARED', $actor);
+        $this->clear($accountId, DunningState::ARCHIVE_ADMIN_CLEARED, $actor);
     }
 
     /** R-5(c) clear-without-payment: write off the debt and recover the subscription. */
     public function clearWithoutPayment(string $accountId, ?string $actor = null): void
     {
-        $this->emitAdminOverride($accountId, 'CLEAR_WITHOUT_PAYMENT', $actor);
-        $this->clear($accountId, 'ADMIN_CLEARED', $actor);
+        $this->emitAdminOverride($accountId, DunningState::ADMIN_CLEAR_WITHOUT_PAYMENT, $actor);
+        $this->clear($accountId, DunningState::ARCHIVE_ADMIN_CLEARED, $actor);
     }
 
     public function hold(string $accountId, ?string $actor = null, ?int $hours = null): void
     {
         DunningState::query()->where('account_id', $accountId)
             ->update(['next_evaluation_at' => $hours ? now()->addHours($hours) : null]);
-        $this->emitAdminOverride($accountId, 'HOLD', $actor);
+        $this->emitAdminOverride($accountId, DunningState::ADMIN_HOLD, $actor);
     }
 
     /** R-5(b) skip-to-next-level: force one advance ahead of schedule by zeroing the grace clock. */
@@ -377,7 +376,7 @@ class DunningService
             return;
         }
         $state->update(['entered_level_at' => now()->subYears(1), 'next_evaluation_at' => null]);
-        $this->emitAdminOverride($accountId, 'ADVANCE', $actor);
+        $this->emitAdminOverride($accountId, DunningState::ADMIN_ADVANCE, $actor);
         $debt = (float) $state->outstanding_debt_amount;
         $this->assessAccount($accountId, $state->operator_code, $debt > 0 ? $debt : 1, now()->subDays(60)->toDateString());
     }
@@ -400,7 +399,7 @@ class DunningService
     /** Force terminate from review without waiting (admin). */
     public function forceTerminate(string $accountId, ?string $actor = null): void
     {
-        $this->emitAdminOverride($accountId, 'FORCE_TERMINATE', $actor);
+        $this->emitAdminOverride($accountId, DunningState::ADMIN_FORCE_TERMINATE, $actor);
         $this->confirmTermination($accountId, $actor);
     }
 
@@ -439,7 +438,7 @@ class DunningService
      * level >= 2 removes the dunning-applied restrictions; level 3 resumes service from
      * non-payment suspension (R-BIL-04-R-1/R-2/R-3). A failed recovery flags RECOVERY_FAILED.
      */
-    public function clear(string $accountId, string $archiveReason = 'CLEARED_FULLY_PAID', ?string $actor = null): void
+    public function clear(string $accountId, string $archiveReason = DunningState::ARCHIVE_CLEARED, ?string $actor = null): void
     {
         $state = DunningState::query()->where('account_id', $accountId)->where('status', DunningState::STATUS_ACTIVE)->first();
         if (! $state) {
@@ -510,7 +509,7 @@ class DunningService
             ->whereNull('archived_at')->limit($limit)->get();
 
         foreach ($rows as $state) {
-            $this->archive($state, 'CLEARED_FULLY_PAID');
+            $this->archive($state, DunningState::ARCHIVE_CLEARED);
             $state->update(['status' => DunningState::STATUS_ARCHIVED]);
         }
 

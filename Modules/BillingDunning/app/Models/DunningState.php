@@ -1,7 +1,6 @@
 <?php
 
 namespace Modules\Billing\Dunning\Models;
-use Modules\Billing\Dunning\Models\DunningProgram;
 
 use App\Foundation\Models\HasPrefixedId;
 use App\Foundation\Support\Context;
@@ -39,6 +38,27 @@ class DunningState extends Model
     public const STATUS_RECOVERY_FAILED = 'RECOVERY_FAILED';
 
     public const STATUS_ARCHIVED = 'ARCHIVED';
+
+    // Triggering event types — what put the account into dunning (T-1).
+    public const TRIGGER_INVOICE_OVERDUE = 'INVOICE_OVERDUE';
+
+    public const TRIGGER_CYCLE_PAYMENT_MISSED = 'CYCLE_PAYMENT_MISSED';
+
+    // Archive reasons (D-4).
+    public const ARCHIVE_CLEARED = 'CLEARED_FULLY_PAID';
+
+    public const ARCHIVE_ADMIN_CLEARED = 'ADMIN_CLEARED';
+
+    public const ARCHIVE_TERMINATED = 'TERMINATED';
+
+    // Admin override actions (R-5, audit labels on DunningAdminOverride).
+    public const ADMIN_CLEAR_WITHOUT_PAYMENT = 'CLEAR_WITHOUT_PAYMENT';
+
+    public const ADMIN_HOLD = 'HOLD';
+
+    public const ADMIN_ADVANCE = 'ADVANCE';
+
+    public const ADMIN_FORCE_TERMINATE = 'FORCE_TERMINATE';
 
     protected $table = 'dunning_state';
 
