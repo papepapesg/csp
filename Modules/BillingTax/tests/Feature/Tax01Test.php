@@ -213,10 +213,10 @@ class Tax01Test extends TestCase
     }
 
     /**
-     * EXPECTATION — cancelling a SIGNED tax invoice is dual-controlled (C-1/C-2).
-     * An unsigned tax invoice cancels immediately with no gateway call. A signed one
-     * only stages the cancellation; it takes a DIFFERENT user holding tax.compliance
-     * to approve, which then calls the gateway and records the authority reference.
+     * EXPECTATION — cancelling a SIGNED tax invoice is dual-controlled on the EM-CFG-04 engine (C-1/C-2).
+     * An unsigned tax invoice cancels immediately with no gateway call. A signed one opens an
+     * approval gate; it takes a DIFFERENT user holding tax.compliance to approve, which then calls
+     * the gateway and records the authority reference — no bespoke SoD, the engine owns it.
      */
     public function test_unsigned_cancel_is_immediate_signed_cancel_needs_dual_approval(): void
     {
@@ -247,6 +247,27 @@ class Tax01Test extends TestCase
             ->assertOk()->assertJsonPath('status', 'CANCELLED');
         $this->assertNotNull($signed->refresh()->cancellation_reference);
         $this->assertDatabaseHas('outbox_events', ['event_type' => 'TaxInvoiceCancelled']);
+    }
+
+    /**
+     * EXPECTATION — the engine (not the controller) enforces separation of duties.
+     * One person who both requests AND approves a signed cancellation is refused
+     * SELF_APPROVAL_NOT_ALLOWED by the EM-CFG-04 gate — the invoice stays SIGNED.
+     */
+    public function test_signed_cancellation_requester_cannot_self_approve(): void
+    {
+        $admin = User::factory()->create(['operator_code' => 'WIK']);
+        $admin->assignRole('SUPER_ADMIN'); // holds both invoice.manage and tax.compliance
+        Sanctum::actingAs($admin);
+        $this->customer('cust_1');
+
+        $signed = $this->signing()->sign($this->generator()->fromPaymentApplied($this->postpaidInvoice(), 'pay_s', 1000.0, 'evt_s'));
+        $this->postJson("/api/tax-invoices/{$signed->tax_invoice_id}/cancel", ['reason_code' => 'ERROR'])->assertOk();
+
+        // Same user tries to approve their own request → engine refuses.
+        $this->postJson("/api/tax-invoices/{$signed->tax_invoice_id}/cancel/approve")
+            ->assertStatus(403)->assertJsonPath('errorCode', 'SELF_APPROVAL_NOT_ALLOWED');
+        $this->assertSame('SIGNED', $signed->refresh()->status);
     }
 
     /**

@@ -33,6 +33,11 @@ class TaxInvoice extends Model
     /** Unsigned states — cancellable with regular privileges, no gateway call (C-2). */
     public const UNSIGNED = [self::GENERATED, self::PENDING_SIGNATURE, self::SIGNING_FAILED, self::GAVE_UP_AUTO];
 
+    /** EM-CFG-04 gate for the C-1 dual-controlled cancellation of a SIGNED tax invoice. */
+    public const ENTITY_TYPE = 'TAX_INVOICE';
+
+    public const ACTION_CANCELLATION = 'CANCELLATION';
+
     protected $table = 'tax_invoice';
 
     protected $primaryKey = 'tax_invoice_id';

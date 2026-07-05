@@ -2,6 +2,8 @@
 
 namespace Modules\Billing\Tax\Http\Controllers;
 
+use App\Foundation\Approvals\ApprovalRequest;
+use App\Foundation\Approvals\ApprovalService;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
@@ -22,6 +24,7 @@ class TaxInvoiceController extends ApiController
     public function __construct(
         private readonly TaxSigningService $signing,
         private readonly TaxInvoiceGenerator $generator,
+        private readonly ApprovalService $approvals,
     ) {}
 
     /** GET /api/tax-invoices/dashboard — operations counts per state/failure type (D-1). */
@@ -110,8 +113,8 @@ class TaxInvoiceController extends ApiController
 
     /**
      * POST /api/tax-invoices/{taxInvoice}/cancel — request cancellation. Unsigned cancels
-     * immediately (C-2); a SIGNED invoice records the request and waits for compliance approval
-     * (C-1 dual-approval), enforced by the approve endpoint's role gate.
+     * immediately (C-2); a SIGNED invoice opens an EM-CFG-04 dual-control gate (C-1) with the
+     * requester as SoD anchor — the reason lives on the gate, not staged on the invoice.
      */
     public function cancel(Request $request, TaxInvoice $taxInvoice): JsonResponse
     {
@@ -119,23 +122,45 @@ class TaxInvoiceController extends ApiController
         if (in_array($taxInvoice->status, TaxInvoice::UNSIGNED, true)) {
             return ApiResponse::item($this->signing->cancel($taxInvoice, $data['reason_code'], $request->user()?->uid));
         }
-        // Signed: stage the request; a compliance officer must approve.
-        $taxInvoice->update(['cancel_reason_code' => $data['reason_code'], 'cancel_requested_by' => $request->user()?->uid]);
+        if ($taxInvoice->status !== TaxInvoice::SIGNED) {
+            throw DomainException::conflict('Tax invoice cannot be cancelled in its current state.');
+        }
+
+        $this->approvals->request([
+            'operator_code' => $taxInvoice->operator_code,
+            'entity_type' => TaxInvoice::ENTITY_TYPE,
+            'action' => TaxInvoice::ACTION_CANCELLATION,
+            'entity_ref' => $taxInvoice->tax_invoice_id,
+            'requested_by' => $request->user()?->uid,
+            'payload' => ['reasonCode' => $data['reason_code']],
+        ]);
 
         return ApiResponse::item(['taxInvoiceId' => $taxInvoice->tax_invoice_id, 'status' => $taxInvoice->status, 'cancellationPending' => true]);
     }
 
-    /** POST /api/tax-invoices/{taxInvoice}/cancel/approve — compliance officer approves (C-1). */
+    /**
+     * POST /api/tax-invoices/{taxInvoice}/cancel/approve — compliance officer approves (C-1).
+     * The EM-CFG-04 engine enforces the distinct-approver rule (SELF_APPROVAL_NOT_ALLOWED); the
+     * tax.compliance route permission gates WHO may act. On approval the gateway cancel runs.
+     */
     public function approveCancel(Request $request, TaxInvoice $taxInvoice): JsonResponse
     {
-        if ($taxInvoice->status !== TaxInvoice::SIGNED || ! $taxInvoice->cancel_reason_code) {
+        $gate = ApprovalRequest::query()
+            ->where('entity_type', TaxInvoice::ENTITY_TYPE)
+            ->where('entity_ref', $taxInvoice->tax_invoice_id)
+            ->where('status', ApprovalRequest::PENDING)
+            ->latest('created_at')->first();
+        if (! $gate || $taxInvoice->status !== TaxInvoice::SIGNED) {
             throw DomainException::conflict('No pending signed-cancellation to approve.');
         }
-        // Segregation: the approver must differ from the requester (dual approval).
-        if ($taxInvoice->cancel_requested_by && $taxInvoice->cancel_requested_by === $request->user()?->uid) {
-            throw DomainException::ruleRejected('SELF_APPROVAL_NOT_ALLOWED', 'The cancellation approver must differ from the requester.');
+
+        $gate = $this->approvals->decide($gate, true, $request->user());
+        if ($gate->status !== ApprovalRequest::APPROVED) {
+            return ApiResponse::item(['taxInvoiceId' => $taxInvoice->tax_invoice_id, 'cancellationPending' => true]);
         }
 
-        return ApiResponse::item($this->signing->cancel($taxInvoice, $taxInvoice->cancel_reason_code, $request->user()?->uid));
+        $reason = $gate->payload['reasonCode'] ?? null;
+
+        return ApiResponse::item($this->signing->cancel($taxInvoice, (string) $reason, $request->user()?->uid));
     }
 }
