@@ -40,8 +40,8 @@ class SubscriptionServiceProvider extends ModuleServiceProvider
      *
      * @param  $schedule
      */
-    // protected function configureSchedules(Schedule $schedule): void
-    // {
-    //     $schedule->command('inspire')->hourly();
-    // }
+    protected function configureSchedules(Schedule $schedule): void
+    {
+        $schedule->command('sophix:subscription:operation-timeouts')->everyMinute()->withoutOverlapping();
+    }
 }

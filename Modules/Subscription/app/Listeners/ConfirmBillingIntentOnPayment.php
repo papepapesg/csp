@@ -5,7 +5,7 @@ namespace Modules\Subscription\Listeners;
 use App\Foundation\Events\OutboxEventPublished;
 use Modules\Billing\Intent\Models\BillingIntent;
 use Modules\Billing\Intent\Services\BillingIntentService;
-use Modules\Workflow\Engine\WorkflowEngine;
+use App\Foundation\Workflow\WorkflowRuntime;
 
 /**
  * Pay-first gate release. When a fee/proration invoice raised by a billing intent
@@ -17,7 +17,7 @@ class ConfirmBillingIntentOnPayment
 {
     public function __construct(
         private readonly BillingIntentService $intents,
-        private readonly WorkflowEngine $engine,
+        private readonly WorkflowRuntime $engine,
     ) {}
 
     public function handle(OutboxEventPublished $published): void

@@ -3,6 +3,7 @@
 namespace Modules\Billing\Intent\Tests\Feature;
 
 use App\Foundation\Errors\DomainException;
+use App\Foundation\Catalog\SupportLevel;
 use App\Foundation\Support\Context;
 use App\Models\User;
 use Database\Seeders\RbacSeeder;
@@ -159,6 +160,26 @@ class BillableEventCatalogTest extends TestCase
         $this->assertSame('CONFIRMED', $skipped->status);
         $this->assertSame('NONE', $skipped->settlement_channel);
         $this->assertNull($skipped->invoice_id);
+    }
+
+    public function test_reference_only_catalog_entry_cannot_enter_runtime_control_flow(): void
+    {
+        $event = BillableEvent::query()->where('operator_code', 'WIK')->where('code', 'PAUSE_FEE')->firstOrFail();
+        $event->update(['support_level' => SupportLevel::REFERENCE_ONLY]);
+
+        $this->assertFalse($event->refresh()->isExecutable());
+
+        try {
+            app(BillingIntentService::class)->emit([
+                'subscription_id' => 'sub_reference',
+                'account_id' => 'acc_reference',
+                'intent_type' => 'PAUSE_FEE',
+                'amount' => 100,
+            ]);
+            $this->fail('expected UNKNOWN_BILLABLE_EVENT');
+        } catch (DomainException $e) {
+            $this->assertSame('UNKNOWN_BILLABLE_EVENT', $e->errorCode);
+        }
     }
 
     public function test_paid_state_callback_transitions_the_subscription(): void

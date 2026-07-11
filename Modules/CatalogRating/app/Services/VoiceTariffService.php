@@ -2,7 +2,6 @@
 
 namespace Modules\Catalog\Rating\Services;
 
-use App\Foundation\Cache\SophixCache;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
@@ -17,7 +16,6 @@ use Modules\Catalog\Rating\Models\VoiceTariffBinding;
 use Modules\Catalog\Rating\Models\VoiceTariffPlan;
 use Modules\Catalog\Rating\Models\VoiceTariffRate;
 use Modules\Catalog\Rating\Models\VoiceTimeBand;
-use Modules\Catalog\Support\CatalogCacheKeys;
 
 /**
  * PLM-CFG-07 Voice Tariff Catalog admin + rating-lookup service. Pure
@@ -28,16 +26,10 @@ use Modules\Catalog\Support\CatalogCacheKeys;
  */
 class VoiceTariffService
 {
-    /** Binding scope precedence (DD §8.4 / §14): higher number wins. */
-    private const SCOPE_RANK = [
-        VoiceTariffBinding::SCOPE_SUBSCRIPTION_OVERRIDE => 3,
-        VoiceTariffBinding::SCOPE_PACKAGE => 2,
-        VoiceTariffBinding::SCOPE_SERVICE => 1,
-    ];
-
     public function __construct(
         private readonly EventBus $events,
-        private readonly SophixCache $cache,
+        private readonly VoiceTariffResolver $resolver,
+        private readonly VoiceCallRater $rater,
     ) {}
 
     // ----------------------------------------------------------------- Plans
@@ -330,75 +322,10 @@ class VoiceTariffService
         });
     }
 
-    // -------------------------------------------------------- Rating lookup
-
-    /**
-     * The core read used by RAT-01 (DD §8.4). Resolves plan → zone → time band →
-     * rate against a cached per-operator snapshot of the ACTIVE catalog, applying
-     * the policy rules. Returns the §8.4 response shape plus resolutionStatus.
-     *
-     * @param  array<string,mixed>  $req
-     * @return array<string,mixed>
-     */
+    /** Compatibility façade for callers that still use the catalog write service. */
     public function ratingLookup(array $req): array
     {
-        $operator = $req['operatorCode'] ?? Context::operatorCode();
-        $at = $this->ts($req['callStartedAt'] ?? null) ?? Carbon::now();
-        $direction = $req['callDirection'] ?? 'OUTBOUND';
-        $called = (string) ($req['calledNumberNormalized'] ?? '');
-
-        $snapshot = $this->cache->remember(
-            ...CatalogCacheKeys::voiceTariff($operator),
-            ttlSeconds: CatalogCacheKeys::voiceTariffTtl(),
-            source: fn () => $this->buildSnapshot($operator),
-        );
-
-        // (a) resolve tariff plan by binding precedence + effective at callStartedAt.
-        $plan = $this->resolvePlan($snapshot, $req, $at);
-        if ($plan === null) {
-            return $this->quarantine('NO_PLAN');
-        }
-
-        // (b) longest-prefix match → zone.
-        $zone = $this->resolveZone($snapshot, $called, $at);
-        if ($zone === null) {
-            return $this->quarantine('NO_ZONE');
-        }
-
-        // (c) pick the time band whose window contains callStartedAt (default ANYTIME).
-        $band = $this->resolveTimeBand($snapshot, $at);
-
-        // (d) find the rate for (plan, zone, time band, direction) active at callStartedAt.
-        $rate = $this->resolveRate($snapshot, $plan['tariff_plan_id'], $zone['zone_id'], $band['time_band_id'] ?? null, $direction, $at);
-        if ($rate === null) {
-            return $this->quarantine('NO_RATE');
-        }
-
-        // Policy: EMERGENCY zone / ZERO_RATED → zero-rated, unitPrice 0 (R-VOICE-TAR-04/05).
-        $zonePolicy = $zone['default_charge_policy'] ?? 'CHARGEABLE';
-        $isZeroRated = $zone['zone_type'] === 'EMERGENCY'
-            || $zonePolicy === 'ZERO_RATED'
-            || $rate['charge_policy'] === 'ZERO_RATED';
-
-        $chargePolicy = $isZeroRated ? 'ZERO_RATED' : $rate['charge_policy'];
-        $unitPrice = $isZeroRated ? 0.0 : (float) $rate['unit_price'];
-
-        return [
-            'tariffPlanCode' => $plan['tariff_plan_code'],
-            'zoneCode' => $zone['zone_code'],
-            'timeBandCode' => $band['time_band_code'] ?? 'ANYTIME',
-            'chargePolicy' => $chargePolicy,
-            'unitType' => $rate['unit_type'],
-            'unitPrice' => $unitPrice,
-            'currency' => $plan['currency_code'],
-            'initialIncrementSeconds' => (int) $rate['initial_increment_seconds'],
-            'subsequentIncrementSeconds' => (int) $rate['subsequent_increment_seconds'],
-            'setupFeeAmount' => (float) $rate['setup_fee_amount'],
-            'minimumChargeAmount' => (float) $rate['minimum_charge_amount'],
-            'taxableKind' => $rate['taxable_kind'],
-            'taxableRef' => $rate['taxable_ref'],
-            'resolutionStatus' => 'RESOLVED',
-        ];
+        return $this->resolver->resolve($req);
     }
 
     /**
@@ -415,83 +342,7 @@ class VoiceTariffService
      */
     public function rateCall(array $req): array
     {
-        $card = $this->ratingLookup($req);
-        if (($card['resolutionStatus'] ?? null) !== 'RESOLVED') {
-            return $card; // QUARANTINE / NO_RATE etc. — nothing to rate
-        }
-
-        $duration = max(0, (int) ($req['durationSeconds'] ?? 0));
-        $remainingAllowance = max(0, (int) ($req['remainingAllowanceSeconds'] ?? 0));
-        $policy = $card['chargePolicy'];
-
-        if ($policy === 'QUARANTINE') {
-            return $this->quarantine('RATE_QUARANTINE');
-        }
-
-        // Reservation + pulse rounding (Huawei CBS / Diameter terms).
-        $billable = $this->reservePulse($duration, max(0, (int) $card['initialIncrementSeconds']), max(1, (int) $card['subsequentIncrementSeconds']));
-
-        if ($policy === 'BLOCKED') {
-            return $this->ratedResult($card, 'BLOCKED', 0, 0, 0, 0.0);
-        }
-        if ($policy === 'ZERO_RATED') {
-            return $this->ratedResult($card, 'ZERO_RATED', $billable, 0, 0, 0.0); // free: no allowance burn, no charge
-        }
-
-        // Burn allowance first, charge the remaining seconds.
-        $allowanceUsed = min($billable, $remainingAllowance);
-        $chargeable = $billable - $allowanceUsed;
-
-        $units = str_contains(strtoupper((string) $card['unitType']), 'SECOND') ? $chargeable : $chargeable / 60.0;
-        $amount = $units * (float) $card['unitPrice'];
-        if ($chargeable > 0) {
-            $amount += (float) $card['setupFeeAmount'];
-            $amount = max($amount, (float) $card['minimumChargeAmount']);
-        }
-
-        return $this->ratedResult($card, 'CHARGED', $billable, $allowanceUsed, $chargeable, round($amount, 2));
-    }
-
-    /** Round a duration up by the reservation (first block) then pulse (subsequent blocks). */
-    private function reservePulse(int $duration, int $initial, int $pulse): int
-    {
-        if ($duration <= 0) {
-            return 0;
-        }
-        if ($duration <= $initial) {
-            return $initial;
-        }
-
-        return $initial + (int) (ceil(($duration - $initial) / $pulse) * $pulse);
-    }
-
-    /**
-     * @param  array<string,mixed>  $card
-     * @return array<string,mixed>
-     */
-    private function ratedResult(array $card, string $chargeStatus, int $billable, int $allowanceUsed, int $chargeable, float $amount): array
-    {
-        return [
-            'resolutionStatus' => 'RATED',
-            'chargeStatus' => $chargeStatus,                 // CHARGED | ZERO_RATED | BLOCKED
-            'tariffPlanCode' => $card['tariffPlanCode'] ?? null,
-            'zoneCode' => $card['zoneCode'] ?? null,
-            'timeBandCode' => $card['timeBandCode'] ?? null,
-            'billableSeconds' => $billable,
-            'allowanceConsumedSeconds' => $allowanceUsed,
-            'chargeableSeconds' => $chargeable,
-            'amount' => $amount,
-            'currency' => $card['currency'] ?? null,
-            'taxableKind' => $card['taxableKind'] ?? null,
-            'taxableRef' => $card['taxableRef'] ?? null,
-        ];
-    }
-
-    /** @return array{resolutionStatus:string,reason:string} */
-    private function quarantine(string $reason): array
-    {
-        // R-VOICE-TAR-07: do not silently zero-rate; quarantine the CDR.
-        return ['resolutionStatus' => 'QUARANTINE', 'reason' => $reason];
+        return $this->rater->rate($req);
     }
 
     // ---------------------------------------------------- snapshot + resolve
@@ -505,205 +356,10 @@ class VoiceTariffService
      */
     public function buildSnapshot(string $operator): array
     {
-        return [
-            'plans' => VoiceTariffPlan::query()
-                ->where('operator_code', $operator)->where('status', VoiceTariffPlan::STATUS_ACTIVE)
-                ->get()->map->getAttributes()->all(),
-            'zones' => VoiceDestinationZone::query()
-                ->where('operator_code', $operator)->where('status', VoiceDestinationZone::STATUS_ACTIVE)
-                ->get()->map->getAttributes()->all(),
-            'prefixes' => VoiceDestinationPrefix::query()
-                ->where('operator_code', $operator)->where('status', VoiceDestinationPrefix::STATUS_ACTIVE)
-                ->get()->map->getAttributes()->all(),
-            'timeBands' => VoiceTimeBand::query()
-                ->where('operator_code', $operator)->where('status', VoiceTimeBand::STATUS_ACTIVE)
-                ->get()->map->getAttributes()->all(),
-            'rates' => VoiceTariffRate::query()
-                ->where('operator_code', $operator)->where('status', VoiceTariffRate::STATUS_ACTIVE)
-                ->get()->map->getAttributes()->all(),
-            'bindings' => VoiceTariffBinding::query()
-                ->where('operator_code', $operator)->where('status', VoiceTariffBinding::STATUS_ACTIVE)
-                ->get()->map->getAttributes()->all(),
-        ];
-    }
-
-    /**
-     * @param  array<string,mixed>  $snapshot
-     * @param  array<string,mixed>  $req
-     * @return array<string,mixed>|null
-     */
-    private function resolvePlan(array $snapshot, array $req, Carbon $at): ?array
-    {
-        $refByScope = [
-            VoiceTariffBinding::SCOPE_SUBSCRIPTION_OVERRIDE => $req['subscriptionId'] ?? null,
-            VoiceTariffBinding::SCOPE_PACKAGE => $req['packageRef'] ?? null,
-            VoiceTariffBinding::SCOPE_SERVICE => $req['serviceRef'] ?? null,
-        ];
-
-        $best = null;
-        $bestRank = -1;
-        $bestPriority = PHP_INT_MIN;
-
-        foreach ($snapshot['bindings'] as $b) {
-            $scope = $b['binding_scope'];
-            $expectedRef = $refByScope[$scope] ?? null;
-            if ($expectedRef === null || (string) $b['binding_ref'] !== (string) $expectedRef) {
-                continue;
-            }
-            if (! $this->effective($b['effective_from'] ?? null, $b['effective_to'] ?? null, $at)) {
-                continue;
-            }
-            $rank = self::SCOPE_RANK[$scope] ?? 0;
-            $priority = (int) ($b['priority'] ?? 0);
-            // Higher scope precedence wins; tie-break by higher priority.
-            if ($rank > $bestRank || ($rank === $bestRank && $priority > $bestPriority)) {
-                $bestRank = $rank;
-                $bestPriority = $priority;
-                $best = $b;
-            }
-        }
-
-        if ($best === null) {
-            return null;
-        }
-
-        foreach ($snapshot['plans'] as $p) {
-            if ($p['tariff_plan_id'] === $best['tariff_plan_id']
-                && $this->effective($p['effective_from'] ?? null, $p['effective_to'] ?? null, $at)) {
-                return $p;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * R-VOICE-TAR-03: longest-prefix match, tie-broken by match_priority.
-     *
-     * @param  array<string,mixed>  $snapshot
-     * @return array<string,mixed>|null
-     */
-    private function resolveZone(array $snapshot, string $called, Carbon $at): ?array
-    {
-        $bestPrefix = null;
-        $bestLen = -1;
-        $bestPriority = PHP_INT_MIN;
-
-        foreach ($snapshot['prefixes'] as $px) {
-            $value = (string) $px['prefix'];
-            if ($value === '' || ! str_starts_with($called, $value)) {
-                continue;
-            }
-            if (! $this->effective($px['effective_from'] ?? null, $px['effective_to'] ?? null, $at)) {
-                continue;
-            }
-            $len = strlen($value);
-            $priority = (int) ($px['match_priority'] ?? 0);
-            if ($len > $bestLen || ($len === $bestLen && $priority > $bestPriority)) {
-                $bestLen = $len;
-                $bestPriority = $priority;
-                $bestPrefix = $px;
-            }
-        }
-
-        if ($bestPrefix === null) {
-            return null;
-        }
-
-        foreach ($snapshot['zones'] as $z) {
-            if ($z['zone_id'] === $bestPrefix['zone_id']) {
-                return $z;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * @param  array<string,mixed>  $snapshot
-     * @return array<string,mixed>|null
-     */
-    private function resolveTimeBand(array $snapshot, Carbon $at): ?array
-    {
-        $anytime = null;
-        foreach ($snapshot['timeBands'] as $tb) {
-            if (($tb['time_band_code'] ?? null) === 'ANYTIME') {
-                $anytime = $tb;
-            }
-            if ($this->bandContains($tb, $at)) {
-                return $tb;
-            }
-        }
-
-        return $anytime;
-    }
-
-    /** @param array<string,mixed> $tb */
-    private function bandContains(array $tb, Carbon $at): bool
-    {
-        $tz = $tb['timezone'] ?? 'UTC';
-        $local = $at->copy()->setTimezone($tz);
-
-        $days = array_filter(array_map('trim', explode(',', (string) ($tb['days_of_week'] ?? ''))));
-        if ($days !== []) {
-            $dow = strtoupper(substr($local->format('D'), 0, 3));
-            if (! in_array($dow, array_map('strtoupper', $days), true)) {
-                return false;
-            }
-        }
-
-        $start = (string) ($tb['start_time_local'] ?? '00:00:00');
-        $end = (string) ($tb['end_time_local'] ?? '23:59:59');
-        $now = $local->format('H:i:s');
-
-        return $now >= $start && $now <= $end;
-    }
-
-    /**
-     * @param  array<string,mixed>  $snapshot
-     * @return array<string,mixed>|null
-     */
-    private function resolveRate(array $snapshot, string $planId, string $zoneId, ?string $bandId, string $direction, Carbon $at): ?array
-    {
-        $best = null;
-        $bestFrom = null;
-
-        foreach ($snapshot['rates'] as $r) {
-            if ($r['tariff_plan_id'] !== $planId || $r['zone_id'] !== $zoneId || $r['call_direction'] !== $direction) {
-                continue;
-            }
-            if ($bandId !== null && $r['time_band_id'] !== $bandId) {
-                continue;
-            }
-            if (! $this->effective($r['effective_from'] ?? null, $r['effective_to'] ?? null, $at)) {
-                continue;
-            }
-            // R-VOICE-TAR-02: pick the most recent effective_from active at call time.
-            $from = $this->ts($r['effective_from'] ?? null);
-            if ($best === null || ($from !== null && ($bestFrom === null || $from->greaterThan($bestFrom)))) {
-                $best = $r;
-                $bestFrom = $from;
-            }
-        }
-
-        return $best;
+        return $this->resolver->buildSnapshot($operator);
     }
 
     // -------------------------------------------------------------- helpers
-
-    private function effective(mixed $from, mixed $to, Carbon $at): bool
-    {
-        $f = $this->ts($from);
-        $t = $this->ts($to);
-        if ($f !== null && $at->lessThan($f)) {
-            return false;
-        }
-        if ($t !== null && $at->greaterThan($t)) {
-            return false;
-        }
-
-        return true;
-    }
 
     private function periodsOverlap(?Carbon $aFrom, ?Carbon $aTo, ?Carbon $bFrom, ?Carbon $bTo): bool
     {

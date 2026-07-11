@@ -13,7 +13,7 @@ use Modules\Subscription\Events\SubscriptionEvents;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Models\SubscriptionOperation;
 use Modules\Subscription\Models\SubscriptionOperationConfig;
-use Modules\Workflow\Engine\WorkflowEngine;
+use App\Foundation\Workflow\WorkflowRuntime;
 use Modules\Workflow\Models\ProcessInstance;
 
 /**
@@ -30,7 +30,7 @@ class OperationFramework
 {
     public function __construct(
         private readonly EventBus $events,
-        private readonly WorkflowEngine $engine,
+        private readonly WorkflowRuntime $engine,
     ) {}
 
     /** Convention fallback: operation kind -> process definition key. */

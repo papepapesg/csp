@@ -2,7 +2,6 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -105,8 +104,11 @@ return new class extends Migration
             $table->unique(['operator_code', 'source_event_ref'], 'cvm_activity_idem');
             $table->index(['operator_code', 'status', 'priority']);
         });
-        // Legacy `type` was NOT NULL; the DD model uses activity_type, so relax it.
-        DB::statement('ALTER TABLE cvm_activity ALTER COLUMN type DROP NOT NULL');
+        // Legacy `type` was NOT NULL; the DD model uses activity_type, so relax it
+        // through Laravel's portable schema grammar.
+        Schema::table('cvm_activity', function (Blueprint $table) {
+            $table->string('type')->nullable()->change();
+        });
     }
 
     public function down(): void

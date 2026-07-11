@@ -40,8 +40,10 @@ class BillingServiceProvider extends ModuleServiceProvider
      *
      * @param  $schedule
      */
-    // protected function configureSchedules(Schedule $schedule): void
-    // {
-    //     $schedule->command('inspire')->hourly();
-    // }
+    protected function configureSchedules(Schedule $schedule): void
+    {
+        $schedule->command('sophix:billing:cycle-close')->everyThirtyMinutes()->withoutOverlapping();
+        $schedule->command('sophix:billing:pro-forma')->daily()->withoutOverlapping();
+        $schedule->command('sophix:billing:generation-retry')->everyFifteenMinutes()->withoutOverlapping();
+    }
 }

@@ -3,6 +3,7 @@
 namespace Modules\Billing\Intent\Services;
 
 use App\Foundation\Errors\DomainException;
+use App\Foundation\Catalog\SupportLevel;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Context;
@@ -59,6 +60,8 @@ class BillableEventCatalogService
             'eligibility_segment_refs' => $data['eligibility_segment_refs'] ?? null,
             'display_order' => $data['display_order'] ?? 100,
             'status' => $data['status'] ?? BillableEvent::DRAFT,
+            'support_level' => $data['support_level'] ?? SupportLevel::EXECUTABLE->value,
+            'behavior_key' => $data['behavior_key'] ?? null,
             'notes' => $data['notes'] ?? null,
             'created_by' => $createdBy,
         ]);
@@ -132,6 +135,7 @@ class BillableEventCatalogService
         return BillableEvent::query()
             ->where('operator_code', $operator)
             ->where('status', BillableEvent::ACTIVE)
+            ->where('support_level', SupportLevel::EXECUTABLE->value)
             ->where(fn ($q) => $q->where('trigger_intent_code', $intentCode)->orWhere('code', $intentCode))
             ->orderBy('display_order')->orderBy('code')
             ->get()
@@ -145,12 +149,20 @@ class BillableEventCatalogService
         return BillableEvent::query()
             ->where('operator_code', $operator)
             ->where('status', BillableEvent::ACTIVE)
+            ->where('support_level', SupportLevel::EXECUTABLE->value)
             ->exists();
     }
 
     /** @param array<string,mixed> $data */
     private function validateRules(string $operator, array $data): void
     {
+        if (isset($data['support_level']) && SupportLevel::tryFrom((string) $data['support_level']) === null) {
+            throw DomainException::ruleRejected('INVALID_SUPPORT_LEVEL', 'support_level must be REFERENCE_ONLY, VALIDATION_ONLY, EXECUTABLE or DEPRECATED.');
+        }
+        if (($data['support_level'] ?? null) === SupportLevel::EXECUTABLE->value
+            && array_key_exists('behavior_key', $data) && $data['behavior_key'] === '') {
+            throw DomainException::ruleRejected('EMPTY_BEHAVIOR_KEY', 'behavior_key must be null or a registered behavior identifier.');
+        }
         if (isset($data['amount_sign_policy']) && ! in_array($data['amount_sign_policy'], BillableEvent::SIGN_POLICIES, true)) {
             throw DomainException::ruleRejected('INVALID_SIGN_POLICY', 'amount_sign_policy must be POSITIVE_ONLY, NEGATIVE_ONLY or SIGNED.');
         }

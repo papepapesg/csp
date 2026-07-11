@@ -3,6 +3,7 @@
 namespace Modules\Billing\Intent\Models;
 
 use App\Foundation\Models\HasPrefixedId;
+use App\Foundation\Catalog\SupportLevel;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -52,6 +53,7 @@ class BillableEvent extends Model
         'eligibility_segment_refs' => 'array',
         'pay_first_required' => 'boolean',
         'retired_at' => 'datetime',
+        'support_level' => SupportLevel::class,
     ];
 
     /** R-BIL-CFG-01-B-5: does this event apply to the given billing mode? */
@@ -62,5 +64,10 @@ class BillableEvent extends Model
             'POSTPAID_ONLY' => $billingMode === 'POSTPAID',
             default => true,
         };
+    }
+
+    public function isExecutable(): bool
+    {
+        return ($this->support_level ?? SupportLevel::EXECUTABLE)->isExecutable();
     }
 }

@@ -48,7 +48,8 @@ class I18nController extends ApiController
             ->when($request->query('section'), fn ($q, $s) => $q->where('section', $s))
             ->when($request->query('operatorCode'), fn ($q, $o) => $q->where('operator_code', $o))
             ->when($request->query('q'), fn ($q, $term) => $q->where(fn ($w) => $w
-                ->where('key', 'ilike', "%{$term}%")->orWhere('value', 'ilike', "%{$term}%")))
+                ->whereLike('key', "%{$term}%", caseSensitive: false)
+                ->orWhereLike('value', "%{$term}%", caseSensitive: false)))
             ->orderBy('domain')->orderBy('section')->orderBy('key')
             ->limit(1000)->get();
 

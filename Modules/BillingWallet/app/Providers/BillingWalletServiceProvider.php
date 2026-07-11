@@ -5,6 +5,7 @@ namespace Modules\Billing\Wallet\Providers;
 use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Console\Scheduling\Schedule;
 use Modules\Billing\Wallet\Console\WalletExpiryCommand;
 use Modules\Billing\Wallet\Listeners\EvictPlmCatalogCache;
 
@@ -20,7 +21,7 @@ class BillingWalletServiceProvider extends ServiceProvider
         $this->app->register(RouteServiceProvider::class);
     }
 
-    public function boot(): void
+    public function boot(Schedule $schedule): void
     {
         $this->loadMigrationsFrom(dirname(__DIR__, 2).'/database/migrations');
 
@@ -30,6 +31,7 @@ class BillingWalletServiceProvider extends ServiceProvider
 
         if ($this->app->runningInConsole()) {
             $this->commands([WalletExpiryCommand::class]);
+            $schedule->command('sophix:wallet:expire')->daily()->withoutOverlapping();
         }
     }
 }

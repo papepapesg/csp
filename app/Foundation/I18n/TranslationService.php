@@ -6,6 +6,7 @@ use App\Foundation\Cache\SophixCache;
 use App\Foundation\Models\OperatorConfig;
 use App\Foundation\Models\UiTranslation;
 use Illuminate\Support\Facades\Lang;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * i18n resource resolution. The ui_translation catalog is the source of truth
@@ -25,6 +26,10 @@ class TranslationService
     /** Merged key → value map for one operator + locale (cached). */
     public function resources(string $locale, ?string $operator = null): array
     {
+        if (! Schema::hasTable((new UiTranslation)->getTable())) {
+            return [];
+        }
+
         $operator = $operator ?: UiTranslation::ALL_OPERATORS;
 
         return $this->cache->remember('i18n', 'resources', "{$operator}:{$locale}", SophixCache::TTL_CATALOG, function () use ($locale, $operator) {
@@ -61,6 +66,10 @@ class TranslationService
     /** The cultures the studio offers: configured + already-translated ones. */
     public function locales(): array
     {
+        if (! Schema::hasTable((new UiTranslation)->getTable())) {
+            return ['en', 'fr', 'sw'];
+        }
+
         return UiTranslation::query()->distinct()->pluck('locale')
             ->merge(OperatorConfig::query()->pluck('default_locale'))
             ->push('en', 'sw', 'fr')
@@ -70,6 +79,10 @@ class TranslationService
     /** Evict the merged maps that contain this row (global rows touch all operators). */
     public function evict(string $locale, string $operatorCode): void
     {
+        if (! Schema::hasTable((new UiTranslation)->getTable())) {
+            return;
+        }
+
         if ($operatorCode === UiTranslation::ALL_OPERATORS) {
             $operators = OperatorConfig::query()->pluck('operator_code')
                 ->push(UiTranslation::ALL_OPERATORS)

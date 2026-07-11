@@ -4,7 +4,7 @@ namespace Modules\Fulfillment\Listeners;
 
 use App\Foundation\Events\OutboxEventPublished;
 use Modules\Fulfillment\Models\FulfillmentOrder;
-use Modules\Workflow\Engine\WorkflowEngine;
+use App\Foundation\Workflow\WorkflowRuntime;
 
 /**
  * FUL-02 STEP-KYC resume. The customer's FINAL KYC approval (CustomerKycApproved
@@ -13,7 +13,7 @@ use Modules\Workflow\Engine\WorkflowEngine;
  */
 class ResumeOrderOnKycApproved
 {
-    public function __construct(private readonly WorkflowEngine $engine) {}
+    public function __construct(private readonly WorkflowRuntime $engine) {}
 
     public function handle(OutboxEventPublished $published): void
     {

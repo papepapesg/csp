@@ -7,6 +7,7 @@ use App\Foundation\Http\ApiController;
 use App\Foundation\Http\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 /**
  * CUST-INT-01 Customer Interaction Timeline. A unified, event-sourced chronological
@@ -21,8 +22,12 @@ class CustomerTimelineController extends ApiController
     {
         $events = OutboxEvent::query()
             ->where(function ($q) use ($customerId) {
-                $q->where('aggregate_id', $customerId)
-                    ->orWhereRaw('payload::text LIKE ?', ['%'.$customerId.'%']);
+                $q->where('aggregate_id', $customerId);
+                if (DB::getDriverName() === 'pgsql') {
+                    $q->orWhereRaw('payload::text LIKE ?', ['%'.$customerId.'%']);
+                } else {
+                    $q->orWhere('payload', 'like', '%'.$customerId.'%');
+                }
             })
             ->orderByDesc('created_at')
             ->limit((int) $request->query('limit', 100))

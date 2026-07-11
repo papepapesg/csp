@@ -6,8 +6,6 @@ use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Event;
 use Modules\Notification\Console\DeliveryShowCommand;
-use Modules\Notification\Console\Icn\StaffExpireCommand;
-use Modules\Notification\Console\Icn\StaffRetryCommand;
 use Modules\Notification\Console\OpsStatusCommand;
 use Modules\Notification\Console\RetryDispatchCommand;
 use Modules\Notification\Console\RetryFixCommand;
@@ -40,8 +38,6 @@ class NotificationServiceProvider extends ModuleServiceProvider
     protected array $commands = [
         RetryDispatchCommand::class,
         RetryRenderCommand::class,
-        StaffRetryCommand::class,
-        StaffExpireCommand::class,
         OpsStatusCommand::class,
         DeliveryShowCommand::class,
         RetryFixCommand::class,

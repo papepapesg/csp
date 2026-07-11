@@ -20,7 +20,7 @@ return new class extends Migration
             // Carry the RLM contractors over to the canonical registry (id preserved).
             DB::statement(<<<'SQL'
                 INSERT INTO contractor (contractor_id, operator_code, code, name, type, skills, status, created_at, updated_at)
-                SELECT tc.contractor_id, tc.operator_code, tc.code, tc.name, 'EXTERNAL', tc.skills, tc.status, now(), now()
+                SELECT tc.contractor_id, tc.operator_code, tc.code, tc.name, 'EXTERNAL', tc.skills, tc.status, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 FROM tech_contractor tc
                 WHERE NOT EXISTS (
                     SELECT 1 FROM contractor c WHERE c.operator_code = tc.operator_code AND c.code = tc.code

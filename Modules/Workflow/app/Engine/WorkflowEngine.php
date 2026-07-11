@@ -2,6 +2,7 @@
 
 namespace Modules\Workflow\Engine;
 
+use App\Foundation\Workflow\WorkflowRuntime;
 use App\Foundation\Errors\DomainException;
 use App\Foundation\Support\Context;
 use Illuminate\Support\Facades\DB;
@@ -23,7 +24,7 @@ use Modules\Workflow\Models\WorkflowTimer;
  * instance until fired/correlated. All flow shape lives in DATA, so behaviour
  * varies by operator with zero code change.
  */
-class WorkflowEngine
+class WorkflowEngine implements WorkflowRuntime
 {
     public function __construct(private readonly TaskRegistry $registry) {}
 
@@ -489,6 +490,33 @@ class WorkflowEngine
         }
 
         return $subs->count();
+    }
+
+    public function cancelByBusinessKey(string $businessKey, ?string $reason = null): int
+    {
+        $instances = ProcessInstance::query()
+            ->where('business_key', $businessKey)
+            ->where('status', ProcessInstance::RUNNING)
+            ->lockForUpdate()
+            ->get();
+
+        foreach ($instances as $instance) {
+            DB::transaction(function () use ($instance, $reason): void {
+                ExternalTask::query()->where('instance_id', $instance->instance_id)
+                    ->whereIn('status', [ExternalTask::CREATED, ExternalTask::LOCKED])
+                    ->update(['status' => ExternalTask::CANCELLED, 'error_message' => $reason]);
+                UserTask::query()->where('instance_id', $instance->instance_id)
+                    ->whereIn('status', [UserTask::OPEN, UserTask::CLAIMED])
+                    ->update(['status' => UserTask::CANCELLED, 'completed_at' => now()]);
+                MessageSubscription::query()->where('instance_id', $instance->instance_id)->delete();
+                WorkflowTimer::query()->where('instance_id', $instance->instance_id)->where('status', 'PENDING')->update(['status' => 'CANCELLED']);
+                $instance->update(['status' => ProcessInstance::CANCELLED, 'error_message' => $reason, 'ended_at' => now()]);
+                $this->log($instance, null, null, 'PROCESS_CANCELLED', ['reason' => $reason]);
+                ProcessInstanceEnded::dispatch($instance->refresh());
+            });
+        }
+
+        return $instances->count();
     }
 
     public function fireDueTimers(): int

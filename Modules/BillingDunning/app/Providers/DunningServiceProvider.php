@@ -5,6 +5,7 @@ namespace Modules\Billing\Dunning\Providers;
 use App\Foundation\Events\OutboxEventPublished;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Console\Scheduling\Schedule;
 use Modules\Billing\Dunning\Console\ArchiveDunningStatesCommand;
 use Modules\Billing\Dunning\Console\DunningFixCommand;
 use Modules\Billing\Dunning\Console\DunningRunCommand;
@@ -19,7 +20,7 @@ class DunningServiceProvider extends ServiceProvider
         $this->app->register(RouteServiceProvider::class);
     }
 
-    public function boot(): void
+    public function boot(Schedule $schedule): void
     {
         $this->loadMigrationsFrom(dirname(__DIR__, 2).'/database/migrations');
 
@@ -28,6 +29,7 @@ class DunningServiceProvider extends ServiceProvider
 
         if ($this->app->runningInConsole()) {
             $this->commands([DunningRunCommand::class, ArchiveDunningStatesCommand::class, DunningShowCommand::class, DunningFixCommand::class]);
+            $schedule->command('sophix:billing:dunning-run')->daily()->withoutOverlapping();
         }
     }
 }

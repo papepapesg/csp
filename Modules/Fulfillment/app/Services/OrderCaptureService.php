@@ -6,12 +6,11 @@ use App\Foundation\Errors\DomainException;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use Illuminate\Support\Facades\DB;
+use App\Foundation\Workflow\WorkflowRuntime;
 use Modules\Fulfillment\Events\FulfillmentEvents;
 use Modules\Fulfillment\Models\FulfillmentOrder;
 use Modules\Subscription\Models\Subscription;
 use Modules\Subscription\Services\SubscriptionService;
-use Modules\Workflow\Engine\WorkflowEngine;
-use Modules\Workflow\Models\ProcessInstance;
 use Modules\WorkOrder\Models\WorkOrder;
 use Modules\WorkOrder\Services\WorkOrderService;
 
@@ -27,7 +26,7 @@ class OrderCaptureService
 {
     public function __construct(
         private readonly EventBus $events,
-        private readonly WorkflowEngine $engine,
+        private readonly WorkflowRuntime $engine,
     ) {}
 
     /**
@@ -119,9 +118,7 @@ class OrderCaptureService
         }
 
         // FUL-02-FRAMEWORK §1.8: cancellation interrupts the journey wherever it is.
-        ProcessInstance::query()->where('business_key', $order->order_id)
-            ->where('status', ProcessInstance::RUNNING)
-            ->update(['status' => ProcessInstance::CANCELLED, 'ended_at' => now()]);
+        $this->engine->cancelByBusinessKey($order->order_id, $reason ?? 'Fulfillment order cancelled');
 
         // FUL-02-STEP-CANCELLATION: compensate the artifacts the journey already created,
         // in reverse creation order. Each step is conditional — a step that never ran left

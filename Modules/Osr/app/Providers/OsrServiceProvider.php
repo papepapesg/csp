@@ -44,8 +44,8 @@ class OsrServiceProvider extends ModuleServiceProvider
      *
      * @param  $schedule
      */
-    // protected function configureSchedules(Schedule $schedule): void
-    // {
-    //     $schedule->command('inspire')->hourly();
-    // }
+    protected function configureSchedules(Schedule $schedule): void
+    {
+        $schedule->command('sophix:stock:expire-reservations')->everyTenMinutes()->withoutOverlapping();
+    }
 }

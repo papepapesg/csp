@@ -24,7 +24,7 @@ return new class extends Migration
             DB::statement(<<<'SQL'
                 INSERT INTO equipment_sku (sku_id, operator_code, name, category, is_serialized, ownership_semantics, deposit_amount, warranty_days, active, created_at, updated_at)
                 SELECT et.operator_code || '-' || et.code, et.operator_code, et.name, COALESCE(et.category, 'OTHER'),
-                       et.serialized, 'RETURNABLE', et.default_deposit, et.warranty_days, true, now(), now()
+                       et.serialized, 'RETURNABLE', et.default_deposit, et.warranty_days, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 FROM equipment_type et
                 WHERE NOT EXISTS (SELECT 1 FROM equipment_sku s WHERE s.sku_id = et.operator_code || '-' || et.code)
             SQL);

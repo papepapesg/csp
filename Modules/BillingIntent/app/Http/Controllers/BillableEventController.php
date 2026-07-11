@@ -10,6 +10,8 @@ use Illuminate\Http\Request;
 use Modules\Billing\Intent\Models\BillableEvent;
 use Modules\Billing\Intent\Models\BillableEventCategory;
 use Modules\Billing\Intent\Services\BillableEventCatalogService;
+use App\Foundation\Catalog\SupportLevel;
+use Illuminate\Validation\Rule;
 
 /**
  * BIL-CFG-01 BillableEvent catalog admin API (DD §4): CRUD + DRAFT→ACTIVE→RETIRED
@@ -29,6 +31,7 @@ class BillableEventController extends ApiController
             ->when($request->query('triggerIntentCode'), fn ($q, $i) => $q->where('trigger_intent_code', $i))
             ->when($request->query('status'), fn ($q, $s) => $q->whereIn('status', explode(',', $s)))
             ->when($request->query('categoryCode'), fn ($q, $c) => $q->where('category_code', $c))
+            ->when($request->query('supportLevel'), fn ($q, $s) => $q->where('support_level', $s))
             ->orderBy('display_order')->orderBy('code')
             ->paginate(perPage: $params['size'], page: $params['page'] + 1);
 
@@ -102,6 +105,8 @@ class BillableEventController extends ApiController
             'eligibility_segment_refs' => ['nullable', 'array'],
             'display_order' => ['nullable', 'integer', 'min:0'],
             'notes' => ['nullable', 'string', 'max:2000'],
+            'support_level' => ['nullable', Rule::enum(SupportLevel::class)],
+            'behavior_key' => ['nullable', 'string', 'max:128'],
         ];
     }
 }

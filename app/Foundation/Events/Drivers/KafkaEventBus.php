@@ -5,7 +5,6 @@ namespace App\Foundation\Events\Drivers;
 use App\Foundation\Events\DomainEvent;
 use App\Foundation\Events\EventBus;
 use App\Foundation\Events\Outbox\OutboxEvent;
-use Illuminate\Support\Facades\Log;
 
 /**
  * Kafka event bus (swap-in for SOPHIX_EVENT_BUS=kafka).
@@ -38,7 +37,6 @@ class KafkaEventBus implements EventBus
     public function produce(OutboxEvent $row): void
     {
         $topic = config('sophix.kafka.topic_prefix', 'sophix').'.'.$row->topic;
-        Log::info('[kafka] would produce', ['topic' => $topic, 'event_id' => $row->event_id]);
-        // TODO: integrate rdkafka producer when running with --profile kafka.
+        throw new \RuntimeException("Kafka publisher is not installed; event {$row->event_id} was not published to {$topic}.");
     }
 }

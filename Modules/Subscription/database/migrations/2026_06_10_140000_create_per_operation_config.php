@@ -39,10 +39,14 @@ return new class extends Migration
             $table->timestamps();
         });
 
-        // §3.1 CHECK: threshold and currency are both set or both null (no tiering when null).
-        DB::statement('ALTER TABLE subscription_suspend_np_config
-            ADD CONSTRAINT chk_suspend_np_debt_tier
-            CHECK ((debt_amount_warning_threshold IS NULL) = (debt_amount_warning_currency IS NULL))');
+        // SQLite cannot add a named CHECK constraint after table creation. The
+        // application validates the pair on that test/development driver; production
+        // databases retain the database-level invariant as a second line of defence.
+        if (DB::getDriverName() !== 'sqlite') {
+            DB::statement('ALTER TABLE subscription_suspend_np_config
+                ADD CONSTRAINT chk_suspend_np_debt_tier
+                CHECK ((debt_amount_warning_threshold IS NULL) = (debt_amount_warning_currency IS NULL))');
+        }
     }
 
     public function down(): void

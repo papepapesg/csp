@@ -150,7 +150,8 @@ class RbacController extends ApiController
         $params = $this->pageParams($request);
         $page = User::query()
             ->when($request->query('q'), fn ($q, $term) => $q->where(fn ($w) => $w
-                ->where('name', 'ilike', "%{$term}%")->orWhere('email', 'ilike', "%{$term}%")))
+                ->whereLike('name', "%{$term}%", caseSensitive: false)
+                ->orWhereLike('email', "%{$term}%", caseSensitive: false)))
             ->orderBy('name')
             ->paginate(perPage: $params['size'], page: $params['page'] + 1)
             ->through(fn (User $u) => [

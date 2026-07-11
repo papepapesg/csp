@@ -26,6 +26,8 @@ class ExternalTask extends Model
 
     public const INCIDENT = 'INCIDENT';
 
+    public const CANCELLED = 'CANCELLED';
+
     protected $table = 'workflow_external_task';
 
     protected $primaryKey = 'task_id';

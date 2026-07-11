@@ -3,7 +3,7 @@
 namespace Modules\WorkOrder\Services;
 
 use App\Foundation\Errors\DomainException;
-use Modules\Workflow\Engine\WorkflowEngine;
+use App\Foundation\Workflow\WorkflowRuntime;
 use Modules\Workflow\Models\ProcessInstance;
 use Modules\Workflow\Models\UserTask;
 use Modules\WorkOrder\Models\WorkOrder;
@@ -15,7 +15,7 @@ use Modules\WorkOrder\Models\WorkOrder;
  */
 class ShiftingFlowService
 {
-    public function __construct(private readonly WorkflowEngine $engine) {}
+    public function __construct(private readonly WorkflowRuntime $engine) {}
 
     public function start(WorkOrder $wo): ProcessInstance
     {

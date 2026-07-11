@@ -184,11 +184,11 @@ class DiscountAssignmentService
     /** R-SIP-DA runtime query API: effective ACTIVE assignments for a scope on a date (DIS-OP-01 reads this). */
     public function effective(string $operator, array $filters, ?string $onDate = null): \Illuminate\Support\Collection
     {
-        $date = $onDate ?: now()->toDateString();
+        $date = $onDate ? Carbon::parse($onDate) : now();
 
         return DiscountAssignment::query()->where('operator_code', $operator)->where('status', DiscountAssignment::ACTIVE)
-            ->where(fn ($q) => $q->whereNull('valid_from')->orWhere('valid_from', '<=', $date))
-            ->where(fn ($q) => $q->whereNull('valid_to')->orWhere('valid_to', '>=', $date))
+            ->where(fn ($q) => $q->whereNull('valid_from')->orWhere('valid_from', '<=', $date->copy()->endOfDay()))
+            ->where(fn ($q) => $q->whereNull('valid_to')->orWhere('valid_to', '>=', $date->copy()->startOfDay()))
             ->when($filters['subscriptionId'] ?? null, fn ($q, $v) => $q->where(fn ($w) => $w->where('subscription_id', $v)->orWhere(fn ($x) => $x->where('scope_type', 'SUBSCRIPTION')->where('scope_ref_id', $v))))
             ->when($filters['customerId'] ?? null, fn ($q, $v) => $q->where(fn ($w) => $w->where('customer_id', $v)->orWhere(fn ($x) => $x->where('scope_type', 'CUSTOMER')->where('scope_ref_id', $v))))
             ->orderBy('assignment_priority')->get();

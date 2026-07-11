@@ -8,7 +8,7 @@ use App\Foundation\Events\EventBus;
 use App\Foundation\Support\Id;
 use Modules\Osr\Events\OsrEvents;
 use Modules\Osr\Swap\Models\EquipmentSwapRequest;
-use Modules\Workflow\Engine\WorkflowEngine;
+use App\Foundation\Workflow\WorkflowRuntime;
 use Modules\Workflow\Models\ProcessInstance;
 use Modules\Workflow\Models\UserTask;
 
@@ -21,7 +21,7 @@ class SwapRequestService
 {
     public function __construct(
         private readonly EventBus $events,
-        private readonly WorkflowEngine $engine,
+        private readonly WorkflowRuntime $engine,
     ) {}
 
     /**

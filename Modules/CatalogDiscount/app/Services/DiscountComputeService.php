@@ -33,8 +33,8 @@ class DiscountComputeService
         $assignments = DiscountAssignment::query()
             ->where('operator_code', $operator)
             ->where('status', DiscountAssignment::ACTIVE)
-            ->where(fn ($q) => $q->whereNull('valid_from')->orWhere('valid_from', '<=', $at->toDateString()))
-            ->where(fn ($q) => $q->whereNull('valid_to')->orWhere('valid_to', '>=', $at->toDateString()))
+            ->where(fn ($q) => $q->whereNull('valid_from')->orWhere('valid_from', '<=', $at->copy()->endOfDay()))
+            ->where(fn ($q) => $q->whereNull('valid_to')->orWhere('valid_to', '>=', $at->copy()->startOfDay()))
             ->where(function ($q) use ($scopeRefs) {
                 $q->where('scope', 'ALL');
                 foreach ($scopeRefs as $scope => $ref) {

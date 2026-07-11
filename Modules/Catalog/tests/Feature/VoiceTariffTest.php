@@ -341,9 +341,10 @@ class VoiceTariffTest extends TestCase
     public function test_rate_change_event_invalidates_rating_cache(): void
     {
         $cache = app(SophixCache::class);
+        [$sourceModule, $aggregate, $catalogId] = CatalogCacheKeys::voiceTariff('WIK');
         // Prime a snapshot under the operator key.
-        $cache->remember(...CatalogCacheKeys::voiceTariff('WIK'), ttlSeconds: 60, source: fn () => ['plans' => []]);
-        $this->assertNotNull($cache->remember(...CatalogCacheKeys::voiceTariff('WIK'), ttlSeconds: 60, source: fn () => null));
+        $cache->remember($sourceModule, $aggregate, $catalogId, 60, fn () => ['plans' => []]);
+        $this->assertNotNull($cache->remember($sourceModule, $aggregate, $catalogId, 60, fn () => null));
 
         // The CatalogCacheInvalidator evicts the snapshot on a rate-changed event.
         $row = OutboxEvent::query()->create([
@@ -355,7 +356,7 @@ class VoiceTariffTest extends TestCase
 
         // Next read misses → rebuild source runs.
         $rebuilt = false;
-        $cache->remember(...CatalogCacheKeys::voiceTariff('WIK'), ttlSeconds: 60, source: function () use (&$rebuilt) {
+        $cache->remember($sourceModule, $aggregate, $catalogId, 60, function () use (&$rebuilt) {
             $rebuilt = true;
 
             return ['plans' => ['rebuilt']];

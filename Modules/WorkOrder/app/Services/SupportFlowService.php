@@ -3,7 +3,7 @@
 namespace Modules\WorkOrder\Services;
 
 use App\Foundation\Errors\DomainException;
-use Modules\Workflow\Engine\WorkflowEngine;
+use App\Foundation\Workflow\WorkflowRuntime;
 use Modules\Workflow\Models\ProcessInstance;
 use Modules\Workflow\Models\UserTask;
 use Modules\WorkOrder\Models\WoFlowConfig;
@@ -17,7 +17,7 @@ use Modules\WorkOrder\Models\WorkOrder;
  */
 class SupportFlowService
 {
-    public function __construct(private readonly WorkflowEngine $engine) {}
+    public function __construct(private readonly WorkflowRuntime $engine) {}
 
     /** Start the support flow for a WO and return the process instance. */
     public function start(WorkOrder $wo): ProcessInstance

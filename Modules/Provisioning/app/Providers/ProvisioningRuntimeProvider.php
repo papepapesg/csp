@@ -3,6 +3,7 @@
 namespace Modules\Provisioning\Providers;
 
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Console\Scheduling\Schedule;
 use Modules\Provisioning\Adapters\StubProvisioningAdapter;
 use Modules\Provisioning\Console\ReconcileCommand;
 use Modules\Provisioning\Contracts\ProvisioningAdapter;
@@ -34,13 +35,15 @@ class ProvisioningRuntimeProvider extends ServiceProvider
         });
     }
 
-    public function boot(): void
+    public function boot(Schedule $schedule): void
     {
         $this->app->make(TaskRegistry::class)->register(ActivateServiceHandler::class);
 
         if ($this->app->runningInConsole()) {
             $this->commands([ReconcileCommand::class, \Modules\Provisioning\Console\PollAsyncCommand::class,
                 \Modules\Provisioning\Console\OpsStatusCommand::class, \Modules\Provisioning\Console\CommandShowCommand::class, \Modules\Provisioning\Console\OpsFixCommand::class]);
+            $schedule->command('sophix:provisioning:poll-async')->everyFiveMinutes()->withoutOverlapping();
+            $schedule->command('sophix:provisioning:reconcile')->hourly()->withoutOverlapping();
         }
     }
 }

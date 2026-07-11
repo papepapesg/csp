@@ -6,6 +6,7 @@ use App\Foundation\Approvals\ApprovalDefinition;
 use App\Foundation\Rules\RuleEngine;
 use Illuminate\Support\ServiceProvider;
 use Modules\Billing\Adjustments\Services\AdjustmentService;
+use Modules\Billing\Adjustments\Console\OpsStatusCommand;
 
 /** BIL-02-ADJ-01 adjustments module bootstrap — owns its schema, routes and approval-routing fallback. */
 class AdjustmentsServiceProvider extends ServiceProvider
@@ -18,6 +19,10 @@ class AdjustmentsServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->loadMigrationsFrom(dirname(__DIR__, 2).'/database/migrations');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([OpsStatusCommand::class]);
+        }
 
         // ADJ-01 approval routing fallback: when no decision table is deployed for
         // rules.billing.adjustment-approval, select the process from the base ADJUSTMENT

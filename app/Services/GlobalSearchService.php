@@ -61,57 +61,78 @@ class GlobalSearchService
 
     private function customers(string $like, ?string $op): array
     {
+        $match = $this->likeOperator();
+
         return $this->scoped(\Modules\Ilm\Models\Customer::class, $op)
-            ->where(fn ($w) => $w->where('name', 'ilike', $like)->orWhere('primary_msisdn', 'ilike', $like)->orWhere('customer_id', 'ilike', $like))
+            ->where(fn ($w) => $w->where('name', $match, $like)->orWhere('primary_msisdn', $match, $like)->orWhere('customer_id', $match, $like))
             ->get()->map(fn ($c) => ['id' => $c->customer_id, 'title' => $c->name, 'subtitle' => $c->primary_msisdn])->all();
     }
 
     private function accounts(string $like, ?string $op): array
     {
+        $match = $this->likeOperator();
+
         return $this->scoped(\Modules\Ilm\Models\CustomerAccount::class, $op)
-            ->where(fn ($w) => $w->where('account_number', 'ilike', $like)->orWhere('account_id', 'ilike', $like))
+            ->where(fn ($w) => $w->where('account_number', $match, $like)->orWhere('account_id', $match, $like))
             ->get()->map(fn ($a) => ['id' => $a->customer_id, 'title' => $a->account_number, 'subtitle' => $a->status ?? null])->all();
     }
 
     private function subscriptions(string $like, ?string $op): array
     {
+        $match = $this->likeOperator();
+
         return $this->scoped(\Modules\Subscription\Models\Subscription::class, $op)
-            ->where(fn ($w) => $w->where('subscription_id', 'ilike', $like)->orWhere('package_ref', 'ilike', $like))
+            ->where(fn ($w) => $w->where('subscription_id', $match, $like)->orWhere('package_ref', $match, $like))
             ->get()->map(fn ($s) => ['id' => $s->subscription_id, 'title' => $s->subscription_id, 'subtitle' => $s->package_ref])->all();
     }
 
     private function invoices(string $like, ?string $op): array
     {
+        $match = $this->likeOperator();
+
         return $this->scoped(\Modules\Billing\Invoicing\Models\Invoice::class, $op)
-            ->where(fn ($w) => $w->where('legal_invoice_number', 'ilike', $like)->orWhere('invoice_id', 'ilike', $like))
+            ->where(fn ($w) => $w->where('legal_invoice_number', $match, $like)->orWhere('invoice_id', $match, $like))
             ->get()->map(fn ($i) => ['id' => $i->invoice_id, 'title' => $i->legal_invoice_number ?? $i->invoice_id, 'subtitle' => $i->status ?? null])->all();
     }
 
     private function payments(string $like, ?string $op): array
     {
+        $match = $this->likeOperator();
+
         return $this->scoped(\Modules\Billing\Models\Payment::class, $op)
-            ->where(fn ($w) => $w->where('payment_reference', 'ilike', $like))
+            ->where(fn ($w) => $w->where('payment_reference', $match, $like))
             ->get()->map(fn ($p) => ['id' => $p->getKey(), 'title' => $p->payment_reference, 'subtitle' => $p->customer_id])->all();
     }
 
     private function workOrders(string $like, ?string $op): array
     {
+        $match = $this->likeOperator();
+
         return $this->scoped(\Modules\WorkOrder\Models\WorkOrder::class, $op)
-            ->where(fn ($w) => $w->where('work_order_id', 'ilike', $like)->orWhere('customer_id', 'ilike', $like))
+            ->where(fn ($w) => $w->where('work_order_id', $match, $like)->orWhere('customer_id', $match, $like))
             ->get()->map(fn ($w) => ['id' => $w->work_order_id, 'title' => $w->work_order_id, 'subtitle' => $w->type.' · '.$w->status])->all();
     }
 
     private function equipment(string $like, ?string $op): array
     {
+        $match = $this->likeOperator();
+
         return $this->scoped(\Modules\Osr\Models\EquipmentInstance::class, $op)
-            ->where(fn ($w) => $w->where('serial', 'ilike', $like))
+            ->where(fn ($w) => $w->where('serial', $match, $like))
             ->get()->map(fn ($e) => ['id' => $e->getKey(), 'title' => $e->serial, 'subtitle' => $e->status ?? null])->all();
     }
 
     private function tickets(string $like, ?string $op): array
     {
+        $match = $this->likeOperator();
+
         return $this->scoped(\Modules\Ticketing\Models\Ticket::class, $op)
-            ->where(fn ($w) => $w->where('ticket_number', 'ilike', $like)->orWhere('subject', 'ilike', $like)->orWhere('ticket_id', 'ilike', $like))
+            ->where(fn ($w) => $w->where('ticket_number', $match, $like)->orWhere('subject', $match, $like)->orWhere('ticket_id', $match, $like))
             ->get()->map(fn ($t) => ['id' => $t->ticket_id, 'title' => $t->ticket_number ?? $t->ticket_id, 'subtitle' => $t->subject])->all();
+    }
+
+    private function likeOperator(): string
+    {
+        return config('database.default') === 'pgsql' ? 'ilike' : 'like';
     }
 }

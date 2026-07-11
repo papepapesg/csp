@@ -24,7 +24,7 @@ class ItOpsController extends ApiController
             ->when($request->query('level'), fn ($q, $l) => $q->whereIn('level', explode(',', strtolower($l))))
             ->when($request->query('channel'), fn ($q, $c) => $q->where('channel', $c))
             ->when($request->query('correlationId'), fn ($q, $c) => $q->where('correlation_id', $c))
-            ->when($request->query('q'), fn ($q, $term) => $q->where('message', 'ilike', "%{$term}%"))
+            ->when($request->query('q'), fn ($q, $term) => $q->whereLike('message', "%{$term}%", caseSensitive: false))
             ->when($request->query('from'), fn ($q, $f) => $q->where('logged_at', '>=', $f))
             ->when($request->query('to'), fn ($q, $t) => $q->where('logged_at', '<=', $t))
             ->orderByDesc('id')

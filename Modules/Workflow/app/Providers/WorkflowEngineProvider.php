@@ -3,6 +3,8 @@
 namespace Modules\Workflow\Providers;
 
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Console\Scheduling\Schedule;
+use App\Foundation\Workflow\WorkflowRuntime;
 use Modules\Workflow\Console\InstanceShowCommand;
 use Modules\Workflow\Console\OpsStatusCommand;
 use Modules\Workflow\Console\WorkflowTickCommand;
@@ -21,9 +23,15 @@ class WorkflowEngineProvider extends ServiceProvider
     {
         $this->app->singleton(TaskRegistry::class);
         $this->app->singleton(WorkflowEngine::class);
+        $this->app->singleton(WorkflowRuntime::class, function ($app) {
+            return match ((string) config('sophix.workflow_driver', 'native')) {
+                'native' => $app->make(WorkflowEngine::class),
+                default => throw new \InvalidArgumentException('Unsupported workflow driver ['.config('sophix.workflow_driver').']. Install and bind an adapter before enabling it.'),
+            };
+        });
     }
 
-    public function boot(): void
+    public function boot(Schedule $schedule): void
     {
         if ($this->app->runningInConsole()) {
             $this->commands([
@@ -32,6 +40,7 @@ class WorkflowEngineProvider extends ServiceProvider
                 OpsStatusCommand::class,
                 InstanceShowCommand::class,
             ]);
+            $schedule->command('sophix:workflow:tick')->everyMinute()->withoutOverlapping();
         }
     }
 }
