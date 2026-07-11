@@ -106,6 +106,14 @@ own schedules; `routes/console.php` contains platform-wide schedules only.
 
 See `docs/OPERATIONS.md` for command conventions and safety requirements.
 
+### 4.3 Migration ownership
+
+Every physical module owns a `database/migrations` history, including capabilities
+split from an older parent module. Migration files retain their original timestamped
+basename when ownership moves, so existing deployments keep the same Laravel migration
+ledger identity and do not execute the migration again. Basenames remain globally unique.
+`ModuleMigrationOwnershipTest` enforces both module coverage and global uniqueness.
+
 ## 5. Build order
 
 Per `Sophix_V3_DD_Reading_And_Implementation_Order` and the MVP baseline:
