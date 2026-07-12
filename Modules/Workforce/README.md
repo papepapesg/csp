@@ -14,6 +14,43 @@ Skills, coverage, calendars, slot capacities and assignment constraints are cata
 
 Add scheduling strategies behind a stable interface and select them by operator policy. Preserve capacity atomically, make release idempotent and test concurrent booking and cancellation.
 
+## Exposed APIs
+
+- `DELETE contractor-slot-commitments/{commitment}`
+- `GET contractors`
+- `GET staff`
+- `POST contractor-availability`
+- `POST contractor-slot-commitments`
+- `POST contractor-slot-commitments/{commitment}/consume`
+- `POST contractors`
+- `POST contractors/{contractor}/teams`
+- `POST staff`
+
+## Data models
+
+- `Contractor`
+- `ContractorAvailabilitySlot`
+- `ContractorRegionScope`
+- `ContractorRegionSkill`
+- `ContractorSlotCommitment`
+- `ContractorTeam`
+- `SkillCatalog`
+- `StaffMember`
+
+## Services
+
+- `ContractorAvailabilityService`
+
+## Events
+
+- `ResolveSlotCommitmentOnWoLifecycle`
+
+## Commands
+
+- `sophix:workforce:contractor-show`
+- `sophix:workforce:ops-status`
+- `sophix:workforce:release-wo`
+
 ## Test
 
 Workforce API and slot-commitment lifecycle scenarios are in `tests/Feature`.

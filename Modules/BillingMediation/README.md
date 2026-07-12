@@ -14,6 +14,30 @@ Source mappings and mediation policies are configuration. Rating catalogs are ow
 
 Add source-specific parsers behind mediation contracts and keep the normalized record stable. New rating units require registered executable logic plus catalog entries and reconciliation tests.
 
+## Exposed APIs
+
+- `GET rated-events`
+- `GET usage`
+- `POST usage`
+- `POST usage/rate-run`
+
+## Data models
+
+- `RatedEvent`
+- `UsageRecord`
+
+## Services
+
+- `MediationRatingService`
+
+## Events
+
+- No module-specific event catalog or listener is currently registered.
+
+## Commands
+
+- `sophix:billing:rate-usage`
+
 ## Test
 
 Allowance, rating and usage-tariff tests are in `tests/Feature`.

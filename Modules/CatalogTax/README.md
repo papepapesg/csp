@@ -14,6 +14,35 @@ Rates, compound ordering, applicability and effective windows are catalog/config
 
 Represent country variation as rules whenever existing computation semantics support it. Add code only for a genuinely new tax algorithm, selected by a registered behavior key and protected by examples and rounding tests.
 
+## Exposed APIs
+
+- `GET tax/groups`
+- `GET tax/rules`
+- `PATCH tax/groups/{taxGroup}`
+- `PATCH tax/rules/{taxRule}`
+- `POST tax/compute`
+- `POST tax/groups`
+- `POST tax/rules`
+
+## Data models
+
+- `TaxGroup`
+- `TaxRule`
+
+## Services
+
+- `TaxComputeService`
+- `TaxConfigService`
+
+## Events
+
+- `CatalogEvents::TAX_CONFIG_CHANGED`
+- `CatalogEvents::TOPIC`
+
+## Commands
+
+- `sophix:catalog-tax:ops-status`
+
 ## Test
 
 Tests live in `tests/Feature`; calculation scenarios also remain under `../Catalog/tests/Feature` during transition.

@@ -14,6 +14,36 @@ Billable events are module-owned catalog entries. `support_level` separates exec
 
 Register code for a new executable behavior before marking its catalog entry `EXECUTABLE`. Add state callbacks through stable contracts/events, never by coupling to a consumer controller.
 
+## Exposed APIs
+
+- `GET billing/billable-event-categories`
+- `GET billing/billable-events`
+- `GET billing/billable-events/{billableEvent}`
+- `PATCH billing/billable-events/{billableEvent}`
+- `POST billing/billable-events`
+- `POST billing/billable-events/{billableEvent}/activate`
+- `POST billing/billable-events/{billableEvent}/retire`
+
+## Data models
+
+- `BillableEvent`
+- `BillableEventCategory`
+- `BillingIntent`
+
+## Services
+
+- `BillableEventCatalogService`
+- `BillingIntentService`
+
+## Events
+
+- `BillingEvents::BILLABLE_EVENT_CHANGED`
+- `BillingEvents::TOPIC`
+
+## Commands
+
+- `sophix:billing-intent:ops-status`
+
 ## Test
 
 Catalog and lifecycle tests are in `tests/Feature`.

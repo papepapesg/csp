@@ -14,6 +14,41 @@ Journey sequencing is a workflow definition; deposit, KYC and activation policie
 
 Prefer editing the workflow and adding focused task handlers. Keep handlers idempotent, compensate created artifacts on cancellation, and communicate across modules through contracts or events.
 
+## Exposed APIs
+
+- `GET fulfillment-orders`
+- `GET fulfillment-orders/{fulfillmentOrder}`
+- `POST fulfillment-orders`
+- `POST fulfillment-orders/{fulfillmentOrder}/cancel`
+- `POST fulfillment-orders/{fulfillmentOrder}/complete`
+
+## Data models
+
+- `FulfillmentOrder`
+- `FulfillmentOrderStep`
+
+## Services
+
+- `OrderCaptureService`
+
+## Events
+
+- `CancelOrderOnKycRejected`
+- `FulfillmentEvents`
+- `FulfillmentEvents::ORDER_CANCELLED`
+- `FulfillmentEvents::ORDER_CAPTURED`
+- `FulfillmentEvents::ORDER_COMPLETED`
+- `FulfillmentEvents::ORDER_STEP_COMPLETED`
+- `FulfillmentEvents::TOPIC`
+- `ResumeOrderOnInstallFinalized`
+- `ResumeOrderOnKycApproved`
+
+## Commands
+
+- `sophix:fulfillment:ops-status`
+- `sophix:fulfillment:order-fix`
+- `sophix:fulfillment:order-show`
+
 ## Test
 
 The end-to-end configurable journey is covered in `tests/Feature/FulfillmentJourneyTest.php`.

@@ -14,6 +14,46 @@ Wallet types, units, priority, expiry and carry-over rules are catalogs/configur
 
 Add wallet policies as registered strategies, preserve ledger idempotency, and publish balance-impact events. New units must define deterministic arithmetic and tests.
 
+## Exposed APIs
+
+- `GET wallet-types`
+- `GET wallet-types/{wallet}`
+- `GET wallets/{subscriptionId}/balance`
+- `PATCH wallet-types/{wallet}`
+- `POST wallet-types`
+- `POST wallet-types/{wallet}/activate`
+- `POST wallet-types/{wallet}/retire`
+- `POST wallets/{subscriptionId}/debit`
+- `POST wallets/{subscriptionId}/topup`
+
+## Data models
+
+- `Wallet`
+- `WalletTransaction`
+- `WalletType`
+
+## Services
+
+- `WalletService`
+- `WalletTypeService`
+
+## Events
+
+- `BillingEvents::TOPIC`
+- `BillingEvents::WALLET_CREDITED`
+- `BillingEvents::WALLET_DEBITED`
+- `BillingEvents::WALLET_TOPPED_UP`
+- `CatalogEvents::TOPIC`
+- `CatalogEvents::WALLET_ACTIVATED`
+- `CatalogEvents::WALLET_CREATED`
+- `CatalogEvents::WALLET_RETIRED`
+- `CatalogEvents::WALLET_UPDATED`
+- `EvictPlmCatalogCache`
+
+## Commands
+
+- `sophix:wallet:expire`
+
 ## Test
 
 Wallet lifecycle and multi-wallet scenarios are in `tests/Feature`.

@@ -21,6 +21,13 @@ class ModuleMigrationOwnershipTest extends TestCase
 
             if (! is_file($modulePath.'/README.md')) {
                 $missingDocumentation[] = $module;
+            } else {
+                $documentation = (string) file_get_contents($modulePath.'/README.md');
+                foreach (['Exposed APIs', 'Data models', 'Services', 'Events', 'Commands'] as $section) {
+                    if (! str_contains($documentation, "## {$section}")) {
+                        $missingDocumentation[] = "{$module}:{$section}";
+                    }
+                }
             }
             if (! is_dir($modulePath.'/tests')) {
                 $missingTests[] = $module;

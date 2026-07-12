@@ -14,6 +14,34 @@ Provider credentials, signature policy, timeout and callback mappings are deploy
 
 Implement a provider adapter/verifier, register it by provider key, validate signatures before parsing business data, and add replay/idempotency contract tests using sanitized fixtures.
 
+## Exposed APIs
+
+- `GET payment-gateway/callbacks`
+- `GET payment-gateway/callbacks/{paymentGatewayCallback}`
+- `POST payment-gateway/{provider}/callbacks`
+
+## Data models
+
+- `PaymentGatewayCallback`
+
+## Services
+
+- `GatewayCallbackService`
+
+## Events
+
+- `PaymentGatewayEvents`
+- `PaymentGatewayEvents::CALLBACK_DUPLICATE`
+- `PaymentGatewayEvents::CALLBACK_PROCESSED`
+- `PaymentGatewayEvents::CALLBACK_RECEIVED`
+- `PaymentGatewayEvents::CALLBACK_REJECTED`
+- `PaymentGatewayEvents::TOPIC`
+
+## Commands
+
+- `sophix:paymentgateway:callback-show`
+- `sophix:paymentgateway:ops-status`
+
 ## Test
 
 Callback lifecycle and operational API behavior are in `tests/Feature`.
