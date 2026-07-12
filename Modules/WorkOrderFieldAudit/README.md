@@ -1,0 +1,19 @@
+# Work Order Field Audit
+
+Field-audit capability for campaigns, tasks, observations, discrepancies, approval and resolution across equipment and installations.
+
+## Use
+
+Audit APIs are composed in `../WorkOrder/routes/api.php`. Create campaigns/tasks, submit observations and resolve discrepancies. Review queues with `sophix:field-audit:ops-status`.
+
+## Configure
+
+Audit types, expected conditions, sampling, discrepancy severity and approval policy are catalogs/configuration. Observations and resolutions are audit history.
+
+## Extend
+
+Add configurable observation schemas and discrepancy rules before adding code. Integrate correction actions through owning module services/events, with approvals and traceable evidence.
+
+## Test
+
+Module boot coverage is in `tests/Feature`; detailed legacy field-audit scenarios also remain under `../WorkOrder/tests/Feature` during transition.

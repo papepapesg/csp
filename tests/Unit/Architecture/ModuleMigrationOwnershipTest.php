@@ -9,6 +9,29 @@ use PHPUnit\Framework\TestCase;
 class ModuleMigrationOwnershipTest extends TestCase
 {
     #[Test]
+    public function every_module_contains_documentation_and_tests(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $missingDocumentation = [];
+        $missingTests = [];
+
+        foreach (glob($root.'/Modules/*/module.json') ?: [] as $manifest) {
+            $modulePath = dirname($manifest);
+            $module = basename($modulePath);
+
+            if (! is_file($modulePath.'/README.md')) {
+                $missingDocumentation[] = $module;
+            }
+            if (! is_dir($modulePath.'/tests')) {
+                $missingTests[] = $module;
+            }
+        }
+
+        self::assertSame([], $missingDocumentation, 'Missing module README.md: '.implode(', ', $missingDocumentation));
+        self::assertSame([], $missingTests, 'Missing module tests directory: '.implode(', ', $missingTests));
+    }
+
+    #[Test]
     public function every_module_contains_at_least_one_migration(): void
     {
         $missing = [];
